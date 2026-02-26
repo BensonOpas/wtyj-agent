@@ -1,0 +1,20 @@
+# System / user home noise
+.bash_history
+.bashrc
+.profile
+.lesshst
+.cache/
+.config/
+.local/
+.ssh/
+.npm/
+__pycache__/
+*.pyc
+a.out
+
+# OpenClaw local runtime/workspace
+.openclaw/workspace/
+.openclaw/**/workspace/
+
+# Backups
+*.bak.*
