@@ -1,0 +1,39 @@
+{
+  "threads": {
+    "subj:benson_agent@icloud.com:booking test": {
+      "fields": {
+        "guests": 6,
+        "experience": "Sunset Signature Cruise",
+        "customer_name": "Calvin",
+        "phone": "+59991234567",
+        "date": "tomorrow"
+      },
+      "last_customer_hash": "38bc08a93d95fd135557e95584b024f492cc484fc44848a805d151d018ee0165",
+      "reply_times": [
+        1771950768,
+        1771950867
+      ],
+      "flags": {
+        "hold_created": true,
+        "event_id": "62pv53ni4825l43pep6lkmhru4",
+        "event_link": "https://www.google.com/calendar/event?eid=NjJwdjUzbmk0ODI1bDQzcGVwNmxrbWhydTQgMDBkYTg5YjBlODFlYjNiYjgyNjdmOGU4NTAwNDk0MDJkOGNjMjJmMDcyNzM4Y2ExMTFmNWRkYTM4ZjcyM2FmNUBn"
+      }
+    },
+    "subj:mssecurity-noreply@microsoft.com:new recommendation available for wetakeyourjob com": {
+      "fields": {},
+      "last_customer_hash": "87a9ac8c3b15d96cbc877d88c953520e8f88490888dff267f5f716d8163627e4",
+      "reply_times": [
+        1771979805
+      ]
+    },
+    "subj:postmaster@microsoft.com:undeliverable: re: new recommendation available for wetakeyourjob com": {
+      "fields": {
+        "phone": "1       2"
+      },
+      "last_customer_hash": "9a40442c79dfc3abb01a869264bee0d51d4a6b3a379769de8ee5cd283016b15e",
+      "reply_times": [
+        1771979841
+      ]
+    }
+  }
+}
