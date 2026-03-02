@@ -33,3 +33,9 @@ _archive/
 .npm/
 a.out
 .DS_Store
+
+# Credentials — new location
+bluemarlin/config/azure_refresh_token.txt
+bluemarlin/config/bluemarlin-calendar-key.json
+bluemarlin/config/email_thread_state.json
+_archive_old_system/
