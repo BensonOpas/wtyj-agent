@@ -1,10 +1,16 @@
-import subprocess
+# FILE: social_drafter.py
+# CREATED: Before Brief 001 (original codebase)
+# LAST MODIFIED: Brief 003
+# DEPENDS ON: claude_client.py (Brief 001)
+# DEPENDS ON: social_registry.py (original)
+# IMPORTS FROM: claude_client.py (Brief 001)
+# IMPORTS FROM: social_registry.py (original)
 import sys
 import json
 import social_registry
-
-# Uses the same OpenClaw session as the rest of the demo
-SESSION_ID = "c5613944-cb20-4c34-941e-fd0e53f70494"
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_client
 
 def draft_post(platform: str, context: str) -> dict:
     """
@@ -25,12 +31,7 @@ def draft_post(platform: str, context: str) -> dict:
         f"Context:\n{context}\n"
     )
 
-    r = subprocess.run(
-        ["openclaw", "agent", "--session-id", SESSION_ID, "--message", prompt, "--local"],
-        capture_output=True, text=True, timeout=120
-    )
-
-    text = (r.stdout or "").strip()
+    text = claude_client.complete(prompt)
     if not text:
         text = "BlueMarlin Tours Curaçao — private charters available. DM us or email hello@wetakeyourjob.com"
 

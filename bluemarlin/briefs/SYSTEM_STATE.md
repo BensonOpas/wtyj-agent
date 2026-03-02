@@ -21,5 +21,15 @@
 
 ---
 
+## Brief 003 — social_drafter.py
+**Status:** Stable
+**What changed:** Replaced OpenClaw subprocess call with `claude_client.complete()`. Removed `import subprocess` and `SESSION_ID`. Added file header.
+**Callers must know:** `draft_post(platform, context) -> dict` signature and return shape unchanged. Returns fallback-text draft on API failure. `ANTHROPIC_API_KEY` must be set in the environment.
+**Files affected:** `bluemarlin/src/social_drafter.py`
+**Depends on:** `claude_client.py` (Brief 001), `social_registry.py` (original)
+**Known design issue:** `social_registry` content_id is keyed on generated text not input context. Duplicate drafts possible if same context is passed twice. Fix in future brief when social layer is built out.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
-- `bluemarlin/src/social_drafter.py`
+- None — migration complete.
