@@ -32,3 +32,4 @@ _archive/
 .ssh/
 .npm/
 a.out
+.DS_Store
