@@ -1,21 +1,30 @@
+# FILE: state_registry.py
+# CREATED: Before Brief 001 (original codebase)
+# LAST MODIFIED: Brief 004
+# DEPENDS ON: nothing
+# IMPORTS FROM: nothing
+# CALLERS: email_poller.py (original)
 import hashlib
-import json
 import os
+import sqlite3
+from datetime import datetime, timezone
 
-STATE_FILE = "state.json"
-
-
-def _load_state():
-    if not os.path.exists(STATE_FILE):
-        return {"processed_hashes": []}
-
-    with open(STATE_FILE, "r") as f:
-        return json.load(f)
+DB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "state_registry.db"
+)
 
 
-def _save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+def _get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS processed_hashes ("
+        "hash TEXT PRIMARY KEY, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    return conn
 
 
 def generate_content_hash(content: str) -> str:
@@ -23,15 +32,26 @@ def generate_content_hash(content: str) -> str:
 
 
 def has_been_processed(content: str) -> bool:
-    state = _load_state()
     content_hash = generate_content_hash(content)
-    return content_hash in state["processed_hashes"]
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT count(*) FROM processed_hashes WHERE hash = ?",
+        (content_hash,)
+    ).fetchone()
+    conn.close()
+    return row[0] > 0
 
 
 def mark_as_processed(content: str):
-    state = _load_state()
     content_hash = generate_content_hash(content)
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO processed_hashes (hash, created_at) VALUES (?, ?)",
+        (content_hash, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
 
-    if content_hash not in state["processed_hashes"]:
-        state["processed_hashes"].append(content_hash)
-        _save_state(state)
+
+# Initialise database on module load so the file exists as soon as the module is imported
+_get_conn().close()
