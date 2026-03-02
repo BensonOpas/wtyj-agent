@@ -1,4 +1,27 @@
-# System / user home noise
+# Credentials
+.openclaw/azure_refresh_token.txt
+.openclaw/bluemarlin-calendar-key.json
+.openclaw/openclaw.json
+.openclaw/credentials/
+
+# State files — runtime only
+state.json
+payment_state.json
+social_state.json
+email_thread_state.json
+
+# Logs
+*.log
+bluemarlin/logs/
+
+# Python
+__pycache__/
+*.pyc
+
+# Archive
+_archive/
+
+# System
 .bash_history
 .bashrc
 .profile
@@ -8,13 +31,4 @@
 .local/
 .ssh/
 .npm/
-__pycache__/
-*.pyc
 a.out
-
-# OpenClaw local runtime/workspace
-.openclaw/workspace/
-.openclaw/**/workspace/
-
-# Backups
-*.bak.*
