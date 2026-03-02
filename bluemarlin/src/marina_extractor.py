@@ -1,8 +1,12 @@
-import json
-import subprocess
-import re
-
-SESSION_ID = "marina_extract_session"
+# FILE: marina_extractor.py
+# CREATED: Before Brief 001 (original codebase)
+# LAST MODIFIED: Brief 002
+# DEPENDS ON: claude_client.py (Brief 001)
+# IMPORTS FROM: claude_client.py (Brief 001)
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_client
 
 ALLOWED_KEYS = {
     "experience",
@@ -40,27 +44,8 @@ Message:
 {text}
 """
 
-    try:
-        r = subprocess.run(
-            ["openclaw", "agent", "--session-id", SESSION_ID, "--message", prompt, "--local"],
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-
-        raw = (r.stdout or "").strip()
-
-        # Extract first JSON object found
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            return {}
-
-        data = json.loads(match.group(0))
-
-        # Keep only allowed keys
-        clean = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
-
-        return clean
-
-    except Exception:
+    result = claude_client.extract(prompt)
+    if not isinstance(result, dict):
         return {}
+    clean = {k: v for k, v in result.items() if k in ALLOWED_KEYS}
+    return clean
