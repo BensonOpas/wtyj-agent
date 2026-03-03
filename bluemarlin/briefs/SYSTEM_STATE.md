@@ -73,5 +73,18 @@
 
 ---
 
+## Brief 008 — End-to-end system test (manual)
+**Status:** Passed with known issues
+**Date executed:** 2026-03-03
+**What was tested:** Full booking flow on VPS after Briefs 001–007. calendar.js smoke test, email send/receive, thread state tracking, anti-loop protection, field extraction, calendar hold creation.
+**Confirmed working:** Core booking loop, calendar integration, email send/receive, thread state tracking, anti-loop protection, deduplication.
+**Files affected:** None — observational brief only.
+**Known issues logged for Brief 009:**
+1. Date normalization — `normalize_date_to_yyyy_mm_dd()` only handles `today`, `tomorrow`, `YYYY-MM-DD`. Natural language dates like "March 20" are not recognized → hold creation fails → customer must re-send in correct format.
+2. Off-topic handling — `detect_intent_and_fields()` regex (`joke|riddle|funny|meme|weather|crypto|politics`) is too narrow. "Book a flight to Amsterdam" falls through to booking intake instead of being declined.
+3. Complaint/abusive handling — messages with no booking intent and no matching regex words fall through to booking intake instead of receiving an empathetic non-booking response.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
