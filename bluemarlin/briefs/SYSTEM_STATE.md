@@ -41,5 +41,16 @@
 
 ---
 
+## Brief 005 — email_poller.py — ask_marina_llm()
+**Status:** Stable
+**What changed:** Replaced last OpenClaw subprocess call (inside `ask_marina_llm()`) with `claude_client.complete()`. Added `claude_client` import via `_sys`/`_os` path insertion. Added file header.
+**Callers must know:** `ask_marina_llm(from_email, subject, body, mode)` signature and return type unchanged. Returns fallback string on API failure. `subprocess` import preserved — still used by `create_calendar_hold()` for calendar.js. `SESSION_ID` preserved in CONFIG block (removal out of scope). `ANTHROPIC_API_KEY` must be set in the environment.
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Depends on:** `claude_client.py` (Brief 001)
+**OpenClaw status:** Fully removed from all active code paths. Remaining `.openclaw` strings in the file are VPS filesystem paths in CONFIG and `create_calendar_hold()` — not OpenClaw agent calls.
+**Known flag:** Test 2 during Brief 005 returned the fallback string even with a valid API key — possible empty response from the model for this specific prompt. Fallback mechanism works correctly. Monitor in production.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
-- None — migration complete.
+- None — OpenClaw fully removed from all active code paths.

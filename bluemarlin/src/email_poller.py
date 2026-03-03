@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# FILE: email_poller.py
+# CREATED: Before Brief 001 (original codebase)
+# LAST MODIFIED: Brief 005
+# DEPENDS ON: claude_client.py (Brief 001)
+# DEPENDS ON: state_registry.py (Brief 004)
+# DEPENDS ON: payment_stub.py (original)
+# DEPENDS ON: bm_logger.py (original)
+# DEPENDS ON: marina_extractor.py (Brief 002)
+# DEPENDS ON: social_registry.py (original)
+# IMPORTS FROM: claude_client.py (Brief 001)
+# IMPORTS FROM: state_registry.py (Brief 004)
+# IMPORTS FROM: marina_extractor.py (Brief 002)
+# IMPORTS FROM: payment_stub.py (original)
+# IMPORTS FROM: bm_logger.py (original)
 import state_registry
 import payment_stub
 import bm_logger
@@ -7,6 +21,10 @@ from email.utils import parseaddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib, base64
+import sys as _sys
+import os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import claude_client
 
 # ========= CONFIG =========
 CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
@@ -189,11 +207,7 @@ def ask_marina_llm(from_email, subject, body, mode="general"):
         f"Customer message:\n{body}\n"
     )
 
-    r = subprocess.run(
-        ["openclaw", "agent", "--session-id", SESSION_ID, "--message", prompt, "--local"],
-        capture_output=True, text=True, timeout=120
-    )
-    out = (r.stdout or "").strip()
+    out = claude_client.complete(prompt)
     if not out:
         # fail-safe response
         out = "Hi — thanks for your email. Could you share your preferred date, number of guests, and which experience you want?"
