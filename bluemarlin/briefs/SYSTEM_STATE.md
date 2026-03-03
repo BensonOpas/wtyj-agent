@@ -86,5 +86,25 @@
 
 ---
 
+## Brief 009 — email_poller.py — Marina intelligence improvements
+**Status:** Stable
+**What changed:**
+1. `normalize_date_to_yyyy_mm_dd()` — `dateparser` fallback added after the existing `today`/`tomorrow`/`YYYY-MM-DD` checks. Handles natural language formats ("March 15", "15/03/2026", "15 March 2026", etc.) using `PREFER_DATES_FROM: future`, `TIMEZONE: America/Curacao`. Wrapped in `try/except` — returns `""` on any failure. `import dateparser` added at module level (line 25).
+2. `detect_intent_and_fields()` — Hard keyword regex (`joke|riddle|...`) and booking-word heuristic fully removed. Replaced with `claude_client.complete()` call that classifies intent as one of `{booking, complaint, off_topic, general}`. Defaults to `"general"` if Claude returns unexpected output or raises. `extract_fields()` call and adults+kids merge logic preserved unchanged.
+3. `safe_complaint_reply()` — New function added immediately before `package_key_from_experience()`. Returns static empathetic holding reply with Marina signature.
+4. Complaint dispatch path — `elif intent == "complaint":` added to main loop between `out_of_scope` and `booking/general` branches. Sends `safe_complaint_reply()` and logs.
+5. `out_of_scope` dispatch — updated from `if intent == "out_of_scope":` to `if intent in ("out_of_scope", "off_topic"):` to handle both the legacy label and the new Claude-returned label.
+6. Internal error leak removed — `f"(Internal note: {err})\n\n"` line removed from booking-failure reply. Customers no longer see internal error strings.
+7. File header updated to `Brief 009`.
+
+**Callers must know:** `detect_intent_and_fields()` now makes a live Claude API call on every email processed. Each email incurs one additional API call for intent classification (on top of any `extract_fields()` call). `ANTHROPIC_API_KEY` must be set — if absent, all intents default to `"general"`. `"off_topic"` is now the canonical intent label for non-charter messages (not `"out_of_scope"`); both are handled in the dispatch block for backward compatibility.
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Dependencies added:** `dateparser==1.3.0` (installed on VPS via pip). Also pulled in: `python-dateutil`, `pytz`, `regex`, `six`, `tzlocal`.
+**Depends on:** `claude_client.py` (Brief 001), `dateparser` (PyPI)
+**Known issues resolved:** All three issues logged in Brief 008 are fixed.
+**Remaining known flag:** `dateparser` with `PREFER_DATES_FROM: future` may misparse ambiguous slash formats (e.g. `"03/15"` — MM/DD vs DD/MM ambiguity). Low risk in practice — most customers use named months or YYYY-MM-DD. Monitor in production.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 006
+# LAST MODIFIED: Brief 009
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -22,6 +22,7 @@ from email.utils import parseaddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib, base64
+import dateparser
 import sys as _sys
 import os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -178,11 +179,26 @@ def stable_thread_key(msg, from_email: str, subject: str) -> str:
 def detect_intent_and_fields(text: str):
     from marina_extractor import extract_fields
 
-    t = (text or "").lower()
+    VALID_INTENTS = {"booking", "complaint", "off_topic", "general"}
 
-    # Hard out-of-scope filter stays
-    if re.search(r"joke|riddle|funny|meme|weather|crypto|politics", t):
-        return ("out_of_scope", {})
+    prompt = (
+        "You are an intent classifier for BlueMarlin Tours Cura\u00e7ao.\n"
+        "Read the customer message below and reply with exactly one word:\n"
+        "- booking (if they want to book or ask about a charter)\n"
+        "- complaint (if they are unhappy, want a refund, or have a problem)\n"
+        "- off_topic (if the message has nothing to do with boat charters)\n"
+        "- general (if unclear but not hostile)\n"
+        "Reply with ONLY that one word. No punctuation. No explanation.\n"
+        "Message:\n"
+        f"{text}"
+    )
+    try:
+        raw = claude_client.complete(prompt) or ""
+        intent = raw.strip().lower()
+        if intent not in VALID_INTENTS:
+            intent = "general"
+    except Exception:
+        intent = "general"
 
     fields = extract_fields(text) or {}
 
@@ -191,10 +207,6 @@ def detect_intent_and_fields(text: str):
         adults = int(fields.get("adults", 0) or 0)
         kids = int(fields.get("kids", 0) or 0)
         fields["guests"] = adults + kids
-
-    # Determine intent
-    booking_words = ["book", "booking", "reserve", "reservation", "availability", "charter", "boat", "trip", "cruise"]
-    intent = "booking" if any(w in t for w in booking_words) or fields else "general"
 
     return (intent, fields)
 
@@ -228,6 +240,19 @@ def safe_out_of_scope_reply():
     )
 
 
+def safe_complaint_reply():
+    return (
+        "Hi there,\n\n"
+        "Thank you for reaching out, and I'm sorry to hear you've "
+        "had a frustrating experience.\n\n"
+        "I've flagged your message and our team will follow up with "
+        "you directly as soon as possible.\n\n"
+        "If your concern is about an upcoming or recent booking, "
+        "please reply with your booking details and we'll prioritize it.\n\n"
+        "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
+    )
+
+
 def package_key_from_experience(exp: str) -> str:
     e = (exp or "").lower()
     if "sunset" in e:
@@ -239,7 +264,6 @@ def package_key_from_experience(exp: str) -> str:
     return ""
 
 def normalize_date_to_yyyy_mm_dd(date_val: str) -> str:
-    # Minimal demo normalization
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
     tz = ZoneInfo("America/Curacao")
@@ -252,6 +276,17 @@ def normalize_date_to_yyyy_mm_dd(date_val: str) -> str:
     # Accept already-normalized YYYY-MM-DD
     if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
         return d
+    try:
+        parsed = dateparser.parse(date_val, settings={
+            "PREFER_DAY_OF_MONTH": "first",
+            "PREFER_DATES_FROM": "future",
+            "TIMEZONE": "America/Curacao",
+            "RETURN_TIME_AS_PERIOD": False,
+        })
+        if parsed is not None:
+            return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        pass
     return ""
 
 def default_start_time_for_package(package_key: str) -> str:
@@ -403,11 +438,18 @@ def main():
                 th["fields"] = merged
                 log(f"Merged fields: {merged}")
 
-                if intent == "out_of_scope":
+                if intent in ("out_of_scope", "off_topic"):
                     reply_body = safe_out_of_scope_reply()
                     smtp_send(from_email, "Re: " + subj, reply_body,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     log(f"Out-of-scope -> sent SAFE reply to: {from_email}")
+
+                elif intent == "complaint":
+                    reply_body = safe_complaint_reply()
+                    smtp_send(from_email, "Re: " + subj, reply_body,
+                              in_reply_to=msg.get("Message-ID"),
+                              references=msg.get("References"))
+                    log(f"Complaint -> sent empathetic reply to: {from_email}")
 
                 elif intent in ("booking", "general"):
                     missing = [f for f in REQUIRED_FIELDS if f not in merged]
@@ -508,7 +550,6 @@ def main():
                                         "That time slot is not available.\n\n"
                                         + alt_txt +
                                         "Reply with ONE of the dates above (YYYY-MM-DD), or send a different date/time and I’ll check it.\n\n"
-                                        f"(Internal note: {err})\n\n"
                                         "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
                                     )
                                     smtp_send(from_email, "Re: " + subj, msg_fail,
