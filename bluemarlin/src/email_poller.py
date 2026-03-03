@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 005
+# LAST MODIFIED: Brief 006
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
 # DEPENDS ON: marina_extractor.py (Brief 002)
 # DEPENDS ON: social_registry.py (original)
+# DEPENDS ON: calendar.js (original)
 # IMPORTS FROM: claude_client.py (Brief 001)
 # IMPORTS FROM: state_registry.py (Brief 004)
 # IMPORTS FROM: marina_extractor.py (Brief 002)
@@ -31,7 +32,9 @@ CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
 TENANT_ID = "caac06b5-1420-4223-9dcc-ba4a670ec26a"
 EMAIL_ADDR = "hello@wetakeyourjob.com"
 
-REFRESH_TOKEN_PATH = "/root/.openclaw/azure_refresh_token.txt"
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_CONFIG_DIR = os.path.normpath(os.path.join(_SRC_DIR, "..", "config"))
+REFRESH_TOKEN_PATH = os.path.join(_CONFIG_DIR, "azure_refresh_token.txt")
 SESSION_ID = "c5613944-cb20-4c34-941e-fd0e53f70494"
 
 IMAP_HOST = "outlook.office365.com"
@@ -42,8 +45,8 @@ SMTP_PORT = 587
 MAILBOX = "INBOX"
 POLL_INTERVAL = 30
 
-STATE_DIR = "/root/.openclaw"
-THREAD_STATE_PATH = os.path.join(STATE_DIR, "email_thread_state.json")
+STATE_DIR = _CONFIG_DIR
+THREAD_STATE_PATH = os.path.join(_CONFIG_DIR, "email_thread_state.json")
 
 # Anti-loop: max replies per thread within window
 MAX_REPLIES_PER_THREAD = 3
@@ -295,7 +298,7 @@ def create_calendar_hold(fields_now: dict) -> dict:
 
     try:
         r = subprocess.run(
-            ["node", "/root/.openclaw/workspace/calendar.js", json.dumps(payload)],
+            ["node", os.path.join(_SRC_DIR, "calendar.js"), json.dumps(payload)],
             capture_output=True, text=True, timeout=30
         )
         if r.returncode != 0:

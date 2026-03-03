@@ -52,5 +52,16 @@
 
 ---
 
+## Brief 006 — bm_logger.py + email_poller.py — config paths
+**Status:** Stable
+**What changed (bm_logger.py):** `LOG_PATH` replaced — now constructed from `__file__`, resolves to `bluemarlin/logs/bluemarlin.log` (Mac: `/Users/benson/Projects/bluemarlin-agent/bluemarlin/logs/bluemarlin.log`, VPS: `/root/bluemarlin/logs/bluemarlin.log`). `datetime.utcnow()` replaced with `datetime.now(timezone.utc)`. File header updated.
+**What changed (email_poller.py):** `REFRESH_TOKEN_PATH`, `STATE_DIR`, `THREAD_STATE_PATH` now constructed from `__file__` via `_SRC_DIR` / `_CONFIG_DIR` pointing to `bluemarlin/config/`. `calendar.js` subprocess call path updated from `/root/.openclaw/workspace/calendar.js` to `os.path.join(_SRC_DIR, "calendar.js")`. File header updated.
+**Callers must know (bm_logger.py):** `log()` return dict now contains timezone-aware ISO 8601 timestamp (e.g. `2026-03-03T03:13:44+00:00`). No functional impact on callers that discard the return value. `bluemarlin/logs/` directory is created automatically on first write.
+**Callers must know (email_poller.py):** No API changes. All path-dependent config now resolves correctly on both Mac and VPS without modification.
+**Files affected:** `bluemarlin/src/bm_logger.py`, `bluemarlin/src/email_poller.py`, `bluemarlin/logs/bluemarlin.log` (created)
+**Resolved paths (VPS):** `REFRESH_TOKEN_PATH` → `/root/bluemarlin/config/azure_refresh_token.txt`, `THREAD_STATE_PATH` → `/root/bluemarlin/config/email_thread_state.json`, `LOG_PATH` → `/root/bluemarlin/logs/bluemarlin.log`, `calendar.js` → `/root/bluemarlin/src/calendar.js`
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
