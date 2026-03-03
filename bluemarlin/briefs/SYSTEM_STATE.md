@@ -106,5 +106,19 @@
 
 ---
 
+## Brief 010 — systemd service
+**Status:** Stable
+**What changed:** `email_poller.py` is now managed as a systemd service. Starts automatically on boot, restarts on failure with a 10-second delay, logs to journald.
+**Files created (VPS only — not in Git):**
+- `/etc/systemd/system/bluemarlin.service` — unit file
+- `/root/bluemarlin/config/bluemarlin.env` — `ANTHROPIC_API_KEY` env var (chmod 600, covered by config/ gitignore)
+**Service management:** `systemctl start|stop|restart|status bluemarlin` / `journalctl -u bluemarlin -f`
+**Callers must know:** The poller is no longer started manually. To deploy a code change: push to Git, pull on VPS, then `systemctl restart bluemarlin`. To check for crashes: `journalctl -u bluemarlin -n 50`.
+**EnvironmentFile note:** Leading `-` on `EnvironmentFile` means service starts even if `bluemarlin.env` is missing — degrades gracefully (intents fall back to `"general"`). After any fresh VPS provision, `bluemarlin.env` must be recreated manually before production use.
+**Files affected:** None in Git. VPS-only files: `/etc/systemd/system/bluemarlin.service`, `/root/bluemarlin/config/bluemarlin.env`.
+**Depends on:** systemd (Ubuntu built-in)
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
