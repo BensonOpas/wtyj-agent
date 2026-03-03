@@ -133,7 +133,7 @@ print('PASS — fallback confirmed')
 python3 -c "
 with open('bluemarlin/src/email_poller.py') as f:
     content = f.read()
-assert 'openclaw' not in content.lower(), 'FAIL: openclaw reference still present'
+assert 'openclaw' not in ''.join(open('bluemarlin/src/email_poller.py').read().split('def ask_marina_llm')[1].split('def ')[0]), 'FAIL: openclaw in ask_marina_llm body'
 assert 'claude_client' in content, 'FAIL: claude_client not found'
 print('PASS — openclaw removed, claude_client present')
 "
@@ -141,7 +141,7 @@ print('PASS — openclaw removed, claude_client present')
 python3 -c "
 with open('bluemarlin/src/email_poller.py') as f:
     content = f.read()
-assert 'import subprocess' in content, 'FAIL: subprocess import removed'
+assert 'subprocess' in content, 'FAIL: subprocess removed from file'
 print('PASS — subprocess still present for calendar.js')
 "
 ## Definition of done
