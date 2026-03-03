@@ -63,5 +63,15 @@
 
 ---
 
+## Brief 007 — calendar.js — KEY_PATH and timezone fix
+**Status:** Stable
+**What changed:** `KEY_PATH` replaced — now constructed via `path.join(__dirname, '..', 'config', 'bluemarlin-calendar-key.json')`. Timezone bug fixed — `startDateTime` and `endDateTime` now constructed via `Date.UTC` with explicit `CURACAO_OFFSET_MS = -4 * 60 * 60 * 1000` offset instead of system-local `new Date(year, month-1, day, hour, minute)`. File header added.
+**Callers must know:** No interface change. JSON payload format and response format identical. Calendar holds now created at correct Curaçao local time — previously 4 hours off on UTC VPS (10:00 AM Curaçao was incorrectly stored as 10:00 UTC; now correctly stored as 14:00 UTC).
+**Files affected:** `bluemarlin/src/calendar.js`
+**Resolved paths (VPS):** `KEY_PATH` → `/root/bluemarlin/config/bluemarlin-calendar-key.json`
+**Pre-existing dependencies (unchanged):** `googleapis` npm package must be installed on VPS. `bluemarlin-calendar-key.json` must exist in `bluemarlin/config/` on VPS.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

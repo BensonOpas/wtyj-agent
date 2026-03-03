@@ -1,6 +1,11 @@
+// FILE: calendar.js
+// CREATED: Before Brief 001 (original codebase)
+// LAST MODIFIED: Brief 007
+// DEPENDS ON: bluemarlin-calendar-key.json (config)
+// CALLED BY: email_poller.py via subprocess
 const { google } = require('googleapis');
-
-const KEY_PATH = '/root/.openclaw/bluemarlin-calendar-key.json';
+const path = require('path');
+const KEY_PATH = path.join(__dirname, '..', 'config', 'bluemarlin-calendar-key.json');
 
 const CALENDARS = {
   half_day_private_charter: '011f3fe421fe405fc7cd93b0271c25b385c5ece811d9a8afed89ed68ee0ecd1e@group.calendar.google.com',
@@ -27,8 +32,11 @@ async function createHold({ package_key, date, start_time, guests_pax, customer_
   const [year, month, day] = date.split('-').map(Number);
   const [hour, minute] = start_time.split(':').map(Number);
 
-  const startDateTime = new Date(year, month - 1, day, hour, minute);
-  const endDateTime = new Date(startDateTime);
+  // Construct time in America/Curacao (always UTC-4, no DST)
+  const CURACAO_OFFSET_MS = -4 * 60 * 60 * 1000;
+  const utcMs = Date.UTC(year, month - 1, day, hour, minute) - CURACAO_OFFSET_MS;
+  const startDateTime = new Date(utcMs);
+  const endDateTime = new Date(utcMs);
   const dur = DURATIONS_HOURS[package_key] || 4;
   endDateTime.setTime(endDateTime.getTime() + dur * 60 * 60 * 1000);
 
