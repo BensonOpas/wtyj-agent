@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 016
+# LAST MODIFIED: Brief 017
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -776,16 +776,29 @@ def main():
                                         date = normalize_date_to_yyyy_mm_dd(fields_now.get("date")) or fields_now.get("date","—")
                                         name = fields_now.get("customer_name", "—")
 
+                                        social_opener = (
+                                            "That means so much to us \u2014 thank you! "
+                                            "We can't wait to have you on board. \U0001f30a\n\n"
+                                        ) if "social" in intents else ""
+                                        special_note = (
+                                            f"\U0001f4dd We've noted your special request: {fields_now.get('special_requests')}\n\n"
+                                        ) if fields_now.get("special_requests") else ""
                                         confirm = (
-                                            "Hi,\n\n"
-                                            "\u2705 Your provisional hold has been created (valid for 6 hours).\n\n"
+                                            f"Hi {name},\n\n"
+                                            + social_opener +
+                                            "\u2705 Your provisional hold has been created \u2014 "
+                                            "you're one step closer to an unforgettable day on the water!\n\n"
                                             f"- **Package:** {exp}\n"
-                                            f"- **Guests:** {guests}\n"
                                             f"- **Date:** {date}\n"
-                                            f"- **Name:** {name}\n\n"
-                                            f"Calendar link (internal): {res.get('htmlLink','')}\n\n"
-                                            f"Payment status: {th['flags'].get('payment_status', 'pending')}\n"
-                                            f"Payment link: {th['flags'].get('payment_link', '')}\n\n"
+                                            f"- **Guests:** {guests}\n\n"
+                                            + special_note +
+                                            "Your hold is valid for 6 hours. To confirm your booking, "
+                                            "please complete the payment using the link below:\n\n"
+                                            f"\U0001f4b3 Payment link: {th['flags'].get('payment_link', '')}\n\n"
+                                            f"Calendar link: {res.get('htmlLink','')}\n\n"
+                                            "If you have any questions at all, just reply to this email "
+                                            "and we'll take care of you.\n\n"
+                                            "See you on the water! \U0001f41f\n\n"
                                             "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
                                         )
 

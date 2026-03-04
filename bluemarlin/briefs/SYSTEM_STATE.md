@@ -216,5 +216,45 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 016 — email_poller.py — multi-label intent classification
+**Status:** Stable
+**What changed:** `detect_intent_and_fields()` replaced with multi-label classifier. Returns `(list[str], dict)` instead of `(str, dict)`. Full intent dispatch block replaced.
+**New intent label set (7 labels):** `booking`, `inquiry`, `cancellation`, `reschedule`, `complaint`, `social`, `off_topic`. `general` removed.
+**Classifier:** Prompt updated to request JSON array. Response parsing handles markdown code fences, validates against `VALID_INTENTS`, defaults to `["inquiry"]` on any failure.
+**Dispatch logic:**
+- `off_topic` only fires if it is the sole intent (`intents == ["off_topic"]`)
+- `social` only fires as pure-social if no actionable intent present alongside it
+- `complaint`, `cancellation`/`reschedule`, `inquiry`, `booking` each handled independently — multiple can fire per message
+- Booking flow unchanged — wrapped in `if "booking" in intents:`
+**New reply functions added:** `safe_social_reply()`, `safe_inquiry_reply()`, `safe_change_request_reply(action: str)`
+**New bm_logger events:** `social_received`, `cancellation_requested`, `reschedule_requested`, `inquiry_received`
+**`import json` added** at module level (no duplicate).
+**All 10 tests passed.**
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Dependencies added:** None.
+
+---
+
+## Brief 017 — email_poller.py — warm confirmation email
+**Status:** Stable
+**What changed:** Booking confirmation email rewritten for warmth and personalisation. No logic changes — only the `confirm` string construction.
+**Changes to confirm block:**
+- Greeting: `"Hi,"` → `f"Hi {name},"`
+- `social_opener` injected after greeting — fires when `"social" in intents`, empty string otherwise
+- Hold-created line: `"you're one step closer to an unforgettable day on the water!"`
+- Fields reordered: Package, Date, Guests (name removed from fields — already in greeting)
+- `special_note` injected after fields — fires when `fields_now.get("special_requests")` is truthy, empty string otherwise
+- Payment section reworded with 6-hour hold CTA; `payment_status` line removed
+- Payment link prefixed with 💳 emoji
+- Added: "If you have any questions at all, just reply to this email and we'll take care of you."
+- Added: "See you on the water! 🐟"
+- Sign-off unchanged
+**`social_opener` and `special_note` are pure string expressions — cannot raise exceptions.**
+**All 3 tests passed.**
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Dependencies added:** None.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
