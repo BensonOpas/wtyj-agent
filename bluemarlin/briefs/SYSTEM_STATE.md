@@ -283,5 +283,33 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 019 — email_poller.py — ambiguous date confirmation flow
+**Status:** Stable
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Dependencies added:** None.
+
+**New functions:**
+- `is_date_ambiguous(date_val: str) -> bool` — Returns `True` when no 4-digit year (`20\d{2}`) is found in the string. `"today"` and `"tomorrow"` return `False`. Uses existing `re` import.
+- `safe_date_confirmation_reply(resolved_date: str, original: str) -> str` — Formats resolved date to `"%B %d, %Y"` and returns a confirmation-request string with Marina signature. Falls back to raw `resolved_date` on any parse error. Never raises.
+- `is_date_confirmation_yes(text: str) -> bool` — Returns `True` if message is exactly a confirmation word or starts with one followed by a space or comma. Confirm words: yes, yeah, yep, yup, correct, confirmed, sure, ok, okay, si, ja, affirmative, that's right, thats right, right, exactly.
+
+**New thread flags:** `awaiting_date_confirmation`, `pending_date`, `pending_date_original` — stored in `th["flags"]`.
+
+**Date confirmation intercept (Change 4a):** Runs immediately after `detect_intent_and_fields()`, before field merging. When `awaiting_date_confirmation` is set:
+- Customer confirmed → lock date into `th["fields"]["date"]`, clear flag, fall through to normal booking flow.
+- Customer sent a new date → if still ambiguous, ask again; if explicit year, lock it and fall through; if unparseable, ask again with original pending date.
+- No date in message → ask again with original pending date.
+- All `continue` branches save thread state before exiting.
+
+**Ambiguity check (Change 4b):** Runs inside `if "booking" in intents:`, immediately before `missing = [f for f in REQUIRED_FIELDS if f not in merged]`. When `raw_date` is present, resolves, is ambiguous, and `awaiting_date_confirmation` is not already set — sends `safe_date_confirmation_reply()`, logs `date_confirmation_requested` to `bm_logger` and `sheets_writer`, saves state, `continue`.
+
+**Thread state default:** Now includes `"flags": {}`. `th.setdefault("flags", {})` retained in intercept block as safety net for threads loaded from pre-019 state files.
+
+**No changes to:** `normalize_date_to_yyyy_mm_dd()`, intent classifier, reply functions, or booking flow.
+
+**All 5 tests passed.**
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

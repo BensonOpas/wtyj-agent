@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 018
+# LAST MODIFIED: Brief 019
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -324,6 +324,45 @@ def safe_change_request_reply(action: str):
     )
 
 
+def safe_date_confirmation_reply(resolved_date: str, original: str) -> str:
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(resolved_date, "%Y-%m-%d")
+        friendly = dt.strftime("%B %d, %Y")
+    except Exception:
+        friendly = resolved_date
+    return (
+        f"Hi there,\n\n"
+        f"Just to confirm \u2014 when you said \"{original}\", "
+        f"did you mean {friendly}?\n\n"
+        f"Please reply with Yes to confirm, or send the exact date "
+        f"(e.g. 2026-04-15) if you meant a different date.\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def is_date_confirmation_yes(text: str) -> bool:
+    """
+    Returns True if the customer's message is a confirmation of the date.
+    Handles: yes, yeah, yep, correct, confirmed, sure, ok, okay,
+    si, ja, yep, affirmative — case insensitive.
+    """
+    t = (text or "").strip().lower()
+    confirm_words = {
+        "yes", "yeah", "yep", "yup", "correct", "confirmed",
+        "sure", "ok", "okay", "si", "ja", "affirmative",
+        "that's right", "thats right", "right", "exactly"
+    }
+    # Short message that is just a confirmation word
+    if t in confirm_words:
+        return True
+    # Message starts with a confirmation word
+    for word in confirm_words:
+        if t.startswith(word + " ") or t.startswith(word + ","):
+            return True
+    return False
+
+
 def package_key_from_experience(exp: str) -> str:
     e = (exp or "").lower()
     if "sunset" in e:
@@ -359,6 +398,32 @@ def normalize_date_to_yyyy_mm_dd(date_val: str) -> str:
     except Exception:
         pass
     return ""
+
+def is_date_ambiguous(date_val: str) -> bool:
+    """
+    Returns True if the date string does not contain an explicit 4-digit year.
+    Examples:
+      "January 1"       -> True  (no year)
+      "March 20"        -> True  (no year)
+      "next Friday"     -> True  (no year)
+      "tomorrow"        -> False (relative, unambiguous)
+      "today"           -> False (relative, unambiguous)
+      "2026-04-15"      -> False (explicit year)
+      "15/04/2026"      -> False (explicit year)
+      "April 15 2026"   -> False (explicit year)
+      "15 April 2026"   -> False (explicit year)
+    """
+    if not date_val:
+        return False
+    d = date_val.strip().lower()
+    # Relative dates are unambiguous
+    if d in ("today", "tomorrow"):
+        return False
+    # If a 4-digit year is present anywhere, it is unambiguous
+    if re.search(r'\b(20\d{2})\b', date_val):
+        return False
+    return True
+
 
 def default_start_time_for_package(package_key: str) -> str:
     # Demo defaults
@@ -477,6 +542,7 @@ def main():
                 threads = state["threads"]
                 th = threads.get(thread_key, {
                     "fields": {},
+                    "flags": {},
                     "last_customer_hash": "",
                     "reply_times": []  # epoch seconds
                 })
@@ -515,6 +581,82 @@ def main():
                     continue
 
                 intents, fields = detect_intent_and_fields(body)
+
+                # --- Date confirmation intercept ---
+                th.setdefault("flags", {})
+                if th["flags"].get("awaiting_date_confirmation"):
+                    pending_date = th["flags"].get("pending_date", "")
+                    pending_original = th["flags"].get("pending_date_original", "")
+                    if is_date_confirmation_yes(body):
+                        # Customer confirmed — lock the date and clear the flag
+                        th["flags"]["awaiting_date_confirmation"] = False
+                        if "fields" not in th:
+                            th["fields"] = {}
+                        th["fields"]["date"] = pending_date
+                        # Also merge any new fields from this message
+                        new_fields = fields or {}
+                        th["fields"].update(
+                            {k: v for k, v in new_fields.items()
+                             if v is not None and v != "" and k != "date"}
+                        )
+                        log(f"Date confirmed: {pending_date}")
+                        # Fall through to normal booking flow with confirmed date
+                    else:
+                        # Customer did not confirm — check if they sent a new date
+                        new_date = fields.get("date")
+                        if new_date:
+                            resolved = normalize_date_to_yyyy_mm_dd(new_date)
+                            if resolved:
+                                if is_date_ambiguous(new_date):
+                                    # Still ambiguous — ask again with new date
+                                    th["flags"]["pending_date"] = resolved
+                                    th["flags"]["pending_date_original"] = new_date
+                                    reply_body = safe_date_confirmation_reply(
+                                        resolved, new_date)
+                                    smtp_send(from_email, "Re: " + subj, reply_body,
+                                              in_reply_to=msg.get("Message-ID"),
+                                              references=msg.get("References"))
+                                    log(f"Date re-asked (still ambiguous): {resolved}")
+                                    th["last_customer_hash"] = customer_hash
+                                    th["reply_times"].append(now)
+                                    threads[thread_key] = th
+                                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                    save_json(THREAD_STATE_PATH, state)
+                                    continue
+                                else:
+                                    # Explicit year provided — use it directly
+                                    th["flags"]["awaiting_date_confirmation"] = False
+                                    th["fields"]["date"] = resolved
+                                    log(f"Date updated with explicit year: {resolved}")
+                                    # Fall through to normal booking flow
+                            else:
+                                # Could not parse new date — ask again
+                                reply_body = safe_date_confirmation_reply(
+                                    pending_date, pending_original)
+                                smtp_send(from_email, "Re: " + subj, reply_body,
+                                          in_reply_to=msg.get("Message-ID"),
+                                          references=msg.get("References"))
+                                log(f"Date confirmation re-asked (unparseable): {pending_date}")
+                                th["last_customer_hash"] = customer_hash
+                                th["reply_times"].append(now)
+                                threads[thread_key] = th
+                                im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                save_json(THREAD_STATE_PATH, state)
+                                continue
+                        else:
+                            # No date in message — ask again
+                            reply_body = safe_date_confirmation_reply(
+                                pending_date, pending_original)
+                            smtp_send(from_email, "Re: " + subj, reply_body,
+                                      in_reply_to=msg.get("Message-ID"),
+                                      references=msg.get("References"))
+                            log(f"Date confirmation re-asked (no date in reply): {pending_date}")
+                            th["last_customer_hash"] = customer_hash
+                            th["reply_times"].append(now)
+                            threads[thread_key] = th
+                            im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                            save_json(THREAD_STATE_PATH, state)
+                            continue
 
                 # Merge fields (union only)
                 merged = dict(th.get("fields", {}))
@@ -589,6 +731,38 @@ def main():
                                                 {"email": from_email, "subject": subj})
                     # booking: run the full booking flow (unchanged logic)
                     if "booking" in intents:
+                        # --- Ambiguous date check ---
+                        raw_date = fields.get("date") or merged.get("date", "")
+                        resolved_date = normalize_date_to_yyyy_mm_dd(raw_date)
+                        if (raw_date
+                                and resolved_date
+                                and is_date_ambiguous(raw_date)
+                                and not th["flags"].get("awaiting_date_confirmation")):
+                            # Date is ambiguous — ask for confirmation before proceeding
+                            th["flags"]["awaiting_date_confirmation"] = True
+                            th["flags"]["pending_date"] = resolved_date
+                            th["flags"]["pending_date_original"] = raw_date
+                            reply_body = safe_date_confirmation_reply(resolved_date, raw_date)
+                            smtp_send(from_email, "Re: " + subj, reply_body,
+                                      in_reply_to=msg.get("Message-ID"),
+                                      references=msg.get("References"))
+                            log(f"Ambiguous date detected: '{raw_date}' -> asking confirmation for {resolved_date}")
+                            bm_logger.log("date_confirmation_requested", email=from_email,
+                                          subject=subj, raw_date=raw_date,
+                                          resolved_date=resolved_date)
+                            sheets_writer.log_event("date_confirmation_requested", {
+                                "email": from_email,
+                                "subject": subj,
+                                "raw_date": raw_date,
+                                "resolved_date": resolved_date,
+                            })
+                            th["last_customer_hash"] = customer_hash
+                            th["reply_times"].append(now)
+                            threads[thread_key] = th
+                            im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                            save_json(THREAD_STATE_PATH, state)
+                            continue
+                        # --- end ambiguous date check ---
                         missing = [f for f in REQUIRED_FIELDS if f not in merged]
 
                         if missing:
