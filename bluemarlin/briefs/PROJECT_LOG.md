@@ -100,45 +100,73 @@ BRIEF 015 — sheet polish
   Output: bluemarlin/briefs/OUTPUT_015.md
 ---
 ## Planned Work
-BRIEF 016 — client.json config system
+### Phase C — Foundation
+BRIEF 021 — Decisions record (complete — no Codex execution)
+  What: Locked architectural and product decisions.
+        MARINA_INTELLIGENCE_SPEC.md and PROJECT_LOG.md updated.
+BRIEF 022 — client.json schema + config_loader.py
   Priority: HIGH
   What: Extract all client-specific values to single config file.
         Business name, email, timezone, packages, calendar IDs,
         Microsoft credentials reference, Google credentials reference.
         All source files read from config at startup.
   Why: Required to onboard second client without manual file edits.
-       Highest leverage brief remaining.
-  Files: bluemarlin/config/client.json (new),
+       Gate for Brief 023 prompt design and Brief 024 refactor.
+  Files: bluemarlin/config/client.json (new), config_loader.py (new),
          email_poller.py, marina_extractor.py, social_drafter.py,
          calendar.js, bm_logger.py, sheets_writer.py
-BRIEF 017 — WhatsApp channel
+BRIEF 023 — Unified Claude prompt isolated test
+  Priority: HIGH
+  What: Design and test the unified Claude call in isolation.
+        One call per email: returns structured JSON with intents,
+        extracted_fields, confidence, clarifications_needed,
+        reply, and flags (requires_human, large_group, etc.).
+        Marina persona injected from client.json.
+  Why: Must be validated in isolation before Brief 024 integration.
+  Gate: All isolated tests must pass before Brief 024 starts.
+BRIEF 024 — Full refactor of email_poller.py
+  Priority: HIGH
+  What: Replace rule engine with unified Claude call.
+        Remove: classify_date_input(), is_date_confirmation_yes(),
+        experience_is_clear(), all safe_X_reply() functions,
+        date confirmation state machine, multi-label dispatch block.
+        Python handles only: prompt construction, JSON parsing,
+        field validation, state update, calendar hold, logging.
+  Why: Correct the architectural drift from Briefs 018-020.
+  Gate: Brief 023 must pass before this starts.
+BRIEF 025 — Regression and live test suite
+  Priority: HIGH
+  What: End-to-end test suite covering all email scenarios.
+        Must pass before WhatsApp work begins.
+  Gate: All live tests must pass before Brief 026 starts.
+### Phase D — Channels and Polish
+BRIEF 026 — WhatsApp integration
   Priority: HIGH
   What: Extend booking agent to WhatsApp messages.
         Most Caribbean tourism customers use WhatsApp not email.
-  Why: Likely larger booking channel than email for BlueMarlin.
-  Dependencies: WhatsApp Business API access, Meta developer account
-  Note: Requires platform research before brief can be written
-BRIEF 018 — complaint escalation
+  Dependencies: WhatsApp Business API access, Meta developer account,
+                Brief 025 (regression suite) must be complete.
+  Note: Requires platform research before brief can be written.
+BRIEF 027 — Reply variation and tone
   Priority: MEDIUM
-  What: Forward complaints to configurable notification channel.
-        Currently complaints are logged and replied to but no
-        human is notified.
-  Why: Real client liability — unhappy customer with no human follow-up
-  Design: Escalation channel defined in client.json (email, WhatsApp,
-          or webhook). Build when first client requires it.
-  Dependencies: Brief 016 (client.json) must be complete first
-BRIEF 019 — Instagram DM handling
+  What: Ensure Marina's dynamic replies vary naturally.
+        Tone calibration, energy matching, language switching.
+  Dependencies: Brief 024 (refactor) must be complete.
+BRIEF 028 — Complaint escalation (operator notification)
   Priority: MEDIUM
-  What: Extend booking agent to Instagram DMs
-  Dependencies: Meta developer account, Instagram Graph API access,
-                Brief 016 (client.json)
-  Note: Requires platform research before brief can be written
-BRIEF 020 — social posting
-  Priority: LOW
-  What: Connect social_drafter.py and post_executor.py to real
-        Instagram and Facebook posting
-  Note: Drafting already built. Needs real API connection.
-  Dependencies: Brief 019 (Instagram DM) infrastructure
+  What: Forward requires_human events to operator via email
+        or webhook. Currently logged but no human notified.
+  Why: Real client liability — unhappy customer with no human follow-up.
+  Dependencies: Brief 022 (client.json) for escalation channel config.
+BRIEF 029 — Booking reference numbers
+  Priority: MEDIUM
+  What: Generate a human-readable booking reference for each hold.
+        Include in confirmation email and calendar event.
+### Phase E — Multi-Client
+BRIEF 030 — Second client onboarding
+  Priority: HIGH
+  What: Onboard a second client using the client.json config system.
+  Dependencies: Briefs 022, 024, 025 must all be complete.
 ---
 ## Discarded / Deferred
 Stripe payments
@@ -221,6 +249,12 @@ Decision: client.json before social media
   Reason: client.json unlocks clean multi-client deployment.
           Social media integrations should be built on top of
           a clean config system, not before it.
+8. Rule engine frozen 2026-03-04 — Briefs 018-020 introduced
+   Python logic for language understanding (date classification,
+   experience matching, confirmation detection). This was drift
+   from the correct architecture. Frozen as of Brief 021.
+   Full refactor in Brief 024 will replace with unified Claude
+   call returning structured JSON. See ARCHITECTURE_DRIFT_LOG.md.
 ---
 ## Workflow Reference
 Every change follows this loop:

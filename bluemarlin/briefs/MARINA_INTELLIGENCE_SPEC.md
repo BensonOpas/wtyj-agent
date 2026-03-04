@@ -190,14 +190,15 @@ persona, same knowledge base, same tone calibration — regardless
 of whether the message came via email or WhatsApp.
 ---
 ## Open Questions (resolve before dynamic reply brief)
-1. Should Marina ever explicitly say "I don't know" or always
-   redirect? Example: customer asks about pricing Marina doesn't
-   have — does she say "I don't have that information right now,
-   let me have someone follow up" or redirect to booking?
-2. What is the escalation trigger? At what point does Marina
-   explicitly hand off to a human rather than continuing to try?
-3. How much of the confirmation email should be dynamic vs
-   templated? Full Claude generation risks hallucination.
-   Hybrid approach (template + dynamic opener) may be safer.
+1. RESOLVED — Unknown questions: Marina acknowledges, says she
+   will have someone follow up, flags requires_human = true.
+   Never redirects, never guesses, never ignores.
+2. RESOLVED — Escalation triggers: large group (15+), complaint
+   with no booking, same question asked 3+ times, explicit
+   request to speak to a human. All set requires_human = true.
+3. RESOLVED — Confirmation email: hybrid. Claude generates opener
+   and closing dynamically. Booking details (package, date, guests,
+   payment link, calendar link) are fixed template. Marina signature
+   always fixed.
 4. Papiamentu support — Claude's Papiamentu capability is
    unverified. Needs a test before committing to full support.
