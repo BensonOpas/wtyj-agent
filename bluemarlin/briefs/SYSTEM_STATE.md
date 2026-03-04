@@ -147,5 +147,49 @@
 
 ---
 
+## Brief 013 — sheets_writer.py (NEW) + email_poller.py — Google Sheets dashboard
+**Status:** Stable
+**What changed:**
+
+`sheets_writer.py` — new file created. Appends rows to the BlueMarlin Operations Dashboard Google Sheet in real time. Four public functions:
+- `log_hold_created(data)` → Bookings tab (13 cols, status=CREATED) + All Events tab
+- `log_hold_failed(data)` → Bookings tab (13 cols, status=FAILED) + All Events tab
+- `log_complaint(data)` → Complaints tab (6 cols, status=NEW) + All Events tab
+- `log_event(event_type, data)` → All Events tab only (5 cols)
+
+All four functions wrapped in `try/except` — never raise, never crash `email_poller.py`. `_get_service()` called fresh per write (no persistent connection). `KEY_PATH` resolves from `__file__`. `SPREADSHEET_ID` hardcoded as module constant.
+
+`email_poller.py` — `import sheets_writer` added. Six call sites added, one immediately after each `bm_logger.log()` call: `off_topic_received`, `complaint_received`, `missing_fields_requested`, `booking_attempted`, `hold_failed`, `hold_created`. No existing logic changed. File header updated to `Brief 013`.
+
+**Sheet structure (Spreadsheet ID: `1soG3zVnx-Y0WYWGJdgakXqpNeI6GAe6AD8DycOwwifE`):**
+- Tab `Bookings`: Timestamp, Customer Name, Email, Experience, Date, Guests, Phone, Special Requests, Hold Status, Event Link, Payment Link, Error, Operator Notes
+- Tab `Complaints`: Timestamp, Email, Subject, Message Preview, Status, Operator Notes
+- Tab `All Events`: Timestamp, Event Type, Email, Subject, Details (JSON)
+
+**Callers must know:** Each of the 6 structured log events now triggers one Google Sheets API call (~100–300ms latency). If Sheets API is unavailable, error is printed to stdout (→ journald) and `email_poller` continues normally. Test rows with `test@example.com` are live in the sheet — delete before go-live.
+**Files affected:** `bluemarlin/src/sheets_writer.py` (new), `bluemarlin/src/email_poller.py`
+**Dependencies added:** `google-api-python-client==2.191.0`, `google-auth==2.48.0` (plus transitive deps including `httplib2`, `cryptography`, `pyasn1`, `rsa`)
+**Depends on:** `bluemarlin-calendar-key.json` (VPS config, gitignored), Google Sheets API (enabled on existing service account)
+
+---
+
+## Brief 014 — format_sheets.py (NEW) — Google Sheets dashboard formatting
+**Status:** Stable
+**What changed:** `format_sheets.py` created as a run-once manual formatting script. Applies the BlueMarlin color palette to all three dashboard tabs (Bookings, Complaints, All Events). Writes header rows and applies formatting via a single batched `batchUpdate` API call per tab. Not imported by any other module — no impact on the live booking loop.
+**Format applied per tab:**
+- Entire sheet background: deep navy `#1a2744`
+- Header row: `#243460` background, white bold 11pt text, centered, frozen
+- Header bottom border: `SOLID_MEDIUM` in `#2e7d9e`
+- Body rows 1–1000: text `#e8edf5`, 10pt, vertically centered
+- Column widths: Bookings 160px × 13, Complaints 200px × 6, All Events 160px × 4 + 400px for Details column
+- Row height: 32px all rows
+**To run:** `python3 bluemarlin/src/format_sheets.py` — prints `Formatted: {tab}` per tab, then `Done.`
+**Idempotent:** safe to re-run; last-write-wins for all formatting. Will overwrite any manual header formatting.
+**Files affected:** `bluemarlin/src/format_sheets.py` (new). No other files modified.
+**Dependencies added:** None — `google-api-python-client` and `google-auth` already installed in Brief 013.
+**Depends on:** `sheets_writer.py` (imports `KEY_PATH`, `SPREADSHEET_ID`, `_get_service`), `bluemarlin-calendar-key.json`
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
