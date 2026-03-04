@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 009
+# LAST MODIFIED: Brief 012
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -443,6 +443,12 @@ def main():
                     smtp_send(from_email, "Re: " + subj, reply_body,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     log(f"Out-of-scope -> sent SAFE reply to: {from_email}")
+                    bm_logger.log(
+                        "off_topic_received",
+                        email=from_email,
+                        subject=subj,
+                        body_snippet=body[:200]
+                    )
 
                 elif intent == "complaint":
                     reply_body = safe_complaint_reply()
@@ -450,6 +456,12 @@ def main():
                               in_reply_to=msg.get("Message-ID"),
                               references=msg.get("References"))
                     log(f"Complaint -> sent empathetic reply to: {from_email}")
+                    bm_logger.log(
+                        "complaint_received",
+                        email=from_email,
+                        subject=subj,
+                        body_snippet=body[:200]
+                    )
 
                 elif intent in ("booking", "general"):
                     missing = [f for f in REQUIRED_FIELDS if f not in merged]
@@ -480,6 +492,13 @@ def main():
                         smtp_send(from_email, "Re: " + subj, ask,
                                   in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                         log(f"Booking intent -> requested missing fields (all at once): {missing}")
+                        bm_logger.log(
+                            "missing_fields_requested",
+                            email=from_email,
+                            subject=subj,
+                            missing=missing,
+                            fields_so_far=list(merged.keys())
+                        )
 
                     else:
                         # We have all required booking info.
@@ -523,6 +542,17 @@ def main():
 
                             else:
                                 # Create REAL calendar hold
+                                bm_logger.log(
+                                    "booking_attempted",
+                                    email=from_email,
+                                    subject=subj,
+                                    experience=fields_now.get("experience"),
+                                    date=fields_now.get("date"),
+                                    guests=fields_now.get("guests"),
+                                    customer_name=fields_now.get("customer_name"),
+                                    phone=fields_now.get("phone"),
+                                    special_requests=fields_now.get("special_requests")
+                                )
                                 res = create_calendar_hold(fields_now)
                                 if not res.get("ok"):
                                     err = (res.get("error","unknown") or "unknown")
@@ -555,6 +585,15 @@ def main():
                                     smtp_send(from_email, "Re: " + subj, msg_fail,
                                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                                     log(f"Hold create FAILED for {from_email}: {res.get('error')}")
+                                    bm_logger.log(
+                                        "hold_failed",
+                                        email=from_email,
+                                        subject=subj,
+                                        error=res.get("error"),
+                                        experience=fields_now.get("experience"),
+                                        date=fields_now.get("date"),
+                                        guests=fields_now.get("guests")
+                                    )
                                 else:
                                     th["flags"]["hold_created"] = True
                                     th["flags"]["event_id"] = res.get("eventId")
@@ -573,10 +612,18 @@ def main():
                                     # ---- BM-014: Structured logging ----
                                     bm_logger.log(
                                         "hold_created",
-                                        event_id=th["flags"].get("event_id"),
-                                        payment_id=th["flags"].get("payment_id"),
                                         email=from_email,
-                                        subject=subj
+                                        subject=subj,
+                                        event_id=th["flags"].get("event_id"),
+                                        html_link=th["flags"].get("event_link"),
+                                        payment_id=th["flags"].get("payment_id"),
+                                        payment_link=th["flags"].get("payment_link"),
+                                        experience=fields_now.get("experience"),
+                                        date=fields_now.get("date"),
+                                        guests=fields_now.get("guests"),
+                                        customer_name=fields_now.get("customer_name"),
+                                        phone=fields_now.get("phone"),
+                                        special_requests=fields_now.get("special_requests")
                                     )
                                     # ---- end BM-014 ----
                                     # ---- end BM-006 ----
