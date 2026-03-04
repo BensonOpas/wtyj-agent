@@ -130,5 +130,22 @@
 
 ---
 
+## Brief 012 — email_poller.py — expand structured logging
+**Status:** Stable
+**What changed:** `bm_logger.log()` calls added at 6 key events in the main loop. Previously only `hold_created` was structured-logged (1 call). Now 6 events are logged:
+1. `off_topic_received` — email, subject, body_snippet (first 200 chars)
+2. `complaint_received` — email, subject, body_snippet (first 200 chars)
+3. `missing_fields_requested` — email, subject, missing (list), fields_so_far (list of keys)
+4. `booking_attempted` — email, subject, experience, date, guests, customer_name, phone, special_requests (logged immediately before `create_calendar_hold()`)
+5. `hold_created` — expanded from 4 fields to 12: email, subject, event_id, html_link, payment_id, payment_link, experience, date, guests, customer_name, phone, special_requests
+6. `hold_failed` — email, subject, error, experience, date, guests
+
+**Callers must know:** No runtime behaviour changes — logging only. `bluemarlin/logs/bluemarlin.log` will now contain entries for all 6 event types in JSONL format. `missing` and `fields_so_far` are serialised as JSON arrays. `body_snippet` is capped at 200 chars — full body is never logged. `phone` and `customer_name` appear in `booking_attempted` and `hold_created` — the log file contains PII and must be treated accordingly. `special_requests` is now surfaced in structured logs (closes the dead-field flag from Brief 011 for logging purposes; confirmation email surfacing remains a future brief).
+**Files affected:** `bluemarlin/src/email_poller.py`
+**Dependencies added:** None.
+**Depends on:** `bm_logger.py` (original, Brief 006)
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
