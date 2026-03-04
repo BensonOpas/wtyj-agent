@@ -120,5 +120,15 @@
 
 ---
 
+## Brief 011 — marina_extractor.py — special_requests field
+**Status:** Stable
+**What changed:** `special_requests` added as an 8th extraction field to `marina_extractor.py`. `ALLOWED_KEYS` updated. Extraction prompt updated with annotated field descriptions and a new rule: capture verbatim, omit entirely if not mentioned. Function signature, return type, and `claude_client` import block unchanged. Filter line (`clean = {k: v ...}`) unchanged — handles the new key automatically.
+**Callers must know:** `extract_fields()` may now return a `special_requests` key (plain string, verbatim from customer message). Absent when no special requests are mentioned. `email_poller.py` is unaffected — unknown fields accumulate in `th["fields"]` and are ignored by existing logic. `special_requests` is now available in the thread state for future use but is not yet surfaced in the confirmation email, calendar hold payload, or `bm_logger` output.
+**Files affected:** `bluemarlin/src/marina_extractor.py`
+**Dependencies added:** None.
+**Known flag:** `special_requests` is a dead field until a future brief surfaces it — confirmation email, calendar hold description, or structured log. Data is being captured; it is not being used yet.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

@@ -1,6 +1,6 @@
 # FILE: marina_extractor.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 002
+# LAST MODIFIED: Brief 011
 # DEPENDS ON: claude_client.py (Brief 001)
 # IMPORTS FROM: claude_client.py (Brief 001)
 import sys
@@ -15,7 +15,8 @@ ALLOWED_KEYS = {
     "adults",
     "kids",
     "customer_name",
-    "phone"
+    "phone",
+    "special_requests"
 }
 
 def extract_fields(text: str):
@@ -26,19 +27,26 @@ Extract booking parameters from the message below.
 
 Return ONLY valid JSON.
 Allowed keys:
-- experience
-- date
-- guests
-- adults
-- kids
-- customer_name
-- phone
+- experience (which boat tour they want)
+- date (when they want to go)
+- guests (total number of people)
+- adults (if specified separately)
+- kids (if specified separately)
+- customer_name (their name)
+- phone (their phone number)
+- special_requests (dietary needs, allergies, accessibility
+  requirements, celebrations, drink preferences, or any
+  other personal notes — capture verbatim as a single string)
 
 Rules:
 - If a field is missing, omit it.
 - Do NOT guess.
 - Do NOT explain.
 - Do NOT write anything except JSON.
+- For special_requests: capture any personal context,
+  dietary restrictions, accessibility needs, allergies,
+  celebrations, or preferences verbatim. If none are
+  mentioned, omit the field entirely.
 
 Message:
 {text}
