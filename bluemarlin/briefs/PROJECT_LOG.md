@@ -172,9 +172,7 @@ OpenClaw
 4. AI confidence visibility — when Claude intent classifier is
    uncertain it defaults to general silently. No logging of
    confidence level. Future improvement.
-5. Confirmation email does not acknowledge special_requests
-   back to customer. Customer has no confirmation their request
-   was noted. Future improvement.
+5. Confirmation email — special_requests acknowledged ✓ RESOLVED Brief 017
 6. payment_stub.py — placeholder only, demo.pay links go nowhere.
    Deferred per client decision.
 7. Sheet1 tab — default Google Sheets tab, not used, not deleted.
@@ -182,6 +180,13 @@ OpenClaw
 8. format_sheets.py test rows — test rows with test@example.com
    are live in the Bookings, Complaints, and All Events tabs.
    Should be manually deleted before client handoff.
+9. Reply tone and variation — all static reply templates (safe_social_reply,
+   safe_inquiry_reply, safe_change_request_reply, safe_out_of_scope_reply,
+   safe_complaint_reply, and the confirmation email) are hardcoded strings.
+   No variation, no dynamic tone, emojis feel templated. Marina needs to
+   sound like a real person — different phrasing each time, natural emoji
+   use, responses that adapt to the customer's energy. Fix in a dedicated
+   brief after client.json is complete.
 ---
 ## Architecture Decisions Log
 Decision: SQLite over JSON for state_registry

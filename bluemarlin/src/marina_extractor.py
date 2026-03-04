@@ -1,6 +1,6 @@
 # FILE: marina_extractor.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 011
+# LAST MODIFIED: Brief 018
 # DEPENDS ON: claude_client.py (Brief 001)
 # IMPORTS FROM: claude_client.py (Brief 001)
 import sys
@@ -34,19 +34,25 @@ Allowed keys:
 - kids (if specified separately)
 - customer_name (their name)
 - phone (their phone number)
-- special_requests (dietary needs, allergies, accessibility
-  requirements, celebrations, drink preferences, or any
-  other personal notes — capture verbatim as a single string)
+- special_requests (forward-looking preferences for the
+  upcoming trip only: dietary needs, allergies, accessibility
+  requirements, celebrations, drink preferences — capture
+  verbatim. Exclude complaints about past experiences.)
 
 Rules:
 - If a field is missing, omit it.
 - Do NOT guess.
 - Do NOT explain.
 - Do NOT write anything except JSON.
-- For special_requests: capture any personal context,
-  dietary restrictions, accessibility needs, allergies,
-  celebrations, or preferences verbatim. If none are
-  mentioned, omit the field entirely.
+- For special_requests: capture ONLY forward-looking personal
+  preferences for the upcoming trip — dietary restrictions,
+  allergies, accessibility needs, celebrations, drink
+  preferences, or specific requests for the day.
+  Do NOT capture complaints about past experiences,
+  negative feedback, or anything referring to a previous trip.
+  Those are complaints, not special requests.
+  If no forward-looking preferences are mentioned, omit
+  the field entirely.
 
 Message:
 {text}

@@ -256,5 +256,32 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 018 — email_poller.py + marina_extractor.py — three bug fixes
+**Status:** Stable
+**Files affected:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_extractor.py`
+**Dependencies added:** None.
+
+**Fix 1 — Anti-loop constants (email_poller.py):**
+- `MAX_REPLIES_PER_THREAD` 3 → 10
+- `REPLY_WINDOW_SECONDS` 10 min → 60 min
+- Reason: 3-reply/10-minute window was too tight for legitimate multi-turn bookings (missing fields → name/phone → confirm = 3 exchanges minimum).
+
+**Fix 2 — Past date guard (email_poller.py, inside `create_calendar_hold()`):**
+- Added immediately after `if not date_iso:` early-return block.
+- Returns `{"ok": False, "error": "Requested date YYYY-MM-DD is in the past."}` before calling `calendar.js`.
+- `_date` alias used (`from datetime import date as _date`) to avoid shadowing the `date` local variable defined later in the booking flow.
+- Existing `hold_failed` dispatch handles this error shape correctly — Marina replies with 3 alternative dates.
+- Known edge case: `date.today()` on a UTC VPS could reject a valid same-day Curaçao booking in the 4-hour window before UTC midnight. Accepted for demo system.
+
+**Fix 3 — `special_requests` prompt tightened (marina_extractor.py):**
+- Key annotation updated: "forward-looking preferences for the upcoming trip only ... Exclude complaints about past experiences."
+- Rule updated: "capture ONLY forward-looking personal preferences ... Do NOT capture complaints about past experiences, negative feedback, or anything referring to a previous trip."
+- Reason: "Last time the music was too loud" was being captured as `special_requests` due to "any personal context" wording. Intent classifier correctly handles complaints — extractor should not also grab them.
+- `extract_fields()` will no longer return `special_requests` for complaint-only or past-experience text.
+
+**All 7 tests passed.**
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

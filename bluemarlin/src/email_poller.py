@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 017
+# LAST MODIFIED: Brief 018
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -51,8 +51,8 @@ STATE_DIR = _CONFIG_DIR
 THREAD_STATE_PATH = os.path.join(_CONFIG_DIR, "email_thread_state.json")
 
 # Anti-loop: max replies per thread within window
-MAX_REPLIES_PER_THREAD = 3
-REPLY_WINDOW_SECONDS = 10 * 60
+MAX_REPLIES_PER_THREAD = 10
+REPLY_WINDOW_SECONDS = 60 * 60
 
 # Booking fields we require to proceed
 REQUIRED_FIELDS = ["experience", "date", "guests"]
@@ -391,6 +391,19 @@ def create_calendar_hold(fields_now: dict) -> dict:
         return {"ok": False, "error": "Unknown package (experience mapping failed)."}
     if not date_iso:
         return {"ok": False, "error": "Date not recognized. Use today/tomorrow or YYYY-MM-DD."}
+
+    # Past date guard
+    try:
+        from datetime import date as _date
+        booking_date = _date.fromisoformat(date_iso)
+        today = _date.today()
+        if booking_date < today:
+            return {
+                "ok": False,
+                "error": f"Requested date {date_iso} is in the past."
+            }
+    except Exception:
+        pass  # If date parsing fails here, let calendar.js handle it
 
     payload = {
         "package_key": pkg,
