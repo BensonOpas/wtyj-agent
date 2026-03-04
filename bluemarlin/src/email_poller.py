@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 012
+# LAST MODIFIED: Brief 013
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -27,6 +27,7 @@ import sys as _sys
 import os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import claude_client
+import sheets_writer
 
 # ========= CONFIG =========
 CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
@@ -449,6 +450,10 @@ def main():
                         subject=subj,
                         body_snippet=body[:200]
                     )
+                    sheets_writer.log_event("off_topic_received", {
+                        "email": from_email,
+                        "subject": subj,
+                    })
 
                 elif intent == "complaint":
                     reply_body = safe_complaint_reply()
@@ -462,6 +467,11 @@ def main():
                         subject=subj,
                         body_snippet=body[:200]
                     )
+                    sheets_writer.log_complaint({
+                        "email": from_email,
+                        "subject": subj,
+                        "body_snippet": body[:200],
+                    })
 
                 elif intent in ("booking", "general"):
                     missing = [f for f in REQUIRED_FIELDS if f not in merged]
@@ -499,6 +509,11 @@ def main():
                             missing=missing,
                             fields_so_far=list(merged.keys())
                         )
+                        sheets_writer.log_event("missing_fields_requested", {
+                            "email": from_email,
+                            "subject": subj,
+                            "missing": missing,
+                        })
 
                     else:
                         # We have all required booking info.
@@ -553,6 +568,12 @@ def main():
                                     phone=fields_now.get("phone"),
                                     special_requests=fields_now.get("special_requests")
                                 )
+                                sheets_writer.log_event("booking_attempted", {
+                                    "email": from_email,
+                                    "subject": subj,
+                                    "experience": fields_now.get("experience"),
+                                    "date": fields_now.get("date"),
+                                })
                                 res = create_calendar_hold(fields_now)
                                 if not res.get("ok"):
                                     err = (res.get("error","unknown") or "unknown")
@@ -594,6 +615,14 @@ def main():
                                         date=fields_now.get("date"),
                                         guests=fields_now.get("guests")
                                     )
+                                    sheets_writer.log_hold_failed({
+                                        "email": from_email,
+                                        "subject": subj,
+                                        "experience": fields_now.get("experience"),
+                                        "date": fields_now.get("date"),
+                                        "guests": fields_now.get("guests"),
+                                        "error": res.get("error"),
+                                    })
                                 else:
                                     th["flags"]["hold_created"] = True
                                     th["flags"]["event_id"] = res.get("eventId")
@@ -625,6 +654,18 @@ def main():
                                         phone=fields_now.get("phone"),
                                         special_requests=fields_now.get("special_requests")
                                     )
+                                    sheets_writer.log_hold_created({
+                                        "email": from_email,
+                                        "subject": subj,
+                                        "customer_name": fields_now.get("customer_name"),
+                                        "experience": fields_now.get("experience"),
+                                        "date": fields_now.get("date"),
+                                        "guests": fields_now.get("guests"),
+                                        "phone": fields_now.get("phone"),
+                                        "special_requests": fields_now.get("special_requests"),
+                                        "html_link": th["flags"].get("event_link"),
+                                        "payment_link": th["flags"].get("payment_link"),
+                                    })
                                     # ---- end BM-014 ----
                                     # ---- end BM-006 ----
 
