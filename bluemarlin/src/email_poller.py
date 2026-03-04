@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 013
+# LAST MODIFIED: Brief 016
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -177,29 +177,54 @@ def stable_thread_key(msg, from_email: str, subject: str) -> str:
 
 
 
-def detect_intent_and_fields(text: str):
+def detect_intent_and_fields(text: str) -> tuple[list[str], dict]:
     from marina_extractor import extract_fields
 
-    VALID_INTENTS = {"booking", "complaint", "off_topic", "general"}
+    VALID_INTENTS = {
+        "booking", "inquiry", "cancellation",
+        "reschedule", "complaint", "social", "off_topic"
+    }
 
     prompt = (
         "You are an intent classifier for BlueMarlin Tours Cura\u00e7ao.\n"
-        "Read the customer message below and reply with exactly one word:\n"
-        "- booking (if they want to book or ask about a charter)\n"
-        "- complaint (if they are unhappy, want a refund, or have a problem)\n"
-        "- off_topic (if the message has nothing to do with boat charters)\n"
-        "- general (if unclear but not hostile)\n"
-        "Reply with ONLY that one word. No punctuation. No explanation.\n"
+        "Read the customer message below and identify ALL intents present.\n"
+        "A message can have more than one intent.\n\n"
+        "Available intents:\n"
+        "- booking (wants to book or is mid-booking process)\n"
+        "- inquiry (asking about price, availability, or what's included)\n"
+        "- cancellation (wants to cancel an existing booking)\n"
+        "- reschedule (wants to change date or time of existing booking)\n"
+        "- complaint (unhappy, wants refund, has a problem)\n"
+        "- social (friendly chat, compliment, joke, or banter about BlueMarlin)\n"
+        "- off_topic (nothing to do with boat charters at all)\n\n"
+        "Reply with ONLY a JSON array of matching intent strings.\n"
+        "Examples:\n"
+        '  ["booking"]\n'
+        '  ["social", "booking"]\n'
+        '  ["complaint", "reschedule"]\n'
+        '  ["inquiry"]\n'
+        '  ["off_topic"]\n'
+        "No explanation. No extra text. Only the JSON array.\n\n"
         "Message:\n"
         f"{text}"
     )
     try:
-        raw = claude_client.complete(prompt) or ""
-        intent = raw.strip().lower()
-        if intent not in VALID_INTENTS:
-            intent = "general"
+        raw = claude_client.complete(prompt) or "[]"
+        raw = raw.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError("not a list")
+        intents = [i.strip().lower() for i in parsed
+                   if isinstance(i, str) and i.strip().lower() in VALID_INTENTS]
+        if not intents:
+            intents = ["inquiry"]
     except Exception:
-        intent = "general"
+        intents = ["inquiry"]
 
     fields = extract_fields(text) or {}
 
@@ -209,7 +234,7 @@ def detect_intent_and_fields(text: str):
         kids = int(fields.get("kids", 0) or 0)
         fields["guests"] = adults + kids
 
-    return (intent, fields)
+    return (intents, fields)
 
 def ask_marina_llm(from_email, subject, body, mode="general"):
     """
@@ -234,7 +259,7 @@ def safe_out_of_scope_reply():
         "Hi there,\n\n"
         "Thanks for reaching out.\n\n"
         "I can only help with BlueMarlin Tours charter information (availability, packages, pricing, and booking details). "
-        "If you share your preferred date, number of guests, and which experience you’re interested in, I’ll help right away.\n\n"
+        "If you share your preferred date, number of guests, and which experience you're interested in, I'll help right away.\n\n"
         "Warm regards,\n"
         "Marina\n"
         "BlueMarlin Tours Curaçao\n"
@@ -251,6 +276,51 @@ def safe_complaint_reply():
         "If your concern is about an upcoming or recent booking, "
         "please reply with your booking details and we'll prioritize it.\n\n"
         "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
+    )
+
+
+def safe_social_reply():
+    return (
+        "Hi there!\n\n"
+        "Thank you so much — messages like yours make our day! \U0001f30a\n\n"
+        "If you'd like to join us on the water, we'd love to have you. "
+        "Just let us know which experience interests you, your preferred "
+        "date, and how many guests — and we'll get everything set up.\n\n"
+        "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def safe_inquiry_reply():
+    return (
+        "Hi there!\n\n"
+        "Thanks for reaching out to BlueMarlin Tours Cura\u00e7ao!\n\n"
+        "Here's a quick overview of our experiences:\n\n"
+        "\U0001f305 Sunset Signature Cruise \u2014 2.5 hours, departs 17:00\n"
+        "   Perfect for couples and small groups. Drinks and sunset views.\n\n"
+        "\u2693 Half Day Private Charter \u2014 4 hours, departs 09:00\n"
+        "   Flexible itinerary. Great for families and private groups.\n\n"
+        "\U0001f30a Full Day West Coast Escape \u2014 8 hours, departs 08:00\n"
+        "   Full day on the water. Snorkeling, beaches, full experience.\n\n"
+        "To check availability and hold your spot, just reply with:\n"
+        "- Which experience you're interested in\n"
+        "- Your preferred date\n"
+        "- Number of guests\n\n"
+        "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def safe_change_request_reply(action: str):
+    action_word = "cancel" if action == "cancellation" else "reschedule"
+    return (
+        f"Hi there,\n\n"
+        f"Thank you for reaching out. I've received your request to "
+        f"{action_word} your booking.\n\n"
+        f"Our team will review your request and follow up with you "
+        f"directly as soon as possible to confirm the changes.\n\n"
+        f"If you have any urgent questions, please reply to this email "
+        f"with your booking details and preferred alternative "
+        f"(if rescheduling).\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
     )
 
 
@@ -431,222 +501,168 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
-                intent, fields = detect_intent_and_fields(body)
+                intents, fields = detect_intent_and_fields(body)
 
                 # Merge fields (union only)
                 merged = dict(th.get("fields", {}))
                 merged.update({k: v for k, v in fields.items() if v is not None and v != ""})
                 th["fields"] = merged
-                log(f"Merged fields: {merged}")
+                log(f"Intents: {intents} | Merged fields: {merged}")
 
-                if intent in ("out_of_scope", "off_topic"):
+                # --- Multi-label intent dispatch ---
+                # off_topic: only fire if SOLE intent is off_topic
+                if intents == ["off_topic"]:
                     reply_body = safe_out_of_scope_reply()
-                    smtp_send(from_email, "Re: " + subj, reply_body,
-                              in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                    log(f"Out-of-scope -> sent SAFE reply to: {from_email}")
-                    bm_logger.log(
-                        "off_topic_received",
-                        email=from_email,
-                        subject=subj,
-                        body_snippet=body[:200]
-                    )
-                    sheets_writer.log_event("off_topic_received", {
-                        "email": from_email,
-                        "subject": subj,
-                    })
-
-                elif intent == "complaint":
-                    reply_body = safe_complaint_reply()
                     smtp_send(from_email, "Re: " + subj, reply_body,
                               in_reply_to=msg.get("Message-ID"),
                               references=msg.get("References"))
-                    log(f"Complaint -> sent empathetic reply to: {from_email}")
-                    bm_logger.log(
-                        "complaint_received",
-                        email=from_email,
-                        subject=subj,
-                        body_snippet=body[:200]
-                    )
-                    sheets_writer.log_complaint({
-                        "email": from_email,
-                        "subject": subj,
-                        "body_snippet": body[:200],
-                    })
+                    log(f"Off-topic -> sent SAFE reply to: {from_email}")
+                    bm_logger.log("off_topic_received", email=from_email,
+                                  subject=subj, body_snippet=body[:200])
+                    sheets_writer.log_event("off_topic_received",
+                                            {"email": from_email, "subject": subj})
+                else:
+                    # Handle each non-off_topic intent present
+                    # social: acknowledge warmly before anything else
+                    if "social" in intents and not any(
+                            i in intents for i in
+                            ("booking", "inquiry", "cancellation",
+                             "reschedule", "complaint")):
+                        # Pure social — no action needed, just warm reply
+                        reply_body = safe_social_reply()
+                        smtp_send(from_email, "Re: " + subj, reply_body,
+                                  in_reply_to=msg.get("Message-ID"),
+                                  references=msg.get("References"))
+                        log(f"Social -> sent warm reply to: {from_email}")
+                        bm_logger.log("social_received", email=from_email,
+                                      subject=subj, body_snippet=body[:200])
+                        sheets_writer.log_event("social_received",
+                                                {"email": from_email, "subject": subj})
+                    # complaint: log and reply (can combine with other intents)
+                    if "complaint" in intents:
+                        reply_body = safe_complaint_reply()
+                        smtp_send(from_email, "Re: " + subj, reply_body,
+                                  in_reply_to=msg.get("Message-ID"),
+                                  references=msg.get("References"))
+                        log(f"Complaint -> sent empathetic reply to: {from_email}")
+                        bm_logger.log("complaint_received", email=from_email,
+                                      subject=subj, body_snippet=body[:200])
+                        sheets_writer.log_complaint({"email": from_email,
+                                                     "subject": subj,
+                                                     "body_snippet": body[:200]})
+                    # cancellation or reschedule: flag for human, send acknowledgement
+                    if "cancellation" in intents or "reschedule" in intents:
+                        action = "cancellation" if "cancellation" in intents else "reschedule"
+                        reply_body = safe_change_request_reply(action)
+                        smtp_send(from_email, "Re: " + subj, reply_body,
+                                  in_reply_to=msg.get("Message-ID"),
+                                  references=msg.get("References"))
+                        log(f"{action.title()} request -> sent acknowledgement to: {from_email}")
+                        bm_logger.log(f"{action}_requested", email=from_email,
+                                      subject=subj, body_snippet=body[:200])
+                        sheets_writer.log_event(f"{action}_requested",
+                                                {"email": from_email, "subject": subj,
+                                                 "body_snippet": body[:200]})
+                    # inquiry: answer pre-sales question
+                    if "inquiry" in intents and "booking" not in intents:
+                        reply_body = safe_inquiry_reply()
+                        smtp_send(from_email, "Re: " + subj, reply_body,
+                                  in_reply_to=msg.get("Message-ID"),
+                                  references=msg.get("References"))
+                        log(f"Inquiry -> sent packages reply to: {from_email}")
+                        bm_logger.log("inquiry_received", email=from_email,
+                                      subject=subj, body_snippet=body[:200])
+                        sheets_writer.log_event("inquiry_received",
+                                                {"email": from_email, "subject": subj})
+                    # booking: run the full booking flow (unchanged logic)
+                    if "booking" in intents:
+                        missing = [f for f in REQUIRED_FIELDS if f not in merged]
 
-                elif intent in ("booking", "general"):
-                    missing = [f for f in REQUIRED_FIELDS if f not in merged]
+                        if missing:
+                            # Ask for ALL missing fields at once, with what we already have
+                            have_summary = []
+                            if "experience" in merged: have_summary.append(f"Experience: {merged['experience']}")
+                            if "date" in merged: have_summary.append(f"Date: {merged['date']}")
+                            if "guests" in merged: have_summary.append(f"Guests: {merged['guests']}")
+                            have_txt = ("\n".join(have_summary) + "\n\n") if have_summary else ""
 
-                    if missing:
-                        # Ask for ALL missing fields at once, with what we already have
-                        have_summary = []
-                        if "experience" in merged: have_summary.append(f"Experience: {merged['experience']}")
-                        if "date" in merged: have_summary.append(f"Date: {merged['date']}")
-                        if "guests" in merged: have_summary.append(f"Guests: {merged['guests']}")
-                        have_txt = ("\n".join(have_summary) + "\n\n") if have_summary else ""
-
-                        ask = (
-                            "Hi,\n\n"
-                            "Thanks — I can help you book this.\n\n"
-                            + have_txt +
-                            "To proceed, please reply with:\n"
-                        )
-                        if "experience" in missing:
-                            ask += "- Which experience you want (Half-Day / Sunset / Full-Day)\n"
-                        if "date" in missing:
-                            ask += "- Your preferred date\n"
-                        if "guests" in missing:
-                            ask += "- Number of guests\n"
-
-                        ask += "\nWarm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
-
-                        smtp_send(from_email, "Re: " + subj, ask,
-                                  in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                        log(f"Booking intent -> requested missing fields (all at once): {missing}")
-                        bm_logger.log(
-                            "missing_fields_requested",
-                            email=from_email,
-                            subject=subj,
-                            missing=missing,
-                            fields_so_far=list(merged.keys())
-                        )
-                        sheets_writer.log_event("missing_fields_requested", {
-                            "email": from_email,
-                            "subject": subj,
-                            "missing": missing,
-                        })
-
-                    else:
-                        # We have all required booking info.
-                        # Deterministic reply: NEVER re-ask known fields. Only ask for missing extras.
-                        th.setdefault("flags", {})
-                        fields_now = th.get("fields", {}) or {}
-
-                        # If we already created a hold for this thread, do not create/re-confirm repeatedly.
-                        if th["flags"].get("hold_created"):
-                            msg2 = (
-                                "Hi\n\n"
-                                "Your provisional hold is already in place. If you need to change anything (date/time/guests), "
-                                "please reply with the updated value(s) in a single message.\n\n"
-                                "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
+                            ask = (
+                                "Hi,\n\n"
+                                "Thanks — I can help you book this.\n\n"
+                                + have_txt +
+                                "To proceed, please reply with:\n"
                             )
-                            smtp_send(from_email, "Re: " + subj, msg2,
+                            if "experience" in missing:
+                                ask += "- Which experience you want (Half-Day / Sunset / Full-Day)\n"
+                            if "date" in missing:
+                                ask += "- Your preferred date\n"
+                            if "guests" in missing:
+                                ask += "- Number of guests\n"
+
+                            ask += "\nWarm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+
+                            smtp_send(from_email, "Re: " + subj, ask,
                                       in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                            log(f"Hold already created -> sent no-loop acknowledgement to: {from_email}")
+                            log(f"Booking intent -> requested missing fields (all at once): {missing}")
+                            bm_logger.log(
+                                "missing_fields_requested",
+                                email=from_email,
+                                subject=subj,
+                                missing=missing,
+                                fields_so_far=list(merged.keys())
+                            )
+                            sheets_writer.log_event("missing_fields_requested", {
+                                "email": from_email,
+                                "subject": subj,
+                                "missing": missing,
+                            })
+
                         else:
-                            extras_missing = []
-                            if not fields_now.get("customer_name"):
-                                extras_missing.append("customer_name")
-                            if not fields_now.get("phone"):
-                                extras_missing.append("phone")
+                            # We have all required booking info.
+                            # Deterministic reply: NEVER re-ask known fields. Only ask for missing extras.
+                            th.setdefault("flags", {})
+                            fields_now = th.get("fields", {}) or {}
 
-                            # If extras missing, ask ONLY for extras. Do NOT claim a hold exists.
-                            if extras_missing:
-                                ask2 = (
-                                    "Hi,\n\n"
-                                    "Perfect — I can create your provisional hold as soon as I have:\n"
+                            # If we already created a hold for this thread, do not create/re-confirm repeatedly.
+                            if th["flags"].get("hold_created"):
+                                msg2 = (
+                                    "Hi\n\n"
+                                    "Your provisional hold is already in place. If you need to change anything (date/time/guests), "
+                                    "please reply with the updated value(s) in a single message.\n\n"
+                                    "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
                                 )
-                                if "customer_name" in extras_missing:
-                                    ask2 += "- Guest name for the booking\n"
-                                if "phone" in extras_missing:
-                                    ask2 += "- Contact phone number (e.g. +599...)\n"
-                                ask2 += "\nWarm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
-
-                                smtp_send(from_email, "Re: " + subj, ask2,
+                                smtp_send(from_email, "Re: " + subj, msg2,
                                           in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                                log(f"Booking intent -> requested missing extras: {extras_missing}")
-
+                                log(f"Hold already created -> sent no-loop acknowledgement to: {from_email}")
                             else:
-                                # Create REAL calendar hold
-                                bm_logger.log(
-                                    "booking_attempted",
-                                    email=from_email,
-                                    subject=subj,
-                                    experience=fields_now.get("experience"),
-                                    date=fields_now.get("date"),
-                                    guests=fields_now.get("guests"),
-                                    customer_name=fields_now.get("customer_name"),
-                                    phone=fields_now.get("phone"),
-                                    special_requests=fields_now.get("special_requests")
-                                )
-                                sheets_writer.log_event("booking_attempted", {
-                                    "email": from_email,
-                                    "subject": subj,
-                                    "experience": fields_now.get("experience"),
-                                    "date": fields_now.get("date"),
-                                })
-                                res = create_calendar_hold(fields_now)
-                                if not res.get("ok"):
-                                    err = (res.get("error","unknown") or "unknown")
+                                extras_missing = []
+                                if not fields_now.get("customer_name"):
+                                    extras_missing.append("customer_name")
+                                if not fields_now.get("phone"):
+                                    extras_missing.append("phone")
 
-                                    # ---- BM-008: Deterministic alternatives on UNAVAILABLE ----
-                                    alt_txt = ""
-                                    if "UNAVAILABLE:" in err:
-                                        try:
-                                            from datetime import datetime, timedelta
-                                            from zoneinfo import ZoneInfo
-                                            tz = ZoneInfo("America/Curacao")
-                                            base_iso = normalize_date_to_yyyy_mm_dd(fields_now.get("date"))
-                                            if base_iso:
-                                                base_dt = datetime.strptime(base_iso, "%Y-%m-%d").replace(tzinfo=tz)
-                                            else:
-                                                base_dt = datetime.now(tz)
-                                            opts = [(base_dt + timedelta(days=i)).strftime("%Y-%m-%d") for i in (1,2,3)]
-                                            alt_txt = "Here are 3 alternatives at the same start time:\n" + "\n".join([f"- {d}" for d in opts]) + "\n\n"
-                                        except Exception:
-                                            alt_txt = "Here are 3 alternatives for the next days at the same start time:\n- +1 day\n- +2 days\n- +3 days\n\n"
-                                    # ---- end BM-008 ----
-
-                                    msg_fail = (
+                                # If extras missing, ask ONLY for extras. Do NOT claim a hold exists.
+                                if extras_missing:
+                                    ask2 = (
                                         "Hi,\n\n"
-                                        "That time slot is not available.\n\n"
-                                        + alt_txt +
-                                        "Reply with ONE of the dates above (YYYY-MM-DD), or send a different date/time and I’ll check it.\n\n"
-                                        "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
+                                        "Perfect — I can create your provisional hold as soon as I have:\n"
                                     )
-                                    smtp_send(from_email, "Re: " + subj, msg_fail,
+                                    if "customer_name" in extras_missing:
+                                        ask2 += "- Guest name for the booking\n"
+                                    if "phone" in extras_missing:
+                                        ask2 += "- Contact phone number (e.g. +599...)\n"
+                                    ask2 += "\nWarm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+
+                                    smtp_send(from_email, "Re: " + subj, ask2,
                                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                                    log(f"Hold create FAILED for {from_email}: {res.get('error')}")
-                                    bm_logger.log(
-                                        "hold_failed",
-                                        email=from_email,
-                                        subject=subj,
-                                        error=res.get("error"),
-                                        experience=fields_now.get("experience"),
-                                        date=fields_now.get("date"),
-                                        guests=fields_now.get("guests")
-                                    )
-                                    sheets_writer.log_hold_failed({
-                                        "email": from_email,
-                                        "subject": subj,
-                                        "experience": fields_now.get("experience"),
-                                        "date": fields_now.get("date"),
-                                        "guests": fields_now.get("guests"),
-                                        "error": res.get("error"),
-                                    })
+                                    log(f"Booking intent -> requested missing extras: {extras_missing}")
+
                                 else:
-                                    th["flags"]["hold_created"] = True
-                                    th["flags"]["event_id"] = res.get("eventId")
-                                    th["flags"]["event_link"] = res.get("htmlLink")
-
-                                    # ---- BM-006: Deterministic payment stub (one link per event_id) ----
-                                    event_id = th["flags"]["event_id"]
-                                    pkg_key = package_key_from_experience(fields_now.get("experience"))
-                                    amount_usd = price_for_package(pkg_key)
-                                    pay = payment_stub.generate_payment_link(event_id, amount_usd)
-                                    pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
-                                    th["flags"]["payment_id"] = pay.get("payment_id")
-                                    th["flags"]["payment_link"] = pay_link
-                                    th["flags"]["payment_status"] = pay.get("status")
-
-                                    # ---- BM-014: Structured logging ----
+                                    # Create REAL calendar hold
                                     bm_logger.log(
-                                        "hold_created",
+                                        "booking_attempted",
                                         email=from_email,
                                         subject=subj,
-                                        event_id=th["flags"].get("event_id"),
-                                        html_link=th["flags"].get("event_link"),
-                                        payment_id=th["flags"].get("payment_id"),
-                                        payment_link=th["flags"].get("payment_link"),
                                         experience=fields_now.get("experience"),
                                         date=fields_now.get("date"),
                                         guests=fields_now.get("guests"),
@@ -654,42 +670,128 @@ def main():
                                         phone=fields_now.get("phone"),
                                         special_requests=fields_now.get("special_requests")
                                     )
-                                    sheets_writer.log_hold_created({
+                                    sheets_writer.log_event("booking_attempted", {
                                         "email": from_email,
                                         "subject": subj,
-                                        "customer_name": fields_now.get("customer_name"),
                                         "experience": fields_now.get("experience"),
                                         "date": fields_now.get("date"),
-                                        "guests": fields_now.get("guests"),
-                                        "phone": fields_now.get("phone"),
-                                        "special_requests": fields_now.get("special_requests"),
-                                        "html_link": th["flags"].get("event_link"),
-                                        "payment_link": th["flags"].get("payment_link"),
                                     })
-                                    # ---- end BM-014 ----
-                                    # ---- end BM-006 ----
+                                    res = create_calendar_hold(fields_now)
+                                    if not res.get("ok"):
+                                        err = (res.get("error","unknown") or "unknown")
 
-                                    exp = fields_now.get("experience", "—")
-                                    guests = fields_now.get("guests", "—")
-                                    date = normalize_date_to_yyyy_mm_dd(fields_now.get("date")) or fields_now.get("date","—")
-                                    name = fields_now.get("customer_name", "—")
+                                        # ---- BM-008: Deterministic alternatives on UNAVAILABLE ----
+                                        alt_txt = ""
+                                        if "UNAVAILABLE:" in err:
+                                            try:
+                                                from datetime import datetime, timedelta
+                                                from zoneinfo import ZoneInfo
+                                                tz = ZoneInfo("America/Curacao")
+                                                base_iso = normalize_date_to_yyyy_mm_dd(fields_now.get("date"))
+                                                if base_iso:
+                                                    base_dt = datetime.strptime(base_iso, "%Y-%m-%d").replace(tzinfo=tz)
+                                                else:
+                                                    base_dt = datetime.now(tz)
+                                                opts = [(base_dt + timedelta(days=i)).strftime("%Y-%m-%d") for i in (1,2,3)]
+                                                alt_txt = "Here are 3 alternatives at the same start time:\n" + "\n".join([f"- {d}" for d in opts]) + "\n\n"
+                                            except Exception:
+                                                alt_txt = "Here are 3 alternatives for the next days at the same start time:\n- +1 day\n- +2 days\n- +3 days\n\n"
+                                        # ---- end BM-008 ----
 
-                                    confirm = (
-                                        "Hi,\n\n"
-                                        "✅ Your provisional hold has been created (valid for 6 hours).\n\n"
-                                        f"- **Package:** {exp}\n"
-                                        f"- **Guests:** {guests}\n"
-                                        f"- **Date:** {date}\n"
-                                        f"- **Name:** {name}\n\n"
-                                        f"Calendar link (internal): {res.get('htmlLink','')}\n\n"
-                                        f"Payment status: {th['flags'].get('payment_status', 'pending')}\n"
-                                        f"Payment link: {th['flags'].get('payment_link', '')}\n\n"
-                                        "Warm regards,\nMarina\nBlueMarlin Tours Curaçao\n"
-                                    )
+                                        msg_fail = (
+                                            "Hi,\n\n"
+                                            "That time slot is not available.\n\n"
+                                            + alt_txt +
+                                            "Reply with ONE of the dates above (YYYY-MM-DD), or send a different date/time and I'll check it.\n\n"
+                                            "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+                                        )
+                                        smtp_send(from_email, "Re: " + subj, msg_fail,
+                                                  in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                                        log(f"Hold create FAILED for {from_email}: {res.get('error')}")
+                                        bm_logger.log(
+                                            "hold_failed",
+                                            email=from_email,
+                                            subject=subj,
+                                            error=res.get("error"),
+                                            experience=fields_now.get("experience"),
+                                            date=fields_now.get("date"),
+                                            guests=fields_now.get("guests")
+                                        )
+                                        sheets_writer.log_hold_failed({
+                                            "email": from_email,
+                                            "subject": subj,
+                                            "experience": fields_now.get("experience"),
+                                            "date": fields_now.get("date"),
+                                            "guests": fields_now.get("guests"),
+                                            "error": res.get("error"),
+                                        })
+                                    else:
+                                        th["flags"]["hold_created"] = True
+                                        th["flags"]["event_id"] = res.get("eventId")
+                                        th["flags"]["event_link"] = res.get("htmlLink")
 
-                                    smtp_send(from_email, "Re: " + subj, confirm,
-                                              in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                                    log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
+                                        # ---- BM-006: Deterministic payment stub (one link per event_id) ----
+                                        event_id = th["flags"]["event_id"]
+                                        pkg_key = package_key_from_experience(fields_now.get("experience"))
+                                        amount_usd = price_for_package(pkg_key)
+                                        pay = payment_stub.generate_payment_link(event_id, amount_usd)
+                                        pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                                        th["flags"]["payment_id"] = pay.get("payment_id")
+                                        th["flags"]["payment_link"] = pay_link
+                                        th["flags"]["payment_status"] = pay.get("status")
+
+                                        # ---- BM-014: Structured logging ----
+                                        bm_logger.log(
+                                            "hold_created",
+                                            email=from_email,
+                                            subject=subj,
+                                            event_id=th["flags"].get("event_id"),
+                                            html_link=th["flags"].get("event_link"),
+                                            payment_id=th["flags"].get("payment_id"),
+                                            payment_link=th["flags"].get("payment_link"),
+                                            experience=fields_now.get("experience"),
+                                            date=fields_now.get("date"),
+                                            guests=fields_now.get("guests"),
+                                            customer_name=fields_now.get("customer_name"),
+                                            phone=fields_now.get("phone"),
+                                            special_requests=fields_now.get("special_requests")
+                                        )
+                                        sheets_writer.log_hold_created({
+                                            "email": from_email,
+                                            "subject": subj,
+                                            "customer_name": fields_now.get("customer_name"),
+                                            "experience": fields_now.get("experience"),
+                                            "date": fields_now.get("date"),
+                                            "guests": fields_now.get("guests"),
+                                            "phone": fields_now.get("phone"),
+                                            "special_requests": fields_now.get("special_requests"),
+                                            "html_link": th["flags"].get("event_link"),
+                                            "payment_link": th["flags"].get("payment_link"),
+                                        })
+                                        # ---- end BM-014 ----
+                                        # ---- end BM-006 ----
+
+                                        exp = fields_now.get("experience", "—")
+                                        guests = fields_now.get("guests", "—")
+                                        date = normalize_date_to_yyyy_mm_dd(fields_now.get("date")) or fields_now.get("date","—")
+                                        name = fields_now.get("customer_name", "—")
+
+                                        confirm = (
+                                            "Hi,\n\n"
+                                            "\u2705 Your provisional hold has been created (valid for 6 hours).\n\n"
+                                            f"- **Package:** {exp}\n"
+                                            f"- **Guests:** {guests}\n"
+                                            f"- **Date:** {date}\n"
+                                            f"- **Name:** {name}\n\n"
+                                            f"Calendar link (internal): {res.get('htmlLink','')}\n\n"
+                                            f"Payment status: {th['flags'].get('payment_status', 'pending')}\n"
+                                            f"Payment link: {th['flags'].get('payment_link', '')}\n\n"
+                                            "Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+                                        )
+
+                                        smtp_send(from_email, "Re: " + subj, confirm,
+                                                  in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                                        log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
 
                 # mark seen + persist thread state
                 im.uid("store", uid, "+FLAGS", r"(\Seen)")
