@@ -1,6 +1,6 @@
 # FILE: marina_extractor.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 018
+# LAST MODIFIED: Brief 020
 # DEPENDS ON: claude_client.py (Brief 001)
 # IMPORTS FROM: claude_client.py (Brief 001)
 import sys
@@ -29,9 +29,14 @@ Return ONLY valid JSON.
 Allowed keys:
 - experience (which boat tour they want)
 - date (when they want to go)
-- guests (total number of people)
-- adults (if specified separately)
-- kids (if specified separately)
+- guests (total number of people — must be an exact integer.
+  "Just me" = 1. "Me and my wife" = 2. "A family of 4" = 4.
+  "Family of 4 plus a baby/infant/toddler" = 4 — do NOT count
+  infants under 2 in the guest total; add them to special_requests
+  instead. "Around 10" or "about 10" — do NOT extract guests,
+  omit the field so Marina can ask for an exact number.)
+- adults (if specified separately as an integer)
+- kids (if specified separately as an integer — does not include infants)
 - customer_name (their name)
 - phone (their phone number)
 - special_requests (forward-looking preferences for the
@@ -44,6 +49,12 @@ Rules:
 - Do NOT guess.
 - Do NOT explain.
 - Do NOT write anything except JSON.
+- For guests: extract ONLY a definite integer. If the customer uses
+  approximate language ("around", "about", "roughly", "maybe",
+  "approximately") do NOT extract guests — omit it entirely so
+  Marina asks for an exact count. If an infant/baby is mentioned
+  alongside a guest count, do NOT include the infant in the count —
+  add "travelling with an infant" to special_requests instead.
 - For special_requests: capture ONLY forward-looking personal
   preferences for the upcoming trip — dietary restrictions,
   allergies, accessibility needs, celebrations, drink

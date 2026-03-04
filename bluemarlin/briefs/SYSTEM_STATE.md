@@ -311,5 +311,35 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 020 — email_poller.py + marina_extractor.py — booking intake fixes
+**Status:** Stable
+**Files affected:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_extractor.py`
+**Dependencies added:** None.
+
+**email_poller.py changes:**
+- `GROUP_BOOKING_THRESHOLD = 15` added after `REQUIRED_FIELDS` constant block.
+- `is_date_ambiguous()` removed entirely — replaced by `classify_date_input()`.
+- `classify_date_input(date_val: str) -> str` — 5-category classifier placed immediately after `normalize_date_to_yyyy_mm_dd()` (calls it internally). Returns one of: `CLEAR_FUTURE`, `PAST`, `IMPLAUSIBLE`, `VAGUE_RESOLVABLE`, `VAGUE_NEEDS_INPUT`. IMPLAUSIBLE threshold: >11 months (335 days) from today with no explicit year. VAGUE_PATTERNS list covers: this/next weekend, next/this month, next week, easter, christmas, new year, thanksgiving, summer, winter, spring, autumn, fall, holiday, vacation, soon, sometime, flexible, any day, anytime, whenever. RESOLVABLE_PATTERNS cover: next/this Mon–Sun, in two weeks, in a week, in 2/3 weeks.
+- New reply functions added: `safe_large_group_reply(guests)`, `safe_date_past_reply(resolved_date, original)`, `safe_date_implausible_reply(resolved_date, original)`, `safe_date_vague_reply(original, resolvable_date="")`.
+- `safe_date_confirmation_reply()` tone updated — less robotic, conversational.
+- `experience_is_clear(exp: str) -> bool` added after `package_key_from_experience()` — returns `bool(package_key_from_experience(exp))`.
+- `safe_experience_unclear_reply(provided: str) -> str` added — shows all 3 packages with duration and departure time.
+- Date confirmation intercept (Brief 019): `is_date_ambiguous` reference updated to `classify_date_input(new_date) in ("VAGUE_RESOLVABLE", "VAGUE_NEEDS_INPUT")`.
+- **Three-check block** inside `if "booking" in intents:`, in order before missing fields check:
+  1. Date classification check — PAST → `safe_date_past_reply()` → continue; IMPLAUSIBLE → sets `awaiting_date_confirmation`, `safe_date_implausible_reply()` → continue; VAGUE_NEEDS_INPUT or VAGUE_RESOLVABLE → sets `awaiting_date_confirmation`, `safe_date_vague_reply()` → continue; CLEAR_FUTURE → fall through.
+  2. Experience clarity check — unknown experience → sets `awaiting_experience_clarification`, `safe_experience_unclear_reply()` → continue; clear → fall through.
+  3. Large group check — `int(guests) >= 15` → `safe_large_group_reply()`, `sheets_writer.log_complaint()` → continue; under threshold → fall through.
+- New thread flag: `awaiting_experience_clarification`.
+- New bm_logger events: `date_past_detected`, `date_implausible_detected`, `date_vague_detected`, `experience_unclear`, `large_group_detected`.
+
+**marina_extractor.py changes:**
+- `guests` field annotation updated: exact integer only. "Just me" = 1. "Me and my wife" = 2. Infants/babies not counted — added to `special_requests` instead. Approximate language ("around", "about", "roughly") → omit field entirely.
+- `adults`/`kids` annotations updated: kids does not include infants.
+- New rule in Rules block: extract ONLY a definite integer for guests; approximate language → omit; infant alongside count → not included, add "travelling with an infant" to special_requests.
+
+**All 8 tests passed.**
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.

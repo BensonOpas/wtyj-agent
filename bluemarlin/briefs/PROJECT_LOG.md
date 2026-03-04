@@ -187,6 +187,9 @@ OpenClaw
    sound like a real person — different phrasing each time, natural emoji
    use, responses that adapt to the customer's energy. Fix in a dedicated
    brief after client.json is complete.
+10. VAGUE_RESOLVABLE re-ask path uses safe_date_confirmation_reply() instead
+    of safe_date_vague_reply() — minor tone inconsistency on second vague date
+    response. Fix in future brief.
 ---
 ## Architecture Decisions Log
 Decision: SQLite over JSON for state_registry

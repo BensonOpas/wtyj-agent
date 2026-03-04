@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 019
+# LAST MODIFIED: Brief 020
 # DEPENDS ON: claude_client.py (Brief 001)
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
@@ -56,6 +56,8 @@ REPLY_WINDOW_SECONDS = 60 * 60
 
 # Booking fields we require to proceed
 REQUIRED_FIELDS = ["experience", "date", "guests"]
+
+GROUP_BOOKING_THRESHOLD = 15
 
 # ========= HELPERS =========
 def log(msg):
@@ -324,6 +326,19 @@ def safe_change_request_reply(action: str):
     )
 
 
+def safe_large_group_reply(guests: int) -> str:
+    return (
+        f"Hi there!\n\n"
+        f"Wow, a group of {guests} \u2014 that sounds like an amazing trip! \U0001f389\n\n"
+        f"For groups this size we like to make sure everything is "
+        f"set up perfectly for you. One of our team will be in touch "
+        f"shortly to discuss the best options and get everything "
+        f"arranged.\n\n"
+        f"We can't wait to have you all on board!\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
 def safe_date_confirmation_reply(resolved_date: str, original: str) -> str:
     from datetime import datetime
     try:
@@ -332,11 +347,73 @@ def safe_date_confirmation_reply(resolved_date: str, original: str) -> str:
     except Exception:
         friendly = resolved_date
     return (
-        f"Hi there,\n\n"
-        f"Just to confirm \u2014 when you said \"{original}\", "
-        f"did you mean {friendly}?\n\n"
-        f"Please reply with Yes to confirm, or send the exact date "
-        f"(e.g. 2026-04-15) if you meant a different date.\n\n"
+        f"Hi there!\n\n"
+        f"Just making sure \u2014 are you thinking {friendly}? "
+        f"Say yes and I'll get your spot held right away, or "
+        f"send me a different date if that's not right \U0001f60a\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def safe_date_past_reply(resolved_date: str, original: str) -> str:
+    """Fired when date resolved to the past."""
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(resolved_date, "%Y-%m-%d")
+        next_year = dt.replace(year=dt.year + 1)
+        suggestion = next_year.strftime("%B %d, %Y")
+    except Exception:
+        suggestion = "a date next year"
+    return (
+        f"Hi there!\n\n"
+        f"It looks like {original} has already passed \u2014 "
+        f"did you mean {suggestion}, or did you have a different date in mind?\n\n"
+        f"Just let me know and I'll check availability right away! \U0001f30a\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def safe_date_implausible_reply(resolved_date: str, original: str) -> str:
+    """Fired when date seems too far in the future."""
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(resolved_date, "%Y-%m-%d")
+        friendly = dt.strftime("%B %d, %Y")
+    except Exception:
+        friendly = resolved_date
+    return (
+        f"Hi there!\n\n"
+        f"Just making sure \u2014 are you planning for {friendly}? "
+        f"That's quite a bit ahead, so I want to make sure I have "
+        f"the right date before holding your spot!\n\n"
+        f"If that's correct just say yes and I'll get it sorted. "
+        f"Or if you meant a sooner date, just send it over \U0001f60a\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
+def safe_date_vague_reply(original: str, resolvable_date: str = "") -> str:
+    """Fired when date is too vague to use."""
+    if resolvable_date:
+        from datetime import datetime
+        try:
+            dt = datetime.strptime(resolvable_date, "%Y-%m-%d")
+            friendly = dt.strftime("%B %d, %Y")
+            return (
+                f"Hi there!\n\n"
+                f"Just to confirm \u2014 are you thinking {friendly}?\n\n"
+                f"Say yes and I'll check availability, or send me "
+                f"the exact date if you had something else in mind \U0001f60a\n\n"
+                f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+            )
+        except Exception:
+            pass
+    return (
+        f"Hi there!\n\n"
+        f"I'd love to help you book! Could you give me a specific date? "
+        f"For example: April 15, or 2026-04-15.\n\n"
+        f"Once I have that I can check availability and get your "
+        f"spot held right away \U0001f30a\n\n"
         f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
     )
 
@@ -373,6 +450,28 @@ def package_key_from_experience(exp: str) -> str:
         return "full_day_west_coast_escape"
     return ""
 
+def experience_is_clear(exp: str) -> bool:
+    """Returns True if experience maps to a known package key."""
+    return bool(package_key_from_experience(exp))
+
+
+def safe_experience_unclear_reply(provided: str) -> str:
+    return (
+        f"Hi there!\n\n"
+        f"Thanks for reaching out! I want to make sure I book "
+        f"the right experience for you \U0001f60a\n\n"
+        f"We have three options:\n\n"
+        f"\U0001f305 Sunset Signature Cruise \u2014 2.5 hours, departs 17:00\n"
+        f"   Perfect for couples and small groups. Drinks and sunset views.\n\n"
+        f"\u2693 Half Day Private Charter \u2014 4 hours, departs 09:00\n"
+        f"   Flexible itinerary. Great for families and private groups.\n\n"
+        f"\U0001f30a Full Day West Coast Escape \u2014 8 hours, departs 08:00\n"
+        f"   Full day on the water. Snorkeling, beaches, full experience.\n\n"
+        f"Which one sounds right for you?\n\n"
+        f"Warm regards,\nMarina\nBlueMarlin Tours Cura\u00e7ao\n"
+    )
+
+
 def normalize_date_to_yyyy_mm_dd(date_val: str) -> str:
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
@@ -399,30 +498,71 @@ def normalize_date_to_yyyy_mm_dd(date_val: str) -> str:
         pass
     return ""
 
-def is_date_ambiguous(date_val: str) -> bool:
+def classify_date_input(date_val: str) -> str:
     """
-    Returns True if the date string does not contain an explicit 4-digit year.
-    Examples:
-      "January 1"       -> True  (no year)
-      "March 20"        -> True  (no year)
-      "next Friday"     -> True  (no year)
-      "tomorrow"        -> False (relative, unambiguous)
-      "today"           -> False (relative, unambiguous)
-      "2026-04-15"      -> False (explicit year)
-      "15/04/2026"      -> False (explicit year)
-      "April 15 2026"   -> False (explicit year)
-      "15 April 2026"   -> False (explicit year)
+    Classifies a date string into one of five categories:
+      CLEAR_FUTURE      — resolved to a valid future date, proceed normally
+      PAST              — resolved to a past date, ask if they meant next occurrence
+      IMPLAUSIBLE       — resolved to a date more than 11 months away with no
+                          explicit year — likely dateparser pushed it forward
+      VAGUE_RESOLVABLE  — relative date that can be calculated from today
+                          (next Friday, in two weeks) — confirm the specific date
+      VAGUE_NEEDS_INPUT — too vague to resolve (this weekend, next month,
+                          Easter, Christmas, summer) — ask for a specific date
+    Returns one of the five string constants above.
     """
+    from datetime import date as _date, timedelta
+    from zoneinfo import ZoneInfo
+    import datetime as _datetime
     if not date_val:
-        return False
+        return "VAGUE_NEEDS_INPUT"
     d = date_val.strip().lower()
-    # Relative dates are unambiguous
+    tz = ZoneInfo("America/Curacao")
+    today = _datetime.datetime.now(tz).date()
+    # today/tomorrow — always clear
     if d in ("today", "tomorrow"):
-        return False
-    # If a 4-digit year is present anywhere, it is unambiguous
-    if re.search(r'\b(20\d{2})\b', date_val):
-        return False
-    return True
+        return "CLEAR_FUTURE"
+    # Vague inputs that need a specific date
+    VAGUE_PATTERNS = [
+        "this weekend", "next weekend", "next month", "this month",
+        "next week", "easter", "christmas", "new year", "thanksgiving",
+        "summer", "winter", "spring", "autumn", "fall",
+        "holiday", "vacation", "soon", "sometime", "flexible",
+        "any day", "anytime", "whenever"
+    ]
+    for pattern in VAGUE_PATTERNS:
+        if pattern in d:
+            return "VAGUE_NEEDS_INPUT"
+    # Try to resolve the date
+    resolved_str = normalize_date_to_yyyy_mm_dd(date_val)
+    if not resolved_str:
+        return "VAGUE_NEEDS_INPUT"
+    try:
+        resolved = _date.fromisoformat(resolved_str)
+    except Exception:
+        return "VAGUE_NEEDS_INPUT"
+    # Past date
+    if resolved < today:
+        return "PAST"
+    # Check if year was explicitly provided
+    has_explicit_year = bool(re.search(r'\b(20\d{2})\b', date_val))
+    # If no explicit year and date is more than 11 months away — implausible
+    if not has_explicit_year:
+        eleven_months = today + timedelta(days=335)
+        if resolved > eleven_months:
+            return "IMPLAUSIBLE"
+    # Resolvable relative dates — "next Friday", "in two weeks"
+    RESOLVABLE_PATTERNS = [
+        "next friday", "next monday", "next tuesday", "next wednesday",
+        "next thursday", "next saturday", "next sunday",
+        "in two weeks", "in a week", "in 2 weeks", "in 3 weeks",
+        "next friday", "this friday", "this saturday", "this sunday",
+        "this monday", "this tuesday", "this wednesday", "this thursday"
+    ]
+    for pattern in RESOLVABLE_PATTERNS:
+        if pattern in d:
+            return "VAGUE_RESOLVABLE"
+    return "CLEAR_FUTURE"
 
 
 def default_start_time_for_package(package_key: str) -> str:
@@ -607,7 +747,7 @@ def main():
                         if new_date:
                             resolved = normalize_date_to_yyyy_mm_dd(new_date)
                             if resolved:
-                                if is_date_ambiguous(new_date):
+                                if classify_date_input(new_date) in ("VAGUE_RESOLVABLE", "VAGUE_NEEDS_INPUT"):
                                     # Still ambiguous — ask again with new date
                                     th["flags"]["pending_date"] = resolved
                                     th["flags"]["pending_date_original"] = new_date
@@ -731,38 +871,127 @@ def main():
                                                 {"email": from_email, "subject": subj})
                     # booking: run the full booking flow (unchanged logic)
                     if "booking" in intents:
-                        # --- Ambiguous date check ---
+                        # --- Date classification check ---
                         raw_date = fields.get("date") or merged.get("date", "")
-                        resolved_date = normalize_date_to_yyyy_mm_dd(raw_date)
-                        if (raw_date
-                                and resolved_date
-                                and is_date_ambiguous(raw_date)
-                                and not th["flags"].get("awaiting_date_confirmation")):
-                            # Date is ambiguous — ask for confirmation before proceeding
-                            th["flags"]["awaiting_date_confirmation"] = True
-                            th["flags"]["pending_date"] = resolved_date
-                            th["flags"]["pending_date_original"] = raw_date
-                            reply_body = safe_date_confirmation_reply(resolved_date, raw_date)
+                        if raw_date and not th["flags"].get("awaiting_date_confirmation"):
+                            date_class = classify_date_input(raw_date)
+                            resolved_date = normalize_date_to_yyyy_mm_dd(raw_date)
+                            if date_class == "PAST":
+                                reply_body = safe_date_past_reply(resolved_date or "", raw_date)
+                                smtp_send(from_email, "Re: " + subj, reply_body,
+                                          in_reply_to=msg.get("Message-ID"),
+                                          references=msg.get("References"))
+                                log(f"Past date detected: '{raw_date}' -> asking for correction")
+                                bm_logger.log("date_past_detected", email=from_email,
+                                              subject=subj, raw_date=raw_date)
+                                sheets_writer.log_event("date_past_detected",
+                                                        {"email": from_email, "subject": subj,
+                                                         "raw_date": raw_date})
+                                th["last_customer_hash"] = customer_hash
+                                th["reply_times"].append(now)
+                                threads[thread_key] = th
+                                im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                save_json(THREAD_STATE_PATH, state)
+                                continue
+                            elif date_class == "IMPLAUSIBLE":
+                                th["flags"]["awaiting_date_confirmation"] = True
+                                th["flags"]["pending_date"] = resolved_date
+                                th["flags"]["pending_date_original"] = raw_date
+                                reply_body = safe_date_implausible_reply(resolved_date, raw_date)
+                                smtp_send(from_email, "Re: " + subj, reply_body,
+                                          in_reply_to=msg.get("Message-ID"),
+                                          references=msg.get("References"))
+                                log(f"Implausible date: '{raw_date}' -> {resolved_date}")
+                                bm_logger.log("date_implausible_detected", email=from_email,
+                                              subject=subj, raw_date=raw_date,
+                                              resolved_date=resolved_date)
+                                sheets_writer.log_event("date_implausible_detected",
+                                                        {"email": from_email, "subject": subj,
+                                                         "raw_date": raw_date,
+                                                         "resolved_date": resolved_date})
+                                th["last_customer_hash"] = customer_hash
+                                th["reply_times"].append(now)
+                                threads[thread_key] = th
+                                im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                save_json(THREAD_STATE_PATH, state)
+                                continue
+                            elif date_class in ("VAGUE_NEEDS_INPUT", "VAGUE_RESOLVABLE"):
+                                th["flags"]["awaiting_date_confirmation"] = True
+                                th["flags"]["pending_date"] = resolved_date or ""
+                                th["flags"]["pending_date_original"] = raw_date
+                                reply_body = safe_date_vague_reply(
+                                    raw_date,
+                                    resolved_date if date_class == "VAGUE_RESOLVABLE" else ""
+                                )
+                                smtp_send(from_email, "Re: " + subj, reply_body,
+                                          in_reply_to=msg.get("Message-ID"),
+                                          references=msg.get("References"))
+                                log(f"Vague date ({date_class}): '{raw_date}' -> asking for specific date")
+                                bm_logger.log("date_vague_detected", email=from_email,
+                                              subject=subj, raw_date=raw_date,
+                                              classification=date_class)
+                                sheets_writer.log_event("date_vague_detected",
+                                                        {"email": from_email, "subject": subj,
+                                                         "raw_date": raw_date,
+                                                         "classification": date_class})
+                                th["last_customer_hash"] = customer_hash
+                                th["reply_times"].append(now)
+                                threads[thread_key] = th
+                                im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                save_json(THREAD_STATE_PATH, state)
+                                continue
+                            # CLEAR_FUTURE — proceed normally, no action needed
+                        # --- end date classification check ---
+                        # --- Experience clarity check ---
+                        provided_experience = merged.get("experience", "")
+                        if (provided_experience
+                                and not experience_is_clear(provided_experience)
+                                and not th["flags"].get("awaiting_experience_clarification")):
+                            th["flags"]["awaiting_experience_clarification"] = True
+                            reply_body = safe_experience_unclear_reply(provided_experience)
                             smtp_send(from_email, "Re: " + subj, reply_body,
                                       in_reply_to=msg.get("Message-ID"),
                                       references=msg.get("References"))
-                            log(f"Ambiguous date detected: '{raw_date}' -> asking confirmation for {resolved_date}")
-                            bm_logger.log("date_confirmation_requested", email=from_email,
-                                          subject=subj, raw_date=raw_date,
-                                          resolved_date=resolved_date)
-                            sheets_writer.log_event("date_confirmation_requested", {
-                                "email": from_email,
-                                "subject": subj,
-                                "raw_date": raw_date,
-                                "resolved_date": resolved_date,
-                            })
+                            log(f"Experience unclear: '{provided_experience}' -> asking for clarification")
+                            bm_logger.log("experience_unclear", email=from_email,
+                                          subject=subj, provided=provided_experience)
+                            sheets_writer.log_event("experience_unclear",
+                                                    {"email": from_email, "subject": subj,
+                                                     "provided": provided_experience})
                             th["last_customer_hash"] = customer_hash
                             th["reply_times"].append(now)
                             threads[thread_key] = th
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             save_json(THREAD_STATE_PATH, state)
                             continue
-                        # --- end ambiguous date check ---
+                        # --- end experience clarity check ---
+                        # --- Large group check ---
+                        guest_count = merged.get("guests")
+                        if guest_count is not None:
+                            try:
+                                guest_count = int(guest_count)
+                                if guest_count >= GROUP_BOOKING_THRESHOLD:
+                                    reply_body = safe_large_group_reply(guest_count)
+                                    smtp_send(from_email, "Re: " + subj, reply_body,
+                                              in_reply_to=msg.get("Message-ID"),
+                                              references=msg.get("References"))
+                                    log(f"Large group detected: {guest_count} guests -> flagging human")
+                                    bm_logger.log("large_group_detected", email=from_email,
+                                                  subject=subj, guests=guest_count)
+                                    sheets_writer.log_complaint({
+                                        "email": from_email,
+                                        "subject": subj,
+                                        "body_snippet": f"Large group booking request: {guest_count} guests"
+                                    })
+                                    th["last_customer_hash"] = customer_hash
+                                    th["reply_times"].append(now)
+                                    threads[thread_key] = th
+                                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                                    save_json(THREAD_STATE_PATH, state)
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+                        # --- end large group check ---
                         missing = [f for f in REQUIRED_FIELDS if f not in merged]
 
                         if missing:
