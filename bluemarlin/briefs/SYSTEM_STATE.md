@@ -191,5 +191,30 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 015 — format_sheets.py — dashboard polish
+**Status:** Stable
+**What changed:** `format_sheets.py` updated with a revised color palette, per-column widths, text wrapping, alternating row banding, and deletion of extra empty columns. `_build_requests()` fully replaced with a 9-request version. Second `batchUpdate` call added to cap data row height at 80px.
+**New color palette:**
+- Sheet background fill: `#1a2030`
+- Header background: `#2a3545`
+- Header text: `#ffffff` bold 11pt, CENTER, CLIP wrap
+- Body text: `#e8edf5` 10pt, MIDDLE, WRAP
+- Odd rows: `#1e2530`, even rows: `#242f3d` (via banding)
+- Header bottom border: `SOLID_MEDIUM` in `#3d8eb9`
+**Column widths (individual per-column requests):**
+- Bookings (13 cols): `[180,150,200,180,110,80,130,250,110,200,200,200,250]`
+- Complaints (6 cols): `[180,200,200,300,110,250]`
+- All Events (5 cols): `[180,150,200,200,400]`
+**Row heights:** 40px all rows (Request 5), then second `batchUpdate` sets data rows 1–1001 to 80px max.
+**Idempotency mechanisms:**
+- Existing `bandedRangeId`s fetched from metadata and deleted (via `deleteBanding`) before `addBanding` — in same `batchUpdate` (atomic)
+- `deleteDimension` guarded by `column_count > n` check — prevents 400 error on re-run
+- All `repeatCell`, `updateSheetProperties`, `updateDimensionProperties`, `updateBorders` are last-write-wins
+**Verified:** second run produces identical output, no errors. Column counts exact: Bookings 13, Complaints 6, All Events 5.
+**Files affected:** `bluemarlin/src/format_sheets.py` only. No other files modified.
+**Dependencies added:** None.
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
