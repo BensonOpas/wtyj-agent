@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 024
+# LAST MODIFIED: Brief 027
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -109,7 +109,15 @@ Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Ju
 The JSON must have exactly these fields:
 {{
   "intents": ["<one or more of: booking, inquiry, cancellation, reschedule, complaint, social, off_topic>"],
-  "fields": {{"<extracted booking fields — experience, date, guests, customer_name, phone, special_requests, trip_key — only if present and certain. trip_key is the exact key from the trips list that matches the experience: one of klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski — only include if you are certain which trip they mean>"}},
+  "fields": {{"<extracted booking fields — only if present and certain:
+    experience: the trip name as the customer described it
+    date: MUST be in YYYY-MM-DD format. Convert any natural language date to YYYY-MM-DD before including. If you cannot resolve it to a specific YYYY-MM-DD date, omit this field entirely and include a clarification question in clarifications_needed instead.
+    guests: exact integer only
+    customer_name: customer's name
+    phone: customer's phone number
+    special_requests: forward-looking preferences only
+    trip_key: exact key from the trips list — one of klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski — only include if certain
+    departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
   "reply": "<full reply to send to the customer — warm, natural, signed with agent signature — never a template, never robotic>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],

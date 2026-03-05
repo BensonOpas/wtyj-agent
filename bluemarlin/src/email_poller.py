@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 025
+# LAST MODIFIED: Brief 027
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -183,7 +183,10 @@ def create_calendar_hold(fields_now: dict) -> dict:
 
     trip = config_loader.get_trip(trip_key)
     departures = trip.get("departures", [])
-    start_time = departures[0].get("time", "09:00") if departures else "09:00"
+    start_time = (
+        fields_now.get("departure_time")
+        or (departures[0].get("time", "09:00") if departures else "09:00")
+    )
     price_usd = trip.get("price_adult_usd", 0)
 
     payload = {
