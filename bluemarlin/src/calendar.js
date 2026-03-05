@@ -1,6 +1,6 @@
 // FILE: calendar.js
 // CREATED: Before Brief 001 (original codebase)
-// LAST MODIFIED: Brief 007
+// LAST MODIFIED: Brief 025
 // DEPENDS ON: bluemarlin-calendar-key.json (config)
 // CALLED BY: email_poller.py via subprocess
 const { google } = require('googleapis');
@@ -8,15 +8,19 @@ const path = require('path');
 const KEY_PATH = path.join(__dirname, '..', 'config', 'bluemarlin-calendar-key.json');
 
 const CALENDARS = {
-  half_day_private_charter: '011f3fe421fe405fc7cd93b0271c25b385c5ece811d9a8afed89ed68ee0ecd1e@group.calendar.google.com',
-  sunset_signature_cruise: '00da89b0e81eb3bb8267f8e850049402d8cc22f072738ca111f5dda38f723af5@group.calendar.google.com',
-  full_day_west_coast_escape: '6539a4ca65a6911ea45f35a1a80ff92f9e9e2b2cdbd2841a7fef9248bfb77e7d@group.calendar.google.com'
+  klein_curacao:    "[VERIFY: BlueFinn klein_curacao calendar ID]",
+  snorkeling_3in1:  "[VERIFY: BlueFinn snorkeling_3in1 calendar ID]",
+  west_coast_beach: "[VERIFY: BlueFinn west_coast_beach calendar ID]",
+  sunset_cruise:    "[VERIFY: BlueFinn sunset_cruise calendar ID]",
+  jet_ski:          "[VERIFY: BlueFinn jet_ski calendar ID]"
 };
 
 const DURATIONS_HOURS = {
-  half_day_private_charter: 4,
-  sunset_signature_cruise: 2.5,
-  full_day_west_coast_escape: 8
+  klein_curacao:    8,
+  snorkeling_3in1:  4,
+  west_coast_beach: 6,
+  sunset_cruise:    2.5,
+  jet_ski:          1
 };
 
 async function createHold({ package_key, date, start_time, guests_pax, customer_name, contact, price_usd }) {
@@ -27,7 +31,9 @@ async function createHold({ package_key, date, start_time, guests_pax, customer_
 
   const calendar = google.calendar({ version: 'v3', auth });
   const calendarId = CALENDARS[package_key];
-  if (!calendarId) throw new Error(`Unknown package_key: ${package_key}`);
+  if (!calendarId || calendarId.startsWith("[VERIFY")) {
+    throw new Error(`Calendar ID not yet configured for: ${package_key}`);
+  }
 
   const [year, month, day] = date.split('-').map(Number);
   const [hour, minute] = start_time.split(':').map(Number);

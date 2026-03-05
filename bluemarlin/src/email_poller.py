@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 024
+# LAST MODIFIED: Brief 025
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -112,7 +112,7 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     auth_b64 = base64.b64encode(auth_string.encode("ascii")).decode("ascii")
 
     msg = MIMEMultipart()
-    msg["From"] = "Marina \u2014 BlueMarlin Tours Cura\u00e7ao <{}>".format(EMAIL_ADDR)
+    msg["From"] = "Marina — BlueFinn Charters Curaçao <{}>".format(EMAIL_ADDR)
     msg["To"] = to_addr
     msg["Subject"] = subject
     if in_reply_to:
@@ -282,7 +282,7 @@ def main():
                         "Hi,\n\n"
                         "I want to make sure I help correctly. To avoid confusion over email threads, "
                         "please reply with these 3 items in a single message:\n"
-                        "1) Experience (Half-Day / Sunset / Full-Day)\n"
+                        "1) Experience (Klein Curaçao / Sunset Cruise / West Coast Beach / Snorkeling / Jet Ski)\n"
                         "2) Date\n"
                         "3) Number of guests\n\n"
                         "Warm regards,\nMarina\n"
