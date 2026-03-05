@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 023
+# LAST MODIFIED: Brief 024
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -109,7 +109,7 @@ Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Ju
 The JSON must have exactly these fields:
 {{
   "intents": ["<one or more of: booking, inquiry, cancellation, reschedule, complaint, social, off_topic>"],
-  "fields": {{"<extracted booking fields — experience, date, guests, customer_name, phone, special_requests — only if present and certain>"}},
+  "fields": {{"<extracted booking fields — experience, date, guests, customer_name, phone, special_requests, trip_key — only if present and certain. trip_key is the exact key from the trips list that matches the experience: one of klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski — only include if you are certain which trip they mean>"}},
   "confidence": "<high | medium | low>",
   "reply": "<full reply to send to the customer — warm, natural, signed with agent signature — never a template, never robotic>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
