@@ -1,0 +1,156 @@
+{
+  "business": {
+    "name": "BlueFinn Charters Curaçao",
+    "email": "info@bluefinncharters.com",
+    "phone": "+599 9690 3717",
+    "whatsapp": "+599 9690 3717",
+    "location": "Jan Thiel Beach, z/n, Willemstad, Curaçao",
+    "languages": ["English", "Dutch", "German", "Spanish", "Portuguese"],
+    "operating_days": "7 days a week",
+    "agent_name": "Marina",
+    "agent_signature": "Marina\nBlueFinn Charters Curaçao"
+  },
+
+  "payment": {
+    "methods": ["Credit card", "iDeal", "Apple Pay", "Google Pay", "Amex"],
+    "cash_policy": "Cash accepted at office only, minimum 24 hours in advance",
+    "no_payment_at_boarding": true,
+    "hold_duration_hours": 6
+  },
+
+  "booking_rules": {
+    "advance_booking_typical_days": "4-7",
+    "group_threshold_requires_human": 15,
+    "required_fields": ["experience", "date", "guests"],
+    "extras_fields": ["customer_name", "phone"],
+    "transfers_available": true,
+    "transfers_advance_notice_hours": 24,
+    "dietary_advance_notice_days": 1
+  },
+
+  "cancellation_policy": {
+    "summary": "[VERIFY: exact terms from bluefinncharters.com/cancellation-policy — page was inaccessible during research]",
+    "full_refund_before_hours": "[VERIFY]"
+  },
+
+  "private_charters": {
+    "available": true,
+    "pricing": "[VERIFY: not published — contact BlueFinn directly]",
+    "contact_for_booking": "info@bluefinncharters.com"
+  },
+
+  "trips": {
+    "klein_curacao": {
+      "display_name": "Klein Curaçao Trip",
+      "price_adult_usd": 120,
+      "price_child_usd": 65,
+      "price_child_age_range": "4-12",
+      "price_under_4": "free",
+      "departures": [
+        {"time": "08:00", "vessel": "BlueFinn2", "departure_point": "Jan Thiel Beach"},
+        {"time": "08:30", "vessel": "BlueFinn1", "departure_point": "Jan Thiel Beach"}
+      ],
+      "duration_hours": 8,
+      "returns_approx": "17:00",
+      "days_available": "daily",
+      "included": ["BBQ lunch", "premium open bar from lunch", "snorkel gear", "snorkel masks and pipe"],
+      "not_included": ["flippers"],
+      "notes": "Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing.",
+      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+    },
+    "snorkeling_3in1": {
+      "display_name": "3-in-1 Snorkeling Trip",
+      "price_adult_usd": 110,
+      "departures": [
+        {"time": "10:00", "vessel": "[VERIFY]", "departure_point": "Mood Beach pier"}
+      ],
+      "duration_hours": "[VERIFY]",
+      "days_available": "Fridays only",
+      "included": ["lunch", "3 snorkel sites"],
+      "snorkel_sites": ["Tugboat Saba wreck (open ocean)", "Tugboat Caracasbaai", "Caracasbaai pier"],
+      "requirements": "Good swimming skills required",
+      "suitable_for_children": false,
+      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+    },
+    "west_coast_beach": {
+      "display_name": "West Coast Beach Trip",
+      "price_adult_usd": 120,
+      "departures": [
+        {"time": "09:00", "vessel": "[VERIFY]", "departure_point": "Mood/Tomatoes"}
+      ],
+      "duration_hours": 6,
+      "days_available": "Wednesdays and Sundays",
+      "included": ["open bar", "snorkel gear"],
+      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+    },
+    "sunset_cruise": {
+      "display_name": "Sunset Cruise",
+      "price_adult_usd": 79,
+      "departures": [
+        {"time": "17:30", "vessel": "[VERIFY]", "departure_point": "Village Marina/Mood pier"}
+      ],
+      "duration_hours": 2.5,
+      "days_available": "Tuesday, Thursday, Friday, Saturday",
+      "included": ["open bar (beer, wine, cocktails)", "snacks"],
+      "snacks": ["pineapple", "mozzarella-tomato-pesto sticks", "chicken satay", "pulled pork sandwich"],
+      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+    },
+    "jet_ski": {
+      "display_name": "Jet Ski Excursion",
+      "price_adult_usd": 135,
+      "departures": [
+        {"time": "every hour", "vessel": "Jet ski", "departure_point": "Spanish Water"},
+        {"time": "every hour", "vessel": "Jet ski", "departure_point": "Piscadera Bay"}
+      ],
+      "days_available": "daily",
+      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+    }
+  },
+
+  "fleet": {
+    "bluefinn1": {"display_name": "BlueFinn 1 (B&W)", "type": "sailing catamaran", "length_ft": 75, "max_guests": 65},
+    "bluefinn2": {"display_name": "BlueFinn 2 (Apache)", "type": "sailing catamaran", "length_ft": 80, "max_guests": 95},
+    "kailani": {"display_name": "Kailani", "type": "motor yacht", "length_ft": 42, "max_guests": 20, "speed_knots": 15, "scuba_equipped": true},
+    "red_dragon": {"display_name": "Red Dragon", "type": "catamaran", "length_ft": 50, "max_guests": 40},
+    "topcat": {"display_name": "TopCat", "type": "sailing catamaran", "max_guests": 30}
+  },
+
+  "faq": {
+    "what_to_bring": "Towel, sunscreen, hat, sunglasses. Seasickness pill if you are prone.",
+    "extra_costs": "No extra costs. Everything is included. Tips appreciated but not required.",
+    "transfers": "Available via booking form. Guaranteed with 24 hours advance notice. Within 24 hours on request.",
+    "dietary": "Vegetarian and other dietary needs accommodated if communicated at least 1 day in advance via the booking form.",
+    "alcohol_policy": "Premium open bar from lunch. No alcohol served to guests under 18. ID may be requested.",
+    "seasickness": "Best seat is at the back of the boat, outside, facing the horizon. Drink water. Avoid going to the toilet. Take a pill in advance. Crew will help.",
+    "children": "All trips suitable for children except the 3-in-1 Snorkeling Trip, which requires good swimming skills in open sea.",
+    "dolphins": "Dolphins are possible while sailing to Klein Curaçao.",
+    "turtles": "Turtles are very likely near Klein Curaçao. You cannot pet them — they are protected by law.",
+    "toilets": "Catamarans have 2 marine toilets. Kailani has 1. No toilets on Klein Curaçao island.",
+    "swimming_ability": "Being comfortable in water is recommended. Life jackets and noodles are available. Guests can take the dinghy to the beach instead of swimming.",
+    "scuba_diving": "Kailani is equipped for scuba. You can also join a 1-tank dive on BlueFinn1 for the Klein Curaçao trip. Contact Scuba Do separately: info@divecenterscubado.com",
+    "local_student_rate": "Available via WhatsApp. Valid local ID or internship agreement required.",
+    "private_charters": "Yes, private charters are available. Contact info@bluefinncharters.com for availability and pricing.",
+    "sustainability": "BlueFinn uses reusable cups, solar panels, and a can pressing system.",
+    "ride_duration_klein_curacao": "Approximately 1 hour 45 minutes by catamaran, approximately 1 hour 15 minutes by Kailani. Depends on weather.",
+    "snorkel_gear_included": "Snorkel masks and pipe included. Flippers are not included.",
+    "no_payment_at_boarding": "No payment is accepted at boarding. Payment must be completed in advance.",
+    "cash_payment": "Cash is accepted at the office only, minimum 24 hours before the trip.",
+    "booking_in_advance": "Booking fills up 4 to 7 days in advance on average. Book early to secure your spot.",
+    "group_bookings": "For groups of 15 or more, contact the team directly for tailored arrangements.",
+    "special_requests": "Special requests and dietary needs should be communicated via the booking form at least 1 day in advance.",
+    "what_is_included": "All shared trips include the items listed per trip. No hidden costs.",
+    "age_child_pricing": "Child pricing applies to guests aged 4 to 12. Children under 4 are free.",
+    "klein_curacao_what_is_it": "Klein Curaçao is a small uninhabited island southeast of Curaçao, known for its white sand beach, lighthouse, and clear water.",
+    "can_i_snorkel": "Yes. Snorkel masks and pipe are provided on all trips that include snorkeling.",
+    "is_there_shade": "[VERIFY: not confirmed during research]",
+    "what_if_seasick": "The crew will help. Best seat is at the back of the boat outside facing the horizon. Take a pill before departure if you are prone."
+  },
+
+  "common_sense_knowledge": {
+    "curacao_timezone": "America/Curacao (UTC-4, no DST)",
+    "currency": "USD for pricing. Local currency is ANG (Netherlands Antillean guilder).",
+    "weather_season": "Curaçao is outside the hurricane belt. Dry season December to April. Wet season May to November. Generally sunny year-round.",
+    "dress_code": "Casual beach attire. Swimwear appropriate.",
+    "marina_persona": "Marina is warm, helpful, knowledgeable, and enthusiastic about the ocean. She never guesses — if she does not know something she says so and offers to follow up."
+  }
+}
