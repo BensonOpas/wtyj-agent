@@ -5,40 +5,54 @@
     "phone": "+599 9690 3717",
     "whatsapp": "+599 9690 3717",
     "location": "Jan Thiel Beach, z/n, Willemstad, Curaçao",
-    "languages": ["English", "Dutch", "German", "Spanish", "Portuguese"],
+    "languages": [
+      "English",
+      "Dutch",
+      "German",
+      "Spanish",
+      "Portuguese"
+    ],
     "operating_days": "7 days a week",
     "agent_name": "Marina",
     "agent_signature": "Marina\nBlueFinn Charters Curaçao"
   },
-
   "payment": {
-    "methods": ["Credit card", "iDeal", "Apple Pay", "Google Pay", "Amex"],
+    "methods": [
+      "Credit card",
+      "iDeal",
+      "Apple Pay",
+      "Google Pay",
+      "Amex"
+    ],
     "cash_policy": "Cash accepted at office only, minimum 24 hours in advance",
     "no_payment_at_boarding": true,
     "hold_duration_hours": 6
   },
-
   "booking_rules": {
     "advance_booking_typical_days": "4-7",
     "group_threshold_requires_human": 15,
-    "required_fields": ["experience", "date", "guests"],
-    "extras_fields": ["customer_name", "phone"],
+    "required_fields": [
+      "experience",
+      "date",
+      "guests"
+    ],
+    "extras_fields": [
+      "customer_name",
+      "phone"
+    ],
     "transfers_available": true,
     "transfers_advance_notice_hours": 24,
     "dietary_advance_notice_days": 1
   },
-
   "cancellation_policy": {
     "summary": "[VERIFY: exact terms from bluefinncharters.com/cancellation-policy — page was inaccessible during research]",
     "full_refund_before_hours": "[VERIFY]"
   },
-
   "private_charters": {
     "available": true,
     "pricing": "[VERIFY: not published — contact BlueFinn directly]",
     "contact_for_booking": "info@bluefinncharters.com"
   },
-
   "trips": {
     "klein_curacao": {
       "display_name": "Klein Curaçao Trip",
@@ -47,74 +61,151 @@
       "price_child_age_range": "4-12",
       "price_under_4": "free",
       "departures": [
-        {"time": "08:00", "vessel": "BlueFinn2", "departure_point": "Jan Thiel Beach"},
-        {"time": "08:30", "vessel": "BlueFinn1", "departure_point": "Jan Thiel Beach"}
+        {
+          "time": "08:00",
+          "vessel": "BlueFinn2",
+          "departure_point": "Jan Thiel Beach"
+        },
+        {
+          "time": "08:30",
+          "vessel": "BlueFinn1",
+          "departure_point": "Jan Thiel Beach"
+        }
       ],
       "duration_hours": 8,
       "returns_approx": "17:00",
       "days_available": "daily",
-      "included": ["BBQ lunch", "premium open bar from lunch", "snorkel gear", "snorkel masks and pipe"],
-      "not_included": ["flippers"],
+      "included": [
+        "BBQ lunch",
+        "premium open bar from lunch",
+        "snorkel gear",
+        "snorkel masks and pipe"
+      ],
+      "not_included": [
+        "flippers"
+      ],
       "notes": "Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing.",
-      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+      "calendar_id": "ed9e5c8b2357d2e21b99af2617c58836204443ed7e8d7352661426cca41cf4cb@group.calendar.google.com"
     },
     "snorkeling_3in1": {
       "display_name": "3-in-1 Snorkeling Trip",
       "price_adult_usd": 110,
       "departures": [
-        {"time": "10:00", "vessel": "[VERIFY]", "departure_point": "Mood Beach pier"}
+        {
+          "time": "10:00",
+          "vessel": "[VERIFY]",
+          "departure_point": "Mood Beach pier"
+        }
       ],
       "duration_hours": "[VERIFY]",
       "days_available": "Fridays only",
-      "included": ["lunch", "3 snorkel sites"],
-      "snorkel_sites": ["Tugboat Saba wreck (open ocean)", "Tugboat Caracasbaai", "Caracasbaai pier"],
+      "included": [
+        "lunch",
+        "3 snorkel sites"
+      ],
+      "snorkel_sites": [
+        "Tugboat Saba wreck (open ocean)",
+        "Tugboat Caracasbaai",
+        "Caracasbaai pier"
+      ],
       "requirements": "Good swimming skills required",
       "suitable_for_children": false,
-      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+      "calendar_id": "649576fb0d0eb17fc895981db2f5e2339ac045edf3a4292d40eff57786fa06db@group.calendar.google.com"
     },
     "west_coast_beach": {
       "display_name": "West Coast Beach Trip",
       "price_adult_usd": 120,
       "departures": [
-        {"time": "09:00", "vessel": "[VERIFY]", "departure_point": "Mood/Tomatoes"}
+        {
+          "time": "09:00",
+          "vessel": "[VERIFY]",
+          "departure_point": "Mood/Tomatoes"
+        }
       ],
       "duration_hours": 6,
       "days_available": "Wednesdays and Sundays",
-      "included": ["open bar", "snorkel gear"],
-      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+      "included": [
+        "open bar",
+        "snorkel gear"
+      ],
+      "calendar_id": "a85ac414af5903971715705bb8f0975a0be07ca637017c1184f1ba7cd4ab1c00@group.calendar.google.com"
     },
     "sunset_cruise": {
       "display_name": "Sunset Cruise",
       "price_adult_usd": 79,
       "departures": [
-        {"time": "17:30", "vessel": "[VERIFY]", "departure_point": "Village Marina/Mood pier"}
+        {
+          "time": "17:30",
+          "vessel": "[VERIFY]",
+          "departure_point": "Village Marina/Mood pier"
+        }
       ],
       "duration_hours": 2.5,
       "days_available": "Tuesday, Thursday, Friday, Saturday",
-      "included": ["open bar (beer, wine, cocktails)", "snacks"],
-      "snacks": ["pineapple", "mozzarella-tomato-pesto sticks", "chicken satay", "pulled pork sandwich"],
-      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+      "included": [
+        "open bar (beer, wine, cocktails)",
+        "snacks"
+      ],
+      "snacks": [
+        "pineapple",
+        "mozzarella-tomato-pesto sticks",
+        "chicken satay",
+        "pulled pork sandwich"
+      ],
+      "calendar_id": "a3df969d58e35c9603fe6ae6672446ec2f430ed3304f9c5aaf2178391e67defe@group.calendar.google.com"
     },
     "jet_ski": {
       "display_name": "Jet Ski Excursion",
       "price_adult_usd": 135,
       "departures": [
-        {"time": "every hour", "vessel": "Jet ski", "departure_point": "Spanish Water"},
-        {"time": "every hour", "vessel": "Jet ski", "departure_point": "Piscadera Bay"}
+        {
+          "time": "every hour",
+          "vessel": "Jet ski",
+          "departure_point": "Spanish Water"
+        },
+        {
+          "time": "every hour",
+          "vessel": "Jet ski",
+          "departure_point": "Piscadera Bay"
+        }
       ],
       "days_available": "daily",
-      "calendar_id": "[VERIFY: BlueFinn must confirm which Google Calendar ID maps to this trip]"
+      "calendar_id": "903f29c1161ed6d1378b7d4b1f7ef0597ce6707e2648fd98b82b081542919f08@group.calendar.google.com"
     }
   },
-
   "fleet": {
-    "bluefinn1": {"display_name": "BlueFinn 1 (B&W)", "type": "sailing catamaran", "length_ft": 75, "max_guests": 65},
-    "bluefinn2": {"display_name": "BlueFinn 2 (Apache)", "type": "sailing catamaran", "length_ft": 80, "max_guests": 95},
-    "kailani": {"display_name": "Kailani", "type": "motor yacht", "length_ft": 42, "max_guests": 20, "speed_knots": 15, "scuba_equipped": true},
-    "red_dragon": {"display_name": "Red Dragon", "type": "catamaran", "length_ft": 50, "max_guests": 40},
-    "topcat": {"display_name": "TopCat", "type": "sailing catamaran", "max_guests": 30}
+    "bluefinn1": {
+      "display_name": "BlueFinn 1 (B&W)",
+      "type": "sailing catamaran",
+      "length_ft": 75,
+      "max_guests": 65
+    },
+    "bluefinn2": {
+      "display_name": "BlueFinn 2 (Apache)",
+      "type": "sailing catamaran",
+      "length_ft": 80,
+      "max_guests": 95
+    },
+    "kailani": {
+      "display_name": "Kailani",
+      "type": "motor yacht",
+      "length_ft": 42,
+      "max_guests": 20,
+      "speed_knots": 15,
+      "scuba_equipped": true
+    },
+    "red_dragon": {
+      "display_name": "Red Dragon",
+      "type": "catamaran",
+      "length_ft": 50,
+      "max_guests": 40
+    },
+    "topcat": {
+      "display_name": "TopCat",
+      "type": "sailing catamaran",
+      "max_guests": 30
+    }
   },
-
   "faq": {
     "what_to_bring": "Towel, sunscreen, hat, sunglasses. Seasickness pill if you are prone.",
     "extra_costs": "No extra costs. Everything is included. Tips appreciated but not required.",
@@ -145,7 +236,6 @@
     "is_there_shade": "[VERIFY: not confirmed during research]",
     "what_if_seasick": "The crew will help. Best seat is at the back of the boat outside facing the horizon. Take a pill before departure if you are prone."
   },
-
   "common_sense_knowledge": {
     "curacao_timezone": "America/Curacao (UTC-4, no DST)",
     "currency": "USD for pricing. Local currency is ANG (Netherlands Antillean guilder).",

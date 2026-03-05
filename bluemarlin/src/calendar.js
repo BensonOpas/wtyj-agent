@@ -1,6 +1,6 @@
 // FILE: calendar.js
 // CREATED: Before Brief 001 (original codebase)
-// LAST MODIFIED: Brief 025
+// LAST MODIFIED: Brief 026
 // DEPENDS ON: bluemarlin-calendar-key.json (config)
 // CALLED BY: email_poller.py via subprocess
 const { google } = require('googleapis');
@@ -8,11 +8,11 @@ const path = require('path');
 const KEY_PATH = path.join(__dirname, '..', 'config', 'bluemarlin-calendar-key.json');
 
 const CALENDARS = {
-  klein_curacao:    "[VERIFY: BlueFinn klein_curacao calendar ID]",
-  snorkeling_3in1:  "[VERIFY: BlueFinn snorkeling_3in1 calendar ID]",
-  west_coast_beach: "[VERIFY: BlueFinn west_coast_beach calendar ID]",
-  sunset_cruise:    "[VERIFY: BlueFinn sunset_cruise calendar ID]",
-  jet_ski:          "[VERIFY: BlueFinn jet_ski calendar ID]"
+  klein_curacao:    "ed9e5c8b2357d2e21b99af2617c58836204443ed7e8d7352661426cca41cf4cb@group.calendar.google.com",
+  snorkeling_3in1:  "649576fb0d0eb17fc895981db2f5e2339ac045edf3a4292d40eff57786fa06db@group.calendar.google.com",
+  west_coast_beach: "a85ac414af5903971715705bb8f0975a0be07ca637017c1184f1ba7cd4ab1c00@group.calendar.google.com",
+  sunset_cruise:    "a3df969d58e35c9603fe6ae6672446ec2f430ed3304f9c5aaf2178391e67defe@group.calendar.google.com",
+  jet_ski:          "903f29c1161ed6d1378b7d4b1f7ef0597ce6707e2648fd98b82b081542919f08@group.calendar.google.com"
 };
 
 const DURATIONS_HOURS = {
@@ -31,7 +31,7 @@ async function createHold({ package_key, date, start_time, guests_pax, customer_
 
   const calendar = google.calendar({ version: 'v3', auth });
   const calendarId = CALENDARS[package_key];
-  if (!calendarId || calendarId.startsWith("[VERIFY")) {
+  if (!calendarId || !calendarId.endsWith("@group.calendar.google.com")) {
     throw new Error(`Calendar ID not yet configured for: ${package_key}`);
   }
 
