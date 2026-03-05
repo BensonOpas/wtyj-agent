@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 027
+# LAST MODIFIED: Brief 028
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -326,7 +326,14 @@ def main():
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     bm_logger.log("human_required", email=from_email, subject=subj,
                                   internal_note=result.get("internal_note", ""))
-                    sheets_writer.log_event("human_required", {"email": from_email, "subject": subj})
+                    sheets_writer.log_escalation({
+                        "email": from_email,
+                        "subject": subj,
+                        "customer_name": th["fields"].get("customer_name", ""),
+                        "intent": (result.get("intents") or ["unknown"])[0],
+                        "fields_collected": th["fields"],
+                        "internal_note": result.get("internal_note", ""),
+                    })
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
@@ -394,6 +401,8 @@ def main():
                             th["flags"]["payment_id"] = pay.get("payment_id")
                             th["flags"]["payment_link"] = pay_link
                             th["flags"]["payment_status"] = pay.get("status")
+                            booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+                            th["flags"]["booking_ref"] = booking_ref
                             bm_logger.log(
                                 "hold_created",
                                 email=from_email, subject=subj,
@@ -409,15 +418,21 @@ def main():
                                 special_requests=fields_now.get("special_requests"),
                             )
                             sheets_writer.log_hold_created({
-                                "email": from_email, "subject": subj,
+                                "booking_ref": booking_ref,
+                                "email": from_email,
+                                "subject": subj,
                                 "customer_name": fields_now.get("customer_name"),
                                 "experience": fields_now.get("experience"),
+                                "trip_key": fields_now.get("trip_key"),
                                 "date": fields_now.get("date"),
                                 "guests": fields_now.get("guests"),
+                                "departure_time": fields_now.get("departure_time"),
                                 "phone": fields_now.get("phone"),
                                 "special_requests": fields_now.get("special_requests"),
+                                "total_price": int(fields_now.get("guests") or 0) * price_usd,
                                 "html_link": th["flags"].get("event_link"),
                                 "payment_link": th["flags"].get("payment_link"),
+                                "payment_status": pay.get("status"),
                             })
                             log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
 

@@ -1,6 +1,6 @@
 # FILE: sheets_writer.py
 # CREATED: Brief 013
-# LAST MODIFIED: Brief 013
+# LAST MODIFIED: Brief 028
 # DEPENDS ON: bluemarlin-calendar-key.json (config)
 # IMPORTS FROM: nothing
 # CALLERS: email_poller.py
@@ -50,18 +50,20 @@ def log_hold_created(data: dict):
             return None
         row_bookings = [
             _now(),
+            data.get('booking_ref', ''),
             data.get('customer_name', ''),
             data.get('email', ''),
             data.get('experience', ''),
+            data.get('trip_key', ''),
             data.get('date', ''),
             str(data.get('guests', '')),
+            data.get('departure_time', ''),
             data.get('phone', ''),
             data.get('special_requests', ''),
-            'CREATED',
+            str(data.get('total_price', '')),
+            data.get('payment_status', ''),
             data.get('html_link', ''),
             data.get('payment_link', ''),
-            '',
-            '',
         ]
         row_all = [
             _now(),
@@ -84,18 +86,20 @@ def log_hold_failed(data: dict):
             return None
         row_bookings = [
             _now(),
+            '',
             data.get('customer_name', ''),
             data.get('email', ''),
             data.get('experience', ''),
+            data.get('trip_key', ''),
             data.get('date', ''),
             str(data.get('guests', '')),
             '',
             '',
+            '',
+            '',
             'FAILED',
             '',
-            '',
             data.get('error', ''),
-            '',
         ]
         row_all = [
             _now(),
@@ -111,30 +115,30 @@ def log_hold_failed(data: dict):
         return None
 
 
-def log_complaint(data: dict):
+def log_escalation(data: dict):
     try:
         service = _get_service()
         if service is None:
             return None
-        row_complaints = [
+        row_escalations = [
             _now(),
+            data.get('customer_name', ''),
             data.get('email', ''),
-            data.get('subject', ''),
-            data.get('body_snippet', ''),
-            'NEW',
-            '',
+            data.get('intent', ''),
+            json.dumps(data.get('fields_collected', {})),
+            data.get('internal_note', ''),
         ]
         row_all = [
             _now(),
-            'complaint_received',
+            'escalation',
             data.get('email', ''),
             data.get('subject', ''),
             json.dumps(data),
         ]
-        _append(service, 'Complaints', row_complaints)
+        _append(service, 'Escalations', row_escalations)
         return _append(service, 'All Events', row_all)
     except Exception as e:
-        print(f"sheets_writer: log_complaint error: {e}")
+        print(f"sheets_writer: log_escalation error: {e}")
         return None
 
 
