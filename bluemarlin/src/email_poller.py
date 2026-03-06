@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 029
+# LAST MODIFIED: Brief 030
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -344,6 +344,7 @@ def main():
                 # Step 5: Booking flow
                 if "booking" in result.get("intents", []):
                     fields_now = th["fields"]
+                    reply_text = result["reply"]
                     if (fields_now.get("experience") and fields_now.get("date")
                             and fields_now.get("guests") and fields_now.get("trip_key")
                             and th["flags"].get("booking_confirmed")
@@ -380,7 +381,8 @@ def main():
                                 "guests": fields_now.get("guests"),
                                 "error": res.get("error"),
                             })
-                            smtp_send(from_email, "Re: " + subj, result["reply"],
+                            failure_reply = result.get("reply_hold_failed") or result["reply"]
+                            smtp_send(from_email, "Re: " + subj, failure_reply,
                                       in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                             log(f"Hold create FAILED for {from_email}: {res.get('error')}")
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
@@ -402,6 +404,7 @@ def main():
                             th["flags"]["payment_id"] = pay.get("payment_id")
                             th["flags"]["payment_link"] = pay_link
                             th["flags"]["payment_status"] = pay.get("status")
+                            reply_text = result["reply"].replace("[PAYMENT_LINK]", pay_link)
                             booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
                             th["flags"]["booking_ref"] = booking_ref
                             bm_logger.log(
@@ -438,7 +441,7 @@ def main():
                             log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
 
                     # Send Claude's reply for all booking sub-cases
-                    smtp_send(from_email, "Re: " + subj, result["reply"],
+                    smtp_send(from_email, "Re: " + subj, reply_text,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
 
                 # Step 6: All other intents

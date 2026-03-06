@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 029
+# LAST MODIFIED: Brief 030
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -124,6 +124,12 @@ When "awaiting_booking_confirmation" is true in thread flags:
   the conversation naturally.
 - If unclear: ask for clarification.
 
+When writing the reply for a confirmed booking (booking_confirmed
+is true and hold will be attempted), include the exact string
+[PAYMENT_LINK] in the reply where the payment link should appear.
+Python will replace [PAYMENT_LINK] with the real payment URL before
+sending.
+
 ESCALATION BEHAVIOUR:
 When the intent is complaint or cancellation, set requires_human
 to true. Your reply must:
@@ -167,7 +173,8 @@ The JSON must have exactly these fields:
     trip_key: exact key from the trips list — one of klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski — only include if certain
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
-  "reply": "<full reply to send to the customer — warm, natural, signed with agent signature — never a template, never robotic>",
+  "reply": "<full reply to send when the booking hold is successfully created — warm, celebratory, includes the booking summary, payment link placeholder [PAYMENT_LINK], payment methods, hold duration, what to bring>",
+  "reply_hold_failed": "<reply to send ONLY if the calendar slot is unavailable or hold creation fails — apologetic, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link — only write this field when booking_confirmed is true in thread flags or you are sending a booking confirmation>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
   "flags": {{"awaiting_booking_confirmation": <true when you are sending a booking summary asking the customer to confirm — omit or false otherwise>, "booking_confirmed": <true only when the customer has just confirmed in this message — omit or false otherwise>}},
