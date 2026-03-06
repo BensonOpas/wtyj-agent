@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 031
+# LAST MODIFIED: Brief 032
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
 # DEPENDS ON: marina_agent.py (Brief 023)
 # DEPENDS ON: config_loader.py (Brief 022)
-# DEPENDS ON: calendar.js (original)
+# DEPENDS ON: gws_calendar.py (Brief 032)
 # IMPORTS FROM: state_registry.py (Brief 004)
 # IMPORTS FROM: payment_stub.py (original)
 # IMPORTS FROM: bm_logger.py (original)
@@ -16,7 +16,7 @@
 import state_registry
 import payment_stub
 import bm_logger
-import imaplib, email, urllib.request, urllib.parse, json, subprocess, time, os, re, hashlib
+import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib
 from email.utils import parseaddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -27,6 +27,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import marina_agent
 import config_loader
 import sheets_writer
+import gws_calendar
 
 # ========= CONFIG =========
 CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
@@ -172,86 +173,6 @@ def stable_thread_key(msg, from_email: str, subject: str) -> str:
     )
 
 
-def create_calendar_hold(fields_now: dict) -> dict:
-    """
-    Calls node calendar.js to create a hold event in Google Calendar.
-    Returns dict: {ok: bool, eventId?, htmlLink?, error?}
-    """
-    trip_key = fields_now.get("trip_key", "")
-    if not trip_key:
-        return {"ok": False, "error": "No trip_key in fields — cannot create hold."}
-
-    trip = config_loader.get_trip(trip_key)
-    departures = trip.get("departures", [])
-    start_time = (
-        fields_now.get("departure_time")
-        or (departures[0].get("time", "09:00") if departures else "09:00")
-    )
-    price_usd = trip.get("price_adult_usd", 0)
-
-    payload = {
-        "package_key": trip_key,
-        "date": fields_now.get("date", ""),
-        "start_time": start_time,
-        "guests_pax": int(fields_now.get("guests") or 0),
-        "customer_name": fields_now.get("customer_name") or "\u2014",
-        "contact": f"{fields_now.get('phone', '')}".strip() or "\u2014",
-        "price_usd": price_usd,
-    }
-
-    try:
-        r = subprocess.run(
-            ["node", os.path.join(_SRC_DIR, "calendar.js"), json.dumps(payload)],
-            capture_output=True, text=True, timeout=30
-        )
-        if r.returncode != 0:
-            return {"ok": False, "error": (r.stderr or r.stdout or "calendar.js failed").strip()[:500]}
-        out = (r.stdout or "").strip()
-        data = json.loads(out)
-        if not data.get("eventId"):
-            return {"ok": False, "error": f"calendar.js returned no eventId: {out[:200]}"}
-        return {"ok": True, "eventId": data.get("eventId"), "htmlLink": data.get("htmlLink")}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:500]}
-
-
-def check_calendar_availability(fields_now: dict) -> dict:
-    """
-    Calls node calendar.js to check slot availability without creating a hold.
-    Returns dict: {available: bool, reason?: str, error?: str}
-    """
-    trip_key = fields_now.get("trip_key", "")
-    if not trip_key:
-        return {"available": False, "error": "No trip_key in fields"}
-
-    trip = config_loader.get_trip(trip_key)
-    departures = trip.get("departures", [])
-    start_time = (
-        fields_now.get("departure_time")
-        or (departures[0].get("time", "09:00") if departures else "09:00")
-    )
-
-    payload = {
-        "command": "checkAvailability",
-        "package_key": trip_key,
-        "date": fields_now.get("date", ""),
-        "start_time": start_time,
-    }
-
-    try:
-        r = subprocess.run(
-            ["node", os.path.join(_SRC_DIR, "calendar.js"), json.dumps(payload)],
-            capture_output=True, text=True, timeout=30
-        )
-        if r.returncode != 0:
-            return {"available": False, "error": (r.stderr or r.stdout or "calendar.js failed").strip()[:500]}
-        out = (r.stdout or "").strip()
-        data = json.loads(out)
-        return data
-    except Exception as e:
-        return {"available": False, "error": str(e)[:500]}
-
-
 # ========= MAIN LOOP =========
 def main():
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
@@ -361,7 +282,12 @@ def main():
                 if (result.get("flags", {}).get("awaiting_booking_confirmation")
                         and not th["flags"].get("slot_checked")):
                     fields_for_check = th["fields"]
-                    avail = check_calendar_availability(fields_for_check)
+                    _ck_trip = fields_for_check.get("trip_key", "")
+                    _ck_deps = config_loader.get_trip(_ck_trip).get("departures", []) if _ck_trip else []
+                    _ck_start = (fields_for_check.get("departure_time")
+                                 or (_ck_deps[0].get("time", "09:00") if _ck_deps else "09:00"))
+                    avail = gws_calendar.check_availability(
+                        _ck_trip, fields_for_check.get("date", ""), _ck_start)
                     th["flags"]["slot_checked"] = True
                     th["flags"]["slot_available"] = avail.get("available", False)
                     if not avail.get("available"):
@@ -416,7 +342,7 @@ def main():
                             "experience": fields_now.get("experience"),
                             "date": fields_now.get("date"),
                         })
-                        res = create_calendar_hold(fields_now)
+                        res = gws_calendar.create_hold(fields_now)
                         if not res.get("ok"):
                             bm_logger.log(
                                 "hold_failed",
