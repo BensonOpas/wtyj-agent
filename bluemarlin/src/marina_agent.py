@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 030
+# LAST MODIFIED: Brief 031
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -174,7 +174,7 @@ The JSON must have exactly these fields:
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
   "reply": "<full reply to send when the booking hold is successfully created — warm, celebratory, includes the booking summary, payment link placeholder [PAYMENT_LINK], payment methods, hold duration, what to bring>",
-  "reply_hold_failed": "<reply to send ONLY if the calendar slot is unavailable or hold creation fails — apologetic, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link — only write this field when booking_confirmed is true in thread flags or you are sending a booking confirmation>",
+  "reply_hold_failed": "<reply to send if the calendar slot is unavailable or hold creation fails — apologetic, warm, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link. Write this field whenever awaiting_booking_confirmation is being set to true OR booking_confirmed is true in thread flags. Always write it alongside the summary reply so Python can choose the correct one based on actual availability.>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
   "flags": {{"awaiting_booking_confirmation": <true when you are sending a booking summary asking the customer to confirm — omit or false otherwise>, "booking_confirmed": <true only when the customer has just confirmed in this message — omit or false otherwise>}},

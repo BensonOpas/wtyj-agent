@@ -1,6 +1,6 @@
 // FILE: calendar.js
 // CREATED: Before Brief 001 (original codebase)
-// LAST MODIFIED: Brief 026
+// LAST MODIFIED: Brief 031
 // DEPENDS ON: bluemarlin-calendar-key.json (config)
 // CALLED BY: email_poller.py via subprocess
 const { google } = require('googleapis');
@@ -75,7 +75,59 @@ async function createHold({ package_key, date, start_time, guests_pax, customer_
   return { eventId: response.data.id, htmlLink: response.data.htmlLink };
 }
 
-const args = JSON.parse(process.argv[2]);
-createHold(args)
-  .then(result => console.log(JSON.stringify(result)))
-  .catch(err => { console.error(err.message); process.exit(1); });
+async function checkAvailability({ package_key, date, start_time }) {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: KEY_PATH,
+    scopes: ['https://www.googleapis.com/auth/calendar']
+  });
+
+  const calendar = google.calendar({ version: 'v3', auth });
+  const calendarId = CALENDARS[package_key];
+  if (!calendarId || !calendarId.endsWith("@group.calendar.google.com")) {
+    return { available: false, error: `Calendar ID not yet configured for: ${package_key}` };
+  }
+
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = start_time.split(':').map(Number);
+
+  const CURACAO_OFFSET_MS = -4 * 60 * 60 * 1000;
+  const utcMs = Date.UTC(year, month - 1, day, hour, minute) - CURACAO_OFFSET_MS;
+  const startDateTime = new Date(utcMs);
+  const endDateTime = new Date(utcMs);
+  const dur = DURATIONS_HOURS[package_key] || 4;
+  endDateTime.setTime(endDateTime.getTime() + dur * 60 * 60 * 1000);
+
+  const timeMin = startDateTime.toISOString();
+  const timeMax = endDateTime.toISOString();
+
+  try {
+    const existing = await calendar.events.list({
+      calendarId,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 5
+    });
+    const items = existing.data.items || [];
+    if (items.length > 0) {
+      return { available: false, reason: `Slot already booked (${items[0].summary || 'event'})` };
+    }
+    return { available: true };
+  } catch (err) {
+    return { available: false, error: err.message };
+  }
+}
+
+const input = JSON.parse(process.argv[2]);
+const command = input.command || 'createHold';
+
+if (command === 'checkAvailability') {
+  checkAvailability(input)
+    .then(result => console.log(JSON.stringify(result)))
+    .catch(err => { console.error(err.message); process.exit(1); });
+} else {
+  createHold(input)
+    .then(result => console.log(JSON.stringify(result)))
+    .catch(err => { console.error(err.message); process.exit(1); });
+}

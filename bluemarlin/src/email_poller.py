@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 030
+# LAST MODIFIED: Brief 031
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -215,6 +215,43 @@ def create_calendar_hold(fields_now: dict) -> dict:
         return {"ok": False, "error": str(e)[:500]}
 
 
+def check_calendar_availability(fields_now: dict) -> dict:
+    """
+    Calls node calendar.js to check slot availability without creating a hold.
+    Returns dict: {available: bool, reason?: str, error?: str}
+    """
+    trip_key = fields_now.get("trip_key", "")
+    if not trip_key:
+        return {"available": False, "error": "No trip_key in fields"}
+
+    trip = config_loader.get_trip(trip_key)
+    departures = trip.get("departures", [])
+    start_time = (
+        fields_now.get("departure_time")
+        or (departures[0].get("time", "09:00") if departures else "09:00")
+    )
+
+    payload = {
+        "command": "checkAvailability",
+        "package_key": trip_key,
+        "date": fields_now.get("date", ""),
+        "start_time": start_time,
+    }
+
+    try:
+        r = subprocess.run(
+            ["node", os.path.join(_SRC_DIR, "calendar.js"), json.dumps(payload)],
+            capture_output=True, text=True, timeout=30
+        )
+        if r.returncode != 0:
+            return {"available": False, "error": (r.stderr or r.stdout or "calendar.js failed").strip()[:500]}
+        out = (r.stdout or "").strip()
+        data = json.loads(out)
+        return data
+    except Exception as e:
+        return {"available": False, "error": str(e)[:500]}
+
+
 # ========= MAIN LOOP =========
 def main():
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
@@ -320,6 +357,16 @@ def main():
 
                 log(f"Intents: {result.get('intents')} | Fields: {th['fields']}")
 
+                # Step 3b: Availability pre-check when booking summary is being sent
+                if (result.get("flags", {}).get("awaiting_booking_confirmation")
+                        and not th["flags"].get("slot_checked")):
+                    fields_for_check = th["fields"]
+                    avail = check_calendar_availability(fields_for_check)
+                    th["flags"]["slot_checked"] = True
+                    th["flags"]["slot_available"] = avail.get("available", False)
+                    if not avail.get("available"):
+                        log(f"Slot unavailable for {from_email}: {avail.get('reason') or avail.get('error')}")
+
                 # Step 4: requires_human check
                 if result.get("requires_human"):
                     smtp_send(from_email, "Re: " + subj, result["reply"],
@@ -344,7 +391,12 @@ def main():
                 # Step 5: Booking flow
                 if "booking" in result.get("intents", []):
                     fields_now = th["fields"]
-                    reply_text = result["reply"]
+                    if (th["flags"].get("slot_checked")
+                            and not th["flags"].get("slot_available")
+                            and result.get("flags", {}).get("awaiting_booking_confirmation")):
+                        reply_text = result.get("reply_hold_failed") or result["reply"]
+                    else:
+                        reply_text = result["reply"]
                     if (fields_now.get("experience") and fields_now.get("date")
                             and fields_now.get("guests") and fields_now.get("trip_key")
                             and th["flags"].get("booking_confirmed")
