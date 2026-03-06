@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 028
+# LAST MODIFIED: Brief 029
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -346,6 +346,7 @@ def main():
                     fields_now = th["fields"]
                     if (fields_now.get("experience") and fields_now.get("date")
                             and fields_now.get("guests") and fields_now.get("trip_key")
+                            and th["flags"].get("booking_confirmed")
                             and not th["flags"].get("hold_created")):
                         bm_logger.log(
                             "booking_attempted",
