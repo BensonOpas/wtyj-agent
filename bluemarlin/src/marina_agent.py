@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 031
+# LAST MODIFIED: Brief 035
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -66,6 +66,7 @@ def _build_prompt(
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
 
 PERSONA: {csk.get('marina_persona', '')}
+LANGUAGE: Detect the language of the customer's inbound message and write your reply in that same language. Supported languages: {', '.join(business.get('languages', []))}. If the language is unclear or not in the supported list, default to English.
 AGENT SIGNATURE: {signature}
 TODAY (Curaçao time): {today}
 TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
@@ -170,7 +171,13 @@ The JSON must have exactly these fields:
     customer_name: customer's name
     phone: customer's phone number
     special_requests: forward-looking preferences only
-    trip_key: exact key from the trips list — one of klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski — only include if certain
+    trip_key: exact key from the trips list. Match the customer's wording to one of these keys:
+      "Klein Curaçao", "Klein", "island trip", "day trip", "turtle trip" → klein_curacao
+      "snorkeling", "snorkel", "3-in-1", "3 in 1", "snorkeling trip" → snorkeling_3in1
+      "west coast", "beach trip", "west coast beach" → west_coast_beach
+      "sunset", "sunset cruise", "evening cruise", "evening trip" → sunset_cruise
+      "jet ski", "jetski", "jet-ski" → jet_ski
+      Only include trip_key if certain. If the customer's description is ambiguous, omit it and ask.
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
   "reply": "<full reply to send when the booking hold is successfully created — warm, celebratory, includes the booking summary, payment link placeholder [PAYMENT_LINK], payment methods, hold duration, what to bring>",

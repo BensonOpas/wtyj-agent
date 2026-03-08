@@ -492,3 +492,7 @@ Outcome: complete — 7/7 tests pass
 Brief 034 — Fill [VERIFY] placeholders in client.json
 Decision: Replace all 8 [VERIFY] items with plausible demo values. No source code changes. Vessel assignments: snorkeling_3in1=TopCat, west_coast_beach=Red Dragon, sunset_cruise=Kailani. Cancellation: 48h full refund, 24h no refund.
 Outcome: complete — 9/9 tests pass
+
+Brief 035 — Marina prompt polish: language adaptation + trip key mapping
+Decision: Add LANGUAGE detection instruction and trip_key mapping table to marina_agent.py prompt. Remove 3 resolved items from CLAUDE.md Known Open Issues. Formally accept fallback reply exception in CLAUDE.md. No logic changes.
+Outcome: complete — 9/9 tests pass
