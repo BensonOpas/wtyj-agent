@@ -21,11 +21,11 @@ _CURACAO_TZ = timezone(timedelta(hours=-4))
 
 # Copied verbatim from calendar.js (Brief 031)
 CALENDARS = {
-    "klein_curacao":    "ed9e5c8b2357d2e21b99af2617c58836204443ed7e8d7352661426cca41cf4cb@group.calendar.google.com",
-    "snorkeling_3in1":  "649576fb0d0eb17fc895981db2f5e2339ac045edf3a4292d40eff57786fa06db@group.calendar.google.com",
-    "west_coast_beach": "a85ac414af5903971715705bb8f0975a0be07ca637017c1184f1ba7cd4ab1c00@group.calendar.google.com",
-    "sunset_cruise":    "a3df969d58e35c9603fe6ae6672446ec2f430ed3304f9c5aaf2178391e67defe@group.calendar.google.com",
-    "jet_ski":          "903f29c1161ed6d1378b7d4b1f7ef0597ce6707e2648fd98b82b081542919f08@group.calendar.google.com",
+    "klein_curacao":    "4ce23ea0e7ec08da249c778969d71c199b8aaf7bf6114efac4fae7e0928f1b31@group.calendar.google.com",
+    "snorkeling_3in1":  "114baef90d15890abbcc550dc5ea5edf68d5676a13a0122c099ed9a9a8d52db2@group.calendar.google.com",
+    "west_coast_beach": "c24538f8ed2c35306fca340e0e3453bdda717b80274beb6e2e8cae53735e48e0@group.calendar.google.com",
+    "sunset_cruise":    "d405cf341b87fcbae36131d910986534fd1d24286632dfa50b1234792aeba2ce@group.calendar.google.com",
+    "jet_ski":          "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com",
 }
 
 DURATIONS_HOURS = {

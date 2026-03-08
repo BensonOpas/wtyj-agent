@@ -27,7 +27,7 @@ def _get_spreadsheet_id() -> str:
     sid = os.environ.get('SPREADSHEET_ID', '')
     if sid:
         return sid
-    return '1soG3zVnx-Y0WYWGJdgakXqpNeI6GAe6AD8DycOwwifE'
+    return '1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I'
 
 
 def _append(tab_name: str, row: list) -> None:
