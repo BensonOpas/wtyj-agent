@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 032
+# LAST MODIFIED: Brief 033
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -160,13 +160,21 @@ def strip_quotes(text: str) -> str:
     t = "\n".join(lines).strip()
     return t
 
-def stable_thread_key(msg, from_email: str, subject: str) -> str:
+def resolve_thread_key(msg, from_email: str, subject: str, mid_index: dict) -> str:
     """
-    Deterministic thread key to prevent looping.
+    Resolve thread key for an inbound message.
+    Priority: References first-ID -> In-Reply-To -> sender+subject fallback.
+    """
+    refs = (msg.get("References") or "").strip()
+    if refs:
+        first_ref = refs.split()[0].strip()
+        if first_ref in mid_index:
+            return mid_index[first_ref]
 
-    We ALWAYS group by: sender + normalized subject.
-    This avoids the "first email uses fallback, replies use refroot/irt" split-brain issue.
-    """
+    irt = (msg.get("In-Reply-To") or "").strip()
+    if irt and irt in mid_index:
+        return mid_index[irt]
+
     return "subj:{}:{}".format(
         from_email.strip().lower(),
         normalize_subject(subject).strip().lower()
@@ -177,7 +185,8 @@ def stable_thread_key(msg, from_email: str, subject: str) -> str:
 def main():
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
 
-    state = load_json(THREAD_STATE_PATH, {"threads": {}})
+    state = load_json(THREAD_STATE_PATH, {"threads": {}, "message_id_index": {}})
+    state.setdefault("message_id_index", {})
 
     while True:
         try:
@@ -212,7 +221,11 @@ def main():
                 state_registry.mark_as_processed(content_fingerprint)
                 # ---- end BM-003 ----
 
-                thread_key = stable_thread_key(msg, from_email, subj)
+                mid_index = state.setdefault("message_id_index", {})
+                thread_key = resolve_thread_key(msg, from_email, subj, mid_index)
+                msg_id = (msg.get("Message-ID") or "").strip()
+                if msg_id:
+                    mid_index[msg_id] = thread_key
 
                 log(f"Processed UNSEEN from {from_name} <{from_email}> | {subj}")
                 log(f"ThreadKey: {thread_key}")

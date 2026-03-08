@@ -341,5 +341,150 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 022 — client.json + config_loader.py
+**Status:** Stable
+**Files created:** `bluemarlin/config/client.json`, `bluemarlin/src/config_loader.py`
+**What changed:** `client.json` created as the single source of truth for all BlueFinn business data (business info, trips, fleet, FAQ, booking rules, payment policy, common sense knowledge). `config_loader.py` created as the read-only interface to that file.
+**Getters:** `get_business()`, `get_trips()`, `get_trip(trip_key)`, `get_faq()`, `get_faq_answer(question_key)`, `get_booking_rules()`, `get_payment()`, `get_fleet()`, `get_agent_signature()`, `get_common_sense_knowledge()`
+**Callers must know:** Never raises. Caches parsed JSON in a module-level `_cache` dict after first read. Path resolves relative to `__file__` — works on both Mac and VPS without modification. All `[VERIFY]` items are preserved as literal placeholder strings in `client.json` — do not treat them as real values; they are awaiting BlueFinn confirmation before go-live.
+**[VERIFY] items outstanding:**
+1. Exact cancellation policy terms
+2. Private charter pricing
+3. All five `calendar_id` values — current `calendar.js` has three invented IDs that do not map to real BlueFinn trips
+4. Vessel and departure point for snorkeling_3in1, west_coast_beach, and sunset_cruise trips
+5. Whether there is shade on the boats
+**Files affected:** `bluemarlin/config/client.json` (new), `bluemarlin/src/config_loader.py` (new)
+**Depends on:** `bluemarlin/config/client.json` (stdlib only — no PyPI dependencies)
+
+---
+
+## Brief 023 — marina_agent.py — Unified Claude Call
+**Status:** Stable
+**Files created:** `bluemarlin/src/marina_agent.py`
+**What changed:** Unified Claude call implemented as standalone module. One public function: `process_message(from_email, subject, body, thread_fields, thread_flags) -> dict`. Makes exactly one direct `anthropic.Anthropic()` call with `max_tokens=2048`. All business data injected from `config_loader`. `[VERIFY]` fields stripped before prompt injection via `_filter_verify()`. Returns structured dict with 8 required fields: `intents`, `fields`, `confidence`, `reply`, `clarifications_needed`, `requires_human`, `flags`, `internal_note`. Never raises — returns signed fallback on any failure. `email_poller.py` untouched.
+**Callers must know:** `ANTHROPIC_API_KEY` must be set in environment. Model hardcoded as `claude-sonnet-4-6` — flag for Brief 024.
+**Files affected:** `bluemarlin/src/marina_agent.py` (new)
+**Depends on:** `config_loader.py` (Brief 022), `anthropic` (PyPI)
+**Tests:** 8/8 pass
+
+---
+
+## Brief 024 — email_poller.py refactor — unified Claude call integration
+**Status:** Stable
+**Files modified:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_agent.py`
+**What changed:** `email_poller.py` refactored from 1241 to 452 lines. All drift removed — 19 functions deleted, 2 constants deleted (`REQUIRED_FIELDS`, `GROUP_BOOKING_THRESHOLD`), `dateparser` and `claude_client` imports removed. Python is now a pure orchestrator: one `marina_agent.process_message()` call per message, routes on structured values, persists state, calls calendar and payment APIs. `marina_agent.py` amended to extract `trip_key` in addition to existing fields.
+**Architecture:** All language decisions now belong to Claude via `marina_agent`. Python never interprets reply content or message meaning. Reply is sent exactly as returned from `marina_agent` — Python routes on structured values only.
+**Known items deferred to Brief 025:**
+- Anti-loop stop message still contains old BlueMarlin package names
+- `smtp_send` From header still says BlueMarlin Tours Curaçao
+- `calendar.js` package keys not yet updated to match `client.json` trip keys
+**Depends on:** `marina_agent.py` (Brief 023), `config_loader.py` (Brief 022), `state_registry.py` (Brief 004), `calendar.js` (original)
+**Tests:** 8/8 pass
+
+---
+
+## Brief 025 — calendar.js + email_poller.py — BlueFinn cleanup
+**Status:** Stable
+**Files modified:** `bluemarlin/src/calendar.js`, `bluemarlin/src/email_poller.py`
+**What changed:** `calendar.js` updated from invented BlueMarlin package keys to real BlueFinn trip keys (`klein_curacao`, `snorkeling_3in1`, `west_coast_beach`, `sunset_cruise`, `jet_ski`). All five calendar IDs are `[VERIFY]` placeholders — any hold attempt will fail gracefully with "Calendar ID not yet configured for: `<trip_key>`" until BlueFinn provides real IDs. `DURATIONS_HOURS` updated to match real trip durations (`snorkeling_3in1` is 4hrs placeholder, unconfirmed). `email_poller.py` From header corrected to BlueFinn Charters Curaçao. Anti-loop message updated to BlueFinn trip names. Unicode escape sequences corrected to literal characters.
+**Outstanding before go-live:** BlueFinn must provide all five Google Calendar IDs so `[VERIFY]` placeholders in `calendar.js` and `client.json` can be replaced.
+**Depends on:** `email_poller.py` (Brief 024), `client.json` (Brief 022)
+**Tests:** 8/8 pass
+
+---
+
+## Brief 026 — Inject real calendar IDs
+**Status:** Stable
+**Files modified:** `bluemarlin/src/calendar.js`, `bluemarlin/config/client.json`
+**What changed:** All five Google Calendar IDs injected with real values provided by BlueFinn. `[VERIFY]` placeholders removed from both files. `[VERIFY]` guard in `calendar.js` updated from `calendarId.startsWith("[VERIFY")` to `!calendarId.endsWith("@group.calendar.google.com")` — equivalent safety, no placeholder string in source. Calendar hold creation is now fully operational for all five trips.
+**Calendar IDs set:**
+- `klein_curacao`: `ed9e5c8b2357d2e21b99af2617c58836204443ed7e8d7352661426cca41cf4cb@group.calendar.google.com`
+- `snorkeling_3in1`: `649576fb0d0eb17fc895981db2f5e2339ac045edf3a4292d40eff57786fa06db@group.calendar.google.com`
+- `west_coast_beach`: `a85ac414af5903971715705bb8f0975a0be07ca637017c1184f1ba7cd4ab1c00@group.calendar.google.com`
+- `sunset_cruise`: `a3df969d58e35c9603fe6ae6672446ec2f430ed3304f9c5aaf2178391e67defe@group.calendar.google.com`
+- `jet_ski`: `903f29c1161ed6d1378b7d4b1f7ef0597ce6707e2648fd98b82b081542919f08@group.calendar.google.com`
+**Outstanding `[VERIFY]` items remaining in `client.json` (non-calendar):** cancellation policy, private charter pricing, vessel names for snorkeling/west coast/sunset, shade on boats, `snorkeling_3in1` duration.
+**Depends on:** `calendar.js` (Brief 025), `client.json` (Brief 022)
+**Tests:** 8/8 pass
+
+---
+
+## Brief 027 — marina_agent.py + email_poller.py — departure_time field + date format enforcement
+**Status:** Stable
+**Files modified:** `bluemarlin/src/marina_agent.py`, `bluemarlin/src/email_poller.py`
+**What changed:** Two live bugs fixed. `marina_agent` now enforces YYYY-MM-DD date format — Claude converts natural language dates before returning; unresolvable dates are omitted and added to `clarifications_needed`. New `departure_time` field added to extractable fields — HH:MM format, only when customer explicitly chooses a departure from available options. `create_calendar_hold` now uses `fields_now.get("departure_time")` with config first-departure as fallback.
+**Bugs fixed:**
+- "Invalid time value" in `calendar.js` caused by natural language dates ("April 20") instead of YYYY-MM-DD
+- Multi-departure trips always used `departures[0]` regardless of customer choice
+**Depends on:** `marina_agent.py` (Brief 023), `email_poller.py` (Brief 024)
+**Tests:** 8/8 pass
+
+---
+
+## Brief 028 — Booking reference + Sheets data rework
+**Status:** Stable
+**Files modified:** `bluemarlin/src/sheets_writer.py`, `bluemarlin/src/email_poller.py`
+**What changed:** Booking reference generated at hold creation time (format `BF-YYYY-XXXXX`). Stored in thread flags and passed to Sheets. `sheets_writer.py` fully reworked: `log_hold_created` updated to 15-column Bookings row including `booking_ref`, `trip_key`, `departure_time`, `total_price`, `payment_status`. `log_hold_failed` updated to matching 15-column structure. `log_escalation` added — writes to new Escalations tab (6 columns: Timestamp, Customer Name, Email, Intent, Fields Collected JSON, Internal Note) and All Events. `log_complaint` removed (unused since Brief 024). `email_poller.py` human_required block now calls `log_escalation` with full context instead of `log_event`.
+**Manual action required:** Escalations tab must be created in Google Sheet before live use. SPREADSHEET_ID: `1soG3zVnx-Y0WYWGJdgakXqpNeI6GAe6AD8DycOwwifE`
+**Depends on:** `email_poller.py` (Brief 027), `sheets_writer.py` (Brief 013)
+**Tests:** 10/10 pass
+
+---
+
+## Brief 029 — marina_agent.py + email_poller.py — Prompt fixes: confirmation step, escalation, vague date
+**Status:** Stable
+**Files modified:** `bluemarlin/src/marina_agent.py`, `bluemarlin/src/email_poller.py`
+**What changed:** Three live bugs fixed via prompt additions to `_build_prompt()`.
+1. **Booking confirmation step:** when all required fields present, Marina sends a booking summary and asks "Shall I lock this in for you?" before any hold is created. Sets `awaiting_booking_confirmation: true` in flags. On customer confirmation, sets `booking_confirmed: true`. `email_poller` booking trigger now requires `booking_confirmed` flag before calling `create_calendar_hold`. `departure_time` is not required to trigger the summary. `flags` field description updated to show explicit key names (`awaiting_booking_confirmation`, `booking_confirmed`) with conditions — generic placeholder was causing model to return `flags: {}`.
+2. **Escalation to The Crew:** complaints and cancellations set `requires_human: true`. Marina acknowledges warmly, tells customer "The Crew will be in touch shortly." No detail gathering. No promises.
+3. **Vague date enforcement:** date field description replaced in full — vague or unresolvable dates must be omitted and added to `clarifications_needed`. Never infer, guess, or pick a date the customer has not explicitly stated.
+**Depends on:** `marina_agent.py` (Brief 027), `email_poller.py` (Brief 028)
+**Tests:** 10/10 pass
+
+---
+
+## Brief 030 — marina_agent.py + email_poller.py — Hold failure reply
+**Status:** Stable
+**Files modified:** `bluemarlin/src/marina_agent.py`, `bluemarlin/src/email_poller.py`
+**What changed:** Fixed bug where hold failure sent a false confirmation to the customer. Claude now writes two replies when `booking_confirmed` is true: `reply` (assumes hold success, contains `[PAYMENT_LINK]` placeholder) and `reply_hold_failed` (apologetic, no payment link, offers alternative date). `email_poller` picks the correct reply based on hold outcome. `[PAYMENT_LINK]` is replaced with the real payment URL at send time in the hold success path. `reply_hold_failed` is optional — if absent or empty, falls back to `result["reply"]`. `reply_hold_failed` is NOT added to `_REQUIRED_RESPONSE_FIELDS` — fallback validation unaffected.
+**Depends on:** `marina_agent.py` (Brief 029), `email_poller.py` (Brief 029)
+**Tests:** 10/10 pass
+
+---
+
+## Brief 031 — calendar.js + email_poller.py + marina_agent.py — Availability pre-check before booking summary
+**Status:** Stable
+**Files modified:** `bluemarlin/src/calendar.js`, `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_agent.py`
+**What changed:** Availability pre-check before booking summary is sent. `calendar.js` now supports two commands via `input.command` routing: `createHold` (existing, unchanged default) and `checkAvailability` (new — read-only, no hold created, returns `{available, reason?, error?}`). `email_poller` runs `check_calendar_availability()` immediately after `marina_agent` sets `awaiting_booking_confirmation`, before sending the summary to the customer. If slot is unavailable, customer receives `reply_hold_failed` instead of the summary. If available, summary sends as normal. `slot_checked` and `slot_available` flags stored in thread state — guard prevents re-checking on subsequent messages in the same thread. `marina_agent` prompt updated to always write `reply_hold_failed` alongside the summary reply (previously only on `booking_confirmed`) so Python can choose the correct one based on actual availability.
+**Depends on:** `marina_agent.py` (Brief 030), `email_poller.py` (Brief 030), `calendar.js` (Brief 026)
+**Tests:** 10/10 pass
+
+---
+
+## Brief 032 — gws Migration: calendar.js → gws_calendar.py, sheets_writer.py gws rewrite
+**Status:** Stable
+**Files modified:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/sheets_writer.py`
+**Files created:** `bluemarlin/src/gws_calendar.py`
+**Files deleted:** `bluemarlin/src/calendar.js`
+**What changed:** Replaced `calendar.js` (Node.js/googleapis) and the googleapis Python client in `sheets_writer.py` with gws CLI subprocess calls. `gws_calendar.py` implements `check_availability(trip_key, date, start_time)` and `create_hold(fields_now)` using `gws calendar events list` and `gws calendar events insert`. `sheets_writer.py` internals rewritten — `_append(tab, row)` now calls `gws sheets spreadsheets values append`; public function signatures (`log_hold_created`, `log_hold_failed`, `log_escalation`, `log_event`) and all row structures unchanged from Brief 028. `email_poller.py` updated to `import gws_calendar` and call its functions directly — `subprocess` removed from email_poller imports. Node.js is no longer in the production path.
+**Auth:** `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` env var points to service account JSON key. Set in subprocess env on every gws call in both `gws_calendar.py` and `sheets_writer.py`.
+**Manual VPS prerequisites before live use:** `npm install -g @googleworkspace/cli`, set `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` in systemd service environment.
+**Depends on:** Brief 031
+**Tests:** 10/10 pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
+
+---
+
+## Decision Log
+One entry per brief. Format:
+Brief 0XX — [title]
+Decision: [what was decided and why]
+Outcome: [what happened]
+
+Brief 033 — Thread key via Message-ID/In-Reply-To
+Decision: Replace subject-based thread keying with Message-ID index lookup. Store message_id_index in state file. Fallback to sender+subject for first messages.
+Outcome: complete — 7/7 tests pass
