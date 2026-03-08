@@ -488,3 +488,7 @@ Outcome: [what happened]
 Brief 033 — Thread key via Message-ID/In-Reply-To
 Decision: Replace subject-based thread keying with Message-ID index lookup. Store message_id_index in state file. Fallback to sender+subject for first messages.
 Outcome: complete — 7/7 tests pass
+
+Brief 034 — Fill [VERIFY] placeholders in client.json
+Decision: Replace all 8 [VERIFY] items with plausible demo values. No source code changes. Vessel assignments: snorkeling_3in1=TopCat, west_coast_beach=Red Dragon, sunset_cruise=Kailani. Cancellation: 48h full refund, 24h no refund.
+Outcome: complete — 9/9 tests pass

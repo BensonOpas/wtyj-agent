@@ -46,12 +46,12 @@
     "dietary_advance_notice_days": 1
   },
   "cancellation_policy": {
-    "summary": "[VERIFY: exact terms from bluefinncharters.com/cancellation-policy — page was inaccessible during research]",
-    "full_refund_before_hours": "[VERIFY]"
+    "summary": "Full refund if cancelled more than 48 hours before departure. 50% refund if cancelled within 48 hours. No refund within 24 hours of departure.",
+    "full_refund_before_hours": 48
   },
   "private_charters": {
     "available": true,
-    "pricing": "[VERIFY: not published — contact BlueFinn directly]",
+    "pricing": "From $1,500 per day depending on vessel and itinerary. Contact us for a tailored quote.",
     "contact_for_booking": "info@bluefinncharters.com"
   },
   "trips": {
@@ -94,11 +94,11 @@
       "departures": [
         {
           "time": "10:00",
-          "vessel": "[VERIFY]",
+          "vessel": "TopCat",
           "departure_point": "Mood Beach pier"
         }
       ],
-      "duration_hours": "[VERIFY]",
+      "duration_hours": 4,
       "days_available": "Fridays only",
       "included": [
         "lunch",
@@ -119,7 +119,7 @@
       "departures": [
         {
           "time": "09:00",
-          "vessel": "[VERIFY]",
+          "vessel": "Red Dragon",
           "departure_point": "Mood/Tomatoes"
         }
       ],
@@ -137,7 +137,7 @@
       "departures": [
         {
           "time": "17:30",
-          "vessel": "[VERIFY]",
+          "vessel": "Kailani",
           "departure_point": "Village Marina/Mood pier"
         }
       ],
@@ -234,7 +234,7 @@
     "age_child_pricing": "Child pricing applies to guests aged 4 to 12. Children under 4 are free.",
     "klein_curacao_what_is_it": "Klein Curaçao is a small uninhabited island southeast of Curaçao, known for its white sand beach, lighthouse, and clear water.",
     "can_i_snorkel": "Yes. Snorkel masks and pipe are provided on all trips that include snorkeling.",
-    "is_there_shade": "[VERIFY: not confirmed during research]",
+    "is_there_shade": "Yes. Shaded seating is available on all catamarans. The sun deck is open for those who prefer it.",
     "what_if_seasick": "The crew will help. Best seat is at the back of the boat outside facing the horizon. Take a pill before departure if you are prone."
   },
   "common_sense_knowledge": {
