@@ -24,7 +24,7 @@ assert "  S22 \u2014" in content, "T3 fail: S22 footer line missing (check key c
 print("T3 pass — S22 present in key checks footer")
 
 # T4: OUTPUT_037.md exists
-output_path = os.path.join(os.path.dirname(__file__), "briefs", "OUTPUT_037.md")
+output_path = os.path.join(os.path.dirname(__file__), "..", "briefs", "OUTPUT_037.md")
 assert os.path.exists(output_path), "T4 fail: OUTPUT_037.md not written"
 print("T4 pass — OUTPUT_037.md exists")
 

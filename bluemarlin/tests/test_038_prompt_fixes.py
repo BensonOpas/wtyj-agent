@@ -4,7 +4,7 @@
 # Run: cd bluemarlin && source ~/.zshrc && python3 test_038_prompt_fixes.py
 
 import os, sys, json
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import marina_agent
 
 # --- Prompt structure tests (no API call) ---
@@ -36,7 +36,7 @@ assert "do NOT reset awaiting_booking_confirmation" in prompt, \
 print("T4 pass — awaiting_booking_confirmation guard present in mid-confirmation handler")
 
 # T5: File header updated to Brief 038
-with open(os.path.join(os.path.dirname(__file__), "src", "marina_agent.py")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "src", "marina_agent.py")) as f:
     header = f.read(300)
 assert "Brief 038" in header, "T5 fail: file header not updated to Brief 038"
 print("T5 pass — file header updated to Brief 038")

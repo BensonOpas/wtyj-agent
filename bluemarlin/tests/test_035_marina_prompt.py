@@ -4,7 +4,7 @@
 # Run: cd bluemarlin && python3 test_035_marina_prompt.py
 
 import os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import marina_agent
 
 # Build a prompt using real data (no API call)
@@ -40,13 +40,13 @@ for alias in ["snorkeling", "west coast", "sunset", "jet ski", "Klein Curaçao"]
 print("T5 pass — trip key aliases present in prompt")
 
 # T6: File header updated to Brief 035
-with open(os.path.join(os.path.dirname(__file__), "src", "marina_agent.py")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "src", "marina_agent.py")) as f:
     header = f.read(300)
 assert "Brief 035" in header, f"T6 fail: file header not updated to Brief 035"
 print("T6 pass — file header updated to Brief 035")
 
 # T7: CLAUDE.md no longer contains the stale thread-key issue
-claude_md_path = os.path.join(os.path.dirname(__file__), "..", "CLAUDE.md")
+claude_md_path = os.path.join(os.path.dirname(__file__), "..", "..", "CLAUDE.md")
 with open(claude_md_path) as f:
     claude_content = f.read()
 assert "Thread key breaks on subject change" not in claude_content, \

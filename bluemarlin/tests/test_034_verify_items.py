@@ -5,7 +5,7 @@
 
 import json, os
 
-with open(os.path.join(os.path.dirname(__file__), "config", "client.json")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "config", "client.json")) as f:
     c = json.load(f)
 
 # T1: No [VERIFY] strings remain anywhere in the file

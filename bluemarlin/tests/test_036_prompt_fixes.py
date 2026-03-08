@@ -4,7 +4,7 @@
 # Run: cd bluemarlin && python3 test_036_prompt_fixes.py
 
 import os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import marina_agent
 
 prompt = marina_agent._build_prompt(
@@ -45,7 +45,7 @@ assert "escalation" in prompt or "inquiry" in prompt, \
 print("T6 pass — reply_hold_failed exclusion of non-booking paths present")
 
 # T7: File header updated to Brief 036
-with open(os.path.join(os.path.dirname(__file__), "src", "marina_agent.py")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "src", "marina_agent.py")) as f:
     header = f.read(300)
 assert "Brief 036" in header, f"T7 fail: file header not updated to Brief 036"
 print("T7 pass — file header updated to Brief 036")
