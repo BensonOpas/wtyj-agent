@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 039
+# LAST MODIFIED: Brief 040
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -60,11 +60,30 @@ def _build_prompt(
     today = datetime.now(_CURACAO_TZ).strftime("%Y-%m-%d")
     signature = config_loader.get_agent_signature()
 
+    relay_mode_section = ""
+    if thread_flags.get("awaiting_relay"):
+        relay_mode_section = (
+            "\nRELAY MODE: A human team member has answered the customer's pending question. "
+            "Their answer is in the INBOUND MESSAGE body below. "
+            "Reformulate it in Marina's warm voice, using the same language the customer used. "
+            "Do not add information the human did not provide. Do not make promises beyond what was stated. "
+            "Set intents to [\"inquiry\"]. Do not set any booking or escalation flags.\n"
+        )
+
+    fully_escalated_section = ""
+    if thread_flags.get("fully_escalated"):
+        fully_escalated_section = (
+            "\nFULLY ESCALATED THREAD: This conversation has already been passed to the human team. "
+            "Send a warm, brief holding message only. Acknowledge the customer warmly. "
+            "Remind them the team will be in touch soon. Do not restart the booking process. "
+            "Do not ask for information. Do not set any booking or escalation flags.\n"
+        )
+
     trips_text = _build_trips_text()
     faq_text = _build_faq_text()
 
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
-
+{relay_mode_section}{fully_escalated_section}
 PERSONA: {csk.get('marina_persona', '')}
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 AGENT SIGNATURE: {signature}
@@ -150,16 +169,26 @@ Python will replace [PAYMENT_LINK] with the real payment URL before
 sending.
 
 ESCALATION BEHAVIOUR:
-When the intent is complaint or cancellation, set requires_human
-to true. Your reply must:
+When the intent is complaint, refund request, or cancellation, set requires_human
+to true. Your reply MUST:
 - Acknowledge what the customer said warmly and with genuine empathy
-- Tell them: "I've passed this to our Crew who will be in touch
-  with you shortly."
+- Tell them exactly: "I've passed this along to our customer care team.
+  You can expect an email from info@bluefinncharters.com shortly —
+  they'll take great care of you."
 - Do NOT ask for booking details, reference numbers, dates, or
-  any other information. The Crew will handle that.
-- Do NOT attempt to resolve the issue or make promises about
-  outcomes.
+  any other information. The crew will handle that.
+- Do NOT attempt to resolve the issue or make promises about outcomes.
 - Sign off warmly.
+
+SEMI-ESCALATION:
+When the customer asks a specific question you cannot answer from available
+context — NOT a complaint, refund, or cancellation (those use requires_human) —
+set semi_escalation to true in your JSON response and populate relay_question
+with the exact question to forward to the team. Examples: equipment policies
+not in the FAQ, specific dietary or accessibility questions, private charter
+pricing details. Your reply to the customer should be warm and brief:
+tell them you are checking with the team and will get back to them shortly.
+Do not set any booking confirmation flags.
 
 AVAILABILITY CONTEXT:
 When spots_remaining is a number in thread flags (not 'unknown'):
@@ -218,6 +247,8 @@ The JSON must have exactly these fields:
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
   "flags": {{"awaiting_booking_confirmation": <true when you are sending a booking summary asking the customer to confirm — omit or false otherwise>, "booking_confirmed": <true only when the customer has just confirmed in this message — omit or false otherwise>}},
+  "semi_escalation": <true only when the customer asks a specific unanswerable question — NOT for complaints or cancellations — omit or false otherwise>,
+  "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
   "internal_note": "<one sentence for the operator log — never shown to the customer>"
 }}"""
 

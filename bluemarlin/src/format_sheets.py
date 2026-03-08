@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: format_sheets.py
 # CREATED: Brief 014
-# LAST MODIFIED: Brief 015
+# LAST MODIFIED: Brief 040
 # DEPENDS ON: sheets_writer.py (KEY_PATH, SPREADSHEET_ID, _get_service)
 # RUN ONCE: python3 bluemarlin/src/format_sheets.py
 # PURPOSE: Apply BlueMarlin color palette to Operations Dashboard
@@ -27,11 +27,17 @@ ALL_EVENTS_HEADERS = [
 BOOKINGS_WIDTHS =    [180, 150, 200, 180, 110, 80, 130, 250, 110, 200, 200, 200, 250]
 COMPLAINTS_WIDTHS =  [180, 200, 200, 300, 110, 250]
 ALL_EVENTS_WIDTHS =  [180, 150, 200, 200, 400]
+ESCALATIONS_HEADERS = [
+    'Timestamp', 'Customer Name', 'Email', 'Intent',
+    'Fields Collected', 'Internal Note', 'Chat Log'
+]
+ESCALATIONS_WIDTHS = [180, 150, 200, 110, 250, 250, 400]
 
 TABS = [
-    {'name': 'Bookings',   'headers': BOOKINGS_HEADERS,   'widths': BOOKINGS_WIDTHS},
-    {'name': 'Complaints', 'headers': COMPLAINTS_HEADERS, 'widths': COMPLAINTS_WIDTHS},
-    {'name': 'All Events', 'headers': ALL_EVENTS_HEADERS, 'widths': ALL_EVENTS_WIDTHS},
+    {'name': 'Bookings',     'headers': BOOKINGS_HEADERS,     'widths': BOOKINGS_WIDTHS},
+    {'name': 'Complaints',   'headers': COMPLAINTS_HEADERS,   'widths': COMPLAINTS_WIDTHS},
+    {'name': 'All Events',   'headers': ALL_EVENTS_HEADERS,   'widths': ALL_EVENTS_WIDTHS},
+    {'name': 'Escalations',  'headers': ESCALATIONS_HEADERS,  'widths': ESCALATIONS_WIDTHS},
 ]
 
 

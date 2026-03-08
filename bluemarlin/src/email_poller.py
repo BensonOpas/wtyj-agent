@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 039
+# LAST MODIFIED: Brief 040
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -17,6 +17,7 @@ import state_registry
 import payment_stub
 import bm_logger
 import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib
+from datetime import datetime, timezone
 from email.utils import parseaddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -107,7 +108,7 @@ def imap_connect():
     im.authenticate("XOAUTH2", lambda _: auth_string)
     return im
 
-def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None):
+def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None):
     token = oauth_token("offline_access https://outlook.office.com/SMTP.Send")
     auth_string = f"user={EMAIL_ADDR}\x01auth=Bearer {token}\x01\x01"
     auth_b64 = base64.b64encode(auth_string.encode("ascii")).decode("ascii")
@@ -120,6 +121,8 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
         msg["In-Reply-To"] = in_reply_to
     if references:
         msg["References"] = references
+    if reply_to:
+        msg["Reply-To"] = reply_to
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
@@ -184,6 +187,7 @@ def resolve_thread_key(msg, from_email: str, subject: str, mid_index: dict) -> s
 # ========= MAIN LOOP =========
 def main():
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
+    demo_support_email = config_loader.get_business().get("demo_support_email", "butlerbensonagent@gmail.com")
 
     state = load_json(THREAD_STATE_PATH, {"threads": {}, "message_id_index": {}})
     state.setdefault("message_id_index", {})
@@ -235,7 +239,8 @@ def main():
                     "fields": {},
                     "flags": {},
                     "last_customer_hash": "",
-                    "reply_times": []
+                    "reply_times": [],
+                    "messages": []
                 })
 
                 # Deduplicate identical customer content
@@ -268,6 +273,87 @@ def main():
                     threads[thread_key] = th
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     save_json(THREAD_STATE_PATH, state)
+                    continue
+
+                # [RELAY] inbound from human team — reformulate and forward to original customer
+                if from_email.lower() == demo_support_email.lower() and "[RELAY]" in subj:
+                    ref_match = re.search(r'BF-\d{4}-\d{5}', subj)
+                    relay_ref = ref_match.group() if ref_match else None
+                    customer_thread_key = None
+                    customer_th = None
+                    for tk, t in state["threads"].items():
+                        if (t.get("flags", {}).get("awaiting_relay")
+                                and (relay_ref is None
+                                     or t.get("flags", {}).get("booking_ref") == relay_ref)):
+                            customer_thread_key = tk
+                            customer_th = t
+                            break
+                    if customer_th is None:
+                        log(f"RELAY: no matching customer thread for ref={relay_ref} — skipping")
+                        im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                        save_json(THREAD_STATE_PATH, state)
+                        continue
+                    relay_result = marina_agent.process_message(
+                        customer_th["flags"].get("relay_customer_email", ""),
+                        customer_th["flags"].get("relay_reply_subject", "Re: " + subj),
+                        body,
+                        customer_th.get("fields", {}),
+                        customer_th.get("flags", {}),
+                    )
+                    relay_reply = relay_result.get("reply", "")
+                    relay_dest = customer_th["flags"].get("relay_customer_email", "")
+                    if relay_reply and relay_dest:
+                        try:
+                            smtp_send(
+                                relay_dest,
+                                customer_th["flags"].get("relay_reply_subject", "Re: " + subj),
+                                relay_reply,
+                            )
+                            customer_th.setdefault("messages", [])
+                            customer_th["messages"].append({
+                                "role": "marina",
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "body": relay_reply,
+                            })
+                            log(f"RELAY: reformulated and sent to {relay_dest}")
+                        except Exception as _relay_send_err:
+                            log(f"RELAY: send to customer failed: {_relay_send_err}")
+                    elif not relay_dest:
+                        log(f"RELAY: relay_customer_email missing on thread {customer_thread_key} — skipping send")
+                    customer_th["flags"]["awaiting_relay"] = False
+                    customer_th["flags"].pop("relay_question", None)
+                    state["threads"][customer_thread_key] = customer_th
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    save_json(THREAD_STATE_PATH, state)
+                    continue
+
+                # Append inbound message to chat log
+                th.setdefault("messages", [])
+                th["messages"].append({
+                    "role": "customer",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "body": body,
+                })
+
+                # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
+                if th["flags"].get("fully_escalated"):
+                    result = marina_agent.process_message(
+                        from_email, subj, body,
+                        th.get("fields", {}), th.get("flags", {})
+                    )
+                    smtp_send(from_email, "Re: " + subj, result["reply"],
+                              in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                    th["messages"].append({
+                        "role": "marina",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "body": result["reply"],
+                    })
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    th["reply_times"].append(now)
+                    th["last_customer_hash"] = customer_hash
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    log(f"Fully escalated: holding reply sent to {from_email}")
                     continue
 
                 # Step 1: Call marina_agent (single Claude call per message)
@@ -338,12 +424,98 @@ def main():
                         log(f"Slot unavailable for {from_email}: "
                             f"{avail.get('spots_remaining', 0)}/{avail.get('capacity', 0)} spots remaining")
 
+                # Semi-escalation handler: relay question to human team, holding reply to customer
+                if result.get("semi_escalation"):
+                    relay_question = result.get("relay_question", "(no question captured)")
+                    # Cancel any soft hold created during Step 3b — booking is not confirmed
+                    if th["flags"].get("hold_id"):
+                        state_registry.cancel_hold(th["flags"]["hold_id"])
+                        th["flags"].pop("hold_id", None)
+                    th["flags"]["slot_checked"] = False
+                    th["flags"]["slot_available"] = False
+                    th["flags"]["awaiting_relay"] = True
+                    th["flags"]["relay_question"] = relay_question
+                    th["flags"]["relay_customer_email"] = from_email
+                    th["flags"]["relay_reply_subject"] = "Re: " + subj
+                    _ref = th["flags"].get("booking_ref", "NO-REF")
+                    _cname = th["fields"].get("customer_name", "Unknown")
+                    _relay_alert = (
+                        f"Customer: {_cname} <{from_email}>\n"
+                        f"Their question: {relay_question}\n\n"
+                        f"Booking context:\n"
+                        f"  Trip: {th['fields'].get('trip_key', '')} | "
+                        f"Date: {th['fields'].get('date', '')} | "
+                        f"Guests: {th['fields'].get('guests', '')}\n"
+                        f"  Ref: {_ref}\n\n"
+                        f"INSTRUCTIONS: Reply to this email with your answer.\n"
+                        f"Marina will relay it to the customer in her own words."
+                    )
+                    try:
+                        smtp_send(
+                            demo_support_email,
+                            f"[RELAY] {_ref} — {_cname}",
+                            _relay_alert,
+                            reply_to=EMAIL_ADDR,
+                        )
+                        log(f"Semi-escalation: relay alert sent to {demo_support_email} for {from_email}")
+                    except Exception as _rel_err:
+                        log(f"Semi-escalation: alert send failed: {_rel_err}")
+                    smtp_send(from_email, "Re: " + subj, result["reply"],
+                              in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                    th["messages"].append({
+                        "role": "marina",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "body": result["reply"],
+                    })
+                    bm_logger.log("semi_escalation", email=from_email, subject=subj,
+                                  relay_question=relay_question)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    th["reply_times"].append(now)
+                    th["last_customer_hash"] = customer_hash
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    continue
+
                 # Step 4: requires_human check
                 if result.get("requires_human"):
                     smtp_send(from_email, "Re: " + subj, result["reply"],
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                    th["messages"].append({
+                        "role": "marina",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "body": result["reply"],
+                    })
+                    th["flags"]["fully_escalated"] = True
                     bm_logger.log("human_required", email=from_email, subject=subj,
                                   internal_note=result.get("internal_note", ""))
+                    # Build and send full escalation alert
+                    chat_log_lines = []
+                    for m in th.get("messages", []):
+                        chat_log_lines.append(
+                            f"[{m.get('role', '?').upper()} | {m.get('ts', '')}]"
+                        )
+                        chat_log_lines.append(m.get("body", ""))
+                        chat_log_lines.append("---")
+                    chat_log = "\n".join(chat_log_lines) or "(no messages logged)"
+                    booking_ref_esc = th["flags"].get("booking_ref", "NO-REF")
+                    customer_name_esc = th["fields"].get("customer_name", "Unknown")
+                    intents_str = ", ".join(result.get("intents") or ["unknown"])
+                    escalation_alert = (
+                        f"=== CHAT LOG ===\n{chat_log}\n\n"
+                        f"=== BOOKING FIELDS ===\n"
+                        f"{json.dumps(th['fields'], indent=2, ensure_ascii=False)}\n\n"
+                        f"=== MARINA'S INTERNAL NOTE ===\n"
+                        f"{result.get('internal_note', '')}"
+                    )
+                    try:
+                        smtp_send(
+                            demo_support_email,
+                            f"[ESCALATION] {booking_ref_esc} — {customer_name_esc} — {intents_str}",
+                            escalation_alert,
+                        )
+                        log(f"Escalation alert sent to {demo_support_email} for {from_email}")
+                    except Exception as _esc_err:
+                        log(f"Escalation alert send failed: {_esc_err}")
                     sheets_writer.log_escalation({
                         "email": from_email,
                         "subject": subj,
@@ -351,6 +523,7 @@ def main():
                         "intent": (result.get("intents") or ["unknown"])[0],
                         "fields_collected": th["fields"],
                         "internal_note": result.get("internal_note", ""),
+                        "messages_json": json.dumps(th.get("messages", []), ensure_ascii=False),
                     })
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
@@ -470,11 +643,21 @@ def main():
                     # Send Claude's reply for all booking sub-cases
                     smtp_send(from_email, "Re: " + subj, reply_text,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                    th["messages"].append({
+                        "role": "marina",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "body": reply_text,
+                    })
 
                 # Step 6: All other intents
                 else:
                     smtp_send(from_email, "Re: " + subj, result["reply"],
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                    th["messages"].append({
+                        "role": "marina",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "body": result["reply"],
+                    })
                     primary_intent = (result.get("intents") or ["inquiry"])[0]
                     bm_logger.log(primary_intent, email=from_email, subject=subj,
                                   internal_note=result.get("internal_note", ""))

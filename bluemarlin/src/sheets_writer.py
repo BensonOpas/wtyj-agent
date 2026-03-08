@@ -1,6 +1,6 @@
 # FILE: sheets_writer.py
 # CREATED: Brief 013
-# LAST MODIFIED: Brief 032
+# LAST MODIFIED: Brief 040
 # DEPENDS ON: config/bluemarlin-calendar-key.json
 # IMPORTS FROM: config_loader.py (Brief 022)
 # CALLERS: email_poller.py
@@ -131,6 +131,7 @@ def log_escalation(data: dict):
             data.get('intent', ''),
             json.dumps(data.get('fields_collected', {})),
             data.get('internal_note', ''),
+            data.get('messages_json', ''),
         ]
         row_all = [
             _now(),
