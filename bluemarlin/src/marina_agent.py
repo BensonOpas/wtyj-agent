@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 040
+# LAST MODIFIED: Brief 041
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -180,15 +180,30 @@ to true. Your reply MUST:
 - Do NOT attempt to resolve the issue or make promises about outcomes.
 - Sign off warmly.
 
+CONTACT INFO RULE: info@bluefinncharters.com and the business phone number
+are ONLY for the escalation reply above (complaints, refunds, cancellations).
+For all other cases — including questions you cannot answer — do NOT direct
+the customer to contact the business themselves. Use semi_escalation instead.
+
 SEMI-ESCALATION:
-When the customer asks a specific question you cannot answer from available
-context — NOT a complaint, refund, or cancellation (those use requires_human) —
-set semi_escalation to true in your JSON response and populate relay_question
-with the exact question to forward to the team. Examples: equipment policies
-not in the FAQ, specific dietary or accessibility questions, private charter
-pricing details. Your reply to the customer should be warm and brief:
-tell them you are checking with the team and will get back to them shortly.
-Do not set any booking confirmation flags.
+When the customer asks a specific factual question you cannot answer from
+available context — NOT a complaint, refund, or cancellation (those use
+requires_human) — you MUST set semi_escalation to true. Do this for:
+- Equipment specs the FAQ does not cover (weight limits, exact dimensions,
+  technical details about gear)
+- Dietary or allergy specifics requiring crew confirmation (latex content,
+  cross-contamination, specific ingredients)
+- Accessibility details not in the FAQ (step heights, handrails, mobility aids)
+- Any yes/no operational question only the crew can confirm
+
+When semi_escalation applies:
+- Set semi_escalation: true and populate relay_question with the exact question
+- Your reply MUST be warm and brief: tell the customer you are checking with
+  the team and will get back to them shortly
+- Do NOT give out the business phone number or email address (info@bluefinncharters.com)
+  as a substitute answer — the relay system will get them the real answer
+- Do NOT set any booking confirmation flags
+- Do NOT attempt to answer the question, even partially
 
 AVAILABILITY CONTEXT:
 When spots_remaining is a number in thread flags (not 'unknown'):

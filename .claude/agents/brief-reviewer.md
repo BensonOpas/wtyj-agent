@@ -29,6 +29,7 @@ A valid brief must contain all of these sections:
 - Tests (with specific assertions)
 - Success condition (testable, not vague)
 - Rollback path (if live system touched)
+- Does the brief contain a `## Why This Approach` section? It must explain what was considered, what was rejected, and what tradeoff this carries. If missing, flag it.
 
 If any section is missing entirely, flag it before running other checks.
 

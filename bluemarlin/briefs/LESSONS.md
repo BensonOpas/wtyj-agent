@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 041 — Semi-escalation prompt fix
+**Date:** 2026-03-08
+
+Live testing caught what unit tests missed: Marina was using "contact us at info@..." as a fallback for specific unanswerable questions instead of triggering semi_escalation. The fix was prompt-only — the relay infrastructure (Brief 040) was already correct. Key lesson: when adding a new behavior path (relay system), explicitly prohibit the existing fallback behavior that would compete with it, otherwise the model defaults to the pattern it already knows.
+
+---
+
 ## Brief 040 — Escalation system: semi + full
 **Date:** 2026-03-08
 

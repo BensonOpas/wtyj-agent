@@ -60,21 +60,9 @@ When given a file (or files), read the entire content and flag every instance of
 - Any branching logic that decides the next conversational step based on previous messages
 - Examples: `if state == "awaiting_date":`, `conversation_stage = "confirm"`, `FLOW_STATES = {...}`
 
-### Known Existing Violations (as of Brief 020)
+### Known Existing Violations (as of Brief 032)
 These are confirmed violations already in the codebase. Flag every one:
-- `classify_date_input()` — language classifier
-- `is_date_confirmation_yes()` — language classifier
-- `experience_is_clear()` — language classifier
-- `safe_date_past_reply()` — static reply string
-- `safe_date_vague_reply()` — static reply string
-- `safe_date_implausible_reply()` — static reply string
-- `safe_date_confirmation_reply()` — static reply string
-- `safe_experience_unclear_reply()` — static reply string
-- `safe_large_group_reply()` — static reply string
-- `VAGUE_PATTERNS` — keyword/pattern list
-- `RESOLVABLE_PATTERNS` — keyword/pattern list
-- `GROUP_BOOKING_THRESHOLD` — hardcoded business value
-- `awaiting_date_confirmation` flag — conversation flow logic
+- (list cleared — items were from Brief 020 and need re-verification against current source before being flagged automatically)
 
 ## Output Format
 
