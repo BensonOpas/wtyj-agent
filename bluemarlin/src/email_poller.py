@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 033
+# LAST MODIFIED: Brief 039
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -284,14 +284,26 @@ def main():
                         if not th["fields"].get(k):
                             th["fields"][k] = v
 
+                _was_awaiting = th["flags"].get("awaiting_booking_confirmation", False)
                 # Step 3: Persist flags
                 th.setdefault("flags", {})
                 new_flags = result.get("flags", {}) or {}
                 th["flags"].update(new_flags)
 
+                # If awaiting_booking_confirmation cleared without booking_confirmed being set,
+                # the customer changed something — cancel old soft hold and reset slot check
+                if _was_awaiting and not th["flags"].get("awaiting_booking_confirmation") \
+                        and not th["flags"].get("booking_confirmed"):
+                    if th["flags"].get("hold_id"):
+                        state_registry.cancel_hold(th["flags"]["hold_id"])
+                        th["flags"].pop("hold_id", None)
+                    th["flags"]["slot_checked"] = False
+                    th["flags"]["slot_available"] = False
+                    log(f"Soft hold cancelled for {from_email}: customer changed booking details")
+
                 log(f"Intents: {result.get('intents')} | Fields: {th['fields']}")
 
-                # Step 3b: Availability pre-check when booking summary is being sent
+                # Step 3b: Availability pre-check + soft hold when booking summary is being sent
                 if (result.get("flags", {}).get("awaiting_booking_confirmation")
                         and not th["flags"].get("slot_checked")):
                     fields_for_check = th["fields"]
@@ -299,12 +311,32 @@ def main():
                     _ck_deps = config_loader.get_trip(_ck_trip).get("departures", []) if _ck_trip else []
                     _ck_start = (fields_for_check.get("departure_time")
                                  or (_ck_deps[0].get("time", "09:00") if _ck_deps else "09:00"))
+                    _ck_guests = int(fields_for_check.get("guests") or 1)
                     avail = gws_calendar.check_availability(
-                        _ck_trip, fields_for_check.get("date", ""), _ck_start)
+                        _ck_trip, fields_for_check.get("date", ""), _ck_start, _ck_guests)
                     th["flags"]["slot_checked"] = True
                     th["flags"]["slot_available"] = avail.get("available", False)
-                    if not avail.get("available"):
-                        log(f"Slot unavailable for {from_email}: {avail.get('reason') or avail.get('error')}")
+                    th["flags"]["spots_remaining"] = avail.get("spots_remaining", 0)
+                    th["flags"]["trip_capacity"] = avail.get("capacity", 0)
+                    if avail.get("available"):
+                        hold_id = state_registry.create_soft_hold(
+                            _ck_trip,
+                            fields_for_check.get("date", ""),
+                            _ck_start,
+                            _ck_guests,
+                            avail.get("capacity", 20)
+                        )
+                        if hold_id is not None:
+                            th["flags"]["hold_id"] = hold_id
+                            log(f"Soft hold created for {from_email}: hold_id={hold_id}, "
+                                f"spots_remaining={avail.get('spots_remaining')}")
+                        else:
+                            # Race: capacity was grabbed between check and insert
+                            th["flags"]["slot_available"] = False
+                            log(f"Soft hold race for {from_email}: slot full at insert time")
+                    else:
+                        log(f"Slot unavailable for {from_email}: "
+                            f"{avail.get('spots_remaining', 0)}/{avail.get('capacity', 0)} spots remaining")
 
                 # Step 4: requires_human check
                 if result.get("requires_human"):
@@ -365,6 +397,8 @@ def main():
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
                             )
+                            if th["flags"].get("hold_id"):
+                                state_registry.cancel_hold(th["flags"]["hold_id"])
                             sheets_writer.log_hold_failed({
                                 "email": from_email, "subject": subj,
                                 "experience": fields_now.get("experience"),
@@ -384,6 +418,8 @@ def main():
                             continue
                         else:
                             th["flags"]["hold_created"] = True
+                            if th["flags"].get("hold_id"):
+                                state_registry.confirm_hold(th["flags"]["hold_id"])
                             th["flags"]["event_id"] = res.get("eventId")
                             th["flags"]["event_link"] = res.get("htmlLink")
                             event_id = th["flags"]["event_id"]

@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 038
+# LAST MODIFIED: Brief 039
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -161,9 +161,24 @@ to true. Your reply must:
   outcomes.
 - Sign off warmly.
 
+AVAILABILITY CONTEXT:
+When spots_remaining is a number in thread flags (not 'unknown'):
+- If spots_remaining > 5: mention availability naturally in the booking summary,
+  e.g. "There's still plenty of room on this date!"
+- If 1 <= spots_remaining <= 5: add gentle urgency, e.g. "Only {{N}} spot(s) left
+  for this date — I'd recommend locking it in soon!" (replace {{N}} with the actual number)
+- If spots_remaining = 0: do NOT send the booking summary. Apologize warmly,
+  explain the slot is fully booked, and suggest 2-3 alternative nearby dates
+  for the same trip. Use reply_hold_failed for this message.
+Note: Python sets slot_available in thread flags before sending your reply.
+When slot_available is false, Python will send reply_hold_failed instead of
+reply. Always write both when sending a booking summary.
+
 THREAD CONTEXT (already collected this conversation):
   Fields: {json.dumps(thread_fields, ensure_ascii=False)}
   Flags: {json.dumps(thread_flags, ensure_ascii=False)}
+  spots_remaining: {thread_flags.get('spots_remaining', 'unknown')}
+  trip_capacity: {thread_flags.get('trip_capacity', 'unknown')}
 
 INBOUND MESSAGE:
   From: {from_email}

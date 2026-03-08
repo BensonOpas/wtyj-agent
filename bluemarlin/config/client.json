@@ -57,6 +57,7 @@
   "trips": {
     "klein_curacao": {
       "display_name": "Klein Curaçao Trip",
+      "capacity": 30,
       "price_adult_usd": 120,
       "price_child_usd": 65,
       "price_child_age_range": "4-12",
@@ -65,12 +66,14 @@
         {
           "time": "08:00",
           "vessel": "BlueFinn2",
-          "departure_point": "Jan Thiel Beach"
+          "departure_point": "Jan Thiel Beach",
+          "calendar_id": "4ce23ea0e7ec08da249c778969d71c199b8aaf7bf6114efac4fae7e0928f1b31@group.calendar.google.com"
         },
         {
           "time": "08:30",
           "vessel": "BlueFinn1",
-          "departure_point": "Jan Thiel Beach"
+          "departure_point": "Jan Thiel Beach",
+          "calendar_id": "9f25610370f0f57fa395735502fcff767ba8276ee5a280d028fee7f003054928@group.calendar.google.com"
         }
       ],
       "duration_hours": 8,
@@ -85,17 +88,18 @@
       "not_included": [
         "flippers"
       ],
-      "notes": "Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing.",
-      "calendar_id": "4ce23ea0e7ec08da249c778969d71c199b8aaf7bf6114efac4fae7e0928f1b31@group.calendar.google.com"
+      "notes": "Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing."
     },
     "snorkeling_3in1": {
       "display_name": "3-in-1 Snorkeling Trip",
+      "capacity": 20,
       "price_adult_usd": 110,
       "departures": [
         {
           "time": "10:00",
           "vessel": "TopCat",
-          "departure_point": "Mood Beach pier"
+          "departure_point": "Mood Beach pier",
+          "calendar_id": "114baef90d15890abbcc550dc5ea5edf68d5676a13a0122c099ed9a9a8d52db2@group.calendar.google.com"
         }
       ],
       "duration_hours": 4,
@@ -110,17 +114,18 @@
         "Caracasbaai pier"
       ],
       "requirements": "Good swimming skills required",
-      "suitable_for_children": false,
-      "calendar_id": "114baef90d15890abbcc550dc5ea5edf68d5676a13a0122c099ed9a9a8d52db2@group.calendar.google.com"
+      "suitable_for_children": false
     },
     "west_coast_beach": {
       "display_name": "West Coast Beach Trip",
+      "capacity": 25,
       "price_adult_usd": 120,
       "departures": [
         {
           "time": "09:00",
           "vessel": "Red Dragon",
-          "departure_point": "Mood/Tomatoes"
+          "departure_point": "Mood/Tomatoes",
+          "calendar_id": "c24538f8ed2c35306fca340e0e3453bdda717b80274beb6e2e8cae53735e48e0@group.calendar.google.com"
         }
       ],
       "duration_hours": 6,
@@ -128,17 +133,18 @@
       "included": [
         "open bar",
         "snorkel gear"
-      ],
-      "calendar_id": "c24538f8ed2c35306fca340e0e3453bdda717b80274beb6e2e8cae53735e48e0@group.calendar.google.com"
+      ]
     },
     "sunset_cruise": {
       "display_name": "Sunset Cruise",
+      "capacity": 20,
       "price_adult_usd": 79,
       "departures": [
         {
           "time": "17:30",
           "vessel": "Kailani",
-          "departure_point": "Village Marina/Mood pier"
+          "departure_point": "Village Marina/Mood pier",
+          "calendar_id": "d405cf341b87fcbae36131d910986534fd1d24286632dfa50b1234792aeba2ce@group.calendar.google.com"
         }
       ],
       "duration_hours": 2.5,
@@ -152,26 +158,28 @@
         "mozzarella-tomato-pesto sticks",
         "chicken satay",
         "pulled pork sandwich"
-      ],
-      "calendar_id": "d405cf341b87fcbae36131d910986534fd1d24286632dfa50b1234792aeba2ce@group.calendar.google.com"
+      ]
     },
     "jet_ski": {
       "display_name": "Jet Ski Excursion",
+      "capacity": 4,
       "price_adult_usd": 135,
+      "duration_hours": 1,
       "departures": [
-        {
-          "time": "every hour",
-          "vessel": "Jet ski",
-          "departure_point": "Spanish Water"
-        },
-        {
-          "time": "every hour",
-          "vessel": "Jet ski",
-          "departure_point": "Piscadera Bay"
-        }
+        {"time": "08:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "09:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "10:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "11:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "12:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "13:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "14:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "15:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "16:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "17:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "18:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"},
+        {"time": "19:00", "vessel": "Jet Ski", "departure_point": "Spanish Water or Piscadera Bay", "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"}
       ],
-      "days_available": "daily",
-      "calendar_id": "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com"
+      "days_available": "daily"
     }
   },
   "fleet": {

@@ -1,8 +1,8 @@
 # FILE: gws_calendar.py
 # CREATED: Brief 032
-# LAST MODIFIED: Brief 032
+# LAST MODIFIED: Brief 039
 # DEPENDS ON: config/bluemarlin-calendar-key.json
-# IMPORTS FROM: config_loader.py (Brief 022)
+# IMPORTS FROM: config_loader.py (Brief 022), state_registry.py (Brief 004)
 # CALLERS: email_poller.py
 
 import json
@@ -13,28 +13,12 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config_loader
+import state_registry
 
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 _KEY_PATH = os.path.normpath(os.path.join(_SRC_DIR, '..', 'config', 'bluemarlin-calendar-key.json'))
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
-
-# Copied verbatim from calendar.js (Brief 031)
-CALENDARS = {
-    "klein_curacao":    "4ce23ea0e7ec08da249c778969d71c199b8aaf7bf6114efac4fae7e0928f1b31@group.calendar.google.com",
-    "snorkeling_3in1":  "114baef90d15890abbcc550dc5ea5edf68d5676a13a0122c099ed9a9a8d52db2@group.calendar.google.com",
-    "west_coast_beach": "c24538f8ed2c35306fca340e0e3453bdda717b80274beb6e2e8cae53735e48e0@group.calendar.google.com",
-    "sunset_cruise":    "d405cf341b87fcbae36131d910986534fd1d24286632dfa50b1234792aeba2ce@group.calendar.google.com",
-    "jet_ski":          "f81a21bbbae8e85f364ee462285ff9f85bcb6f12c0570cac1af63cfe1e850f60@group.calendar.google.com",
-}
-
-DURATIONS_HOURS = {
-    "klein_curacao":    8,
-    "snorkeling_3in1":  4,
-    "west_coast_beach": 6,
-    "sunset_cruise":    2.5,
-    "jet_ski":          1,
-}
 
 
 def _curacao_to_iso(date_str: str, time_str: str) -> str:
@@ -63,44 +47,19 @@ def _run_gws(args: list) -> dict:
         return {'error': str(e)[:500]}
 
 
-def check_availability(trip_key: str, date: str, start_time: str) -> dict:
+def check_availability(trip_key: str, date: str, start_time: str, new_guests: int = 1) -> dict:
     """
-    Check calendar availability for the given slot without creating a hold.
-    Returns {available: bool, reason?: str, error?: str}
+    Check SQLite capacity for this slot. No gws CLI call.
+    Returns {available: bool, spots_remaining: int, capacity: int}.
     """
-    calendar_id = CALENDARS.get(trip_key, '')
-    if not calendar_id or not calendar_id.endswith('@group.calendar.google.com'):
-        return {'available': False, 'error': f'Calendar ID not yet configured for: {trip_key}'}
-
-    dur = DURATIONS_HOURS.get(trip_key, 4)
-    try:
-        time_min = _curacao_to_iso(date, start_time)
-        year, month, day = map(int, date.split('-'))
-        hour, minute = map(int, start_time.split(':'))
-        dt_start = datetime(year, month, day, hour, minute, tzinfo=_CURACAO_TZ)
-        dt_end = dt_start + timedelta(hours=dur)
-        time_max = dt_end.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    except Exception as e:
-        return {'available': False, 'error': f'Date/time parse error: {e}'}
-
-    params = json.dumps({
-        'calendarId': calendar_id,
-        'timeMin': time_min,
-        'timeMax': time_max,
-        'singleEvents': True,
-        'orderBy': 'startTime',
-        'maxResults': 5,
-    })
-
-    result = _run_gws(['calendar', 'events', 'list', '--params', params])
-    if 'error' in result:
-        return {'available': False, 'error': result['error']}
-
-    items = result.get('items', [])
-    if items:
-        first = items[0]
-        return {'available': False, 'reason': f"Slot already booked ({first.get('summary', 'event')})"}
-    return {'available': True}
+    state_registry.expire_stale_holds()
+    capacity = config_loader.get_trip(trip_key).get("capacity", 20)
+    spots = state_registry.get_spots_remaining(trip_key, date, start_time, capacity)
+    return {
+        "available": spots >= new_guests,
+        "spots_remaining": spots,
+        "capacity": capacity,
+    }
 
 
 def create_hold(fields_now: dict) -> dict:
@@ -112,18 +71,21 @@ def create_hold(fields_now: dict) -> dict:
     if not trip_key:
         return {'ok': False, 'error': 'No trip_key in fields — cannot create hold.'}
 
-    calendar_id = CALENDARS.get(trip_key, '')
-    if not calendar_id or not calendar_id.endswith('@group.calendar.google.com'):
-        return {'ok': False, 'error': f'Calendar ID not yet configured for: {trip_key}'}
-
     trip = config_loader.get_trip(trip_key)
     departures = trip.get('departures', [])
     start_time = (
         fields_now.get('departure_time')
         or (departures[0].get('time', '09:00') if departures else '09:00')
     )
+    matching_dep = next(
+        (d for d in departures if d.get('time') == start_time),
+        departures[0] if departures else {}
+    )
+    calendar_id = matching_dep.get('calendar_id', '')
+    if not calendar_id or not calendar_id.endswith('@group.calendar.google.com'):
+        return {'ok': False, 'error': f'Calendar ID not configured for: {trip_key} at {start_time}'}
     price_usd = trip.get('price_adult_usd', 0)
-    dur = DURATIONS_HOURS.get(trip_key, 4)
+    dur = trip.get('duration_hours', 4)
     date = fields_now.get('date', '')
     customer_name = fields_now.get('customer_name') or '\u2014'
     contact = (fields_now.get('phone') or '').strip() or '\u2014'

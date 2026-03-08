@@ -474,6 +474,16 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 039 — Capacity-aware booking with soft holds
+**Status:** Stable
+**Files modified:** `bluemarlin/config/client.json`, `bluemarlin/src/state_registry.py`, `bluemarlin/src/gws_calendar.py`, `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_agent.py`
+**What changed:** Availability tracking moved from Google Calendar (binary) to SQLite capacity tracking. `trip_bookings` table added to `state_registry.py` (schema: trip_key, date, departure_time, guests, status, expires_at). Five new public functions: `expire_stale_holds`, `get_spots_remaining`, `create_soft_hold` (atomic with `BEGIN IMMEDIATE`), `confirm_hold`, `cancel_hold`. `check_availability()` in `gws_calendar.py` rewritten — pure SQLite, no gws CLI call, returns `{available, spots_remaining, capacity}`. `create_hold()` now resolves `calendar_id` from departure-level objects (not the removed `CALENDARS` dict). `CALENDARS` and `DURATIONS_HOURS` dicts removed from `gws_calendar.py` — values now read from `config_loader`. In `client.json`: `capacity` field added to all 5 trips; `calendar_id` moved from trip level to each departure object; Klein Curaçao 08:30 departure gets its own calendar_id; jet_ski expanded to 12 hourly departures (08:00–19:00) with `duration_hours: 1`. In `email_poller.py`: Step 3b creates a soft hold when booking summary fires; date-change detection cancels old soft hold and resets slot_checked; Step 4 confirms/cancels the soft hold based on calendar event outcome. In `marina_agent.py`: `spots_remaining` and `trip_capacity` added to thread context; AVAILABILITY CONTEXT instructions added to prompt.
+**Callers must know:** `check_availability()` signature changed: now takes `new_guests: int = 1` as 4th arg; returns `{available, spots_remaining, capacity}` — `reason` and `error` fields removed. `create_hold()` now requires departure-level `calendar_id` in `client.json` — any trip without it will return an error. Capacity values in client.json are booking ceilings (not vessel max_guests). Soft holds expire after 24h if not confirmed. The `CALENDARS` and `DURATIONS_HOURS` module-level dicts no longer exist in `gws_calendar.py`.
+**Known open items:** `slot_checked` not reset on date change is now mitigated by the date-change cancellation block in email_poller, but the underlying `slot_checked` flag still persists — low priority.
+**Tests:** 8/8 tests + schema checks pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -508,3 +518,7 @@ Outcome: complete — 6/6 tests pass
 Brief 038 — Marina prompt: child age pricing + day-of-week on mid-confirmation date change
 Decision: Two prompt fixes from Brief 037 stress test. Fix 1: SECOND pre-summary check asks child ages before pricing. Fix 2: mid-confirmation date-change handler re-validates day of week before resetting.
 Outcome: complete — 7/7 tests pass
+
+Brief 039 — Capacity-aware booking with soft holds
+Decision: Replace binary gws CLI availability check with SQLite capacity tracking. `trip_bookings` table added to state_registry. `check_availability()` is now pure SQLite — no gws call. Soft hold (24h TTL) created at booking summary time; confirmed on calendar event success; cancelled on failure or customer date change. `calendar_id` moved from trip level to departure level in client.json; `CALENDARS` and `DURATIONS_HOURS` dicts removed from gws_calendar.py. Klein Curaçao gains independent vessel-level capacity per departure. Jet ski expanded to 12 explicit hourly departures (08:00–19:00).
+Outcome: complete — 8/8 tests + schema checks pass
