@@ -25,7 +25,7 @@
 | Source files | `/root/bluemarlin/src/` |
 | Config files | `/root/bluemarlin/config/` |
 | Log directory | `/root/bluemarlin/logs/` |
-| Log filename | `[VERIFY: ls /root/bluemarlin/logs/]` |
+| Log filenames | `bluemarlin.log` (main), `bluemarlin_demo.log` (demo) |
 | Python binary | `/usr/bin/python3` (3.12.3) |
 
 ---
@@ -83,7 +83,7 @@ pip installs: `[VERIFY — ask Benson if any pip install is needed after depende
 
 | Item | Value |
 |------|-------|
-| Binary path | `[VERIFY: run 'which gws' on VPS]` |
+| Binary path | `/usr/bin/gws` |
 | Auth env var | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` |
 | Credentials file | `/root/bluemarlin/config/bluemarlin-calendar-key.json` |
 | Spreadsheet ID | `1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I` |
@@ -102,6 +102,16 @@ pip installs: `[VERIFY — ask Benson if any pip install is needed after depende
 
 ---
 
+## Console Convention
+
+When asking Benson to run a command, ALWAYS specify which machine:
+- **"Run on VPS:"** — command goes into the SSH session at `root@108.61.192.52`
+- **"Run on Mac:"** — command goes into Benson's local terminal
+
+Never say "run this command" without specifying which console.
+
+---
+
 ## Things Claude Code Keeps Getting Wrong
 
 1. **API key location** — it is in `bluemarlin.env`, NOT in `.bashrc` or shell profile. Never tell Benson to check `.zshrc` for the key.
@@ -111,18 +121,6 @@ pip installs: `[VERIFY — ask Benson if any pip install is needed after depende
 
 ---
 
-## Gaps to Verify (run on VPS manually)
+## Gaps to Verify
 
-```bash
-# 1. Exact log filename
-ls /root/bluemarlin/logs/
-
-# 2. gws binary path
-which gws
-
-# 3. pip — check if a venv is in use
-which python3
-pip3 list | grep -E "anthropic|dateparser"
-```
-
-Update this file once verified.
+- pip installs: unknown — `[VERIFY: ask Benson if pip install is ever needed after changes]`
