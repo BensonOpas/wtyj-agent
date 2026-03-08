@@ -496,3 +496,7 @@ Outcome: complete — 9/9 tests pass
 Brief 035 — Marina prompt polish: language adaptation + trip key mapping
 Decision: Add LANGUAGE detection instruction and trip_key mapping table to marina_agent.py prompt. Remove 3 resolved items from CLAUDE.md Known Open Issues. Formally accept fallback reply exception in CLAUDE.md. No logic changes.
 Outcome: complete — 9/9 tests pass
+
+Brief 036 — Marina prompt bug fixes: language body-only, day-of-week validation, reply_hold_failed scope
+Decision: Three prompt fixes following stress test (14 scenarios). Fix 1: language from body text only. Fix 2: day-of-week check before booking summary. Fix 3: reply_hold_failed only on booking confirmation paths.
+Outcome: complete — 7/7 tests pass

@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 035
+# LAST MODIFIED: Brief 036
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -66,7 +66,7 @@ def _build_prompt(
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
 
 PERSONA: {csk.get('marina_persona', '')}
-LANGUAGE: Detect the language of the customer's inbound message and write your reply in that same language. Supported languages: {', '.join(business.get('languages', []))}. If the language is unclear or not in the supported list, default to English.
+LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 AGENT SIGNATURE: {signature}
 TODAY (Curaçao time): {today}
 TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
@@ -102,6 +102,11 @@ When your fields response contains all four required booking fields
 message or already in thread context — AND "awaiting_booking_confirmation"
 is not true in thread flags AND "booking_confirmed" is not true in
 thread flags, do NOT assume the booking is confirmed. Instead:
+- FIRST: verify the requested date's day of week matches the trip's
+  days_available field shown in TRIPS above. If the date falls on a
+  day the trip does not run, do NOT set awaiting_booking_confirmation
+  and do NOT send a booking summary. Instead, tell the customer which
+  days the trip runs and suggest the nearest valid dates.
 - Send a warm booking summary to the customer listing: trip name,
   date, number of guests, departure time (if chosen), total price,
   what is included.
@@ -181,7 +186,7 @@ The JSON must have exactly these fields:
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
   "reply": "<full reply to send when the booking hold is successfully created — warm, celebratory, includes the booking summary, payment link placeholder [PAYMENT_LINK], payment methods, hold duration, what to bring>",
-  "reply_hold_failed": "<reply to send if the calendar slot is unavailable or hold creation fails — apologetic, warm, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link. Write this field whenever awaiting_booking_confirmation is being set to true OR booking_confirmed is true in thread flags. Always write it alongside the summary reply so Python can choose the correct one based on actual availability.>",
+  "reply_hold_failed": "<reply to send if the calendar slot is unavailable or hold creation fails — apologetic, warm, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link. Write this field ONLY when you are setting awaiting_booking_confirmation to true OR booking_confirmed to true in your current JSON response. Do not write it for inquiry, escalation, clarification, or any path where no booking hold will be attempted.>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
   "flags": {{"awaiting_booking_confirmation": <true when you are sending a booking summary asking the customer to confirm — omit or false otherwise>, "booking_confirmed": <true only when the customer has just confirmed in this message — omit or false otherwise>}},
