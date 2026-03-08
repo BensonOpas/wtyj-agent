@@ -71,6 +71,14 @@ from 8-10 per brief to 3-4. Architecture discipline was already correct.
 
 ---
 
+### Brief 038 — 2026-03-07 — Child age pricing + mid-confirmation day-of-week check
+**What happened:** Two prompt fixes from Brief 037 stress test. Fix 1 (child age): Marina now asks ages before pricing when "kids" are mentioned — S21 re-run produced "How old are your 3 children?" with correct tier explanation. Fix 2 (S12 mid-confirmation date bug): day-of-week check now runs when a customer changes a date mid-confirmation thread. Both verified via live API calls (T6/T7).
+**What was tricky:** Brief test assertions used capitalized strings ("If the change involves", "ask for them before") that didn't match the actual multiline f-string prompt (lowercase "if", line break between "ask" and "for them"). Silently fixed during execution — flagged by output-reviewer. Next time: test assertions in the brief should be verified against the exact replacement text in the same brief before submission, especially for multiline f-strings where whitespace breaks substring matches.
+**Lesson:** When writing test assertions for f-string prompt content: (1) check exact case against the find/replace text in the same brief, (2) watch for line breaks — `"ask\n  for them"` does not match `"ask for them"`. If a substring spans a line break, test for a phrase that falls entirely on one line.
+**Contradicts:** none
+
+---
+
 ### Brief 037 — 2026-03-07 — Extended stress test: 8 new edge case scenarios
 **What happened:** Added S15–S22 to test_marina_stress.py and ran all 22 scenarios. 6 PASS, 2 PARTIAL (S21 child pricing, S22 "in 3 weeks"), 1 pre-existing bug surfaced (S12 day-of-week check doesn't block summary when customer changes date mid-confirmation). brief-reviewer flagged T3 as duplicate of T1, hardcoded expected dates for S19/S22, and structural-only tests not catching silent failure. Three targeted patches resolved all reviewer issues.
 **What worked:** Test-before-fix discipline paid off — S21 performed better than expected (Marina assumed child rate and flagged under-4 exception) but exposed a real teen-pricing gap. The S12 pre-existing bug wouldn't have been noticed without running the full 22-scenario suite.

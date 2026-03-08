@@ -504,3 +504,7 @@ Outcome: complete — 7/7 tests pass
 Brief 037 — Extended stress test: 8 new edge case scenarios
 Decision: Add S15–S22 to test_marina_stress.py to test arithmetic guest counts, implicit confirmation, missing trip name, relative dates, and child pricing. Test-only — no prompt changes. Failures documented for 038.
 Outcome: complete — 6/6 tests pass
+
+Brief 038 — Marina prompt: child age pricing + day-of-week on mid-confirmation date change
+Decision: Two prompt fixes from Brief 037 stress test. Fix 1: SECOND pre-summary check asks child ages before pricing. Fix 2: mid-confirmation date-change handler re-validates day of week before resetting.
+Outcome: complete — 7/7 tests pass

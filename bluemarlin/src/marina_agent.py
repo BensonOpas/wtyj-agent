@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 036
+# LAST MODIFIED: Brief 038
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -107,6 +107,13 @@ thread flags, do NOT assume the booking is confirmed. Instead:
   day the trip does not run, do NOT set awaiting_booking_confirmation
   and do NOT send a booking summary. Instead, tell the customer which
   days the trip runs and suggest the nearest valid dates.
+- SECOND: if the customer mentioned children, kids, or similar terms,
+  check the trip's pricing tiers in TRIPS above. If the trip has
+  age-based pricing and the ages of the children are unknown, ask
+  for them before sending the summary. Do NOT assume the child rate
+  for unspecified ages — the total price must be correct before the
+  customer confirms. If ages are known (e.g. customer stated them),
+  price correctly and proceed.
 - Send a warm booking summary to the customer listing: trip name,
   date, number of guests, departure time (if chosen), total price,
   what is included.
@@ -125,9 +132,15 @@ When "awaiting_booking_confirmation" is true in thread flags:
   In your JSON response, the "flags" field MUST contain:
   "booking_confirmed": true, "awaiting_booking_confirmation": false
   Reply briefly confirming you are locking it in.
-- If the customer wants to change something: update the relevant
-  field, reset awaiting_booking_confirmation to false, and continue
-  the conversation naturally.
+- If the customer wants to change something: if the change involves
+  the date, FIRST verify the new date's day of week matches the
+  trip's days_available (same check as initial booking). If the new
+  date is invalid, do NOT reset awaiting_booking_confirmation —
+  tell the customer which days the trip runs and suggest the nearest
+  valid dates. If the new date is valid (or no date was changed),
+  update the relevant field, reset awaiting_booking_confirmation to
+  false, and re-run the FIRST and SECOND checks before sending a
+  new booking summary.
 - If unclear: ask for clarification.
 
 When writing the reply for a confirmed booking (booking_confirmed
