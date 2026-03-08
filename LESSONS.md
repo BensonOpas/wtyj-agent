@@ -71,6 +71,38 @@ from 8-10 per brief to 3-4. Architecture discipline was already correct.
 
 ---
 
+### Brief 037 — 2026-03-07 — Extended stress test: 8 new edge case scenarios
+**What happened:** Added S15–S22 to test_marina_stress.py and ran all 22 scenarios. 6 PASS, 2 PARTIAL (S21 child pricing, S22 "in 3 weeks"), 1 pre-existing bug surfaced (S12 day-of-week check doesn't block summary when customer changes date mid-confirmation). brief-reviewer flagged T3 as duplicate of T1, hardcoded expected dates for S19/S22, and structural-only tests not catching silent failure. Three targeted patches resolved all reviewer issues.
+**What worked:** Test-before-fix discipline paid off — S21 performed better than expected (Marina assumed child rate and flagged under-4 exception) but exposed a real teen-pricing gap. The S12 pre-existing bug wouldn't have been noticed without running the full 22-scenario suite.
+**Lesson:** "Structural-only test" briefs should explicitly acknowledge in the success condition that tests verify execution happened, not that execution was correct — otherwise the brief-reviewer will flag it as incomplete coverage. Also: SYSTEM_STATE.md Decision Log is consistently the most-missed step; treat it as the first instruction, not the last.
+**Contradicts:** none
+
+---
+
+### Brief 036 — 2026-03-07 — Marina prompt bug fixes from stress test
+**What happened:** Stress test (14 scenarios) exposed 3 bugs: language detection fired on sender name not body text, day-of-week validation was inconsistent (snorkeling_3in1 caught, west_coast_beach didn't), reply_hold_failed generated for group escalations. Brief 036 fixed all 3. Fix 1 required two iterations — the first patch ("Do not infer from sender's name") was insufficient for names like "Müller"; needed an explicit MUST rule.
+**What worked:** Stress tests before calling code "done" are essential — found 3 real bugs that would embarrass in a demo. The day-of-week fix (pointing Marina at days_available in the TRIPS data) correctly avoided hardcoding business values in the prompt.
+**Lesson:** When a prompt fix doesn't work on first try, escalate the language from advisory ("do not infer") to mandatory ("MUST be in English"). Soft instructions are ignored when strong signals (like Germanic names) compete. Also: output-reviewer will flag when executed prompt text deviates from the brief's exact find/replace — document the deviation clearly.
+**Contradicts:** none
+
+---
+
+### Brief 035 — 2026-03-07 — Marina prompt polish: language + trip key mapping
+**What happened:** Added LANGUAGE detection block and trip_key mapping table to marina_agent.py prompt. Cleaned up CLAUDE.md Known Open Issues (3 resolved items removed, fallback exception formally accepted). brief-reviewer flagged 3 rounds of issues — mainly: missing file in header, T8 false-pass risk, incomplete CLAUDE.md replacement, silent removal of a bullet, undocumented fallback exception.
+**What worked:** Prompt-only changes (no Python logic) are the right pattern for teaching Claude new behaviour. The mapping table is more reliable than hoping Claude infers trip key from context.
+**Lesson:** When writing a brief that removes content from a multi-item list, explicitly state what is kept AND what is removed — and verify the count matches. Silent omissions get caught by brief-reviewer but add unnecessary retry rounds.
+**Contradicts:** none
+
+---
+
+### Brief 034 — 2026-03-07 — Fill [VERIFY] placeholders in client.json
+**What happened:** All 8 `[VERIFY]` items in `client.json` replaced with demo values. No source code changes. output-reviewer flagged SYSTEM_STATE.md Decision Log not updated on first pass — step was missed during execution.
+**What worked:** Data-only brief kept scope very tight. Vessel assignments (TopCat/Red Dragon/Kailani) derived from fleet capacity data already in the file.
+**Lesson:** SYSTEM_STATE.md Decision Log update is a required instruction step, not a post-execution formality — treat it the same as any other instruction in the brief.
+**Contradicts:** none
+
+---
+
 ### Brief 033 — 2026-03-07 — Thread key via Message-ID/In-Reply-To
 **What happened:** `stable_thread_key()` accepted `msg` but never used it — thread state was keyed on subject alone. Replaced with `resolve_thread_key()` that checks `References` and `In-Reply-To` headers before falling back to subject.
 **What worked:** Flat `message_id_index` dict stored alongside `threads` in the same state file. No schema migration, full backward-compat via `setdefault`.

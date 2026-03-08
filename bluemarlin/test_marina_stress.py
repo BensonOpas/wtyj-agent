@@ -257,8 +257,123 @@ s14 = run(
     thread_flags={},
 )
 
+# -----------------------------------------------------------------------
+# S15 — Guest count via arithmetic: "me and 3 friends"
+# Expected: guests=4
+# -----------------------------------------------------------------------
+s15 = run(
+    label="S15 — Guest count arithmetic: 'me and 3 friends'",
+    from_email="test15@example.com",
+    subject="Sunset cruise inquiry",
+    body="Hi, I want to book the sunset cruise for me and 3 friends on June 12 2026.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S16 — Guest count via social unit: "2 couples"
+# Expected: guests=4 (may also flag day mismatch for west_coast_beach)
+# -----------------------------------------------------------------------
+s16 = run(
+    label="S16 — Guest count inference: '2 couples'",
+    from_email="test16@example.com",
+    subject="West coast beach trip",
+    body="Hello! We're 2 couples interested in the west coast beach trip on May 8 2026.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S17 — Implicit booking confirmation: "sounds good, what's next?"
+# Thread has awaiting_booking_confirmation=true
+# Expected: booking_confirmed=true
+# -----------------------------------------------------------------------
+s17 = run(
+    label="S17 — Implicit confirmation: 'sounds good, what's next?'",
+    from_email="test17@example.com",
+    subject="Re: Klein Curacao booking",
+    body="Sounds good, what's next?",
+    thread_fields={
+        "experience": "Klein Curaçao",
+        "trip_key": "klein_curacao",
+        "date": "2026-05-03",
+        "guests": 4,
+        "customer_name": "Tom",
+    },
+    thread_flags={
+        "awaiting_booking_confirmation": True,
+    },
+)
+
+# -----------------------------------------------------------------------
+# S18 — No trip named
+# Expected: trip_key absent, clarification asking which trip
+# -----------------------------------------------------------------------
+s18 = run(
+    label="S18 — No trip named — should ask which trip",
+    from_email="test18@example.com",
+    subject="Booking inquiry",
+    body="Hi, I want to book for April 22 2026 for 3 people. Name is Sara.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S19 — Relative date: "next Saturday"
+# Expected: date is a YYYY-MM-DD string (not "next Saturday"), guests=1, trip_key=jet_ski
+# -----------------------------------------------------------------------
+s19 = run(
+    label="S19 — Relative date: 'next Saturday'",
+    from_email="test19@example.com",
+    subject="Jet ski booking",
+    body="Can we book the jet ski for next Saturday? Just me.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S20 — Unresolvable holiday date: "Easter"
+# Expected: date omitted from fields, clarification asked
+# -----------------------------------------------------------------------
+s20 = run(
+    label="S20 — Unresolvable date: 'Easter'",
+    from_email="test20@example.com",
+    subject="Klein Curacao at Easter",
+    body="We want to go on the Klein Curacao trip at Easter with 4 people.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S21 — Mixed guest types: "2 adults and 3 kids"
+# Expected (ideal): Marina asks child ages for pricing
+# Likely actual: guests=5, no age question — gap to document
+# -----------------------------------------------------------------------
+s21 = run(
+    label="S21 — Child pricing gap: '2 adults and 3 kids'",
+    from_email="test21@example.com",
+    subject="Klein Curacao family booking",
+    body="Hi, I'd like to book the Klein Curacao trip on May 20 2026. "
+         "We are 2 adults and 3 kids. Name is Marco Rossi.",
+    thread_fields={},
+    thread_flags={},
+)
+
+# -----------------------------------------------------------------------
+# S22 — Relative date arithmetic: "in 3 weeks"
+# Expected: date is a YYYY-MM-DD string (not "in 3 weeks"), trip_key=snorkeling_3in1
+# -----------------------------------------------------------------------
+s22 = run(
+    label="S22 — Relative date arithmetic: 'in 3 weeks'",
+    from_email="test22@example.com",
+    subject="Snorkeling trip",
+    body="Hello! I want to book the snorkeling trip in 3 weeks for 2 people.",
+    thread_fields={},
+    thread_flags={},
+)
+
 print(f"\n{DIVIDER}")
-print(f"Done — 14 scenarios run. Review replies above.")
+print(f"Done — 22 scenarios run. Review replies above.")
 print(f"Key checks:")
 print(f"  S1  — reply is in Dutch")
 print(f"  S2  — awaiting_booking_confirmation=true, booking summary present")
@@ -274,4 +389,12 @@ print(f"  S11 — departure_time=08:00")
 print(f"  S12 — awaiting_booking_confirmation reset, new date captured")
 print(f"  S13 — special_requests captured")
 print(f"  S14 — requires_human=true, no info requests")
+print(f"  S15 — guests=4 (me + 3 friends)")
+print(f"  S16 — guests=4 (2 couples), day mismatch noted")
+print(f"  S17 — booking_confirmed=true (implicit yes)")
+print(f"  S18 — trip_key absent, clarification asked for trip")
+print(f"  S19 — date is YYYY-MM-DD (not 'next Saturday'), guests=1, trip_key=jet_ski")
+print(f"  S20 — date absent, clarification asked (Easter unresolvable)")
+print(f"  S21 — observe: guests count and whether ages asked")
+print(f"  S22 — date is YYYY-MM-DD (not 'in 3 weeks'), trip_key=snorkeling_3in1")
 print(DIVIDER)

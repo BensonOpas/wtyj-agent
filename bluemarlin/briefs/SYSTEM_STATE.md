@@ -500,3 +500,7 @@ Outcome: complete — 9/9 tests pass
 Brief 036 — Marina prompt bug fixes: language body-only, day-of-week validation, reply_hold_failed scope
 Decision: Three prompt fixes following stress test (14 scenarios). Fix 1: language from body text only. Fix 2: day-of-week check before booking summary. Fix 3: reply_hold_failed only on booking confirmation paths.
 Outcome: complete — 7/7 tests pass
+
+Brief 037 — Extended stress test: 8 new edge case scenarios
+Decision: Add S15–S22 to test_marina_stress.py to test arithmetic guest counts, implicit confirmation, missing trip name, relative dates, and child pricing. Test-only — no prompt changes. Failures documented for 038.
+Outcome: complete — 6/6 tests pass
