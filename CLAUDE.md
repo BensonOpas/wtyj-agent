@@ -20,6 +20,7 @@ the real client. Business data lives in `client.json` only — never in source.
 
 ```
 @briefs/SYSTEM_STATE.md
+@briefs/INFRA.md
 ```
 
 If you are about to modify a file, read it first. Every time. No exceptions.
