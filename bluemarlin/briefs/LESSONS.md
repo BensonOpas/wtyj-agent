@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 042 — Operator email hardening
+**Date:** 2026-03-08
+
+Live testing surfaced two gaps in the relay/escalation system: (1) operator replies to [ESCALATION] alerts looped back through the poller as new "customer" messages — fix was a one-line drop guard; (2) [RELAY] subject detection was a magic string with no thread specificity — replaced with UUID relay token embedded in the subject, stored per-thread, and matched exactly on reply. The output reviewer correctly flagged that the guard fires *after* `mark_as_processed`, not before — the code is correct but the documentation was wrong, which is an easy thing to miss when the anchor is visual rather than positional.
+
+---
+
 ## Brief 041 — Semi-escalation prompt fix
 **Date:** 2026-03-08
 

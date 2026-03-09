@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 040
+# LAST MODIFIED: Brief 042
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -16,7 +16,7 @@
 import state_registry
 import payment_stub
 import bm_logger
-import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib
+import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid
 from datetime import datetime, timezone
 from email.utils import parseaddr
 from email.mime.text import MIMEText
@@ -275,21 +275,28 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
+                # Drop operator replies to [ESCALATION] alerts — escalation is one-way
+                if from_email.lower() == demo_support_email.lower() and "[ESCALATION]" in subj:
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    log(f"Dropped escalation reply from {from_email} — one-way flow")
+                    continue
+
                 # [RELAY] inbound from human team — reformulate and forward to original customer
-                if from_email.lower() == demo_support_email.lower() and "[RELAY]" in subj:
-                    ref_match = re.search(r'BF-\d{4}-\d{5}', subj)
-                    relay_ref = ref_match.group() if ref_match else None
+                if from_email.lower() == demo_support_email.lower() and "[RELAY-" in subj:
+                    token_match = re.search(r'\[RELAY-([a-f0-9]{12})\]', subj)
+                    relay_token_in = token_match.group(1) if token_match else None
                     customer_thread_key = None
                     customer_th = None
                     for tk, t in state["threads"].items():
+                        stored_token = t.get("flags", {}).get("relay_token")
                         if (t.get("flags", {}).get("awaiting_relay")
-                                and (relay_ref is None
-                                     or t.get("flags", {}).get("booking_ref") == relay_ref)):
+                                and relay_token_in
+                                and stored_token == relay_token_in):
                             customer_thread_key = tk
                             customer_th = t
                             break
                     if customer_th is None:
-                        log(f"RELAY: no matching customer thread for ref={relay_ref} — skipping")
+                        log(f"RELAY: no matching customer thread for token={relay_token_in} — skipping")
                         im.uid("store", uid, "+FLAGS", r"(\Seen)")
                         save_json(THREAD_STATE_PATH, state)
                         continue
@@ -322,6 +329,7 @@ def main():
                         log(f"RELAY: relay_customer_email missing on thread {customer_thread_key} — skipping send")
                     customer_th["flags"]["awaiting_relay"] = False
                     customer_th["flags"].pop("relay_question", None)
+                    customer_th["flags"].pop("relay_token", None)
                     state["threads"][customer_thread_key] = customer_th
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     save_json(THREAD_STATE_PATH, state)
@@ -433,7 +441,9 @@ def main():
                         th["flags"].pop("hold_id", None)
                     th["flags"]["slot_checked"] = False
                     th["flags"]["slot_available"] = False
+                    relay_token = uuid.uuid4().hex[:12]
                     th["flags"]["awaiting_relay"] = True
+                    th["flags"]["relay_token"] = relay_token
                     th["flags"]["relay_question"] = relay_question
                     th["flags"]["relay_customer_email"] = from_email
                     th["flags"]["relay_reply_subject"] = "Re: " + subj
@@ -453,7 +463,7 @@ def main():
                     try:
                         smtp_send(
                             demo_support_email,
-                            f"[RELAY] {_ref} — {_cname}",
+                            f"[RELAY-{relay_token}] {_ref} — {_cname}",
                             _relay_alert,
                             reply_to=EMAIL_ADDR,
                         )

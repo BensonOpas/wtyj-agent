@@ -533,6 +533,10 @@ Brief 039 — Capacity-aware booking with soft holds
 Decision: Replace binary gws CLI availability check with SQLite capacity tracking. `trip_bookings` table added to state_registry. `check_availability()` is now pure SQLite — no gws call. Soft hold (24h TTL) created at booking summary time; confirmed on calendar event success; cancelled on failure or customer date change. `calendar_id` moved from trip level to departure level in client.json; `CALENDARS` and `DURATIONS_HOURS` dicts removed from gws_calendar.py. Klein Curaçao gains independent vessel-level capacity per departure. Jet ski expanded to 12 explicit hourly departures (08:00–19:00).
 Outcome: complete — 8/8 tests + schema checks pass
 
+Brief 042 — Operator email hardening: escalation guard + relay token auth
+Decision: Two fixes to email_poller.py only. (1) Escalation reply guard: inbound from demo_support_email with [ESCALATION] in subject is dropped immediately — escalation is one-way, no reply loop. (2) Relay token auth: replaced [RELAY] magic-string subject detection with [RELAY-<12-char-hex-token>] per relay. Token generated at relay alert send time (uuid.uuid4().hex[:12]), stored in th["flags"]["relay_token"], embedded in alert subject, extracted on reply via regex, matched against stored token for exact thread lookup. Eliminates booking_ref fallback, handles multiple concurrent relays, unforgeable without knowing the UUID.
+Outcome: complete — 5/5 tests pass
+
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
