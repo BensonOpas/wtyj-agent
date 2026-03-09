@@ -114,7 +114,7 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     auth_b64 = base64.b64encode(auth_string.encode("ascii")).decode("ascii")
 
     msg = MIMEMultipart()
-    msg["From"] = "Marina — BlueFinn Charters Curaçao <{}>".format(EMAIL_ADDR)
+    msg["From"] = "Marina <{}>".format(EMAIL_ADDR)
     msg["To"] = to_addr
     msg["Subject"] = subject
     if in_reply_to:
