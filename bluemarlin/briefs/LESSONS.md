@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 050 — Manifest foundation: tables + calendar functions
+**Date:** 2026-03-09
+
+Purely additive foundation brief — no existing behavior touched. Key design decision: manifest events are per-slot (trip_key + date + departure_time), not per-customer, so a separate `manifest_events` table with composite PK is the correct model rather than adding a column to `trip_bookings`. Adding `customer_name`/`customer_email` to the bookings table (rather than looking them up from thread state at manifest-build time) keeps the manifest builder self-contained. Brief reviewer caught a dead parameter (`booking_ref` in `create_or_update_manifest`) that would have caused confusion downstream — the function gets refs from SQLite via `get_slot_passengers()`, so passing it as a parameter was misleading.
+
+---
+
 ## Brief 049 — Fix format_sheets.py + apply formatting to new dashboard
 **Date:** 2026-03-09
 

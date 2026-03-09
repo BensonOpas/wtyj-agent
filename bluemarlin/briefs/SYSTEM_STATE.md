@@ -531,6 +531,16 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 050 — Manifest foundation: tables + calendar functions
+**Status:** Stable
+**Files modified:** `bluemarlin/src/state_registry.py`, `bluemarlin/src/gws_calendar.py`
+**What changed:** Added `manifest_events` SQLite table (PK: trip_key, date, departure_time) to track per-slot calendar events. Added `customer_name` and `customer_email` columns to `trip_bookings` (ALTER TABLE migration). Extended `create_soft_hold()` with optional `customer_name`/`customer_email` kwargs. Five new functions in state_registry: `set_booking_ref()`, `get_manifest_event()`, `save_manifest_event()`, `delete_manifest_event()`, `get_slot_passengers()`. Four new functions in gws_calendar: `_build_manifest_body()`, `create_or_update_manifest()`, `update_manifest()`, `remove_from_manifest()`. Old `create_hold()` untouched.
+**Callers must know:** New manifest functions are not yet wired into the booking flow — that happens in Brief 051. `create_soft_hold()` is backward compatible (new kwargs have defaults). `create_or_update_manifest()` reads passenger info from `state_registry.get_slot_passengers()` — caller must call `set_booking_ref()` before invoking if the ref should appear in the manifest.
+**Depends on:** `config_loader.py` (Brief 022), `state_registry.py` (Brief 039)
+**Tests:** 31/31 pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -589,6 +599,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 050 — Manifest foundation: tables + calendar functions
+Decision: Replace per-customer calendar events with manifest-style events (one per departure slot). This brief adds the foundation: manifest_events SQLite table, customer_name/customer_email in trip_bookings, and four new gws_calendar functions (create_or_update_manifest, update_manifest, remove_from_manifest, _build_manifest_body). Purely additive — no existing behavior changed. Wiring into booking flow deferred to Brief 051.
+Outcome: complete — 31/31 tests pass
 
 Brief 049 — Fix format_sheets.py + apply formatting to new dashboard
 Decision: format_sheets.py was broken since Brief 032 removed _get_service() and SPREADSHEET_ID from sheets_writer.py. Added local service init using google-api-python-client. Updated Bookings headers from 13 to 15 columns to match sheets_writer.log_hold_created(). Points to new sheet via config_loader.
