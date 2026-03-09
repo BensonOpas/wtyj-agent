@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 046
+# LAST MODIFIED: Brief 047
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -55,6 +55,11 @@ THREAD_STATE_PATH = os.path.join(_CONFIG_DIR, "email_thread_state.json")
 # Anti-loop: max replies per thread within window
 MAX_REPLIES_PER_THREAD = 10
 REPLY_WINDOW_SECONDS = 60 * 60
+
+# Intents that activate the Python booking validation and hold-creation flow.
+# "reschedule" is included because mid-thread date/time changes are booking
+# modifications that need the same validation (day-of-week, departure, summary).
+_BOOKING_INTENTS = {"booking", "reschedule"}
 
 # ========= HELPERS =========
 def _decode_subj(raw):
@@ -276,7 +281,7 @@ def _post_validate(th, result, trip):
     fields = th.get("fields", {})
     flags = th.get("flags", {})
 
-    if "booking" not in result.get("intents", []):
+    if not any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
         return None, False
     if not all(fields.get(k) for k in ("experience", "date", "guests", "trip_key")):
         return None, False
@@ -551,7 +556,7 @@ def main():
                 reply_text = result["reply"]
                 _pv_trip_key = th["fields"].get("trip_key", "")
                 _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
-                if "booking" in result.get("intents", []):
+                if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
                     _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_trip)
                     if _pv_override:
                         reply_text = _pv_override
@@ -722,7 +727,7 @@ def main():
                     continue
 
                 # Step 5: Booking flow
-                if "booking" in result.get("intents", []):
+                if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
                     fields_now = th["fields"]
                     if (fields_now.get("experience") and fields_now.get("date")
                             and fields_now.get("guests") and fields_now.get("trip_key")

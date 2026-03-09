@@ -504,6 +504,15 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 047 — Treat reschedule intent as booking-active in Python validation
+**Status:** Stable
+**Files modified:** `bluemarlin/src/email_poller.py`
+**What changed:** Added `_BOOKING_INTENTS = {"booking", "reschedule"}` constant. Widened three intent gates (`_post_validate`, Step 3a, Step 5) from `"booking" in intents` to `any(i in _BOOKING_INTENTS for i in intents)`. When Claude classifies a mid-thread date change as `reschedule`, Python's booking validation (day-of-week, departure time, summary generation) and hold-creation flow now trigger correctly.
+**Callers must know:** `_BOOKING_INTENTS` is the single source of truth for which intents activate the booking validation path. To add future booking-related intents, add to this set.
+**Tests:** 10/10 tests pass (+ 28/28 Brief 046 regression)
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -562,6 +571,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 047 — Treat reschedule intent as booking-active
+Decision: Widen intent gates in _post_validate, Step 3a, and Step 5 from "booking" to _BOOKING_INTENTS (booking + reschedule). Live Test 5 showed Claude classifying a mid-thread date change as reschedule, bypassing Python's validation entirely.
+Outcome: complete — 10/10 tests pass
 
 Brief 046 — Hybrid refactor: Python state machine + simplified Claude prompt
 Decision: Move all deterministic booking validation (day-of-week, departure time gating, summary generation, awaiting_booking_confirmation flag management) from the Claude prompt to Python. Claude's 62-line BOOKING CONFIRMATION BEHAVIOUR block replaced with 12-line BOOKING BEHAVIOUR section. Five new helper functions in email_poller.py. Python builds data-driven booking summaries, departure options, day-of-week errors, and slot-unavailable messages from client.json. Claude still handles field extraction, confirmation detection, child pricing detection, and conversational replies. action_context parameter added to process_message for Python-to-Claude state instructions.

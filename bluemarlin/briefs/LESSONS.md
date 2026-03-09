@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 047 — Treat reschedule intent as booking-active
+**Date:** 2026-03-09
+
+Live testing caught what unit tests couldn't: Claude classified a mid-thread date change as `reschedule` instead of `booking`, bypassing Python's entire validation path. The fix was a `_BOOKING_INTENTS` set that widens three intent gates. Key lesson: when Python gates on Claude's intent labels, always consider which other labels could appear for the same user action — the model's intent taxonomy and the code's routing assumptions must match.
+
+---
+
 ## Brief 046 — Hybrid refactor: Python state machine + simplified Claude prompt
 **Date:** 2026-03-08
 
