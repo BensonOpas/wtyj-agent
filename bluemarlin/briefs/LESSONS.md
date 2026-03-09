@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 048 — Human speech optimization: multi-topic fix + prompt hardening
+**Date:** 2026-03-09
+
+Three bugs from live testing, one architectural fix. The multi-topic issue (answers to side questions dropped when `_post_validate` overrides) was solved by appending overrides instead of replacing when non-booking intents are present. The date-clearing bug was deeper than expected: the brief reviewer caught that the field merge logic silently discards empty strings, so Claude's `date: ""` would never reach thread state — required a merge logic fix alongside the prompt instruction. Key lesson: when adding a new clearing mechanism, trace the value through every layer (extraction → merge → validation) to verify it survives.
+
+---
+
 ## Brief 047 — Treat reschedule intent as booking-active
 **Date:** 2026-03-09
 

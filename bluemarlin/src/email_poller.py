@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 047
+# LAST MODIFIED: Brief 048
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -241,7 +241,6 @@ def _build_booking_summary(fields, trip):
         date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
     except ValueError:
         date_fmt = date_str
-    signature = config_loader.get_agent_signature()
     return (
         f"Here's a quick summary of your booking:\n\n"
         f"  Trip: {trip_name}\n"
@@ -250,8 +249,7 @@ def _build_booking_summary(fields, trip):
         f"  Departure: {departure_time} from {dep_point} aboard {vessel}\n"
         f"  Total: ${total} USD ({guests} x ${price_adult})\n"
         f"  Included: {included}\n\n"
-        f"Shall I lock this in for you?\n\n"
-        f"Warm regards,\n{signature}"
+        f"Shall I lock this in for you?"
     )
 
 
@@ -296,13 +294,11 @@ def _post_validate(th, result, trip):
         day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A")
         days_avail = trip.get("days_available", "daily")
         if not _day_matches(day_name, days_avail):
-            signature = config_loader.get_agent_signature()
             return (
                 f"Great choice! Unfortunately, the {trip.get('display_name', fields['trip_key'])} "
                 f"doesn't run on {day_name}s — it runs {days_avail}. "
                 f"Would any of these dates work instead?\n\n"
-                f"{_suggest_dates(date, days_avail)}\n\n"
-                f"Warm regards,\n{signature}"
+                f"{_suggest_dates(date, days_avail)}"
             ), False
     except ValueError:
         pass
@@ -313,12 +309,10 @@ def _post_validate(th, result, trip):
             f"- {d['time']} aboard {d.get('vessel', '?')} from {d.get('departure_point', '?')}"
             for d in departures
         )
-        signature = config_loader.get_agent_signature()
         return (
             f"Almost there! The {trip.get('display_name', fields['trip_key'])} has "
             f"a couple of departure options:\n\n{dep_lines}\n\n"
-            f"Which one works best for you?\n\n"
-            f"Warm regards,\n{signature}"
+            f"Which one works best for you?"
         ), False
 
     # 3. Child pricing — Claude sets needs_child_ages flag
@@ -532,6 +526,9 @@ def main():
                 for k, v in new_fields.items():
                     if v is not None and v != "":
                         th["fields"][k] = v
+                    elif v == "" and k in th["fields"]:
+                        # Intentional clear — Claude returned empty string for existing field
+                        del th["fields"][k]
 
                 # Step 3: Persist flags — Python manages awaiting_booking_confirmation (set only)
                 th.setdefault("flags", {})
@@ -559,7 +556,15 @@ def main():
                 if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
                     _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_trip)
                     if _pv_override:
-                        reply_text = _pv_override
+                        _intents = result.get("intents", [])
+                        _has_side_topics = any(i not in _BOOKING_INTENTS for i in _intents)
+                        if _has_side_topics:
+                            # Preserve Claude's answers to non-booking questions
+                            reply_text = result["reply"].rstrip() + "\n\n" + _pv_override
+                        else:
+                            # Booking-only: use override with signature
+                            _sig = config_loader.get_agent_signature()
+                            reply_text = _pv_override + f"\n\nWarm regards,\n{_sig}"
                         if _pv_set_awaiting:
                             th["flags"]["awaiting_booking_confirmation"] = True
 

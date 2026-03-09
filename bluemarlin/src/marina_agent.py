@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 046
+# LAST MODIFIED: Brief 048
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -124,6 +124,11 @@ If you receive an ACTION instruction below, follow it exactly.
 When no ACTION is given, reply naturally — ask for any missing required fields
 (experience, date, guests) in a warm conversational way.
 
+When the customer asks non-booking questions alongside a booking request
+(e.g. "book X for 2 on March 28, also is there food?"), answer those
+questions in your reply. Python may append booking-specific information
+(summaries, departure options, date corrections) after your reply.
+
 If the customer mentions children and the trip has age-based pricing (shown in
 TRIPS data above), ask for their ages in your reply and set needs_child_ages
 to true in your flags.
@@ -191,7 +196,13 @@ The JSON must have exactly these fields:
       ask for a specific date in clarifications_needed. Never infer,
       guess, or pick a date the customer has not explicitly stated or
       clearly implied. When in doubt, ask.
-    guests: exact integer only
+      If the customer explicitly rejects or cancels a previously stated date
+      (e.g. "nvm the 28th", "not that date", "change the date"), you MUST
+      set date to "" (empty string) so the old date is cleared. Then ask
+      for a specific new date in clarifications_needed.
+    guests: exact integer ONLY when the customer explicitly states a number.
+      "We", "us", "our family" without a number does NOT count — omit this
+      field entirely. Never infer a guest count from context or business rules.
     customer_name: customer's name
     phone: customer's phone number
     special_requests: forward-looking preferences only

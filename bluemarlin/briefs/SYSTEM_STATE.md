@@ -513,6 +513,15 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 048 — Human speech optimization: multi-topic fix + prompt hardening
+**Status:** Stable
+**Files modified:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/marina_agent.py`
+**What changed:** (1) `_post_validate` override messages no longer include signatures. Step 3a now appends overrides to Claude's reply when non-booking intents are present (preserving answers to side questions), or replaces with signature when booking-only. (2) Field merge logic now handles intentional clears: `date: ""` from Claude deletes the existing date field instead of being silently skipped. (3) Prompt hardened: guests field requires explicitly stated number ("We" doesn't count); date-clearing instruction for rejected dates; multi-topic guidance tells Claude to answer non-booking questions in its reply.
+**Callers must know:** `_post_validate` and `_build_booking_summary` return messages WITHOUT signatures. Step 3a handles signature addition. Field merge now treats `""` as intentional clear for existing fields.
+**Tests:** 19/19 tests pass (+ 28/28 Brief 046, 10/10 Brief 047)
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -571,6 +580,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 048 — Human speech optimization: multi-topic fix + prompt hardening
+Decision: Three fixes from live testing. (1) Append _post_validate overrides to Claude's reply when non-booking intents present — preserves answers to side questions. (2) Field merge handles empty-string clears so date rejection works. (3) Prompt hardened against guest hallucination and vague date changes.
+Outcome: complete — 19/19 tests pass
 
 Brief 047 — Treat reschedule intent as booking-active
 Decision: Widen intent gates in _post_validate, Step 3a, and Step 5 from "booking" to _BOOKING_INTENTS (booking + reschedule). Live Test 5 showed Claude classifying a mid-thread date change as reschedule, bypassing Python's validation entirely.
