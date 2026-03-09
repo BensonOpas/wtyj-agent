@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 049 — Fix format_sheets.py + apply formatting to new dashboard
+**Date:** 2026-03-09
+
+Straightforward broken-import fix. `format_sheets.py` has been silently broken since Brief 032 removed `_get_service()` and `SPREADSHEET_ID` from `sheets_writer.py`. Key lesson: when a refactor removes symbols from a module, grep for all importers — `format_sheets.py` was a run-once script that nobody noticed was broken because it's never called by the poller. Also caught stale Bookings headers (13 cols vs 15 actually written) — always cross-check formatter headers against writer row structures after column layout changes.
+
+---
+
 ## Brief 048 — Human speech optimization: multi-topic fix + prompt hardening
 **Date:** 2026-03-09
 

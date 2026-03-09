@@ -1,20 +1,46 @@
 #!/usr/bin/env python3
 # FILE: format_sheets.py
 # CREATED: Brief 014
-# LAST MODIFIED: Brief 040
-# DEPENDS ON: sheets_writer.py (KEY_PATH, SPREADSHEET_ID, _get_service)
+# LAST MODIFIED: Brief 049
+# DEPENDS ON: config/bluemarlin-calendar-key.json, config_loader.py
 # RUN ONCE: python3 bluemarlin/src/format_sheets.py
 # PURPOSE: Apply BlueMarlin color palette to Operations Dashboard
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sheets_writer import KEY_PATH, SPREADSHEET_ID, _get_service
+import config_loader
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+KEY_PATH = os.path.normpath(os.path.join(_SRC_DIR, '..', 'config', 'bluemarlin-calendar-key.json'))
+_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+
+def _get_spreadsheet_id() -> str:
+    try:
+        sid = config_loader.get_business().get('spreadsheet_id', '')
+        if sid:
+            return sid
+    except Exception:
+        pass
+    return os.environ.get('SPREADSHEET_ID', '')
+
+
+def _get_service():
+    try:
+        creds = Credentials.from_service_account_file(KEY_PATH, scopes=_SCOPES)
+        return build('sheets', 'v4', credentials=creds)
+    except Exception as e:
+        print(f"format_sheets: service init error: {e}")
+        return None
 
 BOOKINGS_HEADERS = [
-    'Timestamp', 'Customer Name', 'Email', 'Experience',
-    'Date', 'Guests', 'Phone', 'Special Requests',
-    'Hold Status', 'Event Link', 'Payment Link', 'Error',
-    'Operator Notes'
+    'Timestamp', 'Booking Ref', 'Customer Name', 'Email', 'Experience',
+    'Trip Key', 'Date', 'Guests', 'Departure Time', 'Phone',
+    'Special Requests', 'Total Price', 'Payment Status', 'Event Link',
+    'Payment Link'
 ]
 COMPLAINTS_HEADERS = [
     'Timestamp', 'Email', 'Subject', 'Message Preview',
@@ -24,7 +50,7 @@ ALL_EVENTS_HEADERS = [
     'Timestamp', 'Event Type', 'Email', 'Subject', 'Details'
 ]
 
-BOOKINGS_WIDTHS =    [180, 150, 200, 180, 110, 80, 130, 250, 110, 200, 200, 200, 250]
+BOOKINGS_WIDTHS =    [180, 130, 150, 220, 160, 140, 110, 80, 120, 130, 220, 100, 120, 220, 220]
 COMPLAINTS_WIDTHS =  [180, 200, 200, 300, 110, 250]
 ALL_EVENTS_WIDTHS =  [180, 150, 200, 200, 400]
 ESCALATIONS_HEADERS = [
@@ -235,7 +261,11 @@ def main():
             return
 
         # Step 1 — get sheet metadata: sheetId, column count, banded ranges per tab
-        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        spreadsheet_id = _get_spreadsheet_id()
+        if not spreadsheet_id:
+            print("format_sheets: no spreadsheet ID found — check client.json or SPREADSHEET_ID env")
+            return
+        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         sheet_meta = {
             s['properties']['title']: s
             for s in meta['sheets']
@@ -261,7 +291,7 @@ def main():
             # Write header row
             try:
                 service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID,
+                    spreadsheetId=spreadsheet_id,
                     range=f"'{tab_name}'!A1",
                     valueInputOption="RAW",
                     body={"values": [headers]}
@@ -277,7 +307,7 @@ def main():
                     column_count=column_count
                 )
                 service.spreadsheets().batchUpdate(
-                    spreadsheetId=SPREADSHEET_ID,
+                    spreadsheetId=spreadsheet_id,
                     body={"requests": requests}
                 ).execute()
             except Exception as e:
@@ -286,7 +316,7 @@ def main():
             # Second batchUpdate — cap data row height at 80px max
             try:
                 service.spreadsheets().batchUpdate(
-                    spreadsheetId=SPREADSHEET_ID,
+                    spreadsheetId=spreadsheet_id,
                     body={"requests": [{
                         "updateDimensionProperties": {
                             "range": {

@@ -522,6 +522,15 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 049 — Fix format_sheets.py + apply formatting to new dashboard
+**Status:** Stable
+**Files modified:** `bluemarlin/src/format_sheets.py`
+**What changed:** Fixed broken imports — `_get_service()` and `SPREADSHEET_ID` were removed from `sheets_writer.py` in Brief 032 but format_sheets still imported them. Added local service initialization using `google-api-python-client` directly. Updated `BOOKINGS_HEADERS` from 13 columns to 15 to match actual data written by `sheets_writer.log_hold_created()` (added Booking Ref, Trip Key, Departure Time, Total Price, Payment Status). Spreadsheet ID resolved via `config_loader.get_business()` — points to new sheet (`1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I`), not the banned old sheet.
+**Depends on:** `config_loader.py` (Brief 022), `config/bluemarlin-calendar-key.json`
+**Tests:** 20/20 pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -580,6 +589,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 049 — Fix format_sheets.py + apply formatting to new dashboard
+Decision: format_sheets.py was broken since Brief 032 removed _get_service() and SPREADSHEET_ID from sheets_writer.py. Added local service init using google-api-python-client. Updated Bookings headers from 13 to 15 columns to match sheets_writer.log_hold_created(). Points to new sheet via config_loader.
+Outcome: complete — 20/20 tests pass
 
 Brief 048 — Human speech optimization: multi-topic fix + prompt hardening
 Decision: Three fixes from live testing. (1) Append _post_validate overrides to Claude's reply when non-booking intents present — preserves answers to side questions. (2) Field merge handles empty-string clears so date rejection works. (3) Prompt hardened against guest hallucination and vague date changes.
