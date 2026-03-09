@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 051
+# LAST MODIFIED: Brief 052
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -855,6 +855,30 @@ def main():
                                 "html_link": th["flags"].get("event_link"),
                                 "payment_link": th["flags"].get("payment_link"),
                                 "payment_status": pay.get("status"),
+                            })
+                            # Log manifest summary to Sheets
+                            _manifest_trip_key = fields_now.get("trip_key", "")
+                            _manifest_passengers = state_registry.get_slot_passengers(
+                                _manifest_trip_key,
+                                fields_now.get("date", ""),
+                                fields_now.get("departure_time", ""),
+                            )
+                            _manifest_confirmed = sum(1 for p in _manifest_passengers if p["status"] == "confirmed")
+                            _manifest_pending = sum(1 for p in _manifest_passengers if p["status"] == "soft_hold")
+                            _manifest_total_guests = sum(p["guests"] for p in _manifest_passengers)
+                            _manifest_total_revenue = _manifest_total_guests * price_usd
+                            _manifest_capacity = config_loader.get_trip(_manifest_trip_key).get("capacity", 20)
+                            sheets_writer.log_manifest_update({
+                                "trip_key": _manifest_trip_key,
+                                "date": fields_now.get("date", ""),
+                                "departure_time": fields_now.get("departure_time", ""),
+                                "total_guests": _manifest_total_guests,
+                                "capacity": _manifest_capacity,
+                                "confirmed_count": _manifest_confirmed,
+                                "pending_count": _manifest_pending,
+                                "total_revenue": _manifest_total_revenue,
+                                "calendar_link": th["flags"].get("event_link", ""),
+                                "booking_ref": booking_ref,
                             })
                             log(f"Manifest CREATED/UPDATED for {from_email}: eventId={res.get('eventId')}")
 

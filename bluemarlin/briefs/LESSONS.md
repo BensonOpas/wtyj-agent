@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 052 — Sheets: Manifests summary tab
+**Date:** 2026-03-09
+
+Low-risk additive brief — new function, new tab config, one call site. Brief reviewer caught three issues before execution: (1) revenue approximation was undocumented — always state known limitations explicitly in the brief's "Why" section; (2) tests were all structural (string presence checks) with no behavioral assertions — monkey-patching `_append` to capture the row and asserting specific values was the right pattern; (3) the Manifests tab manual creation requirement was missing — follow the same documentation pattern as existing manual-setup requirements (Escalations tab).
+
+---
+
 ## Brief 051 — Integration: rewire booking flow + payment fix
 **Date:** 2026-03-09
 

@@ -1,6 +1,6 @@
 # FILE: sheets_writer.py
 # CREATED: Brief 013
-# LAST MODIFIED: Brief 040
+# LAST MODIFIED: Brief 052
 # DEPENDS ON: config/bluemarlin-calendar-key.json
 # IMPORTS FROM: config_loader.py (Brief 022)
 # CALLERS: email_poller.py
@@ -120,6 +120,27 @@ def log_hold_failed(data: dict):
         _append('All Events', row_all)
     except Exception as e:
         print(f"sheets_writer: log_hold_failed error: {e}")
+
+
+def log_manifest_update(data: dict):
+    """Log a manifest summary row to the Manifests tab."""
+    try:
+        row = [
+            _now(),
+            data.get('trip_key', ''),
+            data.get('date', ''),
+            data.get('departure_time', ''),
+            str(data.get('total_guests', '')),
+            str(data.get('capacity', '')),
+            str(data.get('confirmed_count', '')),
+            str(data.get('pending_count', '')),
+            f"${data.get('total_revenue', 0):,} USD",
+            data.get('calendar_link', ''),
+            data.get('booking_ref', ''),
+        ]
+        _append('Manifests', row)
+    except Exception as e:
+        print(f"sheets_writer: log_manifest_update error: {e}")
 
 
 def log_escalation(data: dict):

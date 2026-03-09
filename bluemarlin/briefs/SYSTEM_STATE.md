@@ -541,6 +541,16 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 052 — Sheets: Manifests summary tab
+**Status:** Stable
+**Files modified:** `bluemarlin/src/sheets_writer.py`, `bluemarlin/src/format_sheets.py`, `bluemarlin/src/email_poller.py`
+**What changed:** New `log_manifest_update()` function in sheets_writer.py appends an 11-column manifest summary row to the Manifests tab after each successful booking. format_sheets.py gains `MANIFESTS_HEADERS`, `MANIFESTS_WIDTHS`, and a Manifests entry in the `TABS` list. email_poller.py Step 5 success path calls `state_registry.get_slot_passengers()` to compute aggregated counts, then calls `sheets_writer.log_manifest_update()`.
+**Callers must know:** Revenue is an approximation (`total_guests * price_adult_usd`). The "Manifests" tab must be created manually in Google Sheets before the first booking is logged.
+**Depends on:** Brief 051 (manifest integration)
+**Tests:** 28/28 pass
+
+---
+
 ## Brief 051 — Integration: rewire booking flow + payment fix
 **Status:** Stable
 **Files modified:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/payment_stub.py`
@@ -609,6 +619,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 052 — Sheets: Manifests summary tab
+Decision: Add Manifests tab to Google Sheets dashboard. New `log_manifest_update()` in sheets_writer.py appends an 11-column summary row (trip, date, departure, guests, capacity, confirmed/pending counts, revenue, calendar link, booking ref) after each successful manifest creation. format_sheets.py gains MANIFESTS_HEADERS/WIDTHS + TABS entry. Revenue is an approximation (total_guests * price_adult_usd — child pricing not tracked per-booking). Manifests tab must be created manually in Google Sheets before first use.
+Outcome: complete — 28/28 tests pass
 
 Brief 051 — Integration: rewire booking flow + payment fix
 Decision: Rewire email_poller.py Step 5 to use create_or_update_manifest instead of create_hold. Generate booking_ref before manifest creation so it appears in the manifest description. Switch payment_stub from event_id to booking_ref to prevent collisions. Add remove_from_manifest at all 3 cancel sites. Brief reviewer caught 3 bugs in initial Step 5 failure path: hold_id not popped, slot_checked/slot_available not reset, confirm_hold before manifest success — all fixed before execution.

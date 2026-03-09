@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: format_sheets.py
 # CREATED: Brief 014
-# LAST MODIFIED: Brief 049
+# LAST MODIFIED: Brief 052
 # DEPENDS ON: config/bluemarlin-calendar-key.json, config_loader.py
 # RUN ONCE: python3 bluemarlin/src/format_sheets.py
 # PURPOSE: Apply BlueMarlin color palette to Operations Dashboard
@@ -58,12 +58,19 @@ ESCALATIONS_HEADERS = [
     'Fields Collected', 'Internal Note', 'Chat Log'
 ]
 ESCALATIONS_WIDTHS = [180, 150, 200, 110, 250, 250, 400]
+MANIFESTS_HEADERS = [
+    'Timestamp', 'Trip', 'Date', 'Departure', 'Total Guests',
+    'Capacity', 'Confirmed', 'Pending', 'Revenue', 'Calendar Link',
+    'Last Booking Ref'
+]
+MANIFESTS_WIDTHS = [180, 160, 110, 100, 100, 80, 90, 80, 130, 220, 130]
 
 TABS = [
     {'name': 'Bookings',     'headers': BOOKINGS_HEADERS,     'widths': BOOKINGS_WIDTHS},
     {'name': 'Complaints',   'headers': COMPLAINTS_HEADERS,   'widths': COMPLAINTS_WIDTHS},
     {'name': 'All Events',   'headers': ALL_EVENTS_HEADERS,   'widths': ALL_EVENTS_WIDTHS},
     {'name': 'Escalations',  'headers': ESCALATIONS_HEADERS,  'widths': ESCALATIONS_WIDTHS},
+    {'name': 'Manifests',    'headers': MANIFESTS_HEADERS,    'widths': MANIFESTS_WIDTHS},
 ]
 
 
