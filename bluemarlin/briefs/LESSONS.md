@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 043 — Fix relay detection + poisoned relay bug
+**Date:** 2026-03-09
+
+Two root causes for relay failure: (1) Python's legacy `email` module does NOT auto-decode RFC 2047 headers — `msg.get("Subject")` returns raw `=?utf-8?q?...?=` strings, not decoded text. Gmail encodes reply subjects even when the original was ASCII. Always decode headers before string matching. (2) Thread flags passed to marina_agent must be filtered per-context — relay flags like `awaiting_relay` are meaningful only when the relay handler is processing an actual relay reply, not when a customer sends a follow-up on the same thread. The RELAY MODE prompt injection fired for customer messages, garbling the reply.
+
+---
+
 ## Brief 042 — Operator email hardening
 **Date:** 2026-03-08
 

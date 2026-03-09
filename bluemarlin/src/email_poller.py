@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 042
+# LAST MODIFIED: Brief 043
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -19,6 +19,7 @@ import bm_logger
 import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid
 from datetime import datetime, timezone
 from email.utils import parseaddr
+from email.header import decode_header as _decode_header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib, base64
@@ -56,6 +57,15 @@ MAX_REPLIES_PER_THREAD = 10
 REPLY_WINDOW_SECONDS = 60 * 60
 
 # ========= HELPERS =========
+def _decode_subj(raw):
+    parts = []
+    for data, charset in _decode_header(raw or ""):
+        if isinstance(data, bytes):
+            parts.append(data.decode(charset or "utf-8", errors="ignore"))
+        else:
+            parts.append(data)
+    return "".join(parts)
+
 def log(msg):
     print(msg, flush=True)
 
@@ -210,7 +220,7 @@ def main():
                 msg = email.message_from_bytes(raw)
 
                 from_name, from_email = parseaddr(msg.get("From", ""))
-                subj = msg.get("Subject", "") or ""
+                subj = _decode_subj(msg.get("Subject", ""))
                 body_raw = extract_text(msg)
                 body = strip_quotes(body_raw)
 
@@ -345,9 +355,13 @@ def main():
 
                 # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
                 if th["flags"].get("fully_escalated"):
+                    _esc_flags = dict(th.get("flags", {}))
+                    for _rk in ("awaiting_relay", "relay_token", "relay_question",
+                                "relay_customer_email", "relay_reply_subject"):
+                        _esc_flags.pop(_rk, None)
                     result = marina_agent.process_message(
                         from_email, subj, body,
-                        th.get("fields", {}), th.get("flags", {})
+                        th.get("fields", {}), _esc_flags
                     )
                     smtp_send(from_email, "Re: " + subj, result["reply"],
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
@@ -365,9 +379,13 @@ def main():
                     continue
 
                 # Step 1: Call marina_agent (single Claude call per message)
+                agent_flags = dict(th.get("flags", {}))
+                for _rk in ("awaiting_relay", "relay_token", "relay_question",
+                            "relay_customer_email", "relay_reply_subject"):
+                    agent_flags.pop(_rk, None)
                 result = marina_agent.process_message(
                     from_email, subj, body,
-                    th.get("fields", {}), th.get("flags", {})
+                    th.get("fields", {}), agent_flags,
                 )
 
                 # Step 2: Merge fields (existing non-empty values are not overwritten)
