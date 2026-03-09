@@ -463,7 +463,7 @@ def main():
                     try:
                         smtp_send(
                             demo_support_email,
-                            f"[RELAY-{relay_token}] {_ref} — {_cname}",
+                            f"[RELAY-{relay_token}] {_ref} - {_cname}",
                             _relay_alert,
                             reply_to=EMAIL_ADDR,
                         )
@@ -520,7 +520,7 @@ def main():
                     try:
                         smtp_send(
                             demo_support_email,
-                            f"[ESCALATION] {booking_ref_esc} — {customer_name_esc} — {intents_str}",
+                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} - {intents_str}",
                             escalation_alert,
                         )
                         log(f"Escalation alert sent to {demo_support_email} for {from_email}")
