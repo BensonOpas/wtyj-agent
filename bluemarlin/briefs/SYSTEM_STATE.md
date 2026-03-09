@@ -533,6 +533,10 @@ Brief 039 — Capacity-aware booking with soft holds
 Decision: Replace binary gws CLI availability check with SQLite capacity tracking. `trip_bookings` table added to state_registry. `check_availability()` is now pure SQLite — no gws call. Soft hold (24h TTL) created at booking summary time; confirmed on calendar event success; cancelled on failure or customer date change. `calendar_id` moved from trip level to departure level in client.json; `CALENDARS` and `DURATIONS_HOURS` dicts removed from gws_calendar.py. Klein Curaçao gains independent vessel-level capacity per departure. Jet ski expanded to 12 explicit hourly departures (08:00–19:00).
 Outcome: complete — 8/8 tests + schema checks pass
 
+Brief 045 — Slot-unavailable alternative = change, not confirmation + [PAYMENT_LINK] safety net
+Decision: Two fixes. (1) Prompt addition in marina_agent.py: new bullet in the awaiting_booking_confirmation handler — when a slot was unavailable and Marina offered alternatives, the customer picking one is a CHANGE, not a confirmation. Must update fields, reset awaiting_booking_confirmation, re-run FIRST/SECOND/THIRD checks, send new summary. Must NOT set booking_confirmed. (2) Safety net in email_poller.py: strip literal `[PAYMENT_LINK]` from reply_text before booking smtp_send — ensures the placeholder never reaches a customer.
+Outcome: complete — 6/6 tests pass
+
 Brief 044 — Departure time before booking summary for multi-departure trips
 Decision: Prompt-only fix in marina_agent.py. Replaced "departure_time is NOT a required field" instruction with a THIRD pre-summary check: for trips with multiple departures (klein_curacao, jet_ski), ask for departure_time BEFORE sending the booking summary and do NOT set awaiting_booking_confirmation until resolved. For single-departure trips (snorkeling_3in1, west_coast_beach, sunset_cruise), auto-select — no question needed. Also updated mid-confirmation re-run instruction to include THIRD check.
 Outcome: complete — 8/8 tests pass

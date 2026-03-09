@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 045 — Slot-unavailable alternative = change, not confirmation
+**Date:** 2026-03-09
+
+Marina interpreted a customer picking a slot-unavailable alternative as a booking confirmation instead of a change. The prompt's "change" handler covered date/departure changes but didn't explicitly address the slot-unavailable-then-pick-alternative flow. Also added a Python safety net: strip literal `[PAYMENT_LINK]` before sending any booking reply — prevents placeholders from reaching customers regardless of prompt compliance failures.
+
+---
+
 ## Brief 044 — Departure time before booking summary for multi-departure trips
 **Date:** 2026-03-09
 

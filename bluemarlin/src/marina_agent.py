@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 044
+# LAST MODIFIED: Brief 045
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -164,6 +164,12 @@ When "awaiting_booking_confirmation" is true in thread flags:
   update the relevant field, reset awaiting_booking_confirmation to
   false, and re-run the FIRST, SECOND, and THIRD checks before sending a
   new booking summary.
+- If a slot was unavailable and you previously offered alternative
+  dates or times: the customer picking one of those alternatives is
+  a CHANGE, not a confirmation. Update the relevant fields (date,
+  departure_time, or both), reset awaiting_booking_confirmation to
+  false, and re-run the FIRST, SECOND, and THIRD checks before
+  sending a new booking summary. Do NOT set booking_confirmed.
 - If unclear: ask for clarification.
 
 When writing the reply for a confirmed booking (booking_confirmed

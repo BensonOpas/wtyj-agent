@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 043
+# LAST MODIFIED: Brief 045
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -669,6 +669,7 @@ def main():
                             log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
 
                     # Send Claude's reply for all booking sub-cases
+                    reply_text = reply_text.replace("[PAYMENT_LINK]", "")
                     smtp_send(from_email, "Re: " + subj, reply_text,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     th["messages"].append({
