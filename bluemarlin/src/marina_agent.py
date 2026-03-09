@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 041
+# LAST MODIFIED: Brief 044
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -133,12 +133,16 @@ thread flags, do NOT assume the booking is confirmed. Instead:
   for unspecified ages — the total price must be correct before the
   customer confirms. If ages are known (e.g. customer stated them),
   price correctly and proceed.
+- THIRD: check the trip's departures array in TRIPS above. If the
+  trip has more than one departure option and the customer has not
+  yet chosen a departure_time, ask which departure they prefer
+  BEFORE sending the booking summary. Do NOT set
+  awaiting_booking_confirmation until departure_time is resolved.
+  If the trip has only one departure option, auto-select it and
+  include it in the summary — do not ask the customer.
 - Send a warm booking summary to the customer listing: trip name,
-  date, number of guests, departure time (if chosen), total price,
+  date, number of guests, departure time, total price,
   what is included.
-- departure_time is NOT a required field. Do not wait for it before
-  sending the summary. If not yet chosen, you may ask in the same
-  message, but still send the summary and set the confirmation flag.
 - End the summary with a single clear confirmation question:
   "Shall I lock this in for you?"
 - In your JSON response, the "flags" field MUST contain:
@@ -158,7 +162,7 @@ When "awaiting_booking_confirmation" is true in thread flags:
   tell the customer which days the trip runs and suggest the nearest
   valid dates. If the new date is valid (or no date was changed),
   update the relevant field, reset awaiting_booking_confirmation to
-  false, and re-run the FIRST and SECOND checks before sending a
+  false, and re-run the FIRST, SECOND, and THIRD checks before sending a
   new booking summary.
 - If unclear: ask for clarification.
 

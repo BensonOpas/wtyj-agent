@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 044 — Departure time before booking summary for multi-departure trips
+**Date:** 2026-03-09
+
+Marina sent a full booking summary (with `[PAYMENT_LINK]` and confirmation flag) while simultaneously asking for departure time on a multi-departure trip. The prompt explicitly told her departure_time was optional before the summary. Fix: add a THIRD pre-summary check that gates on departure_time for multi-departure trips and auto-selects for single-departure trips. Brief reviewer correctly caught that the mid-confirmation re-run instruction also needed updating to include the new THIRD check — same class of gap that created the original bug.
+
+---
+
 ## Brief 043 — Fix relay detection + poisoned relay bug
 **Date:** 2026-03-09
 
