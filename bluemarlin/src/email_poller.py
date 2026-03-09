@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 045
+# LAST MODIFIED: Brief 046
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -194,6 +194,137 @@ def resolve_thread_key(msg, from_email: str, subject: str, mid_index: dict) -> s
     )
 
 
+# ========= BOOKING VALIDATION HELPERS =========
+def _day_matches(day_name, days_available):
+    """Check if day_name matches the trip's days_available string."""
+    if days_available.lower() == "daily":
+        return True
+    return day_name.lower() in days_available.lower()
+
+
+def _suggest_dates(date_str, days_available):
+    """Suggest 2-3 nearby valid dates."""
+    from datetime import timedelta as _td
+    base = datetime.strptime(date_str, "%Y-%m-%d")
+    suggestions = []
+    for offset in range(1, 14):
+        candidate = base + _td(days=offset)
+        if _day_matches(candidate.strftime("%A"), days_available):
+            suggestions.append(f"- {candidate.strftime('%A, %d %B %Y')}")
+            if len(suggestions) >= 3:
+                break
+    return "\n".join(suggestions) if suggestions else "Please suggest another date!"
+
+
+def _build_booking_summary(fields, trip):
+    """Build a data-driven booking summary from fields and trip config."""
+    trip_name = trip.get("display_name", fields.get("trip_key", ""))
+    date_str = fields.get("date", "")
+    guests = int(fields.get("guests") or 1)
+    departure_time = fields.get("departure_time", "")
+    departures = trip.get("departures", [])
+    dep_info = next((d for d in departures if d.get("time") == departure_time), None)
+    if not dep_info and departures:
+        dep_info = departures[0]
+        departure_time = dep_info.get("time", "")
+    vessel = dep_info.get("vessel", "") if dep_info else ""
+    dep_point = dep_info.get("departure_point", "") if dep_info else ""
+    price_adult = trip.get("price_adult_usd", 0)
+    total = price_adult * guests
+    included = ", ".join(trip.get("included", [])) or "see trip details"
+    try:
+        date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
+    except ValueError:
+        date_fmt = date_str
+    signature = config_loader.get_agent_signature()
+    return (
+        f"Here's a quick summary of your booking:\n\n"
+        f"  Trip: {trip_name}\n"
+        f"  Date: {date_fmt}\n"
+        f"  Guests: {guests}\n"
+        f"  Departure: {departure_time} from {dep_point} aboard {vessel}\n"
+        f"  Total: ${total} USD ({guests} x ${price_adult})\n"
+        f"  Included: {included}\n\n"
+        f"Shall I lock this in for you?\n\n"
+        f"Warm regards,\n{signature}"
+    )
+
+
+def _build_action_context(th):
+    """Build action_context string for the Claude prompt based on thread state."""
+    flags = th.get("flags", {})
+    if flags.get("awaiting_booking_confirmation"):
+        return (
+            "ACTION: A booking summary was sent. The customer is replying. "
+            "Determine if they are: (a) confirming — set booking_confirmed: true, "
+            "awaiting_booking_confirmation: false, write a warm celebratory reply "
+            "with the exact string [PAYMENT_LINK] where the payment link goes. "
+            "Also write reply_hold_failed — an apologetic message if the slot turns "
+            "out to be unavailable, without [PAYMENT_LINK]; "
+            "(b) changing something — extract new fields, set "
+            "awaiting_booking_confirmation: false; (c) unclear — ask "
+            "for clarification. Do NOT generate a new booking summary."
+        )
+    return ""
+
+
+def _post_validate(th, result, trip):
+    """
+    Validate extracted fields after Claude call.
+    Returns (reply_override, should_set_awaiting).
+    """
+    fields = th.get("fields", {})
+    flags = th.get("flags", {})
+
+    if "booking" not in result.get("intents", []):
+        return None, False
+    if not all(fields.get(k) for k in ("experience", "date", "guests", "trip_key")):
+        return None, False
+    if flags.get("awaiting_booking_confirmation") or flags.get("booking_confirmed"):
+        return None, False
+
+    date = fields["date"]
+    departures = trip.get("departures", [])
+
+    # 1. Day-of-week check
+    try:
+        day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A")
+        days_avail = trip.get("days_available", "daily")
+        if not _day_matches(day_name, days_avail):
+            signature = config_loader.get_agent_signature()
+            return (
+                f"Great choice! Unfortunately, the {trip.get('display_name', fields['trip_key'])} "
+                f"doesn't run on {day_name}s — it runs {days_avail}. "
+                f"Would any of these dates work instead?\n\n"
+                f"{_suggest_dates(date, days_avail)}\n\n"
+                f"Warm regards,\n{signature}"
+            ), False
+    except ValueError:
+        pass
+
+    # 2. Departure time check (multi-departure trips only)
+    if len(departures) > 1 and not fields.get("departure_time"):
+        dep_lines = "\n".join(
+            f"- {d['time']} aboard {d.get('vessel', '?')} from {d.get('departure_point', '?')}"
+            for d in departures
+        )
+        signature = config_loader.get_agent_signature()
+        return (
+            f"Almost there! The {trip.get('display_name', fields['trip_key'])} has "
+            f"a couple of departure options:\n\n{dep_lines}\n\n"
+            f"Which one works best for you?\n\n"
+            f"Warm regards,\n{signature}"
+        ), False
+
+    # 3. Child pricing — Claude sets needs_child_ages flag
+    if result.get("flags", {}).get("needs_child_ages"):
+        return None, False
+
+    # 4. All checks pass — build data-driven summary
+    summary = _build_booking_summary(fields, trip)
+    return summary, True
+
+
 # ========= MAIN LOOP =========
 def main():
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
@@ -378,32 +509,33 @@ def main():
                     log(f"Fully escalated: holding reply sent to {from_email}")
                     continue
 
-                # Step 1: Call marina_agent (single Claude call per message)
+                # Step 1: Build action context + call marina_agent (single Claude call per message)
                 agent_flags = dict(th.get("flags", {}))
                 for _rk in ("awaiting_relay", "relay_token", "relay_question",
                             "relay_customer_email", "relay_reply_subject"):
                     agent_flags.pop(_rk, None)
+                action_context = _build_action_context(th)
                 result = marina_agent.process_message(
                     from_email, subj, body,
-                    th.get("fields", {}), agent_flags,
+                    th.get("fields", {}), agent_flags, action_context,
                 )
 
-                # Step 2: Merge fields (existing non-empty values are not overwritten)
+                # Step 2: Merge fields — always overwrite when Claude returns non-empty values
                 th.setdefault("fields", {})
                 new_fields = result.get("fields", {}) or {}
+                new_flags = result.get("flags", {}) or {}
                 for k, v in new_fields.items():
                     if v is not None and v != "":
-                        if not th["fields"].get(k):
-                            th["fields"][k] = v
+                        th["fields"][k] = v
 
-                _was_awaiting = th["flags"].get("awaiting_booking_confirmation", False)
-                # Step 3: Persist flags
+                # Step 3: Persist flags — Python manages awaiting_booking_confirmation (set only)
                 th.setdefault("flags", {})
-                new_flags = result.get("flags", {}) or {}
+                _was_awaiting = th["flags"].get("awaiting_booking_confirmation", False)
+                if new_flags.get("awaiting_booking_confirmation"):
+                    new_flags.pop("awaiting_booking_confirmation")
                 th["flags"].update(new_flags)
 
-                # If awaiting_booking_confirmation cleared without booking_confirmed being set,
-                # the customer changed something — cancel old soft hold and reset slot check
+                # Change detection: cancel soft hold if customer changed booking details
                 if _was_awaiting and not th["flags"].get("awaiting_booking_confirmation") \
                         and not th["flags"].get("booking_confirmed"):
                     if th["flags"].get("hold_id"):
@@ -415,8 +547,19 @@ def main():
 
                 log(f"Intents: {result.get('intents')} | Fields: {th['fields']}")
 
+                # Step 3a: Post-validation — Python validates fields and may override reply
+                reply_text = result["reply"]
+                _pv_trip_key = th["fields"].get("trip_key", "")
+                _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
+                if "booking" in result.get("intents", []):
+                    _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_trip)
+                    if _pv_override:
+                        reply_text = _pv_override
+                        if _pv_set_awaiting:
+                            th["flags"]["awaiting_booking_confirmation"] = True
+
                 # Step 3b: Availability pre-check + soft hold when booking summary is being sent
-                if (result.get("flags", {}).get("awaiting_booking_confirmation")
+                if (th["flags"].get("awaiting_booking_confirmation")
                         and not th["flags"].get("slot_checked")):
                     fields_for_check = th["fields"]
                     _ck_trip = fields_for_check.get("trip_key", "")
@@ -445,8 +588,26 @@ def main():
                         else:
                             # Race: capacity was grabbed between check and insert
                             th["flags"]["slot_available"] = False
+                            th["flags"]["awaiting_booking_confirmation"] = False
+                            th["flags"]["slot_checked"] = False
+                            _unavail_name = _pv_trip.get("display_name", _ck_trip)
+                            _unavail_sig = config_loader.get_agent_signature()
+                            reply_text = (
+                                f"Oh no — it looks like the {_unavail_name} on that date "
+                                f"is fully booked! Would you like to try a different date?\n\n"
+                                f"Warm regards,\n{_unavail_sig}"
+                            )
                             log(f"Soft hold race for {from_email}: slot full at insert time")
                     else:
+                        th["flags"]["awaiting_booking_confirmation"] = False
+                        th["flags"]["slot_checked"] = False
+                        _unavail_name = _pv_trip.get("display_name", _ck_trip)
+                        _unavail_sig = config_loader.get_agent_signature()
+                        reply_text = (
+                            f"Oh no — it looks like the {_unavail_name} on that date "
+                            f"is fully booked! Would you like to try a different date?\n\n"
+                            f"Warm regards,\n{_unavail_sig}"
+                        )
                         log(f"Slot unavailable for {from_email}: "
                             f"{avail.get('spots_remaining', 0)}/{avail.get('capacity', 0)} spots remaining")
 
@@ -563,12 +724,6 @@ def main():
                 # Step 5: Booking flow
                 if "booking" in result.get("intents", []):
                     fields_now = th["fields"]
-                    if (th["flags"].get("slot_checked")
-                            and not th["flags"].get("slot_available")
-                            and result.get("flags", {}).get("awaiting_booking_confirmation")):
-                        reply_text = result.get("reply_hold_failed") or result["reply"]
-                    else:
-                        reply_text = result["reply"]
                     if (fields_now.get("experience") and fields_now.get("date")
                             and fields_now.get("guests") and fields_now.get("trip_key")
                             and th["flags"].get("booking_confirmed")
@@ -632,7 +787,7 @@ def main():
                             th["flags"]["payment_id"] = pay.get("payment_id")
                             th["flags"]["payment_link"] = pay_link
                             th["flags"]["payment_status"] = pay.get("status")
-                            reply_text = result["reply"].replace("[PAYMENT_LINK]", pay_link)
+                            reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
                             booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
                             th["flags"]["booking_ref"] = booking_ref
                             bm_logger.log(

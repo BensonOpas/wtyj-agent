@@ -494,6 +494,16 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 046 — Hybrid refactor: Python state machine + simplified Claude prompt
+**Status:** Stable
+**Files modified:** `bluemarlin/src/marina_agent.py`, `bluemarlin/src/email_poller.py`
+**What changed:** Moved all deterministic booking validation from Claude's prompt to Python. (1) marina_agent.py: replaced 62-line BOOKING CONFIRMATION BEHAVIOUR with 12-line BOOKING BEHAVIOUR section; removed AVAILABILITY CONTEXT (12 lines); removed spots_remaining/trip_capacity from THREAD CONTEXT; added `action_context: str = ""` parameter to `_build_prompt()` and `process_message()`; simplified reply/reply_hold_failed/flags descriptions in JSON spec; added `needs_child_ages` flag. (2) email_poller.py: added 5 helper functions (`_day_matches`, `_suggest_dates`, `_build_booking_summary`, `_build_action_context`, `_post_validate`); field merge changed to always-overwrite; Python now manages `awaiting_booking_confirmation` flag (strips Claude's SET attempts, allows Claude's CLEAR); post-validation (Step 3a) runs after field/flag merge, may override Claude's reply with data-driven messages; Step 3b trigger changed from Claude-set to Python-set flag; slot-unavailable/race branches now reset `awaiting_booking_confirmation` and `slot_checked`, override reply; Step 5 simplified to use pre-set `reply_text`.
+**Callers must know:** `process_message()` now accepts optional `action_context: str = ""` parameter — backward compatible. Python controls `awaiting_booking_confirmation` flag (set via `_post_validate`, cleared by Claude). Python generates booking summaries, day-of-week errors, departure options, and slot-unavailable messages from client.json data. Claude still handles field extraction, confirmation detection, child pricing detection (`needs_child_ages` flag), escalation, and conversational replies.
+**Known open items:** Child pricing in `_build_booking_summary` uses adult rate for all guests (only affects klein_curacao). Follow-up brief needed for tiered pricing with `children_count`/`children_ages` fields.
+**Tests:** 28/28 tests pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -552,6 +562,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 046 — Hybrid refactor: Python state machine + simplified Claude prompt
+Decision: Move all deterministic booking validation (day-of-week, departure time gating, summary generation, awaiting_booking_confirmation flag management) from the Claude prompt to Python. Claude's 62-line BOOKING CONFIRMATION BEHAVIOUR block replaced with 12-line BOOKING BEHAVIOUR section. Five new helper functions in email_poller.py. Python builds data-driven booking summaries, departure options, day-of-week errors, and slot-unavailable messages from client.json. Claude still handles field extraction, confirmation detection, child pricing detection, and conversational replies. action_context parameter added to process_message for Python-to-Claude state instructions.
+Outcome: complete — 28/28 tests pass
 
 Brief 040 — Escalation system: semi + full
 Decision: Two-mode escalation. Semi-escalation: marina_agent returns `semi_escalation: true` + `relay_question`; email_poller sends holding reply to customer + relay alert (Reply-To: Marina's inbox) to demo_support_email; relay reply from human detected via `[RELAY]` in subject + sender match, marina_agent reformulates in relay mode. Full escalation: existing `requires_human: true` path extended to set `fully_escalated: true` on thread + send chat log alert to demo_support_email + update log_escalation to include messages_json. Messages log (`th["messages"]`) accumulates all inbound/outbound for both paths. Fully escalated threads still call marina_agent (one Claude call per Rule 1) but skip all booking flow. Semi-escalation cancels any soft hold created during Step 3b to prevent capacity leak. `reply_to=EMAIL_ADDR` (not a hardcoded string) on relay alerts.

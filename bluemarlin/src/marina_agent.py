@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 045
+# LAST MODIFIED: Brief 046
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -52,6 +52,7 @@ def _build_prompt(
     body: str,
     thread_fields: dict,
     thread_flags: dict,
+    action_context: str = "",
 ) -> str:
     business = config_loader.get_business()
     booking_rules = config_loader.get_booking_rules()
@@ -115,68 +116,19 @@ PAYMENT:
   No payment at boarding: {payment.get('no_payment_at_boarding', True)}
   Hold duration: {payment.get('hold_duration_hours', 6)} hours
 
-BOOKING CONFIRMATION BEHAVIOUR:
-When your fields response contains all four required booking fields
-(experience, date, guests, trip_key) — whether extracted from this
-message or already in thread context — AND "awaiting_booking_confirmation"
-is not true in thread flags AND "booking_confirmed" is not true in
-thread flags, do NOT assume the booking is confirmed. Instead:
-- FIRST: verify the requested date's day of week matches the trip's
-  days_available field shown in TRIPS above. If the date falls on a
-  day the trip does not run, do NOT set awaiting_booking_confirmation
-  and do NOT send a booking summary. Instead, tell the customer which
-  days the trip runs and suggest the nearest valid dates.
-- SECOND: if the customer mentioned children, kids, or similar terms,
-  check the trip's pricing tiers in TRIPS above. If the trip has
-  age-based pricing and the ages of the children are unknown, ask
-  for them before sending the summary. Do NOT assume the child rate
-  for unspecified ages — the total price must be correct before the
-  customer confirms. If ages are known (e.g. customer stated them),
-  price correctly and proceed.
-- THIRD: check the trip's departures array in TRIPS above. If the
-  trip has more than one departure option and the customer has not
-  yet chosen a departure_time, ask which departure they prefer
-  BEFORE sending the booking summary. Do NOT set
-  awaiting_booking_confirmation until departure_time is resolved.
-  If the trip has only one departure option, auto-select it and
-  include it in the summary — do not ask the customer.
-- Send a warm booking summary to the customer listing: trip name,
-  date, number of guests, departure time, total price,
-  what is included.
-- End the summary with a single clear confirmation question:
-  "Shall I lock this in for you?"
-- In your JSON response, the "flags" field MUST contain:
-  "awaiting_booking_confirmation": true
-- Do NOT set any hold-related flags.
+BOOKING BEHAVIOUR:
+When the customer wants to book, extract all fields you can find (experience,
+date, guests, trip_key, departure_time, customer_name, phone, special_requests).
+Python handles all booking validation, state management, and summary generation.
+If you receive an ACTION instruction below, follow it exactly.
+When no ACTION is given, reply naturally — ask for any missing required fields
+(experience, date, guests) in a warm conversational way.
 
-When "awaiting_booking_confirmation" is true in thread flags:
-- If the customer's message is a confirmation (yes, sure, let's do
-  it, perfect, go ahead, ja, si, or any equivalent in any language):
-  In your JSON response, the "flags" field MUST contain:
-  "booking_confirmed": true, "awaiting_booking_confirmation": false
-  Reply briefly confirming you are locking it in.
-- If the customer wants to change something: if the change involves
-  the date, FIRST verify the new date's day of week matches the
-  trip's days_available (same check as initial booking). If the new
-  date is invalid, do NOT reset awaiting_booking_confirmation —
-  tell the customer which days the trip runs and suggest the nearest
-  valid dates. If the new date is valid (or no date was changed),
-  update the relevant field, reset awaiting_booking_confirmation to
-  false, and re-run the FIRST, SECOND, and THIRD checks before sending a
-  new booking summary.
-- If a slot was unavailable and you previously offered alternative
-  dates or times: the customer picking one of those alternatives is
-  a CHANGE, not a confirmation. Update the relevant fields (date,
-  departure_time, or both), reset awaiting_booking_confirmation to
-  false, and re-run the FIRST, SECOND, and THIRD checks before
-  sending a new booking summary. Do NOT set booking_confirmed.
-- If unclear: ask for clarification.
+If the customer mentions children and the trip has age-based pricing (shown in
+TRIPS data above), ask for their ages in your reply and set needs_child_ages
+to true in your flags.
 
-When writing the reply for a confirmed booking (booking_confirmed
-is true and hold will be attempted), include the exact string
-[PAYMENT_LINK] in the reply where the payment link should appear.
-Python will replace [PAYMENT_LINK] with the real payment URL before
-sending.
+{action_context}
 
 ESCALATION BEHAVIOUR:
 When the intent is complaint, refund request, or cancellation, set requires_human
@@ -215,24 +167,9 @@ When semi_escalation applies:
 - Do NOT set any booking confirmation flags
 - Do NOT attempt to answer the question, even partially
 
-AVAILABILITY CONTEXT:
-When spots_remaining is a number in thread flags (not 'unknown'):
-- If spots_remaining > 5: mention availability naturally in the booking summary,
-  e.g. "There's still plenty of room on this date!"
-- If 1 <= spots_remaining <= 5: add gentle urgency, e.g. "Only {{N}} spot(s) left
-  for this date — I'd recommend locking it in soon!" (replace {{N}} with the actual number)
-- If spots_remaining = 0: do NOT send the booking summary. Apologize warmly,
-  explain the slot is fully booked, and suggest 2-3 alternative nearby dates
-  for the same trip. Use reply_hold_failed for this message.
-Note: Python sets slot_available in thread flags before sending your reply.
-When slot_available is false, Python will send reply_hold_failed instead of
-reply. Always write both when sending a booking summary.
-
 THREAD CONTEXT (already collected this conversation):
   Fields: {json.dumps(thread_fields, ensure_ascii=False)}
   Flags: {json.dumps(thread_flags, ensure_ascii=False)}
-  spots_remaining: {thread_flags.get('spots_remaining', 'unknown')}
-  trip_capacity: {thread_flags.get('trip_capacity', 'unknown')}
 
 INBOUND MESSAGE:
   From: {from_email}
@@ -267,11 +204,11 @@ The JSON must have exactly these fields:
       Only include trip_key if certain. If the customer's description is ambiguous, omit it and ask.
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
-  "reply": "<full reply to send when the booking hold is successfully created — warm, celebratory, includes the booking summary, payment link placeholder [PAYMENT_LINK], payment methods, hold duration, what to bring>",
-  "reply_hold_failed": "<reply to send if the calendar slot is unavailable or hold creation fails — apologetic, warm, offers to find another date or time, does NOT confirm the booking, does NOT include a payment link. Write this field ONLY when you are setting awaiting_booking_confirmation to true OR booking_confirmed to true in your current JSON response. Do not write it for inquiry, escalation, clarification, or any path where no booking hold will be attempted.>",
+  "reply": "<your reply to the customer — warm and natural. Follow any ACTION instruction above. When no ACTION is given, reply conversationally.>",
+  "reply_hold_failed": "<optional — write ONLY when setting booking_confirmed to true. Apologetic message if the slot is unavailable, without [PAYMENT_LINK].>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
-  "flags": {{"awaiting_booking_confirmation": <true when you are sending a booking summary asking the customer to confirm — omit or false otherwise>, "booking_confirmed": <true only when the customer has just confirmed in this message — omit or false otherwise>}},
+  "flags": {{"booking_confirmed": <true only when the customer has just confirmed a booking — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the trip has age-based pricing — omit or false otherwise>}},
   "semi_escalation": <true only when the customer asks a specific unanswerable question — NOT for complaints or cancellations — omit or false otherwise>,
   "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
   "internal_note": "<one sentence for the operator log — never shown to the customer>"
@@ -284,6 +221,7 @@ def process_message(
     body: str,
     thread_fields: dict,
     thread_flags: dict,
+    action_context: str = "",
 ) -> dict:
     signature = config_loader.get_agent_signature()
 
@@ -306,7 +244,7 @@ def process_message(
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        prompt = _build_prompt(from_email, subject, body, thread_fields, thread_flags)
+        prompt = _build_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
 
         response = client.messages.create(
             model="claude-sonnet-4-6",

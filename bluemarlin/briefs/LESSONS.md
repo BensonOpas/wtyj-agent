@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 046 — Hybrid refactor: Python state machine + simplified Claude prompt
+**Date:** 2026-03-08
+
+After Briefs 044 and 045 each patched one prompt compliance failure and exposed the next, the root cause was clear: 62 lines of state machine logic in Claude's prompt (FIRST/SECOND/THIRD checks, confirmation handling, slot-unavailable alternatives) was too complex for reliable compliance. The fix was architectural — move all deterministic validation (day-of-week, departure time, summary generation, flag management) to Python, and simplify Claude to field extraction + conversational reply + confirmation detection. Key insight: always-overwrite field merge (instead of accumulate-only) prevents dead-ends after slot-unavailable responses. Brief reviewer caught a critical dead-end bug in the initial design (slot_checked not reset + stale field overwrite) before execution.
+
+---
+
 ## Brief 045 — Slot-unavailable alternative = change, not confirmation
 **Date:** 2026-03-09
 
