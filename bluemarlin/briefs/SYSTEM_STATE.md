@@ -541,6 +541,16 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
+## Brief 051 — Integration: rewire booking flow + payment fix
+**Status:** Stable
+**Files modified:** `bluemarlin/src/email_poller.py`, `bluemarlin/src/payment_stub.py`
+**What changed:** Booking flow now uses manifest-style calendar events. Step 3b passes `customer_name`/`customer_email` to `create_soft_hold()` and stores slot info (`hold_trip_key`/`hold_date`/`hold_departure_time`) in thread flags. Step 5 generates `booking_ref` before manifest creation, calls `create_or_update_manifest()` instead of `create_hold()`, confirms the hold only after manifest succeeds. All 3 cancel sites call `remove_from_manifest()` and pop slot flags. `payment_stub.py` switched from `event_id` to `booking_ref` as the payment key to prevent collisions when multiple customers share a manifest event.
+**Callers must know:** `payment_stub.generate_payment_link(booking_ref, amount)` — first param is now `booking_ref`, not `event_id`. `mark_paid(booking_ref)` same. Old `create_hold()` still exists in gws_calendar.py but is no longer called by email_poller.
+**Depends on:** Brief 050 (manifest foundation)
+**Tests:** 24/24 pass
+
+---
+
 ## Still on OpenClaw (not yet migrated)
 - None — OpenClaw fully removed from all active code paths.
 
@@ -599,6 +609,10 @@ Outcome: complete — 5/5 tests pass
 Brief 041 — Semi-escalation prompt fix: prohibit contact-info fallback
 Decision: Prompt-only fix in marina_agent.py. Added CONTACT INFO RULE block between ESCALATION BEHAVIOUR and SEMI-ESCALATION — explicitly restricts info@bluefinncharters.com and phone number to complaints/refunds/cancellations only, bans using them as a fallback for factual questions. Replaced SEMI-ESCALATION body with stronger version: "you MUST set semi_escalation: true", four named trigger categories (equipment specs, dietary/allergy, accessibility, yes/no operational), prohibition on contact info, prohibition on partial answers.
 Outcome: complete — 4/4 tests pass
+
+Brief 051 — Integration: rewire booking flow + payment fix
+Decision: Rewire email_poller.py Step 5 to use create_or_update_manifest instead of create_hold. Generate booking_ref before manifest creation so it appears in the manifest description. Switch payment_stub from event_id to booking_ref to prevent collisions. Add remove_from_manifest at all 3 cancel sites. Brief reviewer caught 3 bugs in initial Step 5 failure path: hold_id not popped, slot_checked/slot_available not reset, confirm_hold before manifest success — all fixed before execution.
+Outcome: complete — 24/24 tests pass
 
 Brief 050 — Manifest foundation: tables + calendar functions
 Decision: Replace per-customer calendar events with manifest-style events (one per departure slot). This brief adds the foundation: manifest_events SQLite table, customer_name/customer_email in trip_bookings, and four new gws_calendar functions (create_or_update_manifest, update_manifest, remove_from_manifest, _build_manifest_body). Purely additive — no existing behavior changed. Wiring into booking flow deferred to Brief 051.

@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 051 — Integration: rewire booking flow + payment fix
+**Date:** 2026-03-09
+
+Medium-risk brief that rewired the core booking path to use manifests. Three critical issues caught by the brief reviewer before execution: (1) `confirm_hold` was placed before `create_or_update_manifest` — if manifest creation failed, you'd be trying to cancel an already-confirmed hold; (2) Step 5 failure path didn't reset `slot_checked`/`slot_available` or pop `hold_id`, leaving stale state that would block retries; (3) cancel sites needed `remove_from_manifest()` calls to keep the calendar in sync. Key insight: store slot info (`hold_trip_key`, `hold_date`, `hold_departure_time`) in thread flags at soft-hold creation time, not at cancel time — `th["fields"]` may have changed if the customer modified their booking mid-thread.
+
+---
+
 ## Brief 050 — Manifest foundation: tables + calendar functions
 **Date:** 2026-03-09
 

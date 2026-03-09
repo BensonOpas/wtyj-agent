@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 048
+# LAST MODIFIED: Brief 051
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -542,7 +542,12 @@ def main():
                         and not th["flags"].get("booking_confirmed"):
                     if th["flags"].get("hold_id"):
                         state_registry.cancel_hold(th["flags"]["hold_id"])
+                        _h_trip = th["flags"].pop("hold_trip_key", "")
+                        _h_date = th["flags"].pop("hold_date", "")
+                        _h_dep = th["flags"].pop("hold_departure_time", "")
                         th["flags"].pop("hold_id", None)
+                        if _h_trip and _h_date and _h_dep:
+                            gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
                     th["flags"]["slot_checked"] = False
                     th["flags"]["slot_available"] = False
                     log(f"Soft hold cancelled for {from_email}: customer changed booking details")
@@ -589,10 +594,15 @@ def main():
                             fields_for_check.get("date", ""),
                             _ck_start,
                             _ck_guests,
-                            avail.get("capacity", 20)
+                            avail.get("capacity", 20),
+                            customer_name=th["fields"].get("customer_name", ""),
+                            customer_email=from_email,
                         )
                         if hold_id is not None:
                             th["flags"]["hold_id"] = hold_id
+                            th["flags"]["hold_trip_key"] = _ck_trip
+                            th["flags"]["hold_date"] = fields_for_check.get("date", "")
+                            th["flags"]["hold_departure_time"] = _ck_start
                             log(f"Soft hold created for {from_email}: hold_id={hold_id}, "
                                 f"spots_remaining={avail.get('spots_remaining')}")
                         else:
@@ -627,7 +637,12 @@ def main():
                     # Cancel any soft hold created during Step 3b — booking is not confirmed
                     if th["flags"].get("hold_id"):
                         state_registry.cancel_hold(th["flags"]["hold_id"])
+                        _h_trip = th["flags"].pop("hold_trip_key", "")
+                        _h_date = th["flags"].pop("hold_date", "")
+                        _h_dep = th["flags"].pop("hold_departure_time", "")
                         th["flags"].pop("hold_id", None)
+                        if _h_trip and _h_date and _h_dep:
+                            gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
                     th["flags"]["slot_checked"] = False
                     th["flags"]["slot_available"] = False
                     relay_token = uuid.uuid4().hex[:12]
@@ -753,7 +768,12 @@ def main():
                             "experience": fields_now.get("experience"),
                             "date": fields_now.get("date"),
                         })
-                        res = gws_calendar.create_hold(fields_now)
+                        # Generate booking_ref + set on soft hold BEFORE manifest creation
+                        booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+                        th["flags"]["booking_ref"] = booking_ref
+                        if th["flags"].get("hold_id"):
+                            state_registry.set_booking_ref(th["flags"]["hold_id"], booking_ref)
+                        res = gws_calendar.create_or_update_manifest(fields_now)
                         if not res.get("ok"):
                             bm_logger.log(
                                 "hold_failed",
@@ -765,6 +785,14 @@ def main():
                             )
                             if th["flags"].get("hold_id"):
                                 state_registry.cancel_hold(th["flags"]["hold_id"])
+                                _h_trip = th["flags"].pop("hold_trip_key", "")
+                                _h_date = th["flags"].pop("hold_date", "")
+                                _h_dep = th["flags"].pop("hold_departure_time", "")
+                                th["flags"].pop("hold_id", None)
+                                if _h_trip and _h_date and _h_dep:
+                                    gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+                            th["flags"]["slot_checked"] = False
+                            th["flags"]["slot_available"] = False
                             sheets_writer.log_hold_failed({
                                 "email": from_email, "subject": subj,
                                 "experience": fields_now.get("experience"),
@@ -775,7 +803,7 @@ def main():
                             failure_reply = result.get("reply_hold_failed") or result["reply"]
                             smtp_send(from_email, "Re: " + subj, failure_reply,
                                       in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                            log(f"Hold create FAILED for {from_email}: {res.get('error')}")
+                            log(f"Manifest create FAILED for {from_email}: {res.get('error')}")
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             th["reply_times"].append(now)
                             th["last_customer_hash"] = customer_hash
@@ -788,18 +816,15 @@ def main():
                                 state_registry.confirm_hold(th["flags"]["hold_id"])
                             th["flags"]["event_id"] = res.get("eventId")
                             th["flags"]["event_link"] = res.get("htmlLink")
-                            event_id = th["flags"]["event_id"]
                             trip_key = fields_now.get("trip_key", "")
                             price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
                                          if trip_key else 0)
-                            pay = payment_stub.generate_payment_link(event_id, price_usd)
+                            pay = payment_stub.generate_payment_link(booking_ref, price_usd)
                             pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
                             th["flags"]["payment_id"] = pay.get("payment_id")
                             th["flags"]["payment_link"] = pay_link
                             th["flags"]["payment_status"] = pay.get("status")
                             reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
-                            booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
-                            th["flags"]["booking_ref"] = booking_ref
                             bm_logger.log(
                                 "hold_created",
                                 email=from_email, subject=subj,
@@ -831,7 +856,7 @@ def main():
                                 "payment_link": th["flags"].get("payment_link"),
                                 "payment_status": pay.get("status"),
                             })
-                            log(f"Hold CREATED for {from_email}: eventId={res.get('eventId')}")
+                            log(f"Manifest CREATED/UPDATED for {from_email}: eventId={res.get('eventId')}")
 
                     # Send Claude's reply for all booking sub-cases
                     reply_text = reply_text.replace("[PAYMENT_LINK]", "")

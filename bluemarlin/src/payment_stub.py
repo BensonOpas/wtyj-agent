@@ -1,3 +1,8 @@
+# FILE: payment_stub.py
+# CREATED: Before Brief 001 (original codebase)
+# LAST MODIFIED: Brief 051
+# DEPENDS ON: nothing
+# CALLERS: email_poller.py
 import hashlib
 import json
 import os
@@ -18,40 +23,40 @@ def _save(data):
         json.dump(data, f, indent=2)
 
 
-def generate_payment_link(event_id: str, amount_usd: int) -> dict:
+def generate_payment_link(booking_ref: str, amount_usd: int) -> dict:
     """
     Deterministic payment link generator.
-    One event_id -> exactly one payment link.
+    One booking_ref -> exactly one payment link.
     """
 
     state = _load()
 
-    if event_id in state["payments"]:
-        return state["payments"][event_id]
+    if booking_ref in state["payments"]:
+        return state["payments"][booking_ref]
 
-    raw = f"{event_id}|{amount_usd}"
+    raw = f"{booking_ref}|{amount_usd}"
     payment_id = hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     link = f"https://demo.pay/bluemarlin/{payment_id}"
 
     payment_record = {
         "payment_id": payment_id,
-        "event_id": event_id,
+        "booking_ref": booking_ref,
         "amount_usd": amount_usd,
         "status": "pending",
         "created_at": datetime.utcnow().isoformat()
     }
 
-    state["payments"][event_id] = payment_record
+    state["payments"][booking_ref] = payment_record
     _save(state)
 
     return payment_record
 
 
-def mark_paid(event_id: str):
+def mark_paid(booking_ref: str):
     state = _load()
-    if event_id in state["payments"]:
-        state["payments"][event_id]["status"] = "paid"
+    if booking_ref in state["payments"]:
+        state["payments"][booking_ref]["status"] = "paid"
         _save(state)
         return True
     return False
