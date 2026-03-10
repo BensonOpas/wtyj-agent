@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 048
+# LAST MODIFIED: Brief 054
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -80,11 +80,20 @@ def _build_prompt(
             "Do not ask for information. Do not set any booking or escalation flags.\n"
         )
 
+    returning_customer_section = ""
+    if thread_flags.get("returning_booking"):
+        returning_customer_section = (
+            f"\nRETURNING CUSTOMER: This customer referenced booking {thread_flags['returning_booking']}. "
+            f"Their booking details are pre-loaded in the Fields above. "
+            f"They may want to: check status, change their date, ask a follow-up question, or report an issue. "
+            f"Handle naturally based on their message. For refunds or cancellations: set requires_human to true.\n"
+        )
+
     trips_text = _build_trips_text()
     faq_text = _build_faq_text()
 
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
-{relay_mode_section}{fully_escalated_section}
+{relay_mode_section}{fully_escalated_section}{returning_customer_section}
 PERSONA: {csk.get('marina_persona', '')}
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 AGENT SIGNATURE: {signature}
@@ -134,6 +143,12 @@ TRIPS data above), ask for their ages in your reply and set needs_child_ages
 to true in your flags.
 
 {action_context}
+
+BOOKING REFERENCE:
+When booking_ref is present in thread_flags AND you are writing a booking
+confirmation reply (booking_confirmed: true), you MUST include the booking
+reference naturally in your reply. Example: "Your booking reference is
+BF-2026-12345 — keep this handy for any future questions or changes!"
 
 ESCALATION BEHAVIOUR:
 When the intent is complaint, refund request, or cancellation, set requires_human

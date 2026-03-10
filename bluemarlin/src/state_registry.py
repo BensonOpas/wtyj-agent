@@ -1,6 +1,6 @@
 # FILE: state_registry.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 050
+# LAST MODIFIED: Brief 054
 # DEPENDS ON: nothing
 # IMPORTS FROM: nothing
 # CALLERS: email_poller.py, gws_calendar.py
@@ -51,6 +51,22 @@ def _get_conn():
         "html_link TEXT DEFAULT '', "
         "created_at TEXT NOT NULL, "
         "PRIMARY KEY (trip_key, date, departure_time)"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bookings ("
+        "booking_ref TEXT PRIMARY KEY, "
+        "trip_key TEXT, "
+        "customer_name TEXT, "
+        "customer_email TEXT, "
+        "date TEXT, "
+        "departure_time TEXT, "
+        "guests INTEGER, "
+        "special_requests TEXT, "
+        "payment_link TEXT, "
+        "event_link TEXT, "
+        "status TEXT DEFAULT 'pending_payment', "
+        "created_at TEXT NOT NULL"
         ")"
     )
     try:
@@ -282,6 +298,56 @@ def get_slot_passengers(trip_key: str, date: str, departure_time: str) -> list:
         }
         for r in rows
     ]
+
+
+def save_booking(booking_ref: str, fields: dict, flags: dict,
+                 customer_email: str = "") -> None:
+    """Upsert a booking record after hold creation success."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO bookings "
+        "(booking_ref, trip_key, customer_name, customer_email, date, "
+        "departure_time, guests, special_requests, payment_link, event_link, "
+        "status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            booking_ref,
+            fields.get("trip_key", ""),
+            fields.get("customer_name", ""),
+            customer_email,
+            fields.get("date", ""),
+            fields.get("departure_time", ""),
+            int(fields.get("guests") or 0),
+            fields.get("special_requests", ""),
+            flags.get("payment_link", ""),
+            flags.get("event_link", ""),
+            "confirmed",
+            datetime.now(timezone.utc).isoformat(),
+        )
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_booking(booking_ref: str) -> "dict | None":
+    """Return full booking dict by ref, or None if not found."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT booking_ref, trip_key, customer_name, customer_email, date, "
+        "departure_time, guests, special_requests, payment_link, event_link, "
+        "status, created_at "
+        "FROM bookings WHERE booking_ref = ?",
+        (booking_ref,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "booking_ref": row[0], "trip_key": row[1], "customer_name": row[2],
+        "customer_email": row[3], "date": row[4], "departure_time": row[5],
+        "guests": row[6], "special_requests": row[7], "payment_link": row[8],
+        "event_link": row[9], "status": row[10], "created_at": row[11],
+    }
 
 
 # Initialise database on module load so the file exists as soon as the module is imported

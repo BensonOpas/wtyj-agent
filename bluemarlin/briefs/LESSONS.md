@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 054 — Booking ref in confirmation + cross-thread memory
+**Date:** 2026-03-09
+
+The booking_ref was already generated and stored in thread flags but the prompt never told Marina to include it — a classic "data exists, instruction missing" gap. The cross-thread memory design used a separate `bookings` table rather than reusing `trip_bookings` because the two serve different purposes (capacity tracking vs customer lookup). Brief reviewer caught a real bug: the initial design smuggled `customer_email` through thread flags via an underscore-prefixed key (`_booking_customer_email`) that would leak into the Claude prompt on exception — replaced with a clean function parameter. Key lesson: never inject temporary internal state into a dict that gets persisted or passed to external systems.
+
+---
+
 ## Brief 053 — Stale thread reset on new conversation
 **Date:** 2026-03-09
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 053
+# LAST MODIFIED: Brief 054
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -230,6 +230,12 @@ def _maybe_reset_stale_thread(msg, thread_key: str, th: dict, threads: dict, now
         log(f"Stale thread reset: {thread_key} (last activity {_age_hours:.0f}h ago)")
         return dict(_FRESH_THREAD, messages=[], reply_times=[])
     return th
+
+
+def _detect_booking_ref(body: str) -> "str | None":
+    """Extract a BF-YYYY-XXXXX booking reference from message body. Returns ref or None."""
+    match = re.search(r'BF-\d{4}-\d{5}', body)
+    return match.group() if match else None
 
 
 # ========= BOOKING VALIDATION HELPERS =========
@@ -541,6 +547,20 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     log(f"Fully escalated: holding reply sent to {from_email}")
                     continue
+
+                # Detect returning customer by booking ref mention
+                _detected_ref = _detect_booking_ref(body)
+                if _detected_ref and not th["flags"].get("booking_ref"):
+                    _past_booking = state_registry.get_booking(_detected_ref)
+                    if _past_booking:
+                        th["flags"]["returning_booking"] = _detected_ref
+                        # Pre-populate fields from past booking if thread has no data yet
+                        for _rbk in ("trip_key", "date", "guests", "customer_name",
+                                     "departure_time"):
+                            _rbv = _past_booking.get(_rbk)
+                            if _rbv and not th["fields"].get(_rbk):
+                                th["fields"][_rbk] = _rbv if not isinstance(_rbv, int) else str(_rbv)
+                        log(f"Returning customer: loaded booking {_detected_ref} for {from_email}")
 
                 # Step 1: Build action context + call marina_agent (single Claude call per message)
                 agent_flags = dict(th.get("flags", {}))
@@ -915,6 +935,12 @@ def main():
                                 "booking_ref": booking_ref,
                             })
                             log(f"Manifest CREATED/UPDATED for {from_email}: eventId={res.get('eventId')}")
+
+                            # Save booking for cross-thread memory
+                            state_registry.save_booking(
+                                booking_ref, fields_now, th["flags"],
+                                customer_email=from_email,
+                            )
 
                     # Send Claude's reply for all booking sub-cases
                     reply_text = reply_text.replace("[PAYMENT_LINK]", "")
