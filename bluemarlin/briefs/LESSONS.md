@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 053 — Stale thread reset on new conversation
+**Date:** 2026-03-09
+
+Live testing exposed a thread state persistence bug: subject-based thread keys (`sender+subject`) have no expiration, so a new email with the same subject as an old thread inherits stale fields. The root cause was not Claude hallucination — "Jan" was loaded from persisted thread state and injected into the prompt via THREAD CONTEXT. Key lesson: whenever state is keyed on user-controlled values (email subjects), always consider key collisions across time. The fix — detecting new emails (no In-Reply-To/References) and resetting threads older than 24h — is deterministic and doesn't affect active conversations. Extracting the logic into a testable function (`_maybe_reset_stale_thread`) was critical for getting real test coverage instead of inline re-implementations.
+
+---
+
 ## Brief 052 — Sheets: Manifests summary tab
 **Date:** 2026-03-09
 

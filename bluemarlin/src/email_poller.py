@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 052
+# LAST MODIFIED: Brief 053
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -199,6 +199,39 @@ def resolve_thread_key(msg, from_email: str, subject: str, mid_index: dict) -> s
     )
 
 
+def _is_new_email(msg) -> bool:
+    """Return True if the message has no reply headers (brand-new email)."""
+    refs = (msg.get("References") or "").strip()
+    irt = (msg.get("In-Reply-To") or "").strip()
+    return not refs and not irt
+
+
+_FRESH_THREAD = {
+    "fields": {},
+    "flags": {},
+    "last_customer_hash": "",
+    "reply_times": [],
+    "messages": [],
+}
+
+
+def _maybe_reset_stale_thread(msg, thread_key: str, th: dict, threads: dict, now: int) -> dict:
+    """If msg is a new email hitting a stale (>24h) existing thread, return a fresh thread dict.
+    Otherwise return th unchanged."""
+    if not _is_new_email(msg):
+        return th
+    if thread_key not in threads:
+        return th
+    _last_activity = th.get("last_activity", 0)
+    _last_reply = max(th.get("reply_times", [0]) or [0])
+    _last_seen = max(_last_activity, _last_reply)
+    _age_hours = (now - _last_seen) / 3600 if _last_seen else 999
+    if _age_hours > 24:
+        log(f"Stale thread reset: {thread_key} (last activity {_age_hours:.0f}h ago)")
+        return dict(_FRESH_THREAD, messages=[], reply_times=[])
+    return th
+
+
 # ========= BOOKING VALIDATION HELPERS =========
 def _day_matches(day_name, days_available):
     """Check if day_name matches the trip's days_available string."""
@@ -374,6 +407,7 @@ def main():
                 log(f"Processed UNSEEN from {from_name} <{from_email}> | {subj}")
                 log(f"ThreadKey: {thread_key}")
 
+                now = int(time.time())
                 threads = state["threads"]
                 th = threads.get(thread_key, {
                     "fields": {},
@@ -382,6 +416,7 @@ def main():
                     "reply_times": [],
                     "messages": []
                 })
+                th = _maybe_reset_stale_thread(msg, thread_key, th, threads, now)
 
                 # Deduplicate identical customer content
                 customer_hash = sha((from_email.lower() + "|" + normalize_subject(subj).lower() + "|" + body.strip()))
@@ -393,7 +428,6 @@ def main():
                     continue
 
                 # Anti-loop guard
-                now = int(time.time())
                 th["reply_times"] = [t for t in th.get("reply_times", []) if now - t <= REPLY_WINDOW_SECONDS]
                 if len(th["reply_times"]) >= MAX_REPLIES_PER_THREAD:
                     log("Anti-loop guard tripped -> SAFE stop reply, mark Seen.")
@@ -910,6 +944,7 @@ def main():
                 im.uid("store", uid, "+FLAGS", r"(\Seen)")
                 th["reply_times"].append(now)
                 th["last_customer_hash"] = customer_hash
+                th["last_activity"] = now
                 threads[thread_key] = th
                 save_json(THREAD_STATE_PATH, state)
                 log(f"Replied + marked Seen: {from_email}")
