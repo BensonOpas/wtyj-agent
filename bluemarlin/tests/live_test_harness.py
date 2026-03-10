@@ -246,7 +246,7 @@ def test_simple_inquiry(im, dry_run=False):
     print(f"  Reply: {reply_text(th)[:200]}...")
 
     assert_reply_contains_any(th, ["Klein", "Sunset", "Snorkeling", "cruise", "trip"], "reply mentions trips")
-    assert_flag_absent_or_false(th, "requires_human", "no escalation")
+    assert_flag_absent_or_false(th, "fully_escalated", "no escalation")
     assert_no_emdash(th, "no em dashes")
 
 
@@ -378,7 +378,7 @@ def test_escalation(im, dry_run=False):
     th = wait_for_reply(tk)
     print(f"  Reply: {reply_text(th)[:200]}...")
 
-    assert_flag(th, "requires_human", True, "requires_human set")
+    assert_flag(th, "fully_escalated", True, "fully_escalated set")
     assert_reply_contains_any(th, ["team", "care"], "escalation acknowledgment")
     assert_no_emdash(th, "no em dashes")
 
