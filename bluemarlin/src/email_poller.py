@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 058
+# LAST MODIFIED: Brief 061
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -240,6 +240,13 @@ def _detect_booking_ref(body: str) -> "str | None":
     return match.group() if match else None
 
 
+def _resolve_booking_ref(th: dict) -> str:
+    """Get the best available booking ref from thread flags.
+    Priority: booking_ref (active booking) > returning_booking (past ref) > NO-REF.
+    """
+    return th["flags"].get("booking_ref") or th["flags"].get("returning_booking") or "NO-REF"
+
+
 # Booking-related flags that get reset between bookings in the same thread
 _BOOKING_FLAGS_TO_RESET = {
     "hold_created", "booking_confirmed", "booking_ref", "hold_id",
@@ -307,7 +314,7 @@ def _suggest_dates(date_str, days_available):
     for offset in range(1, 14):
         candidate = base + _td(days=offset)
         if _day_matches(candidate.strftime("%A"), days_available):
-            suggestions.append(f"- {candidate.strftime('%A, %d %B %Y')}")
+            suggestions.append(f"  {candidate.strftime('%A %d %B')}")
             if len(suggestions) >= 3:
                 break
     return "\n".join(suggestions) if suggestions else "Please suggest another date!"
@@ -334,14 +341,11 @@ def _build_booking_summary(fields, trip):
     except ValueError:
         date_fmt = date_str
     return (
-        f"Here's a quick summary of your booking:\n\n"
-        f"  Trip: {trip_name}\n"
-        f"  Date: {date_fmt}\n"
-        f"  Guests: {guests}\n"
-        f"  Departure: {departure_time} from {dep_point} aboard {vessel}\n"
-        f"  Total: ${total} USD ({guests} x ${price_adult})\n"
-        f"  Included: {included}\n\n"
-        f"Shall I lock this in for you?"
+        f"Just to confirm the details: {trip_name} on {date_fmt}, "
+        f"{departure_time} departure from {dep_point} on {vessel}. "
+        f"{guests} guests, ${total} total (${price_adult} each). "
+        f"Includes {included}.\n\n"
+        f"Want me to go ahead and book this?"
     )
 
 
@@ -387,9 +391,9 @@ def _post_validate(th, result, trip):
         days_avail = trip.get("days_available", "daily")
         if not _day_matches(day_name, days_avail):
             return (
-                f"Great choice! Unfortunately, the {trip.get('display_name', fields['trip_key'])} "
-                f"doesn't run on {day_name}s — it runs {days_avail}. "
-                f"Would any of these dates work instead?\n\n"
+                f"The {trip.get('display_name', fields['trip_key'])} "
+                f"doesn't run on {day_name}s, only {days_avail}. "
+                f"Would any of these work instead?\n\n"
                 f"{_suggest_dates(date, days_avail)}"
             ), False
     except ValueError:
@@ -402,9 +406,9 @@ def _post_validate(th, result, trip):
             for d in departures
         )
         return (
-            f"Almost there! The {trip.get('display_name', fields['trip_key'])} has "
-            f"a couple of departure options:\n\n{dep_lines}\n\n"
-            f"Which one works best for you?"
+            f"The {trip.get('display_name', fields['trip_key'])} has "
+            f"a couple of departure times:\n\n{dep_lines}\n\n"
+            f"Which one works for you?"
         ), False
 
     # 3. Child pricing — Claude sets needs_child_ages flag
@@ -614,6 +618,9 @@ def main():
                             if _rbv and not th["fields"].get(_rbk):
                                 th["fields"][_rbk] = _rbv if not isinstance(_rbv, int) else str(_rbv)
                         log(f"Returning customer: loaded booking {_detected_ref} for {from_email}")
+                    else:
+                        th["flags"]["unknown_ref"] = _detected_ref
+                        log(f"Unknown booking ref {_detected_ref} mentioned by {from_email}")
 
                 # Step 1: Build action context + call marina_agent (single Claude call per message)
                 agent_flags = dict(th.get("flags", {}))
@@ -640,6 +647,10 @@ def main():
                     from_email, subj, body,
                     th.get("fields", {}), agent_flags, action_context,
                 )
+
+                # Clear one-shot flags after Claude has seen them
+                if th["flags"].get("unknown_ref"):
+                    del th["flags"]["unknown_ref"]
 
                 # Multi-trip: if booking intent + previous booking completed, archive and reset
                 if (any(i in _BOOKING_INTENTS for i in result.get("intents", []))
@@ -742,8 +753,8 @@ def main():
                             _unavail_name = _pv_trip.get("display_name", _ck_trip)
                             _unavail_sig = config_loader.get_agent_signature()
                             reply_text = (
-                                f"Oh no — it looks like the {_unavail_name} on that date "
-                                f"is fully booked! Would you like to try a different date?\n\n"
+                                f"Unfortunately the {_unavail_name} is fully booked on that date. "
+                                f"Would you like to try a different date?\n\n"
                                 f"Warm regards,\n{_unavail_sig}"
                             )
                             log(f"Soft hold race for {from_email}: slot full at insert time")
@@ -753,8 +764,8 @@ def main():
                         _unavail_name = _pv_trip.get("display_name", _ck_trip)
                         _unavail_sig = config_loader.get_agent_signature()
                         reply_text = (
-                            f"Oh no — it looks like the {_unavail_name} on that date "
-                            f"is fully booked! Would you like to try a different date?\n\n"
+                            f"Unfortunately the {_unavail_name} is fully booked on that date. "
+                            f"Would you like to try a different date?\n\n"
                             f"Warm regards,\n{_unavail_sig}"
                         )
                         log(f"Slot unavailable for {from_email}: "
@@ -780,7 +791,7 @@ def main():
                     th["flags"]["relay_question"] = relay_question
                     th["flags"]["relay_customer_email"] = from_email
                     th["flags"]["relay_reply_subject"] = "Re: " + subj
-                    _ref = th["flags"].get("booking_ref", "NO-REF")
+                    _ref = _resolve_booking_ref(th)
                     _cname = th["fields"].get("customer_name", "Unknown")
                     _relay_alert = (
                         f"Customer: {_cname} <{from_email}>\n"
@@ -840,7 +851,7 @@ def main():
                         chat_log_lines.append(m.get("body", ""))
                         chat_log_lines.append("---")
                     chat_log = "\n".join(chat_log_lines) or "(no messages logged)"
-                    booking_ref_esc = th["flags"].get("booking_ref", "NO-REF")
+                    booking_ref_esc = _resolve_booking_ref(th)
                     customer_name_esc = th["fields"].get("customer_name", "Unknown")
                     intents_str = ", ".join(result.get("intents") or ["unknown"])
                     escalation_alert = (

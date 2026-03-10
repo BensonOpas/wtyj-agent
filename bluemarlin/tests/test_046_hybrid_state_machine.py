@@ -54,7 +54,7 @@ check("T10: multi-departure does not set awaiting", awaiting == False)
 th_single = {"fields": {"experience": "Sunset Cruise", "date": "2026-03-26", "guests": "2", "trip_key": "sunset_cruise"}, "flags": {}}
 trip_single = {"display_name": "Sunset Cruise", "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}], "days_available": "Tuesday, Thursday, Friday, Saturday", "price_adult_usd": 79, "included": ["open bar", "snacks"]}
 override_s, awaiting_s = _post_validate(th_single, result_booking, trip_single)
-check("T11: single-departure builds summary", override_s is not None and "Shall I lock this in" in override_s)
+check("T11: single-departure builds summary", override_s is not None and "Want me to go ahead and book this" in override_s)
 check("T12: single-departure sets awaiting", awaiting_s == True)
 
 # T13: _post_validate with invalid day-of-week
@@ -82,7 +82,7 @@ summary = _build_booking_summary(
 check("T17: summary contains trip name", "Sunset Cruise" in summary)
 check("T18: summary contains price", "$158" in summary)
 check("T19: summary contains departure", "17:30" in summary)
-check("T20: summary ends with lock-in question", "Shall I lock this in" in summary)
+check("T20: summary ends with lock-in question", "Want me to go ahead and book this" in summary)
 
 # T21: Prompt no longer contains FIRST/SECOND/THIRD check text
 import marina_agent

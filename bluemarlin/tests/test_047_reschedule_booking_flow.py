@@ -29,7 +29,7 @@ th_resched = {"fields": {"experience": "3-in-1 Snorkeling", "date": "2026-03-13"
 trip_snorkel = {"display_name": "3-in-1 Snorkeling Trip", "departures": [{"time": "10:00", "vessel": "TopCat", "departure_point": "Mood Beach pier"}], "days_available": "Fridays only", "price_adult_usd": 110, "included": ["lunch", "3 snorkel sites"]}
 result_resched = {"intents": ["reschedule"], "fields": {"date": "2026-03-13"}, "flags": {}}
 override_r, awaiting_r = _post_validate(th_resched, result_resched, trip_snorkel)
-check("T4: reschedule triggers summary", override_r is not None and "Shall I lock this in" in override_r)
+check("T4: reschedule triggers summary", override_r is not None and "Want me to go ahead and book this" in override_r)
 check("T5: reschedule sets awaiting", awaiting_r == True)
 
 # T6: _post_validate does NOT trigger on inquiry intent
@@ -40,7 +40,7 @@ check("T6: inquiry skips validation", override_i is None and awaiting_i == False
 # T7: _post_validate still triggers on booking intent (regression)
 result_booking = {"intents": ["booking"], "fields": {}, "flags": {}}
 override_b, awaiting_b = _post_validate(th_resched, result_booking, trip_snorkel)
-check("T7: booking still triggers summary", override_b is not None and "Shall I lock this in" in override_b)
+check("T7: booking still triggers summary", override_b is not None and "Want me to go ahead and book this" in override_b)
 
 # T8: wrong day + reschedule returns day-of-week error
 th_bad = {"fields": {"experience": "3-in-1 Snorkeling", "date": "2026-03-09", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}

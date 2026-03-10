@@ -38,7 +38,7 @@ from email_poller import _build_booking_summary
 trip_sc = {"display_name": "Sunset Cruise", "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}], "days_available": "Tuesday, Thursday, Friday, Saturday", "price_adult_usd": 79, "included": ["open bar", "snacks"]}
 summary = _build_booking_summary({"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"}, trip_sc)
 check("T3: booking summary has no signature", "Warm regards" not in summary)
-check("T4: summary still has lock-in question", "Shall I lock this in" in summary)
+check("T4: summary still has lock-in question", "Want me to go ahead and book this" in summary)
 check("T5: summary still has correct price", "$158" in summary)
 
 # T6: Simulate multi-intent — override should be APPENDED (test the logic inline)
@@ -88,7 +88,7 @@ override_reg, awaiting_reg = _post_validate(
     {"intents": ["booking"], "fields": {}, "flags": {}},
     trip_sc
 )
-check("T14: booking still builds summary", override_reg is not None and "Shall I lock this in" in override_reg)
+check("T14: booking still builds summary", override_reg is not None and "Want me to go ahead and book this" in override_reg)
 check("T15: booking still sets awaiting", awaiting_reg == True)
 
 # T16: _post_validate still triggers on reschedule intent (Brief 047 regression)
@@ -97,7 +97,7 @@ override_resched, _ = _post_validate(
     {"intents": ["reschedule"], "fields": {}, "flags": {}},
     trip_fri
 )
-check("T16: reschedule still triggers validation", override_resched is not None and "Shall I lock this in" in override_resched)
+check("T16: reschedule still triggers validation", override_resched is not None and "Want me to go ahead and book this" in override_resched)
 
 # === Fix 2 integration: Date clearing through merge ===
 

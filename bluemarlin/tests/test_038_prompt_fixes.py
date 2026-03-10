@@ -16,30 +16,30 @@ prompt = marina_agent._build_prompt(
     thread_flags={},
 )
 
-# T1: SECOND check present in prompt
-assert "SECOND:" in prompt, "T1 fail: SECOND check missing from BOOKING CONFIRMATION BEHAVIOUR"
-print("T1 pass — SECOND check present in prompt")
+# T1: BOOKING BEHAVIOUR section present in prompt (supersedes Brief 038 SECOND check, removed in Brief 046)
+assert "BOOKING BEHAVIOUR:" in prompt, "T1 fail: BOOKING BEHAVIOUR missing from prompt"
+print("T1 pass — BOOKING BEHAVIOUR present in prompt")
 
-# T2: Child age instruction present (text spans two lines in the f-string — check for the unique phrase)
-assert "for them before sending the summary" in prompt, \
-    "T2 fail: child age clarification instruction missing"
-print("T2 pass — child age clarification instruction present")
+# T2: Child age instruction present (restructured in Brief 046)
+assert "needs_child_ages" in prompt, \
+    "T2 fail: child age flag instruction missing"
+print("T2 pass — child age flag instruction present")
 
-# T3: Mid-confirmation date change check present (lowercase "if" in prompt text)
-assert "if the change involves" in prompt, \
-    "T3 fail: mid-confirmation date change instruction missing"
-print("T3 pass — mid-confirmation date change instruction present")
+# T3: Date clearing instruction present (added in Brief 048)
+assert 'set date to ""' in prompt or "set date to empty" in prompt.lower(), \
+    "T3 fail: date clearing instruction missing"
+print("T3 pass — date clearing instruction present")
 
-# T4: Mid-confirmation handler includes day-of-week guard (exact phrase from inserted text)
-assert "do NOT reset awaiting_booking_confirmation" in prompt, \
-    "T4 fail: awaiting_booking_confirmation guard missing from mid-confirmation handler"
-print("T4 pass — awaiting_booking_confirmation guard present in mid-confirmation handler")
+# T4: Guest hallucination guard present (added in Brief 048)
+assert "Never infer a guest count" in prompt, \
+    "T4 fail: guest hallucination guard missing"
+print("T4 pass — guest hallucination guard present")
 
-# T5: File header updated to Brief 038
+# T5: File header updated (now Brief 060)
 with open(os.path.join(os.path.dirname(__file__), "..", "src", "marina_agent.py")) as f:
     header = f.read(300)
-assert "Brief 038" in header, "T5 fail: file header not updated to Brief 038"
-print("T5 pass — file header updated to Brief 038")
+assert "Brief 060" in header, "T5 fail: file header not updated to Brief 060"
+print("T5 pass — file header updated to Brief 060")
 
 # --- Live model tests (2 API calls) ---
 
@@ -65,7 +65,7 @@ reply_s12 = s12.get("reply", "")
 # Fix verified by: flag absent AND reply does not offer to lock in the Sunday date
 assert not flags_s12.get("awaiting_booking_confirmation"), \
     f"T6 fail: awaiting_booking_confirmation=true for invalid Sunday date. flags={flags_s12}"
-lock_phrases = ["shall i lock", "lock this in", "locking this in", "locking it in"]
+lock_phrases = ["shall i lock", "lock this in", "locking this in", "locking it in", "go ahead and book"]
 assert not any(phrase in reply_s12.lower() for phrase in lock_phrases), \
     f"T6 fail: reply contains booking summary / lock-in offer for invalid Sunday date.\nreply={reply_s12[:300]}"
 print(f"T6 pass — no flag set and no lock-in offer for invalid Sunday date. flags={flags_s12}")

@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 059
+# LAST MODIFIED: Brief 061
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -46,19 +46,10 @@ def _build_faq_text() -> str:
     return "\n".join(lines)
 
 
-def _build_prompt(
-    from_email: str,
-    subject: str,
-    body: str,
-    thread_fields: dict,
-    thread_flags: dict,
-    action_context: str = "",
-) -> str:
+def _build_system_prompt(thread_flags: dict) -> str:
+    """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
     business = config_loader.get_business()
-    booking_rules = config_loader.get_booking_rules()
-    payment = config_loader.get_payment()
     csk = config_loader.get_common_sense_knowledge()
-    today = datetime.now(_CURACAO_TZ).strftime("%Y-%m-%d")
     signature = config_loader.get_agent_signature()
 
     relay_mode_section = ""
@@ -80,119 +71,47 @@ def _build_prompt(
             "Do not ask for information. Do not set any booking or escalation flags.\n"
         )
 
-    returning_customer_section = ""
-    if thread_flags.get("returning_booking"):
-        returning_customer_section = (
-            f"\nRETURNING CUSTOMER: This customer referenced booking {thread_flags['returning_booking']}. "
-            f"Their booking details are pre-loaded in the Fields above. "
-            f"They may want to: check status, change their date, ask a follow-up question, or report an issue. "
-            f"Handle naturally based on their message. For refunds or cancellations: set requires_human to true.\n"
-        )
-
-    completed_bookings_section = ""
-    completed = thread_flags.get("_completed_bookings_summary", "")
-    if completed:
-        completed_bookings_section = (
-            f"\nCOMPLETED BOOKINGS IN THIS THREAD:\n{completed}\n"
-            f"The customer may want to book another trip. Start fresh intake "
-            f"for the new booking — do not reference or modify completed bookings.\n"
-        )
-
-    max_bookings_section = ""
-    if thread_flags.get("_max_bookings_reached"):
-        max_bookings_section = (
-            "\nMAX BOOKINGS REACHED: This customer has reached the maximum number of "
-            "bookings per conversation. Politely let them know they can email again "
-            "to book additional trips. Do not start a new booking intake.\n"
-        )
-
-    trips_text = _build_trips_text()
-    faq_text = _build_faq_text()
-
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
-{relay_mode_section}{fully_escalated_section}{returning_customer_section}{completed_bookings_section}{max_bookings_section}
+{relay_mode_section}{fully_escalated_section}
 PERSONA: {csk.get('marina_persona', '')}
 
 WRITING STYLE:
-You must write as a real member of the BlueFinn Charters team. Never sound like
-a chatbot, virtual assistant, copywriter, or AI trying to sound human.
+Write as a real member of the BlueFinn team. Warm, practical, human. Every
+email should read like it was typed by a real person during a real workday.
 
-Every email must feel like it was written by a real person during a real workday.
-Natural, warm, grounded, believable. Never generated, scripted, or artificially
-cheerful.
+Mirror the sender's tone and length. Casual sender gets a casual reply.
+Formal sender gets a direct, professional reply. Short question gets a
+short answer.
 
-Mirror the tone of the sender. If the sender is warm, excited, or chatty, be
-warmer and more personal. If the sender is brief, formal, or clearly a PA or
-concierge, be more direct and to the point.
+Use contractions. Vary sentence length. Plain language. It is fine to start
+with "So", "And", or "But". Do not reason out loud or explain your logic.
 
-Match reply length to the incoming email. A short direct inquiry gets a short
-direct reply. A warm email with many questions gets more space and reassurance.
+GOOD REPLY EXAMPLES (tone reference only, do not copy content or values):
 
-Write in plain, natural language. Vary sentence length. Use contractions. It is
-fine to start a sentence with "And", "But", or "So". Sound professional, warm,
-clear, practical, and human.
+Casual booking inquiry:
+"Saturday works, we've got space. That trip leaves at 9:00, it's $85 per
+person so $340 for four. Just need a name and phone number and I can hold
+your spots."
 
-Do not use stock phrases:
-"I hope this email finds you well", "Thank you for reaching out",
-"Please do not hesitate to contact us", "Should you have any questions",
-"We would be delighted", "Kindly", "As per your request",
-"We appreciate your patience and understanding", "If there's anything else
-I can assist with", "Hope you're having a great day"
+Booking confirmation:
+"You're all set! Your booking reference is [BOOKING_REF]. Here's your
+payment link: [PAYMENT_LINK]. See you Saturday! 🎉"
 
-Avoid corporate fluff, fake warmth, customer support script language, sales
-language, filler phrases, and overly polished wording.
+Answering a question mid-booking:
+"Yep, drinks are included once the BBQ is served. Beer, wine, cocktails.
+Now for the booking, I just need the kids' ages so I can get your total
+right."
 
-Avoid these AI writing habits:
-- Em dashes or en dashes (use commas, periods, or "and" instead)
-- Decorative formatting or random bold text mid-email
-- Excessive bullet lists
-- Overly neat semicolons
-- Perfectly balanced paragraphs every time
+AVOID: em dashes, en dashes, "Shall I", "I'd be happy to", "Great choice",
+"Amazing", "Absolutely", decorative bold, bullet-heavy formatting, forced
+enthusiasm, name-dropping at the end of sentences, reasoning out loud
+("that means...", "so that would be...").
 
-Emojis: allowed in booking confirmation replies only. Otherwise, only use emojis
-if the sender used them first, and even then sparingly.
+Emojis: only in booking confirmations. Otherwise, only if the sender used them first.
 
-Prefer simple words over fancy words. Cut unnecessary adjectives. Do not
-overexplain. Do not force friendliness. Do not sound like a brochure.
-
-Keep greetings and closings brief and natural. Do not force structure.
-
-Before generating your reply, silently check:
-- Does this sound like a real person?
-- Does any sentence sound too polished, too generic, or too AI?
-- Does the tone match the sender?
-- Is the length appropriate?
-If any part sounds generated, rewrite it simpler.
+AGENT SIGNATURE: {signature}
 
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
-AGENT SIGNATURE: {signature}
-TODAY (Curaçao time): {today}
-TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
-CURRENCY: {csk.get('currency', 'USD')}
-
-BUSINESS:
-  Email: {business.get('email', '')}
-  Phone: {business.get('phone', '')}
-  Location: {business.get('location', '')}
-  Languages: {', '.join(business.get('languages', []))}
-  Operating days: {business.get('operating_days', '')}
-
-TRIPS (exact pricing and schedules):
-{trips_text}
-
-FAQ:
-{faq_text}
-
-BOOKING RULES:
-  Required fields to confirm a booking: {booking_rules.get('required_fields', [])}
-  Group threshold requiring human: {booking_rules.get('group_threshold_requires_human', 15)} or more guests
-  Typical advance booking: {booking_rules.get('advance_booking_typical_days', '')} days
-
-PAYMENT:
-  Methods: {', '.join(payment.get('methods', []))}
-  Cash policy: {payment.get('cash_policy', '')}
-  No payment at boarding: {payment.get('no_payment_at_boarding', True)}
-  Hold duration: {payment.get('hold_duration_hours', 6)} hours
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find (experience,
@@ -211,14 +130,11 @@ If the customer mentions children and the trip has age-based pricing (shown in
 TRIPS data above), ask for their ages in your reply and set needs_child_ages
 to true in your flags.
 
-{action_context}
-
 BOOKING REFERENCE:
 When you set booking_confirmed to true, you MUST include the exact placeholder
 [BOOKING_REF] in your reply where the reference number should appear. Python
 will replace it with the real reference number after the hold is confirmed.
-Example: "Your booking reference is [BOOKING_REF] — keep this handy for any
-future questions or changes!"
+Example: "Your booking reference is [BOOKING_REF]."
 
 ESCALATION BEHAVIOUR:
 When the intent is complaint, refund request, or cancellation, set requires_human
@@ -257,15 +173,6 @@ When semi_escalation applies:
 - Do NOT set any booking confirmation flags
 - Do NOT attempt to answer the question, even partially
 
-THREAD CONTEXT (already collected this conversation):
-  Fields: {json.dumps(thread_fields, ensure_ascii=False)}
-  Flags: {json.dumps(thread_flags, ensure_ascii=False)}
-
-INBOUND MESSAGE:
-  From: {from_email}
-  Subject: {subject}
-  Body: {body}
-
 Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Just the JSON.
 
 The JSON must have exactly these fields:
@@ -300,7 +207,7 @@ The JSON must have exactly these fields:
       Only include trip_key if certain. If the customer's description is ambiguous, omit it and ask.
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
-  "reply": "<your reply to the customer — warm and natural. Follow any ACTION instruction above. When no ACTION is given, reply conversationally.>",
+  "reply": "<your reply to the customer, written naturally as a real person would. Follow any ACTION instruction. When no ACTION is given, reply conversationally.>",
   "reply_hold_failed": "<optional — write ONLY when setting booking_confirmed to true. Apologetic message if the slot is unavailable, without [PAYMENT_LINK].>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
@@ -309,6 +216,116 @@ The JSON must have exactly these fields:
   "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
   "internal_note": "<one sentence for the operator log — never shown to the customer>"
 }}"""
+
+
+def _build_user_prompt(
+    from_email: str,
+    subject: str,
+    body: str,
+    thread_fields: dict,
+    thread_flags: dict,
+    action_context: str = "",
+) -> str:
+    """Build the user prompt: business data, thread context, inbound message."""
+    business = config_loader.get_business()
+    booking_rules = config_loader.get_booking_rules()
+    payment = config_loader.get_payment()
+    today = datetime.now(_CURACAO_TZ).strftime("%Y-%m-%d")
+    csk = config_loader.get_common_sense_knowledge()
+
+    returning_customer_section = ""
+    if thread_flags.get("returning_booking"):
+        returning_customer_section = (
+            f"\nRETURNING CUSTOMER: This customer referenced booking {thread_flags['returning_booking']}. "
+            f"Their booking details are pre-loaded in the Fields above. "
+            f"They may want to: check status, change their date, ask a follow-up question, or report an issue. "
+            f"Handle naturally based on their message. For refunds or cancellations: set requires_human to true.\n"
+        )
+
+    unknown_ref_section = ""
+    if thread_flags.get("unknown_ref"):
+        unknown_ref_section = (
+            f"\nUNKNOWN BOOKING REF: The customer mentioned ref {thread_flags['unknown_ref']} "
+            f"but it was not found in our system. Let them know politely that you couldn't "
+            f"find that reference and ask them to double-check the number. If they want to "
+            f"make a new booking, help them normally.\n"
+        )
+
+    completed_bookings_section = ""
+    completed = thread_flags.get("_completed_bookings_summary", "")
+    if completed:
+        completed_bookings_section = (
+            f"\nCOMPLETED BOOKINGS IN THIS THREAD:\n{completed}\n"
+            f"The customer may want to book another trip. Start fresh intake "
+            f"for the new booking — do not reference or modify completed bookings.\n"
+        )
+
+    max_bookings_section = ""
+    if thread_flags.get("_max_bookings_reached"):
+        max_bookings_section = (
+            "\nMAX BOOKINGS REACHED: This customer has reached the maximum number of "
+            "bookings per conversation. Politely let them know they can email again "
+            "to book additional trips. Do not start a new booking intake.\n"
+        )
+
+    trips_text = _build_trips_text()
+    faq_text = _build_faq_text()
+
+    return f"""{returning_customer_section}{unknown_ref_section}{completed_bookings_section}{max_bookings_section}
+TODAY (Curaçao time): {today}
+TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
+CURRENCY: {csk.get('currency', 'USD')}
+
+BUSINESS:
+  Email: {business.get('email', '')}
+  Phone: {business.get('phone', '')}
+  Location: {business.get('location', '')}
+  Languages: {', '.join(business.get('languages', []))}
+  Operating days: {business.get('operating_days', '')}
+
+TRIPS (exact pricing and schedules):
+{trips_text}
+
+FAQ:
+{faq_text}
+
+BOOKING RULES:
+  Required fields to confirm a booking: {booking_rules.get('required_fields', [])}
+  Group threshold requiring human: {booking_rules.get('group_threshold_requires_human', 15)} or more guests
+  Typical advance booking: {booking_rules.get('advance_booking_typical_days', '')} days
+
+PAYMENT:
+  Methods: {', '.join(payment.get('methods', []))}
+  Cash policy: {payment.get('cash_policy', '')}
+  No payment at boarding: {payment.get('no_payment_at_boarding', True)}
+  Hold duration: {payment.get('hold_duration_hours', 6)} hours
+
+{action_context}
+
+THREAD CONTEXT (already collected this conversation):
+  Fields: {json.dumps(thread_fields, ensure_ascii=False)}
+  Flags: {json.dumps(thread_flags, ensure_ascii=False)}
+
+INBOUND MESSAGE:
+  From: {from_email}
+  Subject: {subject}
+  Body: {body}"""
+
+
+def _build_prompt(
+    from_email: str,
+    subject: str,
+    body: str,
+    thread_fields: dict,
+    thread_flags: dict,
+    action_context: str = "",
+) -> str:
+    """Backward-compatible wrapper: returns full prompt (system + user combined).
+    Used by tests. process_message() uses the split functions directly."""
+    return (
+        _build_system_prompt(thread_flags) + "\n\n" +
+        _build_user_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
+    )
 
 
 def process_message(
@@ -326,9 +343,9 @@ def process_message(
         "fields": {},
         "confidence": "low",
         "reply": (
-            f"Hi there!\n\nThank you for getting in touch. To help you out, "
-            f"could you let me know your preferred date, the number of guests, "
-            f"and which experience you are interested in?\n\n"
+            f"Hi! Could you let me know which trip you're looking at, "
+            f"what date works, and how many guests? I'll get you sorted "
+            f"from there.\n\n"
             f"Warm regards,\n{signature}"
         ),
         "clarifications_needed": ["date", "guests", "experience"],
@@ -340,12 +357,14 @@ def process_message(
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        prompt = _build_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
+        system_prompt = _build_system_prompt(thread_flags)
+        user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
 
