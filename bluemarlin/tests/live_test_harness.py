@@ -481,8 +481,10 @@ def test_stress_past_date(im, dry_run=False):
     rt = reply_text(th)
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
-    # Should NOT proceed with booking for a past date
+    # Brief 064: Python now catches past dates with "already passed"
+    assert_reply_contains(th, "already passed", "past date caught by Python")
     assert_flag_absent_or_false(th, "hold_created", "no hold for past date")
+    assert_flag_absent_or_false(th, "awaiting_booking_confirmation", "no confirmation for past date")
 
 
 def test_stress_fake_trip(im, dry_run=False):
@@ -773,6 +775,726 @@ def test_stress_dutch(im, dry_run=False):
     assert_reply_contains_any(th, ["Klein", "trip", "$", "curacao", "Curaçao"], "understands Dutch request")
 
 
+# ========= BRIEF 064 SCENARIOS =========
+
+def test_064_past_date_valid_day(im, dry_run=False):
+    """Brief 064: Past date on a valid operating day — should say 'already passed'."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Past date sunset"
+    body = (
+        f"[LIVETEST-{run_id}] I'd like to book the Sunset Cruise for "
+        f"January 2 2025 for 2 people. Name: Past Date Tester, phone +12345."
+    )
+    if dry_run:
+        _print_dry_run("064_past_date_valid_day", subject, body)
+        return
+    print("\n=== Scenario: 064_past_date_valid_day ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    assert_reply_contains(th, "already passed", "says date already passed")
+    assert_flag_absent_or_false(th, "awaiting_booking_confirmation", "no confirmation for past date")
+    assert_flag_absent_or_false(th, "hold_created", "no hold for past date")
+
+
+def test_064_past_date_wrong_day(im, dry_run=False):
+    """Brief 064: Past date on wrong operating day — day-of-week error should fire first."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Past date wrong day"
+    body = (
+        f"[LIVETEST-{run_id}] Book the snorkeling trip for January 6 2025 "
+        f"for 3 people. Name: Wrong Day Tester, phone +99999."
+    )
+    if dry_run:
+        _print_dry_run("064_past_date_wrong_day", subject, body)
+        return
+    print("\n=== Scenario: 064_past_date_wrong_day ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    # Jan 6 2025 = Monday, snorkeling is Fridays only, so day-of-week fires first
+    assert_reply_contains_any(th, ["Friday", "Fridays", "doesn't run"], "day-of-week error fires")
+    assert_flag_absent_or_false(th, "hold_created", "no hold created")
+
+
+def test_064_future_date_books_normally(im, dry_run=False):
+    """Brief 064: Future valid date should proceed normally (regression)."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)  # Thursday for sunset_cruise
+    subject = "Future sunset booking"
+    body = (
+        f"[LIVETEST-{run_id}] I'd like to book the Sunset Cruise on {valid_day} "
+        f"for 2 people. Name: Future Tester, phone +55555."
+    )
+    if dry_run:
+        _print_dry_run("064_future_date_books_normally", subject, body)
+        return
+    print("\n=== Scenario: 064_future_date_books_normally ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    assert_reply_not_contains(th, "already passed", "no past date error")
+    assert_reply_contains(th, "$", "shows pricing")
+    assert_flag(th, "awaiting_booking_confirmation", True, "awaiting confirmation")
+
+
+# ========= EXTENDED STRESS SCENARIOS =========
+
+def test_stress_multiple_trips_one_email(im, dry_run=False):
+    """Stress: Asking about multiple trips in one email."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Multiple trip options"
+    body = (
+        f"[LIVETEST-{run_id}] Hi! We're in Curacao for a week. Can you tell me "
+        f"the difference between the Klein Curacao trip and the snorkeling 3-in-1? "
+        f"Also what's the sunset cruise like? Trying to decide which to book."
+    )
+    if dry_run:
+        _print_dry_run("stress_multiple_trips_one_email", subject, body)
+        return
+    print("\n=== Scenario: stress_multiple_trips_one_email ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 50, f"reply length={len(rt)}")
+    # Should mention at least 2 of the 3 trips asked about
+    trip_mentions = sum(1 for t in ["Klein", "snorkeling", "sunset", "3-in-1", "Sunset Cruise"]
+                       if t.lower() in rt.lower())
+    check("mentions multiple trips", trip_mentions >= 2, f"found {trip_mentions} trip mentions")
+
+
+def test_stress_kids_pricing(im, dry_run=False):
+    """Stress: Booking with children — should ask ages for age-based pricing."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)  # Thursday for sunset_cruise
+    subject = "Family sunset cruise"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, we'd like to book the sunset cruise on {valid_day}. "
+        f"2 adults and 2 kids. Name: Family Tester, phone +77777."
+    )
+    if dry_run:
+        _print_dry_run("stress_kids_pricing", subject, body)
+        return
+    print("\n=== Scenario: stress_kids_pricing ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should ask about children's ages for pricing
+    assert_reply_contains_any(th, ["age", "old", "how old", "ages"],
+                              "asks about children's ages")
+
+
+def test_stress_vague_date(im, dry_run=False):
+    """Stress: Vague date — 'sometime next month'."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Sometime soon"
+    body = (
+        f"[LIVETEST-{run_id}] Hey, we want to do the Klein Curacao trip "
+        f"sometime in the summer. Maybe July? We're flexible. 4 adults."
+    )
+    if dry_run:
+        _print_dry_run("stress_vague_date", subject, body)
+        return
+    print("\n=== Scenario: stress_vague_date ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should ask for specific date, not guess
+    assert_reply_contains_any(th, ["specific date", "which date", "particular date", "what date",
+                                   "date in mind", "exact date", "when"],
+                              "asks for specific date")
+    assert_flag_absent_or_false(th, "awaiting_booking_confirmation", "no confirmation on vague date")
+
+
+def test_stress_german(im, dry_run=False):
+    """Stress: Email in German."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Buchungsanfrage"
+    body = (
+        f"[LIVETEST-{run_id}] Guten Tag, wir möchten gerne die Sunset Cruise "
+        f"buchen. Wir sind 3 Personen und kommen am 10. April 2027 nach Curaçao. "
+        f"Was kostet das pro Person?"
+    )
+    if dry_run:
+        _print_dry_run("stress_german", subject, body)
+        return
+    print("\n=== Scenario: stress_german ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    assert_reply_contains_any(th, ["$", "79", "sunset", "Sunset", "cruise", "Cruise"], "responds about sunset cruise")
+
+
+def test_stress_casual_tone(im, dry_run=False):
+    """Stress: Very casual tone — Marina should match."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "yo"
+    body = (
+        f"[LIVETEST-{run_id}] yoooo whats up, me and my boys wanna go on "
+        f"a boat trip lol. whats the cheapest option? we're 3 dudes"
+    )
+    if dry_run:
+        _print_dry_run("stress_casual_tone", subject, body)
+        return
+    print("\n=== Scenario: stress_casual_tone ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should not be overly formal
+    assert_reply_not_contains(th, "Dear", "no 'Dear' in casual reply")
+    assert_reply_not_contains(th, "I'd be happy to assist", "no formal assist")
+    assert_no_emdash(th, "no em dashes")
+
+
+def test_stress_formal_tone(im, dry_run=False):
+    """Stress: Very formal tone — Marina should match."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Charter inquiry - Van der Berg family"
+    body = (
+        f"[LIVETEST-{run_id}] Dear BlueFinn Charters,\n\n"
+        f"I am writing to inquire about availability for the Klein Curaçao "
+        f"excursion on April 10, 2027 for a party of six adults.\n\n"
+        f"Could you kindly provide pricing details and departure times?\n\n"
+        f"Kind regards,\nDr. Johannes Van der Berg"
+    )
+    if dry_run:
+        _print_dry_run("stress_formal_tone", subject, body)
+        return
+    print("\n=== Scenario: stress_formal_tone ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 30, f"reply length={len(rt)}")
+    assert_reply_contains_any(th, ["Klein", "$", "departure"], "addresses inquiry")
+    assert_no_emdash(th, "no em dashes")
+
+
+def test_stress_special_requests(im, dry_run=False):
+    """Stress: Booking with multiple special requests."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)  # Thursday
+    subject = "Special occasion booking"
+    body = (
+        f"[LIVETEST-{run_id}] Hi! We want to book the sunset cruise on {valid_day} "
+        f"for 4 people. It's my wife's birthday so we'd love a cake on board if possible. "
+        f"Also, one of our guests is vegetarian. Name: Party Planner, phone +44444."
+    )
+    if dry_run:
+        _print_dry_run("stress_special_requests", subject, body)
+        return
+    print("\n=== Scenario: stress_special_requests ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should capture special requests
+    sr = th.get("fields", {}).get("special_requests", "")
+    check("special requests captured", len(sr) > 0, f"special_requests='{sr}'")
+
+
+def test_stress_multi_question(im, dry_run=False):
+    """Stress: Multiple questions mixed with booking intent."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)
+    subject = "Questions and booking"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, a few questions:\n"
+        f"1. Is there food on the sunset cruise?\n"
+        f"2. Can we bring our own drinks?\n"
+        f"3. What time should we arrive?\n"
+        f"Also I'd like to book for {valid_day}, 2 people. "
+        f"Name: Question Asker, phone +33333."
+    )
+    if dry_run:
+        _print_dry_run("stress_multi_question", subject, body)
+        return
+    print("\n=== Scenario: stress_multi_question ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:400]}...")
+    check("got a reply", len(rt) > 50, f"reply length={len(rt)}")
+    # Should try to answer questions AND handle booking
+    assert_field(th, "trip_key", "sunset_cruise", "trip_key extracted")
+    assert_field(th, "guests", "2", "guests extracted")
+
+
+def test_stress_xss_attempt(im, dry_run=False):
+    """Stress: XSS/HTML injection in email body."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Booking <script>alert('xss')</script>"
+    body = (
+        f"[LIVETEST-{run_id}] Hi <img src=x onerror=alert('xss')> "
+        f"I want to book <b>the sunset cruise</b> for 2 people on April 10 2027. "
+        f"Name: <script>document.cookie</script>, phone +11111."
+    )
+    if dry_run:
+        _print_dry_run("stress_xss_attempt", subject, body)
+        return
+    print("\n=== Scenario: stress_xss_attempt ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 10, f"reply length={len(rt)}")
+    # Should not echo back script tags
+    assert_reply_not_contains(th, "<script>", "no script tag in reply")
+    assert_reply_not_contains(th, "onerror", "no onerror in reply")
+
+
+def test_stress_very_long_email(im, dry_run=False):
+    """Stress: Extremely long email body."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Detailed trip planning"
+    padding = "We are really excited about this trip. " * 50
+    body = (
+        f"[LIVETEST-{run_id}] Hi Marina! {padding}"
+        f"So anyway, can you book the sunset cruise for April 10 2027 for 2 people? "
+        f"Name: Long Email Writer, phone +22222."
+    )
+    if dry_run:
+        _print_dry_run("stress_very_long_email", subject, body)
+        return
+    print("\n=== Scenario: stress_very_long_email ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should still extract booking details from the noise
+    assert_field(th, "trip_key", "sunset_cruise", "trip_key from long email")
+
+
+def test_stress_empty_body(im, dry_run=False):
+    """Stress: Email with empty body."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Sunset cruise"
+    body = f"[LIVETEST-{run_id}]"
+    if dry_run:
+        _print_dry_run("stress_empty_body", subject, body)
+        return
+    print("\n=== Scenario: stress_empty_body ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 10, f"reply length={len(rt)}")
+    assert_flag_absent_or_false(th, "fully_escalated", "no escalation on empty body")
+
+
+def test_stress_french(im, dry_run=False):
+    """Stress: Email in French."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Réservation excursion"
+    body = (
+        f"[LIVETEST-{run_id}] Bonjour, nous sommes un groupe de 5 personnes "
+        f"et nous aimerions réserver la croisière au coucher du soleil. "
+        f"Quel est le prix par personne? Merci beaucoup!"
+    )
+    if dry_run:
+        _print_dry_run("stress_french", subject, body)
+        return
+    print("\n=== Scenario: stress_french ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    assert_reply_contains_any(th, ["$", "79", "sunset", "Sunset", "coucher"], "responds about sunset cruise")
+
+
+def test_stress_west_coast_booking(im, dry_run=False):
+    """Stress: Full booking for west coast beach trip."""
+    run_id = uuid.uuid4().hex[:8]
+    # West coast beach runs on specific days, find a valid one
+    valid_day = next_weekday(5)  # Saturday
+    subject = "West coast beach trip"
+    body = (
+        f"[LIVETEST-{run_id}] Hi! We want to book the west coast beach trip "
+        f"for {valid_day} for 6 adults. Name: Beach Lover, phone +88888."
+    )
+    if dry_run:
+        _print_dry_run("stress_west_coast_booking", subject, body)
+        return
+    print("\n=== Scenario: stress_west_coast_booking ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    assert_field(th, "trip_key", "west_coast_beach", "trip_key correct")
+    assert_field(th, "guests", "6", "guests correct")
+    assert_reply_contains(th, "$", "pricing shown")
+
+
+def test_stress_jet_ski_booking(im, dry_run=False):
+    """Stress: Jet ski booking — should ask for departure time (multi-departure)."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Jet ski rental"
+    body = (
+        f"[LIVETEST-{run_id}] Hey, I want to book jet skis for April 15 2027. "
+        f"Just me and my friend, so 2 people. Name: Jet Fan, phone +66666."
+    )
+    if dry_run:
+        _print_dry_run("stress_jet_ski_booking", subject, body)
+        return
+    print("\n=== Scenario: stress_jet_ski_booking ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    assert_field(th, "trip_key", "jet_ski", "trip_key correct")
+    # Multi-departure trip — should ask for departure time or show options
+    assert_reply_contains_any(th, ["time", "departure", "slot", "when", "which"],
+                              "asks about departure time")
+
+
+def test_stress_cancellation(im, dry_run=False):
+    """Stress: Cancellation request — should escalate."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Cancel my trip"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, I need to cancel my upcoming sunset cruise "
+        f"booking. Something came up and we can't make it anymore. "
+        f"Can I get a refund?"
+    )
+    if dry_run:
+        _print_dry_run("stress_cancellation", subject, body)
+        return
+    print("\n=== Scenario: stress_cancellation ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    assert_flag(th, "fully_escalated", True, "escalated for cancellation")
+    assert_reply_contains_any(th, ["team", "care", "info@bluefinncharters.com"],
+                              "directs to team")
+
+
+def test_stress_weather_question(im, dry_run=False):
+    """Stress: Weather question — Marina can't answer, should semi-escalate or deflect."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Weather concerns"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, I'm booked for a trip next week but "
+        f"I'm worried about the weather. What happens if there's a storm? "
+        f"Do you cancel and refund, or reschedule?"
+    )
+    if dry_run:
+        _print_dry_run("stress_weather_question", subject, body)
+        return
+    print("\n=== Scenario: stress_weather_question ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should address the question (FAQ might have something) or semi-escalate
+    assert_reply_contains_any(th, ["weather", "storm", "cancel", "reschedule", "safety",
+                                   "team", "check"],
+                              "addresses weather concern")
+
+
+def test_stress_papiamentu(im, dry_run=False):
+    """Stress: Email in Papiamentu (local language of Curaçao)."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Buki un trip"
+    body = (
+        f"[LIVETEST-{run_id}] Bon dia! Mi ta interesá den e Sunset Cruise. "
+        f"Nos ta 4 persona i nos ke bai riba April 10, 2027. "
+        f"Kuantu e ta kosta?"
+    )
+    if dry_run:
+        _print_dry_run("stress_papiamentu", subject, body)
+        return
+    print("\n=== Scenario: stress_papiamentu ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    assert_reply_contains_any(th, ["$", "sunset", "Sunset", "cruise", "trip"], "understands Papiamentu")
+
+
+def test_stress_snorkeling_friday(im, dry_run=False):
+    """Stress: Snorkeling on correct day (Friday) — should proceed normally."""
+    run_id = uuid.uuid4().hex[:8]
+    fri = next_weekday(4)  # Friday
+    subject = "Snorkeling trip Friday"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, I want to book the snorkeling 3-in-1 trip "
+        f"for {fri} for 3 people. My name is Friday Snorkeler, phone +10101."
+    )
+    if dry_run:
+        _print_dry_run("stress_snorkeling_friday", subject, body)
+        return
+    print("\n=== Scenario: stress_snorkeling_friday ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    assert_field(th, "trip_key", "snorkeling_3in1", "trip_key correct")
+    assert_reply_not_contains(th, "doesn't run", "no day-of-week error on Friday")
+    assert_reply_contains(th, "$", "pricing shown")
+
+
+def test_stress_klein_curacao_full(im, dry_run=False):
+    """Stress: Full Klein Curaçao booking — multi-departure, should ask departure."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Klein Curacao day trip"
+    # Klein Curacao runs on specific days — find valid one
+    valid_day = next_weekday(3)  # Thursday
+    body = (
+        f"[LIVETEST-{run_id}] Hi! We want to do the Klein Curaçao trip on {valid_day}. "
+        f"8 adults total. Name: Island Hopper, phone +20202."
+    )
+    if dry_run:
+        _print_dry_run("stress_klein_curacao_full", subject, body)
+        return
+    print("\n=== Scenario: stress_klein_curacao_full ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    assert_field(th, "trip_key", "klein_curacao", "trip_key correct")
+    assert_field(th, "guests", "8", "guests correct")
+    # Klein Curacao has multiple departures — should ask
+    assert_reply_contains_any(th, ["departure", "time", "vessel", "which"],
+                              "asks about departure")
+
+
+def test_stress_thank_you(im, dry_run=False):
+    """Stress: Simple thank you message — should reply warmly, not start booking."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Thanks!"
+    body = (
+        f"[LIVETEST-{run_id}] Just wanted to say thanks for the info! "
+        f"We'll think about it and get back to you."
+    )
+    if dry_run:
+        _print_dry_run("stress_thank_you", subject, body)
+        return
+    print("\n=== Scenario: stress_thank_you ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 10, f"reply length={len(rt)}")
+    assert_flag_absent_or_false(th, "awaiting_booking_confirmation", "no booking started on thank you")
+    assert_no_emdash(th, "no em dashes")
+
+
+def test_stress_wrong_price(im, dry_run=False):
+    """Stress: Customer states wrong price — should correct."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Price check"
+    body = (
+        f"[LIVETEST-{run_id}] Hey, the sunset cruise is $50 per person right? "
+        f"I saw that price on a website. Can I book for April 10 2027, 2 people?"
+    )
+    if dry_run:
+        _print_dry_run("stress_wrong_price", subject, body)
+        return
+    print("\n=== Scenario: stress_wrong_price ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should mention correct price ($79), not agree to $50
+    assert_reply_contains(th, "79", "mentions correct price $79")
+    assert_reply_not_contains(th, "$50", "does not agree to $50")
+
+
+def test_stress_phone_only(im, dry_run=False):
+    """Stress: Customer gives phone number but no name."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)
+    subject = "Sunset booking no name"
+    body = (
+        f"[LIVETEST-{run_id}] Book sunset cruise {valid_day} for 2. "
+        f"My number is +1-555-0199."
+    )
+    if dry_run:
+        _print_dry_run("stress_phone_only", subject, body)
+        return
+    print("\n=== Scenario: stress_phone_only ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should have phone but ask for name
+    phone = th.get("fields", {}).get("phone", "")
+    check("phone captured", len(phone) > 0, f"phone='{phone}'")
+    assert_reply_contains_any(th, ["name", "who", "your name"], "asks for name")
+
+
+def test_stress_double_booking(im, dry_run=False):
+    """Stress: Two bookings in one email — should handle one at a time."""
+    run_id = uuid.uuid4().hex[:8]
+    valid_day = next_weekday(3)
+    subject = "Two trips please"
+    body = (
+        f"[LIVETEST-{run_id}] Hi! I want to book the sunset cruise on {valid_day} "
+        f"for 2 people AND the snorkeling trip on a Friday for 3 people. "
+        f"Name: Double Booker, phone +30303."
+    )
+    if dry_run:
+        _print_dry_run("stress_double_booking", subject, body)
+        return
+    print("\n=== Scenario: stress_double_booking ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should handle one trip at a time or ask which one first
+    assert_reply_contains_any(th, ["sunset", "snorkeling", "which", "first", "one at a time",
+                                   "start with", "$"],
+                              "addresses at least one trip")
+
+
+def test_stress_repeat_question(im, dry_run=False):
+    """Stress: Same question asked multiple ways in one email."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Trip prices please"
+    body = (
+        f"[LIVETEST-{run_id}] How much does the sunset cruise cost? "
+        f"What's the price for the sunset cruise? "
+        f"Can you tell me the sunset cruise pricing? "
+        f"I need to know sunset cruise rates."
+    )
+    if dry_run:
+        _print_dry_run("stress_repeat_question", subject, body)
+        return
+    print("\n=== Scenario: stress_repeat_question ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    assert_reply_contains(th, "79", "mentions price $79")
+    # Should not repeat the answer 4 times
+    check("concise reply", rt.lower().count("79") <= 3, f"mentions $79 {rt.lower().count('79')} times")
+
+
+def test_stress_accessibility(im, dry_run=False):
+    """Stress: Accessibility question — should semi-escalate."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Wheelchair accessibility"
+    body = (
+        f"[LIVETEST-{run_id}] Hi, my mother uses a wheelchair. "
+        f"Can she get on and off the boat safely? "
+        f"Are there handrails? Is the deck wheelchair-accessible?"
+    )
+    if dry_run:
+        _print_dry_run("stress_accessibility", subject, body)
+        return
+    print("\n=== Scenario: stress_accessibility ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:300]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    # Should semi-escalate or check with team — this is accessibility info not in FAQ
+    assert_reply_contains_any(th, ["team", "check", "get back", "find out", "confirm"],
+                              "consults team on accessibility")
+
+
+def test_stress_emoji_heavy(im, dry_run=False):
+    """Stress: Email full of emojis — Marina should handle gracefully."""
+    run_id = uuid.uuid4().hex[:8]
+    subject = "Boat trip 🚢🌊"
+    body = (
+        f"[LIVETEST-{run_id}] Hiii 😍😍😍 we want to go on a boat trip!! 🚢🌊🐠 "
+        f"The sunset cruise looks AMAZING 🌅🔥💯 "
+        f"How much for 2 people?? 💰🤔 We're sooo excited!! 🎉🥳"
+    )
+    if dry_run:
+        _print_dry_run("stress_emoji_heavy", subject, body)
+        return
+    print("\n=== Scenario: stress_emoji_heavy ===")
+    tk = predict_thread_key(TEST_SENDER, subject)
+    inject_email(im, TEST_SENDER, TEST_SENDER_NAME, subject, body)
+    print(f"  Injected. Waiting for reply (thread: {tk})...")
+    th = wait_for_reply(tk)
+    rt = reply_text(th)
+    print(f"  Reply: {rt[:200]}...")
+    check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
+    assert_reply_contains(th, "79", "mentions price $79")
+    assert_no_emdash(th, "no em dashes")
+
+
 # ========= SCENARIO REGISTRY =========
 
 SCENARIOS = {
@@ -782,6 +1504,12 @@ SCENARIOS = {
     "tone_quality": test_tone_quality,
     "unknown_ref": test_unknown_ref,
     "escalation": test_escalation,
+}
+
+BRIEF_064_SCENARIOS = {
+    "064_past_date_valid_day": test_064_past_date_valid_day,
+    "064_past_date_wrong_day": test_064_past_date_wrong_day,
+    "064_future_date_books_normally": test_064_future_date_books_normally,
 }
 
 STRESS_SCENARIOS = {
@@ -800,6 +1528,32 @@ STRESS_SCENARIOS = {
     "stress_data_extraction": test_stress_data_extraction,
     "stress_wrong_email_context": test_stress_wrong_email_context,
     "stress_dutch": test_stress_dutch,
+    "stress_multiple_trips_one_email": test_stress_multiple_trips_one_email,
+    "stress_kids_pricing": test_stress_kids_pricing,
+    "stress_vague_date": test_stress_vague_date,
+    "stress_german": test_stress_german,
+    "stress_casual_tone": test_stress_casual_tone,
+    "stress_formal_tone": test_stress_formal_tone,
+    "stress_special_requests": test_stress_special_requests,
+    "stress_multi_question": test_stress_multi_question,
+    "stress_xss_attempt": test_stress_xss_attempt,
+    "stress_very_long_email": test_stress_very_long_email,
+    "stress_empty_body": test_stress_empty_body,
+    "stress_french": test_stress_french,
+    "stress_west_coast_booking": test_stress_west_coast_booking,
+    "stress_jet_ski_booking": test_stress_jet_ski_booking,
+    "stress_cancellation": test_stress_cancellation,
+    "stress_weather_question": test_stress_weather_question,
+    "stress_papiamentu": test_stress_papiamentu,
+    "stress_snorkeling_friday": test_stress_snorkeling_friday,
+    "stress_klein_curacao_full": test_stress_klein_curacao_full,
+    "stress_thank_you": test_stress_thank_you,
+    "stress_wrong_price": test_stress_wrong_price,
+    "stress_phone_only": test_stress_phone_only,
+    "stress_double_booking": test_stress_double_booking,
+    "stress_repeat_question": test_stress_repeat_question,
+    "stress_accessibility": test_stress_accessibility,
+    "stress_emoji_heavy": test_stress_emoji_heavy,
 }
 
 
@@ -815,11 +1569,12 @@ def _print_dry_run(name, subject, body):
 
 def main():
     global _passed, _failed, _results
-    all_scenarios = {**SCENARIOS, **STRESS_SCENARIOS}
+    all_scenarios = {**SCENARIOS, **BRIEF_064_SCENARIOS, **STRESS_SCENARIOS}
     parser = argparse.ArgumentParser(description="BlueMarlin Live Test Harness")
     parser.add_argument("--scenario", help="Run a single scenario by name", choices=list(all_scenarios.keys()))
     parser.add_argument("--stress", action="store_true", help="Run stress tests instead of core tests")
-    parser.add_argument("--all", action="store_true", help="Run both core and stress tests")
+    parser.add_argument("--064", dest="brief064", action="store_true", help="Run Brief 064 tests")
+    parser.add_argument("--all", action="store_true", help="Run all tests")
     parser.add_argument("--dry-run", action="store_true", help="Show emails without injecting")
     parser.add_argument("--cleanup", action="store_true", help="Clean up test threads (requires poller stopped)")
     args = parser.parse_args()
@@ -832,6 +1587,8 @@ def main():
         scenarios = {args.scenario: all_scenarios[args.scenario]}
     elif args.all:
         scenarios = all_scenarios
+    elif args.brief064:
+        scenarios = BRIEF_064_SCENARIOS
     elif args.stress:
         scenarios = STRESS_SCENARIOS
     else:
