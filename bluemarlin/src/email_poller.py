@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parseaddr
 from email.header import decode_header as _decode_header
 from email.mime.text import MIMEText
+from email.utils import make_msgid
 from email.mime.multipart import MIMEMultipart
 import smtplib, base64
 import sys as _sys
@@ -132,6 +133,7 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     msg["From"] = "Marina <{}>".format(EMAIL_ADDR)
     msg["To"] = to_addr
     msg["Subject"] = subject
+    msg["Message-ID"] = make_msgid(domain=EMAIL_ADDR.split("@")[1])
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:

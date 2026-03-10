@@ -60,20 +60,13 @@ The email poller runs 24/7 as a systemd service. It is always running unless exp
 
 ## Deploy Flow
 
-After every `git push` from Mac, run this on VPS:
+After every `git push` from Mac, Claude Code can deploy directly via Bash tool:
 
 ```bash
-ssh root@108.61.192.52
-cd /root/bluemarlin
-git pull
-systemctl restart bluemarlin
-systemctl status bluemarlin   # confirm active
+ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin && systemctl is-active bluemarlin"
 ```
 
-One-liner from Mac (once SSH key is confirmed working):
-```bash
-ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin"
-```
+Key auth is configured — no password needed.
 
 pip installs: `[VERIFY — ask Benson if any pip install is needed after dependency changes]`
 
@@ -102,6 +95,23 @@ pip installs: `[VERIFY — ask Benson if any pip install is needed after depende
 
 ---
 
+## Email Authentication
+
+| Record | Type | Value |
+|--------|------|-------|
+| SPF | TXT @ | `v=spf1 include:spf.protection.outlook.com -all` |
+| DKIM selector1 | CNAME | `selector1-wetakeyourjob-com._domainkey.NETORGFT20395980.p-v1.dkim.mail.microsoft` |
+| DKIM selector2 | CNAME | `selector2-wetakeyourjob-com._domainkey.NETORGFT20395980.p-v1.dkim.mail.microsoft` |
+| DMARC | TXT _dmarc | `v=DMARC1; p=none; rua=mailto:hello@wetakeyourjob.com; fo=1; adkim=s; aspf=s; pct=100` |
+
+DKIM enabled in Microsoft 365 Defender → Email authentication → DKIM. Configured: 2026-03-10.
+
+Next steps (operator):
+- Verify headers show `spf=pass dkim=pass dmarc=pass` after 24–48h propagation
+- Consider tightening DMARC: `p=none` → `p=quarantine` → `p=reject` after monitoring
+
+---
+
 ## Console Convention
 
 When asking Benson to run a command, ALWAYS specify which machine:
@@ -117,7 +127,7 @@ Never say "run this command" without specifying which console.
 1. **API key location** — it is in `bluemarlin.env`, NOT in `.bashrc` or shell profile. Never tell Benson to check `.zshrc` for the key.
 2. **Poller is always running** — do not assume it needs to be started. It runs 24/7 via systemd. Just restart after deploys.
 3. **VPS project path** — it is `/root/bluemarlin/`, NOT `/root/bluemarlin-agent/` (that is the Mac path).
-4. **SSH from Claude Code** — Claude Code's sandbox blocks outbound SSH. Cannot SSH from tool calls. Benson must run SSH commands himself or use the one-liner above.
+4. **SSH from Claude Code** — Works. Key auth is set up (`~/.ssh/id_rsa`). Claude Code can SSH directly via the Bash tool. No password needed.
 
 ---
 
