@@ -185,6 +185,29 @@
       "days_available": "daily"
     }
   },
+  "trip_aliases": {
+    "klein curacao": "klein_curacao",
+    "klein curaçao": "klein_curacao",
+    "klein": "klein_curacao",
+    "island trip": "klein_curacao",
+    "day trip": "klein_curacao",
+    "turtle trip": "klein_curacao",
+    "snorkeling": "snorkeling_3in1",
+    "snorkel": "snorkeling_3in1",
+    "3-in-1": "snorkeling_3in1",
+    "3 in 1": "snorkeling_3in1",
+    "snorkeling trip": "snorkeling_3in1",
+    "west coast": "west_coast_beach",
+    "beach trip": "west_coast_beach",
+    "west coast beach": "west_coast_beach",
+    "sunset": "sunset_cruise",
+    "sunset cruise": "sunset_cruise",
+    "evening cruise": "sunset_cruise",
+    "evening trip": "sunset_cruise",
+    "jet ski": "jet_ski",
+    "jetski": "jet_ski",
+    "jet-ski": "jet_ski"
+  },
   "fleet": {
     "bluefinn1": {
       "display_name": "BlueFinn 1 (B&W)",

@@ -668,6 +668,10 @@ Brief 056 — SSH key auth: Claude Code → VPS
 Decision: INFRA.md incorrectly stated SSH from Claude Code was blocked. Never tested. Root cause was a malformed authorized_keys entry on VPS. Fixed with ssh-copy-id from Mac. Key auth now works — Claude Code Bash tool can SSH and deploy autonomously.
 Outcome: complete — verified in session, briefs 053–055 deployed via SSH
 
+Brief 057 — Anti Email-Spam: SPF/DKIM/DMARC + Message-ID Header
+Decision: Marina's outbound emails landing in spam. Added Message-ID header to SMTP sends (email_poller.py). Documented SPF, DKIM, and DMARC DNS records in INFRA.md for the domain.
+Outcome: complete — emails no longer flagged as spam
+
 Brief 058 — Fix: Booking Ref Missing from Confirmation Reply
 Decision: Brief 054 instructed Marina to include booking_ref from thread_flags, but booking_ref is generated after the marina_agent call — impossible to satisfy. Fixed using the existing [PAYMENT_LINK] placeholder pattern: Marina writes [BOOKING_REF] in her reply, Python replaces it after successful hold creation at line 955. Also strips the placeholder on the non-success path at line 1020.
 Outcome: complete — 6/6 new tests pass, 12/12 Brief 054 tests still pass
@@ -676,6 +680,22 @@ Brief 059 — Marina Tone Polish
 Decision: Prompt-only change. Added comprehensive WRITING STYLE section to marina_agent.py prompt: write as a real person, mirror sender tone, avoid stock phrases (10 banned), avoid AI habits (em dashes, decorative bold, semicolons), emoji rule (confirmations only), self-check before output. Updated marina_persona in client.json to reflect hospitality focus and tone mirroring.
 Outcome: complete — 6/6 tests pass
 
+Brief 060 — Marina Tone v2: Python Templates + Claude Prompting
+Decision: Python-side template improvements for booking summary and validation reply strings. Claude prompt hardened with tone mirroring and stock phrase bans. Improved natural language quality of system-generated replies.
+Outcome: complete — 12/12 tests pass
+
+Brief 061 — Escalation Logic Bugs: NO-REF, Empty Name, Silent Ref Drop
+Decision: Three escalation path fixes. (1) Booking ref fallthrough — `_resolve_booking_ref()` now checks completed_bookings list. (2) Empty customer name — defaults to "Unknown" instead of empty string. (3) Silent ref drop — booking ref preserved through escalation flow.
+Outcome: complete — 10/10 tests pass
+
+Brief 062 — Live Test Harness: Automated E2E Testing
+Decision: Created standalone `tests/live_test_harness.py` — IMAP APPEND injection, thread state polling, pattern-based assertions. Zero src/ imports (copies oauth_token, imap_connect, normalize_subject directly). 50 scenarios total: 6 core, 3 Brief 064, 41 stress. CLI flags: --dry-run, --064, --stress, --all, --scenario, --cleanup.
+Outcome: complete — 50 scenarios, 126/140 assertions pass (90%), zero functional bugs
+
 Brief 064 — Past Date Check, Escalation Email Info, Noreply Filter, Email-Based Returning Customer
 Decision: Four hardening fixes from live stress testing. (1) Past date check in `_post_validate()` after day-of-week — rejects dates in the past using Curaçao timezone. (2) System email filter — `_SYSTEM_EMAIL_PREFIXES` tuple skips noreply@, mailer-daemon@, etc. before processing. (3) Escalation email format — subject now includes customer email, body starts with `=== CUSTOMER ===` section (email, name, phone). (4) Email-based returning customer lookup — `get_bookings_by_email()` in state_registry.py, email normalization in `save_booking()`, cross-thread memory via `_past_customer_bookings` flag injected into marina_agent prompt.
 Outcome: complete — 14/14 tests pass
+
+Brief 065 — Production Hardening: Rate Limiting, Thread Cleanup, Monitoring, OAuth Auto-Refresh
+Decision: Four production-readiness fixes. (1) Per-sender rate limiting — 20 emails/sender/hour tracked in thread state JSON, silent skip on limit hit. (2) Thread state cleanup — `_cleanup_stale_data()` archives threads >30d to JSONL, prunes processed_hashes to 5000, cleans expired sender_rates. (3) Monitoring — token usage logged via bm_logger after each Claude call, heartbeat file written after each poll cycle, error alerting via smtp_send after 3 consecutive failures. (4) OAuth auto-refresh — saves rotated refresh_token back to disk, raises RuntimeError on missing access_token. Multi-operator routing deferred.
+Outcome: complete — 12/12 tests pass, regression 28/28 + 19/19 + 14/14

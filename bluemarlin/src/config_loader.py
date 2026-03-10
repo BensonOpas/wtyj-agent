@@ -72,6 +72,13 @@ def get_payment() -> dict:
         return {}
 
 
+def get_trip_aliases() -> dict:
+    try:
+        return _load().get("trip_aliases", {})
+    except Exception:
+        return {}
+
+
 def get_fleet() -> dict:
     try:
         return _load().get("fleet", {})

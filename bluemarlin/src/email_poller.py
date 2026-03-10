@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 064
+# LAST MODIFIED: Brief 065
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -57,6 +57,22 @@ THREAD_STATE_PATH = os.path.join(_CONFIG_DIR, "email_thread_state.json")
 MAX_REPLIES_PER_THREAD = 10
 REPLY_WINDOW_SECONDS = 60 * 60
 
+# Per-sender rate limit (cross-thread)
+# 20/hr is generous: a real customer doing multi-trip + questions tops out at ~10.
+# Matches the per-thread limit (10) doubled to allow multi-thread legitimate use.
+SENDER_RATE_LIMIT = 20
+SENDER_RATE_WINDOW = 3600  # 1 hour, same window as per-thread anti-loop
+
+# Thread cleanup — 30 days covers the longest booking-to-trip cycle.
+# Booking data survives in SQLite bookings table; this only prunes conversation state.
+THREAD_RETENTION_DAYS = 30
+ARCHIVE_PATH = os.path.join(_CONFIG_DIR, "archived_threads.jsonl")
+HEARTBEAT_PATH = os.path.join(_CONFIG_DIR, "heartbeat.txt")
+
+# Error alerting — 3 consecutive errors ≈ 90 seconds of failures (3 × 30s poll).
+# One-off exceptions are normal (network hiccup); sustained failure warrants alert.
+_ERROR_ALERT_THRESHOLD = 3
+
 # Intents that activate the Python booking validation and hold-creation flow.
 # "reschedule" is included because mid-thread date/time changes are booking
 # modifications that need the same validation (day-of-week, departure, summary).
@@ -108,6 +124,39 @@ def normalize_subject(subj: str) -> str:
         s = ns
     return s
 
+def _cleanup_stale_data(state, now):
+    """Prune threads >30d old (no active hold) and trim processed_hashes."""
+    cutoff = now - (THREAD_RETENTION_DAYS * 86400)
+    threads = state.get("threads", {})
+    to_delete = []
+    for tk, th in threads.items():
+        last = th.get("last_activity") or 0
+        if last < cutoff and not th.get("flags", {}).get("hold_created"):
+            to_delete.append(tk)
+    if to_delete:
+        with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
+            for tk in to_delete:
+                f.write(json.dumps({"archived_at": now, "thread_key": tk, "data": threads[tk]}, ensure_ascii=False) + "\n")
+                del threads[tk]
+        log(f"Archived {len(to_delete)} stale threads (>{THREAD_RETENTION_DAYS}d)")
+    # Prune processed_hashes by count (keep last 5000)
+    try:
+        conn = state_registry._get_conn()
+        count = conn.execute("SELECT count(*) FROM processed_hashes").fetchone()[0]
+        if count > 5000:
+            conn.execute("DELETE FROM processed_hashes WHERE rowid NOT IN (SELECT rowid FROM processed_hashes ORDER BY rowid DESC LIMIT 5000)")
+            conn.commit()
+            log(f"Pruned processed_hashes: {count} -> 5000")
+        conn.close()
+    except Exception:
+        pass
+    # Prune sender_rates
+    sr = state.get("sender_rates", {})
+    for em in list(sr.keys()):
+        sr[em] = [t for t in sr[em] if now - t <= SENDER_RATE_WINDOW]
+        if not sr[em]:
+            del sr[em]
+
 def get_refresh_token():
     return open(REFRESH_TOKEN_PATH).read().strip()
 
@@ -118,9 +167,22 @@ def oauth_token(scope: str) -> str:
         "grant_type": "refresh_token",
         "scope": scope
     }).encode()
-    resp = json.loads(urllib.request.urlopen(
-        urllib.request.Request(f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token", data)
-    ).read())
+    try:
+        resp = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token", data)
+        ).read())
+    except Exception as e:
+        log(f"OAuth token request failed: {e}")
+        raise
+    if "refresh_token" in resp:
+        try:
+            with open(REFRESH_TOKEN_PATH, "w") as f:
+                f.write(resp["refresh_token"])
+        except Exception as e:
+            log(f"Failed to save new refresh token: {e}")
+    if "access_token" not in resp:
+        log(f"OAuth response missing access_token: {resp.get('error', 'unknown')}")
+        raise RuntimeError(f"OAuth failed: {resp.get('error_description', 'no access_token')}")
     return resp["access_token"]
 
 def imap_connect():
@@ -445,16 +507,20 @@ def main():
 
     state = load_json(THREAD_STATE_PATH, {"threads": {}, "message_id_index": {}})
     state.setdefault("message_id_index", {})
+    _consecutive_errors = 0
+    _error_alert_sent = False
 
     while True:
         try:
             im = imap_connect()
+            _cleanup_stale_data(state, int(time.time()))
             im.select(MAILBOX)
 
             typ, data = im.uid("search", None, "UNSEEN")
             uids = data[0].split() if data and data[0] else []
 
             for uid in uids:
+                now = int(time.time())
                 # fetch full message
                 typ, msg_data = im.uid("fetch", uid, "(RFC822)")
                 if not msg_data or not msg_data[0]:
@@ -473,6 +539,19 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     log(f"Skipped system email from {from_email}")
                     continue
+
+                # Per-sender rate limit (cross-thread)
+                _sr = state.setdefault("sender_rates", {})
+                _sr_times = _sr.get(from_email.lower(), [])
+                _sr_times = [t for t in _sr_times if now - t <= SENDER_RATE_WINDOW]
+                if len(_sr_times) >= SENDER_RATE_LIMIT:
+                    log(f"Sender rate limit hit for {from_email}: {len(_sr_times)} emails in window")
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    _sr[from_email.lower()] = _sr_times
+                    save_json(THREAD_STATE_PATH, state)
+                    continue
+                _sr_times.append(now)
+                _sr[from_email.lower()] = _sr_times
 
                 # ---- BM-003: Single-shot duplicate prevention (reply only once) ----
                 content_fingerprint = f"{from_email.strip().lower()}|{normalize_subject(subj).strip().lower()}|{body.strip()}"
@@ -1107,8 +1186,27 @@ def main():
 
             im.logout()
 
+            # Heartbeat — write timestamp for external monitoring
+            try:
+                with open(HEARTBEAT_PATH, "w") as f:
+                    f.write(str(int(time.time())))
+            except Exception:
+                pass
+
         except Exception as ex:
+            _consecutive_errors += 1
             log(f"Error: {ex}")
+            if _consecutive_errors >= _ERROR_ALERT_THRESHOLD and not _error_alert_sent:
+                try:
+                    smtp_send(demo_support_email,
+                        f"[ALERT] Marina poller: {_consecutive_errors} consecutive errors",
+                        f"Latest error: {ex}\n\nCheck journalctl -u bluemarlin")
+                    _error_alert_sent = True
+                except Exception:
+                    pass
+        else:
+            _consecutive_errors = 0
+            _error_alert_sent = False
 
         time.sleep(POLL_INTERVAL)
 

@@ -159,10 +159,6 @@ Valid field keys: `experience` `date` (YYYY-MM-DD) `guests` `customer_name`
 
 ## KNOWN OPEN ISSUES
 
-- `slot_checked` not reset on date change — low priority, deferred
-- Same-day booking UTC edge case (20:00–00:00 Curaçao time) — accepted for demo
-- Escalations tab must be created manually in Google Sheet before first escalation
-- Service account must be shared on all 5 BlueFinn calendars before live use
 - Fallback reply in marina_agent.py (lines 194–208) is a hardcoded string — accepted exception for API failure path only, not a routing template. Rule 3 does not apply.
 
 ---

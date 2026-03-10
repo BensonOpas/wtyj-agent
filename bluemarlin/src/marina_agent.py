@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 064
+# LAST MODIFIED: Brief 065
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -14,6 +14,7 @@ import anthropic
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config_loader
+import bm_logger
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 
@@ -33,6 +34,18 @@ def _build_trips_text() -> str:
     for trip_key, trip in trips.items():
         clean = _filter_verify(trip)
         lines.append(f"  {trip_key}: {json.dumps(clean, ensure_ascii=False)}")
+    return "\n".join(lines)
+
+
+def _build_trip_alias_text() -> str:
+    aliases = config_loader.get_trip_aliases()
+    grouped: dict[str, list[str]] = {}
+    for alias, trip_key in aliases.items():
+        grouped.setdefault(trip_key, []).append(alias)
+    lines = []
+    for trip_key, alias_list in grouped.items():
+        quoted = ", ".join(f'"{a}"' for a in alias_list)
+        lines.append(f'      {quoted} → {trip_key}')
     return "\n".join(lines)
 
 
@@ -199,11 +212,7 @@ The JSON must have exactly these fields:
     phone: customer's phone number
     special_requests: forward-looking preferences only
     trip_key: exact key from the trips list. Match the customer's wording to one of these keys:
-      "Klein Curaçao", "Klein", "island trip", "day trip", "turtle trip" → klein_curacao
-      "snorkeling", "snorkel", "3-in-1", "3 in 1", "snorkeling trip" → snorkeling_3in1
-      "west coast", "beach trip", "west coast beach" → west_coast_beach
-      "sunset", "sunset cruise", "evening cruise", "evening trip" → sunset_cruise
-      "jet ski", "jetski", "jet-ski" → jet_ski
+{_build_trip_alias_text()}
       Only include trip_key if certain. If the customer's description is ambiguous, omit it and ask.
     departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
@@ -376,6 +385,14 @@ def process_message(
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
+
+        # Log API token usage
+        _usage = getattr(response, "usage", None)
+        if _usage:
+            bm_logger.log("api_usage",
+                input_tokens=_usage.input_tokens,
+                output_tokens=_usage.output_tokens,
+                model="claude-sonnet-4-6")
 
         # Strip markdown code fences if present
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
