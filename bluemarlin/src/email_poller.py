@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 054
+# LAST MODIFIED: Brief 055
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -236,6 +236,57 @@ def _detect_booking_ref(body: str) -> "str | None":
     """Extract a BF-YYYY-XXXXX booking reference from message body. Returns ref or None."""
     match = re.search(r'BF-\d{4}-\d{5}', body)
     return match.group() if match else None
+
+
+# Booking-related flags that get reset between bookings in the same thread
+_BOOKING_FLAGS_TO_RESET = {
+    "hold_created", "booking_confirmed", "booking_ref", "hold_id",
+    "payment_id", "payment_link", "payment_status",
+    "event_id", "event_link",
+    "slot_checked", "slot_available", "spots_remaining", "trip_capacity",
+    "awaiting_booking_confirmation",
+    "hold_trip_key", "hold_date", "hold_departure_time",
+}
+
+# Fields to preserve across bookings (customer identity)
+_PERSISTENT_FIELDS = {"customer_name", "phone"}
+
+
+def _maybe_reset_for_new_booking(th: dict) -> bool:
+    """If a booking was just completed (hold_created=True), archive it and reset
+    fields/flags for a fresh booking intake. Returns True if reset happened."""
+    if not th.get("flags", {}).get("hold_created"):
+        return False
+
+    max_bookings = config_loader.get_booking_rules().get("max_bookings_per_thread", 3)
+    completed = th.get("completed_bookings", [])
+    if len(completed) >= max_bookings:
+        return False  # at limit — don't reset, Marina will decline
+
+    # Archive current booking
+    fields = th.get("fields", {})
+    flags = th.get("flags", {})
+    archived = {
+        "booking_ref": flags.get("booking_ref", ""),
+        "trip_key": fields.get("trip_key", ""),
+        "experience": fields.get("experience", ""),
+        "date": fields.get("date", ""),
+        "guests": fields.get("guests", ""),
+        "departure_time": fields.get("departure_time", ""),
+        "payment_link": flags.get("payment_link", ""),
+    }
+    completed.append(archived)
+    th["completed_bookings"] = completed
+
+    # Reset fields — keep customer identity
+    preserved = {k: v for k, v in fields.items() if k in _PERSISTENT_FIELDS}
+    th["fields"] = preserved
+
+    # Reset booking flags
+    for flag_key in _BOOKING_FLAGS_TO_RESET:
+        th["flags"].pop(flag_key, None)
+
+    return True
 
 
 # ========= BOOKING VALIDATION HELPERS =========
@@ -567,11 +618,33 @@ def main():
                 for _rk in ("awaiting_relay", "relay_token", "relay_question",
                             "relay_customer_email", "relay_reply_subject"):
                     agent_flags.pop(_rk, None)
+                # Inject completed bookings summary for multi-trip context
+                _completed = th.get("completed_bookings", [])
+                if _completed:
+                    _cb_lines = []
+                    for _cb in _completed:
+                        _cb_lines.append(
+                            f"  - {_cb.get('experience', _cb.get('trip_key', '?'))} on "
+                            f"{_cb.get('date', '?')} for {_cb.get('guests', '?')} guests "
+                            f"(ref: {_cb.get('booking_ref', 'N/A')})"
+                        )
+                    agent_flags["_completed_bookings_summary"] = "\n".join(_cb_lines)
+                    # Check max bookings — tells Marina to decline new bookings
+                    _max_bk = config_loader.get_booking_rules().get("max_bookings_per_thread", 3)
+                    if len(_completed) >= _max_bk and th["flags"].get("hold_created"):
+                        agent_flags["_max_bookings_reached"] = True
                 action_context = _build_action_context(th)
                 result = marina_agent.process_message(
                     from_email, subj, body,
                     th.get("fields", {}), agent_flags, action_context,
                 )
+
+                # Multi-trip: if booking intent + previous booking completed, archive and reset
+                if (any(i in _BOOKING_INTENTS for i in result.get("intents", []))
+                        and th["flags"].get("hold_created")):
+                    _did_reset = _maybe_reset_for_new_booking(th)
+                    if _did_reset:
+                        log(f"Multi-trip reset for {from_email}: booking #{len(th.get('completed_bookings', []))} archived")
 
                 # Step 2: Merge fields — always overwrite when Claude returns non-empty values
                 th.setdefault("fields", {})

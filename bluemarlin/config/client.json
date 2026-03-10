@@ -45,7 +45,8 @@
     ],
     "transfers_available": true,
     "transfers_advance_notice_hours": 24,
-    "dietary_advance_notice_days": 1
+    "dietary_advance_notice_days": 1,
+    "max_bookings_per_thread": 3
   },
   "cancellation_policy": {
     "summary": "Full refund if cancelled more than 48 hours before departure. 50% refund if cancelled within 48 hours. No refund within 24 hours of departure.",

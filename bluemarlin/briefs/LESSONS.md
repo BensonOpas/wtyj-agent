@@ -4,6 +4,13 @@ One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
 
+## Brief 055 — Multi-trip booking in one thread
+**Date:** 2026-03-09
+
+First draft had an unconditional reset on every message after hold_created — brief reviewer caught that this would break non-booking follow-ups ("Thanks!", FAQ questions) by wiping booking context. The fix was intent-gated reset: archive and reset only when Claude returns booking intent. Key design decision: reset fires AFTER the marina_agent call but BEFORE the field merge, so the old booking is archived from pre-merge state and Claude's new fields merge onto a clean slate. Also critical: `returning_booking` (Brief 054) must NOT be in the reset set — it's a detection flag, not a booking flow flag.
+
+---
+
 ## Brief 054 — Booking ref in confirmation + cross-thread memory
 **Date:** 2026-03-09
 

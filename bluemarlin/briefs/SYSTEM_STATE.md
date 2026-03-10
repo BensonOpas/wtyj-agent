@@ -652,6 +652,10 @@ Brief 053 — Stale thread reset on new conversation
 Decision: Thread keys based on sender+subject had no expiration. A new email with the same subject as a weeks-old thread inherited stale fields (customer_name, phone, departure_time from a different booking), causing Claude to produce nonsensical replies. Fix: `_maybe_reset_stale_thread()` detects new emails (no In-Reply-To/References headers) hitting threads older than 24h and resets them to fresh state. Replies to active conversations are unaffected. `last_activity` timestamp added to thread persist for reliable age tracking.
 Outcome: complete — 9/9 tests pass
 
+Brief 055 — Multi-trip booking in one thread
+Decision: After a completed booking (hold_created=True), the thread was stuck — no way to start a fresh booking. Fix: intent-gated reset that fires AFTER the marina_agent call when booking intent is detected alongside hold_created. Archives the completed booking into `th["completed_bookings"]`, resets fields (preserving customer_name and phone) and booking flags, then merges Claude's new fields onto the clean slate. Non-booking follow-ups ("Thanks!", FAQ questions) pass through unchanged. Max 3 bookings per thread via `max_bookings_per_thread` in client.json.
+Outcome: complete — 10/10 tests pass
+
 Brief 054 — Booking ref in confirmation + cross-thread memory
 Decision: booking_ref (BF-YYYY-XXXXX) was generated but never shown to the customer. Added `bookings` SQLite table for cross-thread memory. `save_booking()` stores full booking context after hold confirmation. `_detect_booking_ref()` extracts refs from inbound message bodies (structured pattern match, not language classification). Returning customer context injected into marina_agent prompt before the Claude call. Static BOOKING REFERENCE instruction added to prompt so Marina includes the ref in confirmation replies.
 Outcome: complete — 12/12 tests pass

@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 054
+# LAST MODIFIED: Brief 055
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -89,11 +89,28 @@ def _build_prompt(
             f"Handle naturally based on their message. For refunds or cancellations: set requires_human to true.\n"
         )
 
+    completed_bookings_section = ""
+    completed = thread_flags.get("_completed_bookings_summary", "")
+    if completed:
+        completed_bookings_section = (
+            f"\nCOMPLETED BOOKINGS IN THIS THREAD:\n{completed}\n"
+            f"The customer may want to book another trip. Start fresh intake "
+            f"for the new booking — do not reference or modify completed bookings.\n"
+        )
+
+    max_bookings_section = ""
+    if thread_flags.get("_max_bookings_reached"):
+        max_bookings_section = (
+            "\nMAX BOOKINGS REACHED: This customer has reached the maximum number of "
+            "bookings per conversation. Politely let them know they can email again "
+            "to book additional trips. Do not start a new booking intake.\n"
+        )
+
     trips_text = _build_trips_text()
     faq_text = _build_faq_text()
 
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
-{relay_mode_section}{fully_escalated_section}{returning_customer_section}
+{relay_mode_section}{fully_escalated_section}{returning_customer_section}{completed_bookings_section}{max_bookings_section}
 PERSONA: {csk.get('marina_persona', '')}
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 AGENT SIGNATURE: {signature}
