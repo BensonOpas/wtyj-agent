@@ -181,7 +181,8 @@ def assert_flag_absent_or_false(th, flag, label):
 
 def assert_field(th, field, expected, label):
     actual = th.get("fields", {}).get(field)
-    check(label, actual == expected, f"{field}={actual}, expected={expected}")
+    # Compare as strings to handle int/str mismatches (e.g. guests: 2 vs "2")
+    check(label, str(actual) == str(expected), f"{field}={actual}, expected={expected}")
 
 
 def assert_no_emdash(th, label):
