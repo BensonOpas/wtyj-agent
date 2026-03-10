@@ -671,3 +671,7 @@ Outcome: complete — verified in session, briefs 053–055 deployed via SSH
 Brief 058 — Fix: Booking Ref Missing from Confirmation Reply
 Decision: Brief 054 instructed Marina to include booking_ref from thread_flags, but booking_ref is generated after the marina_agent call — impossible to satisfy. Fixed using the existing [PAYMENT_LINK] placeholder pattern: Marina writes [BOOKING_REF] in her reply, Python replaces it after successful hold creation at line 955. Also strips the placeholder on the non-success path at line 1020.
 Outcome: complete — 6/6 new tests pass, 12/12 Brief 054 tests still pass
+
+Brief 059 — Marina Tone Polish
+Decision: Prompt-only change. Added comprehensive WRITING STYLE section to marina_agent.py prompt: write as a real person, mirror sender tone, avoid stock phrases (10 banned), avoid AI habits (em dashes, decorative bold, semicolons), emoji rule (confirmations only), self-check before output. Updated marina_persona in client.json to reflect hospitality focus and tone mirroring.
+Outcome: complete — 6/6 tests pass

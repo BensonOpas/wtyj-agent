@@ -124,3 +124,7 @@ Two review cycles were needed: (1) `{N}` inside an f-string in the prompt raises
 ## Brief 058 — Fix: Booking Ref Missing from Confirmation Reply
 Date: 2026-03-10
 When introducing a new value that is generated AFTER the marina_agent call (like booking_ref), never instruct Marina to read it from thread_flags — it will not be there. Use the [PLACEHOLDER] pattern already established by [PAYMENT_LINK]: Marina writes the placeholder, Python replaces it post-hold. Also always add a strip on the non-success path to prevent raw placeholders reaching customers.
+
+## Brief 059 — Marina Tone Polish
+Date: 2026-03-10
+Prompt-only change with big output impact. The comprehensive writing style guide (stock phrase bans, AI habit bans, tone mirroring, length matching, self-check) significantly improved reply naturalness. Token cost is ~500 extra tokens per call, acceptable for demo. The emoji rule (confirmations only) was a user-specified compromise — watch for edge cases in live testing.
