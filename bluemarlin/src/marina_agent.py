@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 061
+# LAST MODIFIED: Brief 064
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -260,6 +260,15 @@ def _build_user_prompt(
             f"for the new booking — do not reference or modify completed bookings.\n"
         )
 
+    past_customer_bookings_section = ""
+    if thread_flags.get("_past_customer_bookings"):
+        past_customer_bookings_section = (
+            f"\nRETURNING CUSTOMER (by email): This customer has previous bookings:\n"
+            f"{thread_flags['_past_customer_bookings']}\n"
+            f"Acknowledge them warmly as a returning customer. If they're booking again, "
+            f"their name and phone may already be on file — check the fields above.\n"
+        )
+
     max_bookings_section = ""
     if thread_flags.get("_max_bookings_reached"):
         max_bookings_section = (
@@ -271,7 +280,7 @@ def _build_user_prompt(
     trips_text = _build_trips_text()
     faq_text = _build_faq_text()
 
-    return f"""{returning_customer_section}{unknown_ref_section}{completed_bookings_section}{max_bookings_section}
+    return f"""{returning_customer_section}{unknown_ref_section}{completed_bookings_section}{past_customer_bookings_section}{max_bookings_section}
 TODAY (Curaçao time): {today}
 TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
 CURRENCY: {csk.get('currency', 'USD')}

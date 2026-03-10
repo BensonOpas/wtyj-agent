@@ -128,3 +128,7 @@ When introducing a new value that is generated AFTER the marina_agent call (like
 ## Brief 059 — Marina Tone Polish
 Date: 2026-03-10
 Prompt-only change with big output impact. The comprehensive writing style guide (stock phrase bans, AI habit bans, tone mirroring, length matching, self-check) significantly improved reply naturalness. Token cost is ~500 extra tokens per call, acceptable for demo. The emoji rule (confirmations only) was a user-specified compromise — watch for edge cases in live testing.
+
+## Brief 064 — Past Date Check, Escalation Email Info, Noreply Filter, Email-Based Returning Customer
+Date: 2026-03-10
+Four small, localized fixes from live stress testing. The past-date check must go after the day-of-week check — if the date falls on an invalid day, the day-of-week error is more actionable than "already passed". Test design caught this: the initial test date (Jan 15 2025, a Wednesday) triggered the day-of-week check first, masking the past-date check. Email normalization in `save_booking()` is critical — without it, `get_bookings_by_email()` won't match case-variant emails. The escalation email format change is a "data was available but not surfaced" pattern — `from_email` was already in scope at the escalation code path, just never included in the outbound email.

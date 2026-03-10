@@ -1,6 +1,6 @@
 # FILE: state_registry.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 054
+# LAST MODIFIED: Brief 064
 # DEPENDS ON: nothing
 # IMPORTS FROM: nothing
 # CALLERS: email_poller.py, gws_calendar.py
@@ -314,7 +314,7 @@ def save_booking(booking_ref: str, fields: dict, flags: dict,
             booking_ref,
             fields.get("trip_key", ""),
             fields.get("customer_name", ""),
-            customer_email,
+            customer_email.strip().lower() if customer_email else "",
             fields.get("date", ""),
             fields.get("departure_time", ""),
             int(fields.get("guests") or 0),
@@ -327,6 +327,23 @@ def save_booking(booking_ref: str, fields: dict, flags: dict,
     )
     conn.commit()
     conn.close()
+
+
+def get_bookings_by_email(customer_email: str) -> list:
+    """Return all bookings for a customer email, newest first."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT booking_ref, trip_key, customer_name, customer_email, date, "
+        "departure_time, guests, special_requests, payment_link, event_link, "
+        "status, created_at "
+        "FROM bookings WHERE customer_email = ? ORDER BY created_at DESC",
+        (customer_email.strip().lower(),)
+    ).fetchall()
+    conn.close()
+    return [{"booking_ref": r[0], "trip_key": r[1], "customer_name": r[2],
+             "customer_email": r[3], "date": r[4], "departure_time": r[5],
+             "guests": r[6], "special_requests": r[7], "payment_link": r[8],
+             "event_link": r[9], "status": r[10], "created_at": r[11]} for r in rows]
 
 
 def get_booking(booking_ref: str) -> "dict | None":

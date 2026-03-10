@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 061
+# LAST MODIFIED: Brief 064
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -17,7 +17,7 @@ import state_registry
 import payment_stub
 import bm_logger
 import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parseaddr
 from email.header import decode_header as _decode_header
 from email.mime.text import MIMEText
@@ -61,6 +61,12 @@ REPLY_WINDOW_SECONDS = 60 * 60
 # "reschedule" is included because mid-thread date/time changes are booking
 # modifications that need the same validation (day-of-week, departure, summary).
 _BOOKING_INTENTS = {"booking", "reschedule"}
+
+# System/automated email prefixes to skip (never reply to these)
+_SYSTEM_EMAIL_PREFIXES = (
+    "noreply@", "no-reply@", "no_reply@", "do-not-reply@", "donotreply@",
+    "mailer-daemon@", "postmaster@", "bounce@",
+)
 
 # ========= HELPERS =========
 def _decode_subj(raw):
@@ -399,6 +405,18 @@ def _post_validate(th, result, trip):
     except ValueError:
         pass
 
+    # 1b. Past date check
+    try:
+        _pv_date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+        _pv_today = datetime.now(timezone(timedelta(hours=-4))).date()
+        if _pv_date_obj < _pv_today:
+            return (
+                f"That date ({date}) has already passed. "
+                f"Would you like to pick a different date?"
+            ), False
+    except ValueError:
+        pass
+
     # 2. Departure time check (multi-departure trips only)
     if len(departures) > 1 and not fields.get("departure_time"):
         dep_lines = "\n".join(
@@ -449,6 +467,12 @@ def main():
                 subj = _decode_subj(msg.get("Subject", ""))
                 body_raw = extract_text(msg)
                 body = strip_quotes(body_raw)
+
+                # Skip system/automated emails (noreply, mailer-daemon, etc.)
+                if any(from_email.lower().startswith(p) for p in _SYSTEM_EMAIL_PREFIXES):
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    log(f"Skipped system email from {from_email}")
+                    continue
 
                 # ---- BM-003: Single-shot duplicate prevention (reply only once) ----
                 content_fingerprint = f"{from_email.strip().lower()}|{normalize_subject(subj).strip().lower()}|{body.strip()}"
@@ -621,6 +645,19 @@ def main():
                     else:
                         th["flags"]["unknown_ref"] = _detected_ref
                         log(f"Unknown booking ref {_detected_ref} mentioned by {from_email}")
+
+                # Email-based returning customer lookup (cross-thread memory)
+                if not _detected_ref and not th.get("completed_bookings"):
+                    _email_bookings = state_registry.get_bookings_by_email(from_email)
+                    if _email_bookings:
+                        _eb_lines = []
+                        for eb in _email_bookings[:3]:
+                            _eb_lines.append(
+                                f"  - {eb['trip_key']} on {eb['date']} for {eb['guests']} guests "
+                                f"(ref: {eb['booking_ref']})"
+                            )
+                        th["flags"]["_past_customer_bookings"] = "\n".join(_eb_lines)
+                        log(f"Returning customer by email: {from_email} has {len(_email_bookings)} past booking(s)")
 
                 # Step 1: Build action context + call marina_agent (single Claude call per message)
                 agent_flags = dict(th.get("flags", {}))
@@ -854,7 +891,12 @@ def main():
                     booking_ref_esc = _resolve_booking_ref(th)
                     customer_name_esc = th["fields"].get("customer_name", "Unknown")
                     intents_str = ", ".join(result.get("intents") or ["unknown"])
+                    _phone_esc = th["fields"].get("phone", "")
                     escalation_alert = (
+                        f"=== CUSTOMER ===\n"
+                        f"Email: {from_email}\n"
+                        f"Name: {customer_name_esc}\n"
+                        f"Phone: {_phone_esc or 'not provided'}\n\n"
                         f"=== CHAT LOG ===\n{chat_log}\n\n"
                         f"=== BOOKING FIELDS ===\n"
                         f"{json.dumps(th['fields'], indent=2, ensure_ascii=False)}\n\n"
@@ -864,7 +906,7 @@ def main():
                     try:
                         smtp_send(
                             demo_support_email,
-                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} - {intents_str}",
+                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {intents_str}",
                             escalation_alert,
                         )
                         log(f"Escalation alert sent to {demo_support_email} for {from_email}")

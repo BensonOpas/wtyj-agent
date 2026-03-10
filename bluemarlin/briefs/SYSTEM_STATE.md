@@ -675,3 +675,7 @@ Outcome: complete — 6/6 new tests pass, 12/12 Brief 054 tests still pass
 Brief 059 — Marina Tone Polish
 Decision: Prompt-only change. Added comprehensive WRITING STYLE section to marina_agent.py prompt: write as a real person, mirror sender tone, avoid stock phrases (10 banned), avoid AI habits (em dashes, decorative bold, semicolons), emoji rule (confirmations only), self-check before output. Updated marina_persona in client.json to reflect hospitality focus and tone mirroring.
 Outcome: complete — 6/6 tests pass
+
+Brief 064 — Past Date Check, Escalation Email Info, Noreply Filter, Email-Based Returning Customer
+Decision: Four hardening fixes from live stress testing. (1) Past date check in `_post_validate()` after day-of-week — rejects dates in the past using Curaçao timezone. (2) System email filter — `_SYSTEM_EMAIL_PREFIXES` tuple skips noreply@, mailer-daemon@, etc. before processing. (3) Escalation email format — subject now includes customer email, body starts with `=== CUSTOMER ===` section (email, name, phone). (4) Email-based returning customer lookup — `get_bookings_by_email()` in state_registry.py, email normalization in `save_booking()`, cross-thread memory via `_past_customer_bookings` flag injected into marina_agent prompt.
+Outcome: complete — 14/14 tests pass
