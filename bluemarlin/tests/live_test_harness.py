@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: tests/live_test_harness.py
 # CREATED: Brief 062
-# LAST MODIFIED: Brief 062
+# LAST MODIFIED: Brief 064
 # PURPOSE: Automated E2E testing via IMAP injection — standalone, no src/ imports
 """BlueMarlin Live Test Harness — automated E2E testing via IMAP injection."""
 import imaplib, json, os, re, time, uuid, argparse, subprocess
@@ -1150,8 +1150,8 @@ def test_stress_french(im, dry_run=False):
 def test_stress_west_coast_booking(im, dry_run=False):
     """Stress: Full booking for west coast beach trip."""
     run_id = uuid.uuid4().hex[:8]
-    # West coast beach runs on specific days, find a valid one
-    valid_day = next_weekday(5)  # Saturday
+    # West coast beach runs Wed + Sun — pick a Wednesday
+    valid_day = next_weekday(2)  # Wednesday
     subject = "West coast beach trip"
     body = (
         f"[LIVETEST-{run_id}] Hi! We want to book the west coast beach trip "
