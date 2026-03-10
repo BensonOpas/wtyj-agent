@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # FILE: email_poller.py
 # CREATED: Before Brief 001 (original codebase)
-# LAST MODIFIED: Brief 055
+# LAST MODIFIED: Brief 058
 # DEPENDS ON: state_registry.py (Brief 004)
 # DEPENDS ON: payment_stub.py (original)
 # DEPENDS ON: bm_logger.py (original)
@@ -952,6 +952,7 @@ def main():
                             th["flags"]["payment_link"] = pay_link
                             th["flags"]["payment_status"] = pay.get("status")
                             reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
+                            reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
                             bm_logger.log(
                                 "hold_created",
                                 email=from_email, subject=subj,
@@ -1017,6 +1018,7 @@ def main():
 
                     # Send Claude's reply for all booking sub-cases
                     reply_text = reply_text.replace("[PAYMENT_LINK]", "")
+                    reply_text = reply_text.replace("[BOOKING_REF]", "")
                     smtp_send(from_email, "Re: " + subj, reply_text,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     th["messages"].append({

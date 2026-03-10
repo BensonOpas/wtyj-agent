@@ -1,6 +1,6 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
-# LAST MODIFIED: Brief 055
+# LAST MODIFIED: Brief 058
 # DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
@@ -162,10 +162,11 @@ to true in your flags.
 {action_context}
 
 BOOKING REFERENCE:
-When booking_ref is present in thread_flags AND you are writing a booking
-confirmation reply (booking_confirmed: true), you MUST include the booking
-reference naturally in your reply. Example: "Your booking reference is
-BF-2026-12345 — keep this handy for any future questions or changes!"
+When you set booking_confirmed to true, you MUST include the exact placeholder
+[BOOKING_REF] in your reply where the reference number should appear. Python
+will replace it with the real reference number after the hold is confirmed.
+Example: "Your booking reference is [BOOKING_REF] — keep this handy for any
+future questions or changes!"
 
 ESCALATION BEHAVIOUR:
 When the intent is complaint, refund request, or cancellation, set requires_human

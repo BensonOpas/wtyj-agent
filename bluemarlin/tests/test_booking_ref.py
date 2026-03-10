@@ -183,13 +183,17 @@ def test_returning_customer_no_overwrite():
 
 
 def test_prompt_contains_booking_ref_instruction():
-    """Marina's prompt includes booking ref instruction text."""
+    """Marina's prompt instructs use of [BOOKING_REF] placeholder (Brief 058 fix)."""
     prompt = marina_agent._build_prompt(
         "test@example.com", "booking", "test body",
         {"trip_key": "klein_curacao"}, {"booking_ref": "BF-2026-99999"},
     )
     assert "BOOKING REFERENCE:" in prompt, "FAIL: prompt missing BOOKING REFERENCE section"
-    assert "booking_ref" in prompt.lower() or "BF-" in prompt, "FAIL: prompt doesn't mention booking ref"
+    booking_ref_section_start = prompt.index("BOOKING REFERENCE:")
+    escalation_start = prompt.index("ESCALATION BEHAVIOUR:")
+    booking_ref_section = prompt[booking_ref_section_start:escalation_start]
+    assert "[BOOKING_REF]" in booking_ref_section, "FAIL: prompt doesn't contain [BOOKING_REF] placeholder"
+    assert "thread_flags" not in booking_ref_section, "FAIL: old thread_flags reference still present"
     print("PASS: test_prompt_contains_booking_ref_instruction")
 
 

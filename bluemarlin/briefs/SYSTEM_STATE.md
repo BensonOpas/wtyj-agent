@@ -663,3 +663,11 @@ Outcome: complete — 12/12 tests pass
 Brief 040 — Escalation system: semi + full
 Decision: Two-mode escalation. Semi-escalation: marina_agent returns `semi_escalation: true` + `relay_question`; email_poller sends holding reply to customer + relay alert (Reply-To: Marina's inbox) to demo_support_email; relay reply from human detected via `[RELAY]` in subject + sender match, marina_agent reformulates in relay mode. Full escalation: existing `requires_human: true` path extended to set `fully_escalated: true` on thread + send chat log alert to demo_support_email + update log_escalation to include messages_json. Messages log (`th["messages"]`) accumulates all inbound/outbound for both paths. Fully escalated threads still call marina_agent (one Claude call per Rule 1) but skip all booking flow. Semi-escalation cancels any soft hold created during Step 3b to prevent capacity leak. `reply_to=EMAIL_ADDR` (not a hardcoded string) on relay alerts.
 Outcome: complete — 5/5 tests pass
+
+Brief 056 — SSH key auth: Claude Code → VPS
+Decision: INFRA.md incorrectly stated SSH from Claude Code was blocked. Never tested. Root cause was a malformed authorized_keys entry on VPS. Fixed with ssh-copy-id from Mac. Key auth now works — Claude Code Bash tool can SSH and deploy autonomously.
+Outcome: complete — verified in session, briefs 053–055 deployed via SSH
+
+Brief 058 — Fix: Booking Ref Missing from Confirmation Reply
+Decision: Brief 054 instructed Marina to include booking_ref from thread_flags, but booking_ref is generated after the marina_agent call — impossible to satisfy. Fixed using the existing [PAYMENT_LINK] placeholder pattern: Marina writes [BOOKING_REF] in her reply, Python replaces it after successful hold creation at line 955. Also strips the placeholder on the non-success path at line 1020.
+Outcome: complete — 6/6 new tests pass, 12/12 Brief 054 tests still pass

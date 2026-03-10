@@ -120,3 +120,7 @@ Two reviewer passes needed: (1) format_sheets.py anchor had a double-space (`ALL
 **Date:** 2026-03-08
 
 Two review cycles were needed: (1) `{N}` inside an f-string in the prompt raises `NameError` — always use `{{N}}` for literal braces inside Python f-strings in marina_agent.py prompt sections; (2) `create_soft_hold` using raw `sqlite3.connect()` bypasses `_get_conn()`'s table creation — always route through `_get_conn()` for schema guarantees, then set `isolation_level = None` if manual transaction control is needed. Brief reviewer caught both before execution; test suite cleanly validated all 8 scenarios including concurrent race.
+
+## Brief 058 — Fix: Booking Ref Missing from Confirmation Reply
+Date: 2026-03-10
+When introducing a new value that is generated AFTER the marina_agent call (like booking_ref), never instruct Marina to read it from thread_flags — it will not be there. Use the [PLACEHOLDER] pattern already established by [PAYMENT_LINK]: Marina writes the placeholder, Python replaces it post-hold. Also always add a strip on the non-success path to prevent raw placeholders reaching customers.
