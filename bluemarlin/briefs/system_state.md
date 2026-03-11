@@ -699,3 +699,7 @@ Outcome: complete — 14/14 tests pass
 Brief 065 — Production Hardening: Rate Limiting, Thread Cleanup, Monitoring, OAuth Auto-Refresh
 Decision: Four production-readiness fixes. (1) Per-sender rate limiting — 20 emails/sender/hour tracked in thread state JSON, silent skip on limit hit. (2) Thread state cleanup — `_cleanup_stale_data()` archives threads >30d to JSONL, prunes processed_hashes to 5000, cleans expired sender_rates. (3) Monitoring — token usage logged via bm_logger after each Claude call, heartbeat file written after each poll cycle, error alerting via smtp_send after 3 consecutive failures. (4) OAuth auto-refresh — saves rotated refresh_token back to disk, raises RuntimeError on missing access_token. Multi-operator routing deferred.
 Outcome: complete — 12/12 tests pass, regression 28/28 + 19/19 + 14/14
+
+Brief 067 — WhatsApp Webhook Server + VPS Infrastructure
+Decision: Stand up full HTTPS webhook infrastructure for Meta WhatsApp Cloud API. FastAPI webhook server (`agents/social/webhook_server.py`) behind nginx reverse proxy with Let's Encrypt SSL on `api.wetakeyourjob.com`. Separate systemd service (`bluemarlin-social`) on port 8001. GET handler for Meta verification (token match → return challenge), POST handler logs payloads via bm_logger. No agent logic yet — minimum viable webhook for Meta verification. VPS infra: nginx, certbot, firewall ports 80/443 opened, env vars for Meta/WhatsApp credentials.
+Outcome: complete — 7/7 local tests pass, 3/3 live curl verification pass

@@ -136,3 +136,7 @@ Four small, localized fixes from live stress testing. The past-date check must g
 ## Brief 065 — Production Hardening: Rate Limiting, Thread Cleanup, Monitoring, OAuth Auto-Refresh
 Date: 2026-03-10
 All four fixes were localized to existing files with no architectural changes — the cleanest brief in the series. The `now` variable placement was the only tricky part: sender rate limiting runs before the original `now = int(time.time())` definition, so it needed an early assignment at the top of the `for uid` loop. The `_cleanup_stale_data()` function's safety guarantee (hold_created threads preserved) prevents accidental data loss during archival. OAuth auto-refresh is a "data was already there, just not saved" pattern — Microsoft returns a new refresh_token on every exchange, we just weren't reading it.
+
+## Brief 067 — WhatsApp Webhook Server + VPS Infrastructure
+Date: 2026-03-11
+First greenfield infrastructure brief — standing up nginx, SSL, FastAPI, systemd from scratch on a VPS that previously only ran a Python poller. Two blockers hit during execution: (1) Ubuntu Noble blocks system-wide pip installs by default (`externally-managed-environment`) — used `--break-system-packages` to match existing install pattern; (2) VPS firewall (ufw) only had port 22 open, so certbot's HTTP challenge failed — had to open ports 80 and 443 first. Key lesson for future VPS infra briefs: always check firewall rules before attempting any public-facing service setup.

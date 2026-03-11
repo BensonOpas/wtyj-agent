@@ -60,6 +60,24 @@ The email poller runs 24/7 as a systemd service. It is always running unless exp
 
 ---
 
+## Social Webhook Server
+
+The WhatsApp webhook server runs as a separate FastAPI process behind nginx.
+
+| Item | Value |
+|------|-------|
+| Service name | `bluemarlin-social` |
+| Status check | `systemctl status bluemarlin-social` |
+| Restart | `systemctl restart bluemarlin-social` |
+| Logs (tail) | `journalctl -u bluemarlin-social -n 50` |
+| Internal port | `8001` (localhost only) |
+| Public URL | `https://api.wetakeyourjob.com/webhooks/meta/whatsapp` |
+| nginx config | `/etc/nginx/sites-available/api-wetakeyourjob` |
+| SSL cert | Let's Encrypt via certbot (auto-renew, expires 2026-06-09) |
+| Health check | `curl -s https://api.wetakeyourjob.com/health` |
+
+---
+
 ## Deploy Flow
 
 After every `git push` from Mac, Claude Code can deploy directly via Bash tool:
