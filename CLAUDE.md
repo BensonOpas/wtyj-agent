@@ -19,8 +19,9 @@ the real client. Business data lives in `client.json` only — never in source.
 ## BEFORE YOU DO ANYTHING — READ THESE FILES
 
 ```
-@briefs/SYSTEM_STATE.md
-@briefs/INFRA.md
+@briefs/master_plan.md
+@briefs/system_state.md
+@briefs/infra.md
 ```
 
 If you are about to modify a file, read it first. Every time. No exceptions.
@@ -32,12 +33,12 @@ If you are about to modify a file, read it first. Every time. No exceptions.
 ### PLAN MODE
 Use /think and /brief commands. Do not freestyle.
 **/think** — discuss the next step with the user. Read CLAUDE.md and
-SYSTEM_STATE.md first, then read any files relevant to what the user describes.
+system_state.md first, then read any files relevant to what the user describes.
 Think out loud, ask questions, flag risks. Do not write any files except
-appending to the Decision Log in SYSTEM_STATE.md when direction is confirmed.
+appending to the Decision Log in system_state.md when direction is confirmed.
 End with: "Ready for /brief — suggested: /compact first."
 **/brief** — write the brief. Read the Decision Log entry and every file the
-brief will touch. Write to briefs/BRIEF_0XX_name.md using the mandatory template
+brief will touch. Write to briefs/marina_brief_0xx_name.md using the mandatory template
 below. Auto-invoke brief-reviewer when done. Patch if flagged, one retry max.
 End with: "Brief approved — suggested: /compact before executing."
 Brief format (mandatory):
@@ -76,12 +77,12 @@ You receive a brief file path. You execute it and nothing else.
 2. Read every file listed in the brief header
 3. Execute instructions exactly as written
 4. Run the tests
-5. Write `briefs/OUTPUT_0XX.md` with: what was done, test results, anything unexpected
+5. Write `briefs/marina_output_0xx.md` with: what was done, test results, anything unexpected
 
 **Ralph loop format for execution:**
 ```
-/ralph-loop "Read briefs/BRIEF_0XX_name.md completely. Execute all instructions
-exactly as written. Run all tests. Write briefs/OUTPUT_0XX.md with results.
+/ralph-loop "Read briefs/marina_brief_0xx_name.md completely. Execute all instructions
+exactly as written. Run all tests. Write briefs/marina_output_0xx.md with results.
 Output <promise>DONE</promise> only when OUTPUT file is written and all tests pass."
 --completion-promise "DONE" --max-iterations 10
 ```

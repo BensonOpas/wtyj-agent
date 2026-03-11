@@ -201,6 +201,14 @@ All fire after Claude's single call. A second call would violate Rule 1. Accepte
 | OAuth token auto-refresh | Done (Brief 065) — auto-saves rotated refresh token | Done |
 | Multi-operator routing | Deferred — noted for future brief when client needs it | Low |
 
+### Roadmap — Next Phase
+
+| Item | Description | Status |
+|------|-------------|--------|
+| **Production audit trail** | Append-only logging of everything: inbound/outbound emails (full content), Claude API calls (prompt context + response + tokens), booking lifecycle events (hold → confirm → payment → complete/cancel), state transitions, errors with tracebacks, system events (poller start/stop, OAuth refresh, rate limits, cleanup). SQLite audit table + JSONL backup. 6-month minimum retention. Replaces current bm_logger.py which only captures 7 event types with no email content, no Claude call details, no state snapshots. Critical for dispute resolution once real money flows. | Planning |
+| **Operator dashboard** | VPS-hosted web app (Flask/FastAPI, second systemd service). Two functions: (1) Status panels — today's bookings, upcoming manifests, pending escalations, system health (heartbeat, error count, token spend), revenue summary. (2) Business config editor — add/remove/edit trips (prices, capacity, departures, days of week, seasonal schedules), business info, FAQ answers. Reads/writes client.json directly, changes go live on next poll cycle (~30s). Password-protected over HTTPS. Replaces manual client.json editing. | Planning |
+| **Social media agent** | Separate agent (not Marina) for social media channels. Two capabilities: (1) Q&A on Instagram DMs / Facebook Messenger / WhatsApp — reads inbound messages, answers from trip/FAQ data, may redirect complex bookings to email. (2) Content creation + auto-posting — generates promotional posts/photos/videos, publishes without approval, can be reactive (operator prompts) or autonomous (promote empty slots). Platform priority TBD. Biggest scope item. | Planning |
+
 ### Resolved Issues (Can Remove from CLAUDE.md)
 
 - ~~`slot_checked` not reset on date change~~ — fixed by change detection block (lines 717-730)

@@ -1,7 +1,7 @@
 # FILE: marina_agent.py
 # CREATED: Brief 023
 # LAST MODIFIED: Brief 065
-# DEPENDS ON: claude_client.py (Brief 001), config_loader.py (Brief 022)
+# DEPENDS ON: config_loader.py (Brief 022), anthropic (PyPI)
 # IMPORTS FROM: config_loader.py (Brief 022)
 
 import json

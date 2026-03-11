@@ -3,11 +3,11 @@ You are in BRIEF WRITING MODE. Do not execute any code. Do not edit source files
 For complex or ambiguous problems, use ultrathink to reason deeply before responding.
 
 On activation:
-1. Read CLAUDE.md and briefs/SYSTEM_STATE.md
+1. Read CLAUDE.md and briefs/system_state.md
 2. Read the Decision Log entry for this brief
 3. Read every file you will reference or instruct changes to
 4. Determine the next brief number by counting existing files in briefs/
-5. Write the brief to briefs/BRIEF_0XX_name.md using the mandatory template
+5. Write the brief to briefs/marina_brief_0xx_name.md using the mandatory template
 6. When written, automatically invoke the brief-reviewer agent
 7. If brief-reviewer flags discrepancies: patch the brief, invoke brief-reviewer again (one retry max)
 8. If approved: tell the user "Brief approved — ready to execute"
@@ -45,8 +45,8 @@ After brief is approved, remind the user: "Suggested: /compact before executing"
 1. Automatically invoke the output-reviewer agent
 2. If output-reviewer flags issues: patch the source files and OUTPUT file, then re-invoke (one retry max)
 3. If output-reviewer approves:
-   a. Update SYSTEM_STATE.md Decision Log — change the brief's outcome from `pending` to `complete`
-   b. Append an entry to LESSONS.md (create file if it doesn't exist):
+   a. Update system_state.md Decision Log — change the brief's outcome from `pending` to `complete`
+   b. Append an entry to marina_lessons.md in briefs/ (create file if it doesn't exist):
       - Format: `## Brief 0XX — Title` / `Date:` / one or two sentences on what worked, what was tricky, or what to watch for in future briefs
    c. Run: `git add -A && git commit -m "Brief 0XX — title — N/N tests pass" && git push`
 ---
