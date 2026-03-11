@@ -32,11 +32,11 @@ echo ""
 
 mkdir -p "${DEST}"
 
-# 1. SQLite database (the real one is in src/)
+# 1. SQLite database (lives in data/)
 echo "[1/6] Pulling SQLite database..."
-scp "${VPS}:${VPS_DIR}/src/state_registry.db" "${DEST}/state_registry.db"
-scp "${VPS}:${VPS_DIR}/src/state_registry.db-wal" "${DEST}/state_registry.db-wal" 2>/dev/null || true
-scp "${VPS}:${VPS_DIR}/src/state_registry.db-shm" "${DEST}/state_registry.db-shm" 2>/dev/null || true
+scp "${VPS}:${VPS_DIR}/data/state_registry.db" "${DEST}/state_registry.db"
+scp "${VPS}:${VPS_DIR}/data/state_registry.db-wal" "${DEST}/state_registry.db-wal" 2>/dev/null || true
+scp "${VPS}:${VPS_DIR}/data/state_registry.db-shm" "${DEST}/state_registry.db-shm" 2>/dev/null || true
 
 # 2. Thread state JSON
 echo "[2/6] Pulling thread state..."
@@ -63,7 +63,7 @@ ssh "${VPS}" "cd ${VPS_DIR} && echo 'commit:' && git log --oneline -1 && echo 's
 echo "[6/6] Generating DB summary..."
 ssh "${VPS}" "cd ${VPS_DIR} && python3 << 'PYEOF'
 import sqlite3
-c = sqlite3.connect('src/state_registry.db')
+c = sqlite3.connect('data/state_registry.db')
 print('=== DATABASE SUMMARY ===')
 for t in ['bookings','trip_bookings','manifest_events','processed_hashes']:
     count = c.execute('SELECT count(*) FROM ' + t).fetchone()[0]

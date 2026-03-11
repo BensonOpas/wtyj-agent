@@ -22,7 +22,9 @@
 | Item | Value |
 |------|-------|
 | Project root | `/root/bluemarlin/` |
-| Source files | `/root/bluemarlin/src/` |
+| Marina agent | `/root/bluemarlin/agents/marina/` |
+| Shared libs | `/root/bluemarlin/shared/` |
+| Runtime data | `/root/bluemarlin/data/` (SQLite DB) |
 | Config files | `/root/bluemarlin/config/` |
 | Log directory | `/root/bluemarlin/logs/` |
 | Log filenames | `bluemarlin.log` (main), `bluemarlin_demo.log` (demo) |

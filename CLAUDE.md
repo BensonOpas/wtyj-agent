@@ -119,18 +119,32 @@ If language needs to be understood, Claude does it.
 
 ---
 
+## PROJECT LAYOUT (Brief 066)
+
+```
+bluemarlin/
+  agents/marina/     — Marina agent source files
+  shared/            — Shared libraries (config, logging, state)
+  data/              — Runtime data (SQLite DB, .gitkeep)
+  config/            — Credentials, client.json, tokens
+  tests/marina/      — All tests
+  briefs/            — Planning docs + output files
+  logs/              — Runtime logs
+```
+
 ## ACTIVE SOURCE FILES
 
 | File | Brief | Lines | Purpose |
 |------|-------|-------|---------|
-| `src/email_poller.py` | 031 | ~524 | Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP |
-| `src/marina_agent.py` | 035 | ~237 | Single Claude call per message. Returns structured JSON |
-| `src/gws_calendar.py` | 032 | — | Calendar hold + availability via gws CLI |
-| `src/sheets_writer.py` | 032 | — | Sheets logging via gws CLI |
-| `src/config_loader.py` | 022 | 94 | Read-only client.json interface. Caches on first read. Never raises |
-| `src/state_registry.py` | 004 | 57 | SQLite WAL deduplication |
-| `src/bm_logger.py` | 006 | 28 | Structured JSONL event logger |
-| `src/payment_stub.py` | orig | 57 | Payment stub — demo.pay links only |
+| `agents/marina/email_poller.py` | 066 | ~1206 | Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP |
+| `agents/marina/marina_agent.py` | 066 | ~410 | Single Claude call per message. Returns structured JSON |
+| `agents/marina/gws_calendar.py` | 066 | ~270 | Calendar hold + availability via gws CLI |
+| `agents/marina/sheets_writer.py` | 066 | ~178 | Sheets logging via gws CLI |
+| `agents/marina/payment_stub.py` | 066 | 60 | Payment stub — demo.pay links only |
+| `agents/marina/format_sheets.py` | 066 | ~350 | Run-once sheet formatting |
+| `shared/config_loader.py` | 066 | 98 | Read-only client.json interface. Caches on first read. Never raises |
+| `shared/state_registry.py` | 066 | ~368 | SQLite WAL deduplication, capacity, manifests, bookings |
+| `shared/bm_logger.py` | 066 | 25 | Structured JSONL event logger |
 
 ---
 
@@ -168,7 +182,7 @@ Valid field keys: `experience` `date` (YYYY-MM-DD) `guests` `customer_name`
 
 Every source file must start with:
 ```python
-# bluemarlin/src/filename.py
+# bluemarlin/agents/marina/filename.py   (or shared/filename.py)
 # Last modified: Brief 0XX
 # Purpose: one line
 ```

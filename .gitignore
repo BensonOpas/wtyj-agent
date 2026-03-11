@@ -9,7 +9,8 @@ state.json
 payment_state.json
 social_state.json
 email_thread_state.json
-bluemarlin/src/state_registry.db
+bluemarlin/data/*
+!bluemarlin/data/.gitkeep
 
 # Logs
 *.log
