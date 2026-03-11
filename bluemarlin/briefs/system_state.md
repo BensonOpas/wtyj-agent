@@ -703,3 +703,7 @@ Outcome: complete — 12/12 tests pass, regression 28/28 + 19/19 + 14/14
 Brief 067 — WhatsApp Webhook Server + VPS Infrastructure
 Decision: Stand up full HTTPS webhook infrastructure for Meta WhatsApp Cloud API. FastAPI webhook server (`agents/social/webhook_server.py`) behind nginx reverse proxy with Let's Encrypt SSL on `api.wetakeyourjob.com`. Separate systemd service (`bluemarlin-social`) on port 8001. GET handler for Meta verification (token match → return challenge), POST handler logs payloads via bm_logger. No agent logic yet — minimum viable webhook for Meta verification. VPS infra: nginx, certbot, firewall ports 80/443 opened, env vars for Meta/WhatsApp credentials.
 Outcome: complete — 7/7 local tests pass, 3/3 live curl verification pass
+
+Brief 068 — WhatsApp Message Pipeline: Parse, Dedup, Reply
+Decision: Close the inbound-to-outbound loop. `whatsapp_client.py` parses Meta payloads into normalized message objects and sends replies via WhatsApp Cloud API (urllib.request, stdlib). `social_agent.py` stub returns hardcoded test reply (Rule 3 accepted temporary exception — replaced by Claude Q&A in next brief). `webhook_server.py` POST handler uses FastAPI BackgroundTasks for non-blocking processing. SQLite dedup via `whatsapp_processed` table in state_registry. Status updates (sent/delivered) correctly filtered. Permanent System User token verified working.
+Outcome: complete — 10/10 local tests pass, 7/7 regression pass, live pipeline confirmed (reply sent + delivered)

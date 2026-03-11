@@ -140,3 +140,7 @@ All four fixes were localized to existing files with no architectural changes �
 ## Brief 067 — WhatsApp Webhook Server + VPS Infrastructure
 Date: 2026-03-11
 First greenfield infrastructure brief — standing up nginx, SSL, FastAPI, systemd from scratch on a VPS that previously only ran a Python poller. Two blockers hit during execution: (1) Ubuntu Noble blocks system-wide pip installs by default (`externally-managed-environment`) — used `--break-system-packages` to match existing install pattern; (2) VPS firewall (ufw) only had port 22 open, so certbot's HTTP challenge failed — had to open ports 80 and 443 first. Key lesson for future VPS infra briefs: always check firewall rules before attempting any public-facing service setup.
+
+## Brief 068 — WhatsApp Message Pipeline: Parse, Dedup, Reply
+Date: 2026-03-11
+Cleanest multi-file brief in the social agent series — parse, dedup, stub agent, and send all worked first try with zero test failures. The brief reviewer flagged the hardcoded reply as a Rule 3 violation; patched by documenting it as a temporary verification fixture (same class as marina_agent.py's accepted API-failure fallback). Key discovery: Meta sends status webhooks (sent/delivered) back through the same endpoint immediately after our reply — the status filtering logic in `parse_webhook_payload` correctly handled these without any extra work. Using `urllib.request` (stdlib) for outbound API calls avoided dependency issues on the VPS.
