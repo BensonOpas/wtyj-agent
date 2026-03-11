@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 066
+# Last modified: Brief 068
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import os
@@ -63,6 +63,12 @@ def _get_conn():
         "payment_link TEXT, "
         "event_link TEXT, "
         "status TEXT DEFAULT 'pending_payment', "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS whatsapp_processed ("
+        "message_id TEXT PRIMARY KEY, "
         "created_at TEXT NOT NULL"
         ")"
     )
@@ -362,6 +368,28 @@ def get_booking(booking_ref: str) -> "dict | None":
         "guests": row[6], "special_requests": row[7], "payment_link": row[8],
         "event_link": row[9], "status": row[10], "created_at": row[11],
     }
+
+
+def wa_has_been_processed(message_id: str) -> bool:
+    """Check if a WhatsApp message ID has already been processed."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM whatsapp_processed WHERE message_id = ?",
+        (message_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def wa_mark_as_processed(message_id: str):
+    """Record a WhatsApp message ID as processed."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO whatsapp_processed (message_id, created_at) VALUES (?, ?)",
+        (message_id, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
 
 
 # Initialise database on module load so the file exists as soon as the module is imported
