@@ -193,21 +193,19 @@ Customer Email
 
 ### Future Architecture (Multi-Channel)
 
-The system expands to multiple specialized agents:
+Two agents, each with its own process, Claude prompt, and channel:
 
-**Booking Agent (Marina)** — Done. LLM + Python state machine. Handles email channel end-to-end.
+**Marina (Email Agent)** — Done. One process (email_poller.py), one Claude call per inbound email. Orchestrates the full booking lifecycle using Python modules:
+- Calendar module (gws_calendar.py) — manifest events, capacity tracking
+- Payment module (payment_stub.py) — demo links, real provider pending
+- Sheets module (sheets_writer.py) — operator dashboard logging
+- Escalation routing — semi-escalation (relay) + full escalation (complaint/refund)
 
-**Calendar Agent** — Done. Deterministic. gws CLI + SQLite capacity tracking. Manifest-style events.
+**Social Agent (WhatsApp + Auto-Posting)** — Planned. Separate process (FastAPI webhook server). Two capabilities:
+- WhatsApp Q&A — answers customer messages from trip/FAQ data, redirects bookings to email
+- Auto-posting — generates and publishes promotional content to Instagram and Facebook on a schedule
 
-**Payment Agent** — Demo stub done. Real provider integration pending.
-
-**Escalation System** — Done. Two modes: semi-escalation (relay to human, auto-reformulate reply) and full escalation (complaint/refund/cancellation → operator alert with chat log).
-
-**Social Content Agent** — Planned. LLM-driven. Generates posts, captions, hashtags, suggests media.
-
-**Social Publishing Agent** — Planned. Deterministic. Schedules and publishes to Instagram, Facebook, X.
-
-**Channel Adapters** — Planned. Instagram DM, Facebook Messenger, WhatsApp, website form. Adapters only move messages, they do not think.
+Both agents share the same business knowledge via `config_loader.py` (client.json) and the same state layer via `state_registry.py` (SQLite).
 
 ---
 

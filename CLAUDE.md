@@ -20,6 +20,7 @@ the real client. Business data lives in `client.json` only — never in source.
 
 ```
 @briefs/master_plan.md
+@briefs/roadmap.md
 @briefs/system_state.md
 @briefs/infra.md
 ```

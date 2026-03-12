@@ -148,3 +148,7 @@ Cleanest multi-file brief in the social agent series — parse, dedup, stub agen
 ## Brief 069 — WhatsApp Channel Support: marina_agent + State Foundation
 Date: 2026-03-11
 The `channel` parameter approach worked cleanly — marina_agent.py stays as the single Claude brain for both email and WhatsApp with zero duplication. Key design tradeoff: conversation history is stored only on successful reply (webhook_server stores user+assistant after send succeeds). This means failed API calls leave no trace in history, which is arguably correct — no response means nothing to remember. The conditional writing style block in `_build_system_prompt` keeps the two styles fully isolated without any shared template logic. All 17 tests passed first try with zero regression across 067/068.
+
+## Brief 070 — WhatsApp Booking Orchestrator
+Date: 2026-03-11
+First brief review caught fabricated trip data in Source Material — all departure times, prices, capacities, and operating days were wrong vs client.json. Key lesson: always read client.json before writing any brief that references trip data, never rely on memory. After correction, the pure-function helpers (`_day_matches`, `_suggest_dates`, `_post_validate`) worked cleanly against real config_loader data. The simplified function signatures (taking `fields` and `flags` directly instead of `th` dict) made tests simpler without losing any behavior. All 50 tests passed first try after the brief rewrite.

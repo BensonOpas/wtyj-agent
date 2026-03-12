@@ -1,18 +1,167 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 069
-# Purpose: WhatsApp agent — calls marina_agent with channel="whatsapp"
+# Last modified: Brief 070
+# Purpose: WhatsApp booking orchestrator — calls marina_agent, validates, holds, confirms
 
+import time
+from datetime import datetime, timezone, timedelta
 from shared import state_registry
 from shared import bm_logger
+from shared import config_loader
 from agents.marina import marina_agent
+from agents.marina import gws_calendar
+from agents.marina import payment_stub
+from agents.marina import sheets_writer
+
+
+_BOOKING_INTENTS = {"booking", "reschedule"}
+
+_BOOKING_FLAGS_TO_RESET = {
+    "hold_created", "booking_confirmed", "booking_ref", "hold_id",
+    "payment_id", "payment_link", "payment_status",
+    "event_id", "event_link",
+    "slot_checked", "slot_available", "spots_remaining", "trip_capacity",
+    "awaiting_booking_confirmation",
+    "hold_trip_key", "hold_date", "hold_departure_time",
+}
+
+_PERSISTENT_FIELDS = {"customer_name", "phone"}
+
+
+def _day_matches(day_name, days_available):
+    """Check if day_name matches the trip's days_available string."""
+    if days_available.lower() == "daily":
+        return True
+    return day_name.lower() in days_available.lower()
+
+
+def _suggest_dates(date_str, days_available):
+    """Suggest 2-3 nearby valid dates."""
+    base = datetime.strptime(date_str, "%Y-%m-%d")
+    suggestions = []
+    for offset in range(1, 14):
+        candidate = base + timedelta(days=offset)
+        if _day_matches(candidate.strftime("%A"), days_available):
+            suggestions.append(f"  {candidate.strftime('%A %d %B')}")
+            if len(suggestions) >= 3:
+                break
+    return "\n".join(suggestions) if suggestions else "Please suggest another date!"
+
+
+def _build_booking_summary(fields, trip):
+    """Build a data-driven booking summary. WhatsApp adaptation: shorter intro than email."""
+    trip_name = trip.get("display_name", fields.get("trip_key", ""))
+    date_str = fields.get("date", "")
+    guests = int(fields.get("guests") or 1)
+    departure_time = fields.get("departure_time", "")
+    departures = trip.get("departures", [])
+    dep_info = next((d for d in departures if d.get("time") == departure_time), None)
+    if not dep_info and departures:
+        dep_info = departures[0]
+        departure_time = dep_info.get("time", "")
+    vessel = dep_info.get("vessel", "") if dep_info else ""
+    dep_point = dep_info.get("departure_point", "") if dep_info else ""
+    price_adult = trip.get("price_adult_usd", 0)
+    total = price_adult * guests
+    included = ", ".join(trip.get("included", [])) or "see trip details"
+    try:
+        date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
+    except ValueError:
+        date_fmt = date_str
+    return (
+        f"Just to confirm: {trip_name} on {date_fmt}, "
+        f"{departure_time} departure from {dep_point} on {vessel}. "
+        f"{guests} guests, ${total} total (${price_adult} each). "
+        f"Includes {included}.\n\n"
+        f"Want me to go ahead and book this?"
+    )
+
+
+def _build_action_context(flags):
+    """Build action_context string for the Claude prompt based on flags."""
+    if flags.get("awaiting_booking_confirmation"):
+        return (
+            "ACTION: A booking summary was sent. The customer is replying. "
+            "Determine if they are: (a) confirming — set booking_confirmed: true, "
+            "awaiting_booking_confirmation: false, write a warm celebratory reply "
+            "with the exact string [PAYMENT_LINK] where the payment link goes. "
+            "Also write reply_hold_failed — an apologetic message if the slot turns "
+            "out to be unavailable, without [PAYMENT_LINK]; "
+            "(b) changing something — extract new fields, set "
+            "awaiting_booking_confirmation: false; (c) unclear — ask "
+            "for clarification. Do NOT generate a new booking summary."
+        )
+    return ""
+
+
+def _post_validate(fields, flags, result, trip):
+    """
+    Validate extracted fields after Claude call.
+    Returns (reply_override, should_set_awaiting).
+    """
+    if not any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+        return None, False
+    if not all(fields.get(k) for k in ("experience", "date", "guests", "trip_key")):
+        return None, False
+    if flags.get("awaiting_booking_confirmation") or flags.get("booking_confirmed"):
+        return None, False
+
+    date = fields["date"]
+    departures = trip.get("departures", [])
+
+    # 1. Day-of-week check
+    try:
+        day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A")
+        days_avail = trip.get("days_available", "daily")
+        if not _day_matches(day_name, days_avail):
+            return (
+                f"The {trip.get('display_name', fields['trip_key'])} "
+                f"doesn't run on {day_name}s, only {days_avail}. "
+                f"Would any of these work instead?\n\n"
+                f"{_suggest_dates(date, days_avail)}"
+            ), False
+    except ValueError:
+        pass
+
+    # 1b. Past date check
+    try:
+        _pv_date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+        _pv_today = datetime.now(timezone(timedelta(hours=-4))).date()
+        if _pv_date_obj < _pv_today:
+            return (
+                f"That date ({date}) has already passed. "
+                f"Would you like to pick a different date?"
+            ), False
+    except ValueError:
+        pass
+
+    # 2. Departure time check (multi-departure trips only)
+    if len(departures) > 1 and not fields.get("departure_time"):
+        dep_lines = "\n".join(
+            f"- {d['time']} aboard {d.get('vessel', '?')} from {d.get('departure_point', '?')}"
+            for d in departures
+        )
+        return (
+            f"The {trip.get('display_name', fields['trip_key'])} has "
+            f"a couple of departure times:\n\n{dep_lines}\n\n"
+            f"Which one works for you?"
+        ), False
+
+    # 3. Child pricing — Claude sets needs_child_ages flag
+    if result.get("flags", {}).get("needs_child_ages"):
+        return None, False
+
+    # 4. All checks pass — build data-driven summary
+    summary = _build_booking_summary(fields, trip)
+    return summary, True
 
 
 def handle_incoming_whatsapp_message(message: dict) -> str:
     """
-    Process a WhatsApp message: fetch state + history, call marina_agent,
-    merge + persist state, return reply.
-    Returns reply string or empty string on failure.
+    Process a WhatsApp message: full booking orchestrator.
+    Fetch state + history -> build action_context -> call marina_agent ->
+    merge fields/flags -> post-validate -> availability + hold ->
+    booking confirmation -> persist state -> return reply.
     """
     phone = message.get("from", "")
     text = message.get("text", "")
@@ -22,6 +171,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     state = state_registry.wa_get_booking_state(phone)
     fields = state.get("fields", {})
     flags = state.get("flags", {})
+    completed_bookings = state.get("completed_bookings", [])
 
     # Get conversation history (last 10 messages, 24h window)
     history = state_registry.wa_get_history(phone, limit=10)
@@ -29,43 +179,231 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Build from identifier with name if available
     from_id = f"{phone} ({from_name})" if from_name else phone
 
-    # Call marina_agent with channel="whatsapp"
+    # Step 1: Build action context
+    action_context = _build_action_context(flags)
+
+    # Step 2: Call marina_agent with channel="whatsapp"
     result = marina_agent.process_message(
         from_email=from_id,
         subject="",
         body=text,
         thread_fields=fields,
         thread_flags=flags,
-        action_context="",
+        action_context=action_context,
         channel="whatsapp",
         messages=history,
     )
 
     reply = result.get("reply", "")
 
-    if reply:
-        # Strip booking placeholders (orchestrator not active until Brief 070)
-        reply = reply.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
+    if not reply:
+        return ""
 
-        # Merge fields — overwrite when Claude returns non-empty values
-        new_fields = result.get("fields", {}) or {}
-        for k, v in new_fields.items():
-            if v is not None and v != "":
-                fields[k] = v
-            elif v == "" and k in fields:
-                del fields[k]
+    # Step 3: Merge fields — overwrite when Claude returns non-empty values
+    new_fields = result.get("fields", {}) or {}
+    for k, v in new_fields.items():
+        if v is not None and v != "":
+            fields[k] = v
+        elif v == "" and k in fields:
+            del fields[k]
 
-        # Merge flags
-        new_flags = result.get("flags", {}) or {}
-        flags.update(new_flags)
+    # Step 4: Merge flags — Python manages awaiting_booking_confirmation (set only)
+    new_flags = result.get("flags", {}) or {}
+    _was_awaiting = flags.get("awaiting_booking_confirmation", False)
+    if new_flags.get("awaiting_booking_confirmation"):
+        new_flags.pop("awaiting_booking_confirmation")
+    flags.update(new_flags)
 
-        # Persist state
-        state_registry.wa_save_booking_state(phone, fields, flags)
+    # Step 5: Change detection — cancel soft hold if customer changed booking details
+    if (_was_awaiting and not flags.get("awaiting_booking_confirmation")
+            and not flags.get("booking_confirmed")):
+        if flags.get("hold_id"):
+            state_registry.cancel_hold(flags["hold_id"])
+            _h_trip = flags.pop("hold_trip_key", "")
+            _h_date = flags.pop("hold_date", "")
+            _h_dep = flags.pop("hold_departure_time", "")
+            flags.pop("hold_id", None)
+            if _h_trip and _h_date and _h_dep:
+                gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+        flags["slot_checked"] = False
+        flags["slot_available"] = False
+        bm_logger.log("whatsapp_hold_cancelled", phone=phone,
+                      reason="customer_changed_details")
 
-        # Log
-        bm_logger.log("whatsapp_agent_reply",
-            phone=phone,
-            intents=result.get("intents", []),
-            reply_length=len(reply))
+    reply_text = reply
 
-    return reply
+    # Step 6: Post-validation (booking intents only)
+    _pv_trip_key = fields.get("trip_key", "")
+    _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
+    if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+        _pv_override, _pv_set_awaiting = _post_validate(fields, flags, result, _pv_trip)
+        if _pv_override:
+            _intents = result.get("intents", [])
+            _has_side_topics = any(i not in _BOOKING_INTENTS for i in _intents)
+            if _has_side_topics:
+                reply_text = result["reply"].rstrip() + "\n\n" + _pv_override
+            else:
+                reply_text = _pv_override
+            if _pv_set_awaiting:
+                flags["awaiting_booking_confirmation"] = True
+
+    # Step 7: Availability pre-check + soft hold when booking summary is being sent
+    if (flags.get("awaiting_booking_confirmation")
+            and not flags.get("slot_checked")):
+        _ck_trip = fields.get("trip_key", "")
+        _ck_deps = config_loader.get_trip(_ck_trip).get("departures", []) if _ck_trip else []
+        _ck_start = (fields.get("departure_time")
+                     or (_ck_deps[0].get("time", "09:00") if _ck_deps else "09:00"))
+        _ck_guests = int(fields.get("guests") or 1)
+        avail = gws_calendar.check_availability(
+            _ck_trip, fields.get("date", ""), _ck_start, _ck_guests)
+        flags["slot_checked"] = True
+        flags["slot_available"] = avail.get("available", False)
+        flags["spots_remaining"] = avail.get("spots_remaining", 0)
+        flags["trip_capacity"] = avail.get("capacity", 0)
+        if avail.get("available"):
+            hold_id = state_registry.create_soft_hold(
+                _ck_trip,
+                fields.get("date", ""),
+                _ck_start,
+                _ck_guests,
+                avail.get("capacity", 20),
+                customer_name=fields.get("customer_name", ""),
+                customer_email=phone,
+            )
+            if hold_id is not None:
+                flags["hold_id"] = hold_id
+                flags["hold_trip_key"] = _ck_trip
+                flags["hold_date"] = fields.get("date", "")
+                flags["hold_departure_time"] = _ck_start
+                bm_logger.log("whatsapp_soft_hold_created", phone=phone,
+                              hold_id=hold_id, trip_key=_ck_trip)
+            else:
+                # Race: capacity was grabbed between check and insert
+                flags["slot_available"] = False
+                flags["awaiting_booking_confirmation"] = False
+                flags["slot_checked"] = False
+                _unavail_name = _pv_trip.get("display_name", _ck_trip)
+                reply_text = (
+                    f"Unfortunately the {_unavail_name} is fully booked on that date. "
+                    f"Would you like to try a different date?"
+                )
+                bm_logger.log("whatsapp_soft_hold_race", phone=phone, trip_key=_ck_trip)
+        else:
+            flags["awaiting_booking_confirmation"] = False
+            flags["slot_checked"] = False
+            _unavail_name = _pv_trip.get("display_name", _ck_trip)
+            reply_text = (
+                f"Unfortunately the {_unavail_name} is fully booked on that date. "
+                f"Would you like to try a different date?"
+            )
+            bm_logger.log("whatsapp_slot_unavailable", phone=phone, trip_key=_ck_trip,
+                          spots=avail.get("spots_remaining", 0))
+
+    # Step 8: Booking confirmation flow
+    if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+        if (fields.get("experience") and fields.get("date")
+                and fields.get("guests") and fields.get("trip_key")
+                and flags.get("booking_confirmed")
+                and not flags.get("hold_created")):
+            bm_logger.log("whatsapp_booking_attempted", phone=phone,
+                          trip_key=fields.get("trip_key"),
+                          date=fields.get("date"), guests=fields.get("guests"))
+
+            # Generate booking_ref + set on soft hold BEFORE manifest creation
+            booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+            flags["booking_ref"] = booking_ref
+            if flags.get("hold_id"):
+                state_registry.set_booking_ref(flags["hold_id"], booking_ref)
+
+            res = gws_calendar.create_or_update_manifest(fields)
+            if not res.get("ok"):
+                bm_logger.log("whatsapp_manifest_failed", phone=phone,
+                              error=res.get("error"))
+                if flags.get("hold_id"):
+                    state_registry.cancel_hold(flags["hold_id"])
+                    _h_trip = flags.pop("hold_trip_key", "")
+                    _h_date = flags.pop("hold_date", "")
+                    _h_dep = flags.pop("hold_departure_time", "")
+                    flags.pop("hold_id", None)
+                    if _h_trip and _h_date and _h_dep:
+                        gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+                flags["slot_checked"] = False
+                flags["slot_available"] = False
+                reply_text = result.get("reply_hold_failed") or reply_text
+                sheets_writer.log_hold_failed({
+                    "email": phone, "subject": "WhatsApp",
+                    "experience": fields.get("experience"),
+                    "date": fields.get("date"),
+                    "guests": fields.get("guests"),
+                    "error": res.get("error"),
+                })
+            else:
+                flags["hold_created"] = True
+                if flags.get("hold_id"):
+                    state_registry.confirm_hold(flags["hold_id"])
+                flags["event_id"] = res.get("eventId")
+                flags["event_link"] = res.get("htmlLink")
+                trip_key = fields.get("trip_key", "")
+                price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
+                             if trip_key else 0)
+                pay = payment_stub.generate_payment_link(booking_ref, price_usd)
+                pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                flags["payment_id"] = pay.get("payment_id")
+                flags["payment_link"] = pay_link
+                flags["payment_status"] = pay.get("status")
+                reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
+                reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
+                bm_logger.log("whatsapp_booking_confirmed", phone=phone,
+                              booking_ref=booking_ref, trip_key=trip_key)
+                sheets_writer.log_hold_created({
+                    "booking_ref": booking_ref,
+                    "email": phone, "subject": "WhatsApp",
+                    "customer_name": fields.get("customer_name"),
+                    "experience": fields.get("experience"),
+                    "trip_key": fields.get("trip_key"),
+                    "date": fields.get("date"),
+                    "guests": fields.get("guests"),
+                    "departure_time": fields.get("departure_time"),
+                    "phone": phone,
+                    "special_requests": fields.get("special_requests"),
+                    "total_price": int(fields.get("guests") or 0) * price_usd,
+                    "html_link": flags.get("event_link"),
+                    "payment_link": flags.get("payment_link"),
+                    "payment_status": pay.get("status"),
+                })
+                # Log manifest summary to Sheets
+                _m_passengers = state_registry.get_slot_passengers(
+                    trip_key, fields.get("date", ""), fields.get("departure_time", ""))
+                _m_confirmed = sum(1 for p in _m_passengers if p["status"] == "confirmed")
+                _m_pending = sum(1 for p in _m_passengers if p["status"] == "soft_hold")
+                _m_total_guests = sum(p["guests"] for p in _m_passengers)
+                _m_total_revenue = _m_total_guests * price_usd
+                _m_capacity = config_loader.get_trip(trip_key).get("capacity", 20)
+                sheets_writer.log_manifest_update({
+                    "trip_key": trip_key,
+                    "date": fields.get("date", ""),
+                    "departure_time": fields.get("departure_time", ""),
+                    "total_guests": _m_total_guests,
+                    "capacity": _m_capacity,
+                    "confirmed_count": _m_confirmed,
+                    "pending_count": _m_pending,
+                    "total_revenue": _m_total_revenue,
+                    "calendar_link": flags.get("event_link", ""),
+                    "booking_ref": booking_ref,
+                })
+                # Save booking for cross-thread memory
+                state_registry.save_booking(
+                    booking_ref, fields, flags,
+                    customer_email=phone,
+                )
+
+    # Step 9: Strip remaining placeholders (safety net)
+    reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
+
+    # Step 10: Persist state + log
+    state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
+    bm_logger.log("whatsapp_agent_reply", phone=phone,
+                  intents=result.get("intents", []), reply_length=len(reply_text))
+
+    return reply_text
