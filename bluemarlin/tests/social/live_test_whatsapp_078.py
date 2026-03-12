@@ -139,6 +139,11 @@ def test_mid_booking_change():
     reply3 = send_message(phone, "Yes, book it!")
     print(f"  T3: {reply3[:300]}...")
     check("G-T3: got reply", len(reply3) > 20, f"len={len(reply3)}")
+    state3 = state_registry.wa_get_booking_state(phone)
+    check("G-T3: hold_created", state3["flags"].get("hold_created") is True,
+          f"hold_created={state3['flags'].get('hold_created')}")
+    check("G-T3: has booking_ref", state3["flags"].get("booking_ref", "").startswith("BF-"),
+          f"ref={state3['flags'].get('booking_ref')}")
 
     _cleanup_phone(phone)
 
@@ -171,6 +176,13 @@ def test_departure_disambiguation():
     check("H-T2: got reply", len(reply2) > 20, f"len={len(reply2)}")
     check_contains_any(reply2, ["$240", "$120", "confirm", "BlueFinn1", "08:30", "Klein"],
                        "H-T2: summary with departure")
+    state2 = state_registry.wa_get_booking_state(phone)
+    check("H-T2: departure_time=08:30",
+          state2["fields"].get("departure_time") == "08:30",
+          f"departure_time={state2['fields'].get('departure_time')}")
+    check("H-T2: awaiting_booking_confirmation",
+          state2["flags"].get("awaiting_booking_confirmation") is True,
+          f"awaiting={state2['flags'].get('awaiting_booking_confirmation')}")
 
     _cleanup_phone(phone)
 
@@ -282,7 +294,8 @@ def test_booking_plus_question():
     is_booking = any(x in reply.lower() for x in ["$158", "confirm", "sunset", "$79"])
     check("K: relay or booking outcome", is_relay or is_booking,
           f"relay={is_relay}, booking_keywords={is_booking}")
-    check_not_contains(reply, "[PAYMENT_LINK]", "K: no raw placeholder")
+    check_not_contains(reply, "[PAYMENT_LINK]", "K: no raw [PAYMENT_LINK]")
+    check_not_contains(reply, "[BOOKING_REF]", "K: no raw [BOOKING_REF]")
 
     _cleanup_phone(phone)
 
@@ -519,6 +532,8 @@ def test_price_accuracy():
     check("T: trip_key=sunset_cruise",
           state["fields"].get("trip_key") == "sunset_cruise",
           f"trip_key={state['fields'].get('trip_key')}")
+    check("T: guests=3", str(state["fields"].get("guests")) == "3",
+          f"guests={state['fields'].get('guests')}")
 
     _cleanup_phone(phone)
 
