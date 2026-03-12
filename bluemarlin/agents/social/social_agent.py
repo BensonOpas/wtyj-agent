@@ -1,9 +1,11 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 070
-# Purpose: WhatsApp booking orchestrator — calls marina_agent, validates, holds, confirms
+# Last modified: Brief 071
+# Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import time
+import json
+import uuid
 from datetime import datetime, timezone, timedelta
 from shared import state_registry
 from shared import bm_logger
@@ -179,8 +181,28 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Build from identifier with name if available
     from_id = f"{phone} ({from_name})" if from_name else phone
 
+    # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
+    if flags.get("fully_escalated"):
+        _esc_flags = dict(flags)
+        for _rk in ("awaiting_relay", "relay_token", "relay_question"):
+            _esc_flags.pop(_rk, None)
+        esc_result = marina_agent.process_message(
+            from_email=from_id, subject="", body=text,
+            thread_fields=fields, thread_flags=_esc_flags,
+            channel="whatsapp", messages=history,
+        )
+        esc_reply = esc_result.get("reply", "")
+        bm_logger.log("whatsapp_escalated_reply", phone=phone,
+                      reply_length=len(esc_reply))
+        return esc_reply
+
     # Step 1: Build action context
     action_context = _build_action_context(flags)
+
+    # Filter relay flags before marina_agent call — prevents RELAY MODE prompt injection
+    agent_flags = dict(flags)
+    for _rk in ("awaiting_relay", "relay_token", "relay_question"):
+        agent_flags.pop(_rk, None)
 
     # Step 2: Call marina_agent with channel="whatsapp"
     result = marina_agent.process_message(
@@ -188,7 +210,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         subject="",
         body=text,
         thread_fields=fields,
-        thread_flags=flags,
+        thread_flags=agent_flags,
         action_context=action_context,
         channel="whatsapp",
         messages=history,
@@ -300,8 +322,74 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             bm_logger.log("whatsapp_slot_unavailable", phone=phone, trip_key=_ck_trip,
                           spots=avail.get("spots_remaining", 0))
 
-    # Step 8: Booking confirmation flow
-    if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+    _skip_booking = False
+
+    # Step 7.5: Semi-escalation — relay question to operator, holding reply to customer
+    if result.get("semi_escalation"):
+        # Cancel any soft hold (capacity leak prevention)
+        if flags.get("hold_id"):
+            state_registry.cancel_hold(flags["hold_id"])
+            _h_trip = flags.pop("hold_trip_key", "")
+            _h_date = flags.pop("hold_date", "")
+            _h_dep = flags.pop("hold_departure_time", "")
+            flags.pop("hold_id", None)
+            if _h_trip and _h_date and _h_dep:
+                gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+        flags["slot_checked"] = False
+        flags["slot_available"] = False
+        flags["awaiting_booking_confirmation"] = False
+        relay_token = uuid.uuid4().hex[:12]
+        flags["awaiting_relay"] = True
+        flags["relay_token"] = relay_token
+        flags["relay_question"] = result.get("relay_question", "(no question captured)")
+        reply_text = result["reply"]  # Claude's warm holding reply, not post-validation override
+        _cname = fields.get("customer_name", "Unknown")
+        sheets_writer.log_escalation({
+            "email": phone,
+            "subject": "WhatsApp",
+            "customer_name": _cname,
+            "intent": "semi_escalation",
+            "fields_collected": fields,
+            "internal_note": f"Relay question: {flags['relay_question']}",
+            "messages_json": json.dumps(history, ensure_ascii=False) if history else "[]",
+        })
+        bm_logger.log("whatsapp_semi_escalation", phone=phone,
+                      relay_question=flags["relay_question"],
+                      relay_token=relay_token)
+        _skip_booking = True
+
+    # Step 7.6: Full escalation — requires_human, holding reply to customer
+    if not _skip_booking and result.get("requires_human"):
+        # Cancel any soft hold (same pattern as semi-escalation — capacity leak prevention)
+        if flags.get("hold_id"):
+            state_registry.cancel_hold(flags["hold_id"])
+            _h_trip = flags.pop("hold_trip_key", "")
+            _h_date = flags.pop("hold_date", "")
+            _h_dep = flags.pop("hold_departure_time", "")
+            flags.pop("hold_id", None)
+            if _h_trip and _h_date and _h_dep:
+                gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+        flags["slot_checked"] = False
+        flags["slot_available"] = False
+        flags["fully_escalated"] = True
+        flags["awaiting_booking_confirmation"] = False
+        reply_text = result["reply"]  # Claude's warm holding reply
+        _cname = fields.get("customer_name", "Unknown")
+        sheets_writer.log_escalation({
+            "email": phone,
+            "subject": "WhatsApp",
+            "customer_name": _cname,
+            "intent": (result.get("intents") or ["unknown"])[0],
+            "fields_collected": fields,
+            "internal_note": result.get("internal_note", ""),
+            "messages_json": json.dumps(history, ensure_ascii=False) if history else "[]",
+        })
+        bm_logger.log("whatsapp_full_escalation", phone=phone,
+                      intents=result.get("intents", []))
+        _skip_booking = True
+
+    # Step 8: Booking confirmation flow (skip if escalated)
+    if not _skip_booking and any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
         if (fields.get("experience") and fields.get("date")
                 and fields.get("guests") and fields.get("trip_key")
                 and flags.get("booking_confirmed")
