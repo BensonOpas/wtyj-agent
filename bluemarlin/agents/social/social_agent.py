@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 074
+# Last modified: Brief 076
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
@@ -29,7 +29,7 @@ _BOOKING_FLAGS_TO_RESET = {
 
 _PERSISTENT_FIELDS = {"customer_name", "phone"}
 
-_MAX_REPLIES_PER_HOUR = 25
+_MAX_REPLIES_PER_HOUR = 50
 _REPLY_WINDOW_SECONDS = 3600
 _STALE_CONVERSATION_SECONDS = 86400  # 24 hours — matches wa_get_history window
 

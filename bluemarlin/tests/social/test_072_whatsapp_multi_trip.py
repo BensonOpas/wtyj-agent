@@ -219,8 +219,8 @@ def test_anti_loop_blocks_after_limit(mock_process):
     phone = "TEST_072_LOOP_001"
     _cleanup_phone(phone)
     now = int(time.time())
-    # 25 timestamps within the last hour
-    reply_times = [now - i * 60 for i in range(25)]
+    # 50 timestamps within the last hour
+    reply_times = [now - i * 60 for i in range(50)]
     state_registry.wa_save_booking_state(phone, {}, {"reply_times": reply_times})
     msg = {"from": phone, "text": "Hello", "from_name": "Test"}
     reply = handle_incoming_whatsapp_message(msg)
@@ -237,7 +237,7 @@ def test_anti_loop_allows_after_window(mock_process):
     phone = "TEST_072_LOOP_002"
     _cleanup_phone(phone)
     old = int(time.time()) - 7200  # 2 hours ago
-    reply_times = [old - i * 60 for i in range(25)]
+    reply_times = [old - i * 60 for i in range(50)]
     state_registry.wa_save_booking_state(phone, {}, {"reply_times": reply_times})
     mock_process.return_value = _base_result(
         intents=["inquiry"],
@@ -327,7 +327,8 @@ def test_anti_loop_blocks_fully_escalated(mock_process):
     phone = "TEST_072_LOOP_003"
     _cleanup_phone(phone)
     now = int(time.time())
-    reply_times = [now - i * 60 for i in range(25)]
+    # 50 timestamps within the last hour
+    reply_times = [now - i * 60 for i in range(50)]
     state_registry.wa_save_booking_state(
         phone, {}, {"fully_escalated": True, "reply_times": reply_times})
     msg = {"from": phone, "text": "Any update?", "from_name": "Test"}

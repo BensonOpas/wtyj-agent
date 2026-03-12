@@ -266,6 +266,8 @@ def test_webhook_stores_conversation():
         }, "field": "messages"}]}]
     }
 
+    from agents.social.webhook_server import _message_buffers, _buffer_lock, _flush_buffer
+
     client = TestClient(app)
     with patch("agents.social.webhook_server.send_text_message") as mock_send, \
          patch("agents.social.webhook_server.handle_incoming_whatsapp_message",
@@ -273,6 +275,11 @@ def test_webhook_stores_conversation():
         mock_send.return_value = True
         r = client.post("/webhooks/meta/whatsapp", json=payload)
         assert r.status_code == 200
+        # Debounce: message is buffered, cancel timer and flush manually
+        with _buffer_lock:
+            if test_phone in _message_buffers:
+                _message_buffers[test_phone]["timer"].cancel()
+        _flush_buffer(test_phone)
 
     history = state_registry.wa_get_history(test_phone)
     assert len(history) == 2

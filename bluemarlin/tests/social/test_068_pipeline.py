@@ -227,13 +227,19 @@ def test_webhook_post_triggers_pipeline():
     conn.commit()
     conn.close()
 
+    from agents.social.webhook_server import _message_buffers, _buffer_lock, _flush_buffer
+
     with patch("agents.social.webhook_server.send_text_message") as mock_send, \
          patch("agents.social.webhook_server.handle_incoming_whatsapp_message", return_value="Test reply"):
         mock_send.return_value = True
         r = client.post("/webhooks/meta/whatsapp", json=payload)
         assert r.status_code == 200
         assert r.text == "OK"
-        # BackgroundTasks run synchronously in TestClient
+        # Debounce: message is buffered, cancel timer and flush manually
+        with _buffer_lock:
+            if "1234567890" in _message_buffers:
+                _message_buffers["1234567890"]["timer"].cancel()
+        _flush_buffer("1234567890")
         mock_send.assert_called_once()
         call_args = mock_send.call_args
         assert call_args[1]["to"] == "1234567890" or call_args[0][0] == "1234567890"

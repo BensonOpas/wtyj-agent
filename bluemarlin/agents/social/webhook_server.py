@@ -1,10 +1,11 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 073
+# Last modified: Brief 076
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import os
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 
@@ -17,6 +18,12 @@ app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None)
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
+
+_DEBOUNCE_SECONDS = 2.0
+_MAX_BATCH_SECONDS = 5.0
+
+_message_buffers = {}   # phone -> {"messages": [...], "timer": Timer, "started": float}
+_buffer_lock = threading.Lock()
 
 
 def _maybe_run_cleanup():
@@ -58,7 +65,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
 
 def _process_whatsapp_event(payload: dict):
-    """Background task: parse messages, dedup, call agent, send reply."""
+    """Background task: parse messages, dedup, buffer for debounce."""
     _maybe_run_cleanup()
     try:
         messages = parse_webhook_payload(payload)
@@ -72,19 +79,72 @@ def _process_whatsapp_event(payload: dict):
                 continue
             state_registry.wa_mark_as_processed(message_id)
             log("whatsapp_message_normalized", **msg)
-            # Only process text messages
+            # Only buffer text messages
             if msg.get("text") is None:
                 log("whatsapp_non_text_skipped", source="meta_whatsapp",
                     message_type=msg.get("message_type"), message_id=message_id)
                 continue
-            # Agent generates reply (reads history + state internally)
-            reply_text = handle_incoming_whatsapp_message(msg)
-            if reply_text:
-                state_registry.wa_store_message(msg["from"], "user", msg["text"])
-                send_text_message(to=msg["from"], text=reply_text)
-                state_registry.wa_store_message(msg["from"], "assistant", reply_text)
+            _buffer_message(msg)
     except Exception as e:
         log("webhook_process_error", source="meta_whatsapp", error=str(e))
+
+
+def _buffer_message(msg):
+    """Add message to per-phone debounce buffer. Schedule flush after window."""
+    phone = msg["from"]
+    now = time.time()
+    with _buffer_lock:
+        if phone not in _message_buffers:
+            _message_buffers[phone] = {
+                "messages": [],
+                "timer": None,
+                "started": now,
+            }
+        buf = _message_buffers[phone]
+        buf["messages"].append(msg)
+        log("whatsapp_message_buffered", phone=phone,
+            buffered_count=len(buf["messages"]))
+
+        # Cancel existing timer
+        if buf["timer"] is not None:
+            buf["timer"].cancel()
+
+        # Calculate delay: min of debounce window or remaining hard cap
+        elapsed = now - buf["started"]
+        remaining_cap = max(0.1, _MAX_BATCH_SECONDS - elapsed)
+        delay = min(_DEBOUNCE_SECONDS, remaining_cap)
+
+        buf["timer"] = threading.Timer(delay, _flush_buffer, args=[phone])
+        buf["timer"].daemon = True
+        buf["timer"].start()
+
+
+def _flush_buffer(phone):
+    """Flush buffered messages: concatenate texts, process as single message."""
+    with _buffer_lock:
+        buf = _message_buffers.pop(phone, None)
+    if not buf or not buf["messages"]:
+        return
+    messages = buf["messages"]
+    # Concatenate all text messages
+    texts = [m["text"] for m in messages if m.get("text")]
+    combined_text = "\n".join(texts)
+    # Use last message's metadata
+    final_msg = messages[-1].copy()
+    final_msg["text"] = combined_text
+    batched_count = len(messages)
+    if batched_count > 1:
+        log("whatsapp_batch_flushed", phone=phone, count=batched_count,
+            combined_length=len(combined_text))
+    try:
+        reply_text = handle_incoming_whatsapp_message(final_msg)
+        if reply_text:
+            state_registry.wa_store_message(phone, "user", combined_text)
+            send_text_message(to=phone, text=reply_text)
+            state_registry.wa_store_message(phone, "assistant", reply_text)
+    except Exception as e:
+        log("webhook_process_error", source="meta_whatsapp", error=str(e),
+            phone=phone)
 
 
 @app.get("/health")

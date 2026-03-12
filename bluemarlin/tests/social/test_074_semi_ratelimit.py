@@ -1,6 +1,6 @@
 # bluemarlin/tests/social/test_074_semi_ratelimit.py
 # Created: Brief 074
-# Purpose: Tests for semi-escalation → full escalation promotion and rate limit bump to 25
+# Purpose: Tests for semi-escalation → full escalation promotion and rate limit bump to 50
 
 import os
 import sys
@@ -150,15 +150,15 @@ def test_post_semi_goes_through_escalated_guard(mock_process):
     _cleanup_phone(phone)
 
 
-# --- Test 5: Rate limit at 25 blocks ---
+# --- Test 5: Rate limit at 50 blocks ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_rate_limit_25_blocks(mock_process):
-    """25 reply_times within the hour → rate limited, empty reply."""
+def test_rate_limit_50_blocks(mock_process):
+    """50 reply_times within the hour → rate limited, empty reply."""
     phone = "TEST_074_RATE_001"
     _cleanup_phone(phone)
     now = int(time.time())
-    reply_times = [now - i * 60 for i in range(25)]
+    reply_times = [now - i * 60 for i in range(50)]
     state_registry.wa_save_booking_state(phone, {}, {"reply_times": reply_times})
     msg = {"from": phone, "text": "Hello", "from_name": "Test"}
     reply = handle_incoming_whatsapp_message(msg)
@@ -167,15 +167,15 @@ def test_rate_limit_25_blocks(mock_process):
     _cleanup_phone(phone)
 
 
-# --- Test 6: Rate limit at 24 allows ---
+# --- Test 6: Rate limit at 49 allows ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_rate_limit_24_allows(mock_process):
-    """24 reply_times within the hour → still under limit, call proceeds."""
+def test_rate_limit_49_allows(mock_process):
+    """49 reply_times within the hour → still under limit, call proceeds."""
     phone = "TEST_074_RATE_002"
     _cleanup_phone(phone)
     now = int(time.time())
-    reply_times = [now - i * 60 for i in range(24)]
+    reply_times = [now - i * 60 for i in range(49)]
     state_registry.wa_save_booking_state(phone, {}, {"reply_times": reply_times})
     mock_process.return_value = _base_result(
         intents=["inquiry"],
