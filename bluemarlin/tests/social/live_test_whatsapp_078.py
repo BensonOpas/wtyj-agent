@@ -337,8 +337,8 @@ def test_emoji_slang():
     print("\n=== Scenario M: Emoji-Heavy Slang ===")
 
     reply = send_message(phone,
-        "yo \U0001f525\U0001f525 what trips u got bruh \U0001f4b0\U0001f4b0 "
-        "we tryna do smth for my bday \U0001f382 6 of us")
+        "yo \U0001f525 what boat trips do u have? \U0001f4b0 "
+        "planning my bday \U0001f382\U0001f389 6 people total")
     print(f"  Reply: {reply[:300]}...")
 
     check("M: got reply", len(reply) > 20, f"len={len(reply)}")
