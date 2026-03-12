@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # bluemarlin/agents/marina/email_poller.py
-# Last modified: Brief 066
+# Last modified: Brief 077
 # Purpose: Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP
 import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid
 from datetime import datetime, timezone, timedelta
@@ -21,6 +21,7 @@ from agents.marina import marina_agent
 from agents.marina import sheets_writer
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
+from agents.social.whatsapp_client import send_text_message as wa_send_text_message
 
 # ========= CONFIG =========
 CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
@@ -626,7 +627,41 @@ def main():
                             customer_th = t
                             break
                     if customer_th is None:
-                        log(f"RELAY: no matching customer thread for token={relay_token_in} — skipping")
+                        # Check WhatsApp relay
+                        _wa_relay = state_registry.get_relay_by_token(relay_token_in)
+                        if _wa_relay and _wa_relay["channel"] == "whatsapp":
+                            _wa_phone = _wa_relay["customer_id"]
+                            _wa_state = state_registry.wa_get_booking_state(_wa_phone)
+                            _wa_fields = _wa_state.get("fields", {})
+                            _wa_flags = _wa_state.get("flags", {})
+                            _wa_history = state_registry.wa_get_history(_wa_phone, limit=10)
+                            _wa_agent_flags = dict(_wa_flags)
+                            for _rk in ("awaiting_relay", "relay_token",
+                                        "relay_question", "reply_times"):
+                                _wa_agent_flags.pop(_rk, None)
+                            relay_result = marina_agent.process_message(
+                                _wa_phone, "", body,
+                                _wa_fields, _wa_agent_flags,
+                                channel="whatsapp", messages=_wa_history,
+                            )
+                            relay_reply = relay_result.get("reply", "")
+                            if relay_reply:
+                                wa_send_text_message(to=_wa_phone, text=relay_reply)
+                                state_registry.wa_store_message(
+                                    _wa_phone, "assistant", relay_reply)
+                                log(f"RELAY: WhatsApp relay sent to {_wa_phone}")
+                            _wa_flags.pop("awaiting_relay", None)
+                            _wa_flags.pop("relay_token", None)
+                            _wa_flags.pop("relay_question", None)
+                            state_registry.wa_save_booking_state(
+                                _wa_phone, _wa_fields, _wa_flags,
+                                _wa_state.get("completed_bookings", []))
+                            state_registry.update_notification_status(
+                                _wa_relay["id"], "replied")
+                            im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                            save_json(THREAD_STATE_PATH, state)
+                            continue
+                        log(f"RELAY: no matching thread for token={relay_token_in} — skipping")
                         im.uid("store", uid, "+FLAGS", r"(\Seen)")
                         save_json(THREAD_STATE_PATH, state)
                         continue
@@ -1175,6 +1210,19 @@ def main():
                 log(f"Replied + marked Seen: {from_email}")
 
             im.logout()
+
+            # Process pending operator notifications (from WhatsApp)
+            _pending = state_registry.get_pending_notifications()
+            for _pn in _pending:
+                try:
+                    smtp_send(demo_support_email, _pn["subject"], _pn["body"],
+                              reply_to=EMAIL_ADDR)
+                    state_registry.update_notification_status(_pn["id"], "sent")
+                    log(f"Sent pending {_pn['notification_type']} "
+                        f"notification id={_pn['id']} for {_pn['customer_id']}")
+                except Exception as _pn_err:
+                    log(f"Failed to send pending notification "
+                        f"id={_pn['id']}: {_pn_err}")
 
             # Heartbeat — write timestamp for external monitoring
             try:

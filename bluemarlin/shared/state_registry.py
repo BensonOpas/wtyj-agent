@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 073
+# Last modified: Brief 077
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -93,6 +93,20 @@ def _get_conn():
         "flags_json TEXT DEFAULT '{}', "
         "completed_bookings_json TEXT DEFAULT '[]', "
         "last_activity TEXT NOT NULL, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pending_notifications ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "notification_type TEXT NOT NULL, "
+        "relay_token TEXT UNIQUE, "
+        "channel TEXT NOT NULL, "
+        "customer_id TEXT NOT NULL, "
+        "customer_name TEXT DEFAULT '', "
+        "subject TEXT NOT NULL, "
+        "body TEXT NOT NULL, "
+        "status TEXT DEFAULT 'pending', "
         "created_at TEXT NOT NULL"
         ")"
     )
@@ -493,6 +507,72 @@ def wa_cleanup_stale_data() -> dict:
     conn.commit()
     conn.close()
     return {"threads_cleaned": threads_cleaned, "processed_cleaned": processed_cleaned}
+
+
+def create_pending_notification(notification_type: str, channel: str,
+                                 customer_id: str, customer_name: str,
+                                 subject: str, body: str,
+                                 relay_token: str = None) -> int:
+    """Insert a pending notification for the email poller to send. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO pending_notifications "
+        "(notification_type, relay_token, channel, customer_id, customer_name, "
+        "subject, body, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (notification_type, relay_token, channel, customer_id, customer_name,
+         subject, body, datetime.now(timezone.utc).isoformat())
+    )
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def get_pending_notifications(status: str = "pending") -> list:
+    """Return all notifications with the given status."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, notification_type, relay_token, channel, customer_id, "
+        "customer_name, subject, body, status, created_at "
+        "FROM pending_notifications WHERE status = ? ORDER BY created_at ASC",
+        (status,)
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
+             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
+             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9]}
+            for r in rows]
+
+
+def update_notification_status(notification_id: int, status: str) -> bool:
+    """Update the status of a pending notification. Returns True if row updated."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE pending_notifications SET status = ? WHERE id = ?",
+        (status, notification_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_relay_by_token(relay_token: str) -> "dict | None":
+    """Look up a relay notification by token. Returns dict or None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, notification_type, relay_token, channel, customer_id, "
+        "customer_name, subject, body, status, created_at "
+        "FROM pending_notifications WHERE relay_token = ?",
+        (relay_token,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "notification_type": row[1], "relay_token": row[2],
+            "channel": row[3], "customer_id": row[4], "customer_name": row[5],
+            "subject": row[6], "body": row[7], "status": row[8], "created_at": row[9]}
 
 
 # Initialise database on module load so the file exists as soon as the module is imported

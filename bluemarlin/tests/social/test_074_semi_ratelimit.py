@@ -45,12 +45,12 @@ def _base_result(**overrides):
     return base
 
 
-# --- Test 1: Semi-escalation promotes to full escalation ---
+# --- Test 1: Semi-escalation creates relay ---
 
 @patch("agents.social.social_agent.sheets_writer.log_escalation")
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_semi_promotes_to_full_escalation(mock_process, mock_sheets):
-    """Semi-escalation sets fully_escalated, no relay flags."""
+def test_semi_creates_relay(mock_process, mock_sheets):
+    """Semi-escalation sets relay flags, not fully_escalated."""
     phone = "TEST_074_SEMI_001"
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
@@ -63,10 +63,10 @@ def test_semi_promotes_to_full_escalation(mock_process, mock_sheets):
     reply = handle_incoming_whatsapp_message(msg)
     assert reply == "I'll check with the team!"
     state = state_registry.wa_get_booking_state(phone)
-    assert state["flags"].get("fully_escalated") is True
-    assert "awaiting_relay" not in state["flags"]
-    assert "relay_token" not in state["flags"]
-    assert "relay_question" not in state["flags"]
+    assert state["flags"].get("awaiting_relay") is True
+    assert state["flags"].get("relay_token") is not None
+    assert len(state["flags"]["relay_token"]) == 12
+    assert "fully_escalated" not in state["flags"]
     _cleanup_phone(phone)
 
 
@@ -75,8 +75,8 @@ def test_semi_promotes_to_full_escalation(mock_process, mock_sheets):
 @patch("agents.social.social_agent.gws_calendar.remove_from_manifest")
 @patch("agents.social.social_agent.sheets_writer.log_escalation")
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_semi_with_hold_cancels_and_escalates(mock_process, mock_sheets, mock_remove):
-    """Semi-escalation cancels soft hold and sets fully_escalated."""
+def test_semi_with_hold_cancels_and_creates_relay(mock_process, mock_sheets, mock_remove):
+    """Semi-escalation cancels soft hold and sets relay flags."""
     phone = "TEST_074_SEMI_002"
     _cleanup_phone(phone)
     fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
@@ -98,7 +98,7 @@ def test_semi_with_hold_cancels_and_escalates(mock_process, mock_sheets, mock_re
     reply = handle_incoming_whatsapp_message(msg)
     state = state_registry.wa_get_booking_state(phone)
     assert "hold_id" not in state["flags"]
-    assert state["flags"].get("fully_escalated") is True
+    assert state["flags"].get("awaiting_relay") is True
     assert state["flags"].get("slot_checked") is False
     mock_remove.assert_called_once_with("west_coast_beach", "2026-03-18", "09:00")
     _cleanup_phone(phone)
@@ -109,7 +109,7 @@ def test_semi_with_hold_cancels_and_escalates(mock_process, mock_sheets, mock_re
 @patch("agents.social.social_agent.sheets_writer.log_escalation")
 @patch("agents.social.social_agent.marina_agent.process_message")
 def test_semi_escalation_sheets_logging(mock_process, mock_sheets):
-    """Sheets intent is semi_to_full_escalation, internal_note contains relay question."""
+    """Sheets intent is semi_escalation, internal_note contains relay question."""
     phone = "TEST_074_SEMI_003"
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
@@ -122,8 +122,8 @@ def test_semi_escalation_sheets_logging(mock_process, mock_sheets):
     handle_incoming_whatsapp_message(msg)
     assert mock_sheets.call_count == 1
     sheets_data = mock_sheets.call_args[0][0]
-    assert sheets_data["intent"] == "semi_to_full_escalation"
-    assert "Relay question (no relay bridge): Is 9pH water available?" in sheets_data["internal_note"]
+    assert sheets_data["intent"] == "semi_escalation"
+    assert "Relay question: Is 9pH water available?" in sheets_data["internal_note"]
     _cleanup_phone(phone)
 
 
@@ -131,7 +131,7 @@ def test_semi_escalation_sheets_logging(mock_process, mock_sheets):
 
 @patch("agents.social.social_agent.marina_agent.process_message")
 def test_post_semi_goes_through_escalated_guard(mock_process):
-    """After semi→full promotion, next message hits fully-escalated guard."""
+    """After full escalation, next message hits fully-escalated guard."""
     phone = "TEST_074_POST_001"
     _cleanup_phone(phone)
     state_registry.wa_save_booking_state(phone,

@@ -1,11 +1,12 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 076
+# Last modified: Brief 077
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
 import time
 import json
+import uuid
 from datetime import datetime, timezone, timedelta
 from shared import state_registry
 from shared import bm_logger
@@ -462,8 +463,9 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
     _skip_booking = False
 
-    # Step 7.5: Semi-escalation → promote to full escalation (no relay bridge on WhatsApp)
+    # Step 7.5: Semi-escalation → create relay (operator notified via email poller)
     if result.get("semi_escalation"):
+        relay_question = result.get("relay_question", "(no question captured)")
         # Cancel any soft hold (capacity leak prevention)
         if flags.get("hold_id"):
             state_registry.cancel_hold(flags["hold_id"])
@@ -476,21 +478,41 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         flags["slot_checked"] = False
         flags["slot_available"] = False
         flags["awaiting_booking_confirmation"] = False
-        flags["fully_escalated"] = True
+        # Set relay flags (proper relay bridge, not promote to full)
+        relay_token = uuid.uuid4().hex[:12]
+        flags["awaiting_relay"] = True
+        flags["relay_token"] = relay_token
+        flags["relay_question"] = relay_question
         reply_text = result["reply"]
+        # Build relay alert for operator
+        _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
         _cname = fields.get("customer_name", "Unknown")
-        _relay_q = result.get("relay_question", "(no question captured)")
+        _alert_subject = f"[RELAY-{relay_token}] {_ref} - {_cname}"
+        _alert_body = (
+            f"Customer: {_cname} (WhatsApp: {phone})\n"
+            f"Their question: {relay_question}\n\n"
+            f"Booking context:\n"
+            f"  Trip: {fields.get('trip_key', '')} | "
+            f"Date: {fields.get('date', '')} | "
+            f"Guests: {fields.get('guests', '')}\n"
+            f"  Ref: {_ref}\n\n"
+            f"INSTRUCTIONS: Reply to this email with your answer.\n"
+            f"Marina will relay it to the customer in her own words."
+        )
+        state_registry.create_pending_notification(
+            'relay', 'whatsapp', phone, _cname,
+            _alert_subject, _alert_body, relay_token=relay_token)
         sheets_writer.log_escalation({
             "email": phone,
             "subject": "WhatsApp",
             "customer_name": _cname,
-            "intent": "semi_to_full_escalation",
+            "intent": "semi_escalation",
             "fields_collected": fields,
-            "internal_note": f"Relay question (no relay bridge): {_relay_q}",
+            "internal_note": f"Relay question: {relay_question}",
             "messages_json": json.dumps(history, ensure_ascii=False) if history else "[]",
         })
-        bm_logger.log("whatsapp_semi_to_full", phone=phone,
-                      relay_question=_relay_q)
+        bm_logger.log("whatsapp_semi_escalation", phone=phone,
+                      relay_question=relay_question, relay_token=relay_token)
         _skip_booking = True
 
     # Step 7.6: Full escalation — requires_human, holding reply to customer
@@ -521,6 +543,33 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         })
         bm_logger.log("whatsapp_full_escalation", phone=phone,
                       intents=result.get("intents", []))
+        # Build escalation alert for operator
+        _esc_ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
+        _esc_intents = ", ".join(result.get("intents") or ["unknown"])
+        _esc_history = state_registry.wa_get_history(phone, limit=20)
+        _esc_chat_lines = []
+        for _em in _esc_history:
+            _esc_chat_lines.append(
+                f"[{_em['role'].upper()} | {_em.get('created_at', '')}]")
+            _esc_chat_lines.append(_em.get("text", ""))
+            _esc_chat_lines.append("---")
+        _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
+        _esc_subject = (
+            f"[ESCALATION] {_esc_ref} - {_cname} "
+            f"(WhatsApp: {phone}) - {_esc_intents}")
+        _esc_body = (
+            f"=== CUSTOMER ===\n"
+            f"WhatsApp: {phone}\n"
+            f"Name: {_cname}\n\n"
+            f"=== CHAT LOG ===\n{_esc_chat_log}\n\n"
+            f"=== BOOKING FIELDS ===\n"
+            f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n"
+            f"=== MARINA'S INTERNAL NOTE ===\n"
+            f"{result.get('internal_note', '')}"
+        )
+        state_registry.create_pending_notification(
+            'escalation', 'whatsapp', phone, _cname,
+            _esc_subject, _esc_body)
         _skip_booking = True
 
     # Step 8: Booking confirmation flow (skip if escalated)

@@ -91,12 +91,12 @@ def test_fully_escalated_guard_filters_relay_flags(mock_process):
     _cleanup_phone(phone)
 
 
-# --- Test 3: Semi-escalation promotes to full escalation ---
+# --- Test 3: Semi-escalation creates relay ---
 
 @patch("agents.social.social_agent.sheets_writer.log_escalation")
 @patch("agents.social.social_agent.marina_agent.process_message")
 def test_semi_escalation_sets_relay_state(mock_process, mock_sheets):
-    """Semi-escalation promotes to full escalation and returns Claude's holding reply."""
+    """Semi-escalation sets relay flags and returns Claude's holding reply."""
     phone = "TEST_071_SEMI_001"
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
@@ -109,11 +109,12 @@ def test_semi_escalation_sets_relay_state(mock_process, mock_sheets):
     msg = {"from": phone, "text": "What's the weight limit for jet skis?", "from_name": "Test"}
     reply = handle_incoming_whatsapp_message(msg)
     assert reply == "Let me check with the team on that!"
-    # Check state — promoted to full escalation, no relay flags
+    # Check state — relay flags set, not fully_escalated
     state = state_registry.wa_get_booking_state(phone)
-    assert state["flags"].get("fully_escalated") is True
-    assert "awaiting_relay" not in state["flags"]
-    assert "relay_token" not in state["flags"]
+    assert state["flags"].get("awaiting_relay") is True
+    assert state["flags"].get("relay_token") is not None
+    assert len(state["flags"]["relay_token"]) == 12
+    assert "fully_escalated" not in state["flags"]
     # Sheets logged
     assert mock_sheets.call_count == 1
     _cleanup_phone(phone)
@@ -152,7 +153,7 @@ def test_semi_escalation_cancels_soft_hold(mock_process, mock_sheets, mock_remov
     assert state["flags"].get("slot_checked") is False
     assert state["flags"].get("slot_available") is False
     assert state["flags"].get("awaiting_booking_confirmation") is False
-    assert state["flags"].get("fully_escalated") is True
+    assert state["flags"].get("awaiting_relay") is True
     # remove_from_manifest called with correct args
     mock_remove.assert_called_once_with("west_coast_beach", "2026-03-18", "09:00")
     _cleanup_phone(phone)
@@ -186,7 +187,7 @@ def test_semi_escalation_overrides_post_validate(mock_process, mock_sheets, mock
     # State checks
     state = state_registry.wa_get_booking_state(phone)
     assert state["flags"].get("awaiting_booking_confirmation") is False
-    assert state["flags"].get("fully_escalated") is True
+    assert state["flags"].get("awaiting_relay") is True
     _cleanup_phone(phone)
 
 
