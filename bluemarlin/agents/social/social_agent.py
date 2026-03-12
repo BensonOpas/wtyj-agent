@@ -1,12 +1,11 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 073
+# Last modified: Brief 074
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
 import time
 import json
-import uuid
 from datetime import datetime, timezone, timedelta
 from shared import state_registry
 from shared import bm_logger
@@ -30,7 +29,7 @@ _BOOKING_FLAGS_TO_RESET = {
 
 _PERSISTENT_FIELDS = {"customer_name", "phone"}
 
-_MAX_REPLIES_PER_HOUR = 15
+_MAX_REPLIES_PER_HOUR = 25
 _REPLY_WINDOW_SECONDS = 3600
 _STALE_CONVERSATION_SECONDS = 86400  # 24 hours — matches wa_get_history window
 
@@ -463,7 +462,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
     _skip_booking = False
 
-    # Step 7.5: Semi-escalation — relay question to operator, holding reply to customer
+    # Step 7.5: Semi-escalation → promote to full escalation (no relay bridge on WhatsApp)
     if result.get("semi_escalation"):
         # Cancel any soft hold (capacity leak prevention)
         if flags.get("hold_id"):
@@ -477,24 +476,21 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         flags["slot_checked"] = False
         flags["slot_available"] = False
         flags["awaiting_booking_confirmation"] = False
-        relay_token = uuid.uuid4().hex[:12]
-        flags["awaiting_relay"] = True
-        flags["relay_token"] = relay_token
-        flags["relay_question"] = result.get("relay_question", "(no question captured)")
-        reply_text = result["reply"]  # Claude's warm holding reply, not post-validation override
+        flags["fully_escalated"] = True
+        reply_text = result["reply"]
         _cname = fields.get("customer_name", "Unknown")
+        _relay_q = result.get("relay_question", "(no question captured)")
         sheets_writer.log_escalation({
             "email": phone,
             "subject": "WhatsApp",
             "customer_name": _cname,
-            "intent": "semi_escalation",
+            "intent": "semi_to_full_escalation",
             "fields_collected": fields,
-            "internal_note": f"Relay question: {flags['relay_question']}",
+            "internal_note": f"Relay question (no relay bridge): {_relay_q}",
             "messages_json": json.dumps(history, ensure_ascii=False) if history else "[]",
         })
-        bm_logger.log("whatsapp_semi_escalation", phone=phone,
-                      relay_question=flags["relay_question"],
-                      relay_token=relay_token)
+        bm_logger.log("whatsapp_semi_to_full", phone=phone,
+                      relay_question=_relay_q)
         _skip_booking = True
 
     # Step 7.6: Full escalation — requires_human, holding reply to customer
