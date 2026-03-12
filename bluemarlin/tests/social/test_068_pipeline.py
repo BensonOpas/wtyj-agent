@@ -141,12 +141,18 @@ def test_dedup_prevents_reprocessing():
 
 # --- Agent stub tests ---
 
-def test_agent_stub_returns_reply():
-    """Stub agent returns hardcoded test reply."""
-    msg = {"from": "59996881585", "text": "Hello", "channel": "whatsapp"}
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_agent_returns_reply(mock_process):
+    """Agent returns Claude-generated reply (mocked marina_agent)."""
+    mock_process.return_value = {
+        "intents": ["greeting"], "fields": {}, "confidence": "high",
+        "reply": "Hi! How can I help?",
+        "clarifications_needed": [], "requires_human": False,
+        "flags": {}, "internal_note": ""
+    }
+    msg = {"from": "59996881585", "text": "Hello", "from_name": "Test", "channel": "whatsapp"}
     reply = handle_incoming_whatsapp_message(msg)
-    assert "BlueMarlin" in reply
-    assert "test agent" in reply.lower() or "online" in reply.lower()
+    assert reply == "Hi! How can I help?"
 
 
 # --- Send tests ---
@@ -221,7 +227,8 @@ def test_webhook_post_triggers_pipeline():
     conn.commit()
     conn.close()
 
-    with patch("agents.social.webhook_server.send_text_message") as mock_send:
+    with patch("agents.social.webhook_server.send_text_message") as mock_send, \
+         patch("agents.social.webhook_server.handle_incoming_whatsapp_message", return_value="Test reply"):
         mock_send.return_value = True
         r = client.post("/webhooks/meta/whatsapp", json=payload)
         assert r.status_code == 200

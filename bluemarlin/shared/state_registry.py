@@ -1,7 +1,8 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 068
+# Last modified: Brief 069
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -69,6 +70,29 @@ def _get_conn():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS whatsapp_processed ("
         "message_id TEXT PRIMARY KEY, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS whatsapp_threads ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "phone TEXT NOT NULL, "
+        "role TEXT NOT NULL, "
+        "text TEXT NOT NULL, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_whatsapp_threads_phone "
+        "ON whatsapp_threads(phone, created_at)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS whatsapp_booking_state ("
+        "phone TEXT PRIMARY KEY, "
+        "fields_json TEXT DEFAULT '{}', "
+        "flags_json TEXT DEFAULT '{}', "
+        "completed_bookings_json TEXT DEFAULT '[]', "
+        "last_activity TEXT NOT NULL, "
         "created_at TEXT NOT NULL"
         ")"
     )
@@ -387,6 +411,67 @@ def wa_mark_as_processed(message_id: str):
     conn.execute(
         "INSERT OR IGNORE INTO whatsapp_processed (message_id, created_at) VALUES (?, ?)",
         (message_id, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def wa_store_message(phone: str, role: str, text: str):
+    """Store a WhatsApp message in conversation history."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO whatsapp_threads (phone, role, text, created_at) VALUES (?, ?, ?, ?)",
+        (phone, role, text, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def wa_get_history(phone: str, limit: int = 10) -> list:
+    """Get recent conversation history for a phone number (last 24h, oldest first)."""
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    rows = conn.execute(
+        "SELECT role, text, created_at FROM whatsapp_threads "
+        "WHERE phone = ? AND created_at > ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (phone, cutoff, limit)
+    ).fetchall()
+    conn.close()
+    return [{"role": r[0], "text": r[1], "created_at": r[2]} for r in reversed(rows)]
+
+
+def wa_get_booking_state(phone: str) -> dict:
+    """Get booking state for a phone number. Returns {fields, flags, completed_bookings}."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT fields_json, flags_json, completed_bookings_json "
+        "FROM whatsapp_booking_state WHERE phone = ?",
+        (phone,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"fields": {}, "flags": {}, "completed_bookings": []}
+    return {
+        "fields": json.loads(row[0] or "{}"),
+        "flags": json.loads(row[1] or "{}"),
+        "completed_bookings": json.loads(row[2] or "[]"),
+    }
+
+
+def wa_save_booking_state(phone: str, fields: dict, flags: dict,
+                          completed_bookings: list = None):
+    """Save/update booking state for a phone number."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    cb = json.dumps(completed_bookings or [], ensure_ascii=False)
+    conn.execute(
+        "INSERT OR REPLACE INTO whatsapp_booking_state "
+        "(phone, fields_json, flags_json, completed_bookings_json, last_activity, created_at) "
+        "VALUES (?, ?, ?, ?, ?, COALESCE("
+        "(SELECT created_at FROM whatsapp_booking_state WHERE phone = ?), ?))",
+        (phone, json.dumps(fields, ensure_ascii=False),
+         json.dumps(flags, ensure_ascii=False), cb, now, phone, now)
     )
     conn.commit()
     conn.close()

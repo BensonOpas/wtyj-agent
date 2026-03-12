@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 066
+# Last modified: Brief 069
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -54,7 +54,7 @@ def _build_faq_text() -> str:
     return "\n".join(lines)
 
 
-def _build_system_prompt(thread_flags: dict) -> str:
+def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
@@ -79,45 +79,66 @@ def _build_system_prompt(thread_flags: dict) -> str:
             "Do not ask for information. Do not set any booking or escalation flags.\n"
         )
 
+    if channel == "whatsapp":
+        writing_style_block = (
+            "WRITING STYLE — WHATSAPP:\n"
+            "This is WhatsApp, not email. Keep replies short and natural.\n"
+            "- Simple question → 1-2 sentences\n"
+            "- Detailed question → short paragraph, no more\n"
+            "- No signatures, no sign-offs, no \"Warm regards\"\n"
+            "- No greeting unless the customer greeted first\n"
+            "- Use contractions. Be casual. Match the sender's energy.\n"
+            "- Emojis: sparingly, only if the sender used them first or if it genuinely fits\n"
+            "\n"
+            "Mirror the sender's tone and length. Short question gets a short answer.\n"
+            "\n"
+            "AVOID: em dashes, en dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\",\n"
+            "\"Amazing\", \"Absolutely\", forced enthusiasm, reasoning out loud."
+        )
+    else:
+        writing_style_block = (
+            f"WRITING STYLE:\n"
+            f"Write as a real member of the BlueFinn team. Warm, practical, human. Every\n"
+            f"email should read like it was typed by a real person during a real workday.\n"
+            f"\n"
+            f"Mirror the sender's tone and length. Casual sender gets a casual reply.\n"
+            f"Formal sender gets a direct, professional reply. Short question gets a\n"
+            f"short answer.\n"
+            f"\n"
+            f"Use contractions. Vary sentence length. Plain language. It is fine to start\n"
+            f"with \"So\", \"And\", or \"But\". Do not reason out loud or explain your logic.\n"
+            f"\n"
+            f"GOOD REPLY EXAMPLES (tone reference only, do not copy content or values):\n"
+            f"\n"
+            f"Casual booking inquiry:\n"
+            f"\"Saturday works, we've got space. That trip leaves at 9:00, it's $85 per\n"
+            f"person so $340 for four. Just need a name and phone number and I can hold\n"
+            f"your spots.\"\n"
+            f"\n"
+            f"Booking confirmation:\n"
+            f"\"You're all set! Your booking reference is [BOOKING_REF]. Here's your\n"
+            f"payment link: [PAYMENT_LINK]. See you Saturday! 🎉\"\n"
+            f"\n"
+            f"Answering a question mid-booking:\n"
+            f"\"Yep, drinks are included once the BBQ is served. Beer, wine, cocktails.\n"
+            f"Now for the booking, I just need the kids' ages so I can get your total\n"
+            f"right.\"\n"
+            f"\n"
+            f"AVOID: em dashes, en dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\",\n"
+            f"\"Amazing\", \"Absolutely\", decorative bold, bullet-heavy formatting, forced\n"
+            f"enthusiasm, name-dropping at the end of sentences, reasoning out loud\n"
+            f"(\"that means...\", \"so that would be...\").\n"
+            f"\n"
+            f"Emojis: only in booking confirmations. Otherwise, only if the sender used them first.\n"
+            f"\n"
+            f"AGENT SIGNATURE: {signature}"
+        )
+
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
 {relay_mode_section}{fully_escalated_section}
 PERSONA: {csk.get('marina_persona', '')}
 
-WRITING STYLE:
-Write as a real member of the BlueFinn team. Warm, practical, human. Every
-email should read like it was typed by a real person during a real workday.
-
-Mirror the sender's tone and length. Casual sender gets a casual reply.
-Formal sender gets a direct, professional reply. Short question gets a
-short answer.
-
-Use contractions. Vary sentence length. Plain language. It is fine to start
-with "So", "And", or "But". Do not reason out loud or explain your logic.
-
-GOOD REPLY EXAMPLES (tone reference only, do not copy content or values):
-
-Casual booking inquiry:
-"Saturday works, we've got space. That trip leaves at 9:00, it's $85 per
-person so $340 for four. Just need a name and phone number and I can hold
-your spots."
-
-Booking confirmation:
-"You're all set! Your booking reference is [BOOKING_REF]. Here's your
-payment link: [PAYMENT_LINK]. See you Saturday! 🎉"
-
-Answering a question mid-booking:
-"Yep, drinks are included once the BBQ is served. Beer, wine, cocktails.
-Now for the booking, I just need the kids' ages so I can get your total
-right."
-
-AVOID: em dashes, en dashes, "Shall I", "I'd be happy to", "Great choice",
-"Amazing", "Absolutely", decorative bold, bullet-heavy formatting, forced
-enthusiasm, name-dropping at the end of sentences, reasoning out loud
-("that means...", "so that would be...").
-
-Emojis: only in booking confirmations. Otherwise, only if the sender used them first.
-
-AGENT SIGNATURE: {signature}
+{writing_style_block}
 
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 
@@ -229,6 +250,8 @@ def _build_user_prompt(
     thread_fields: dict,
     thread_flags: dict,
     action_context: str = "",
+    channel: str = "email",
+    messages: list = None,
 ) -> str:
     """Build the user prompt: business data, thread context, inbound message."""
     business = config_loader.get_business()
@@ -284,6 +307,36 @@ def _build_user_prompt(
     trips_text = _build_trips_text()
     faq_text = _build_faq_text()
 
+    # Build conversation history section for WhatsApp
+    history_section = ""
+    if channel == "whatsapp":
+        if messages:
+            history_lines = []
+            for m in messages:
+                role_label = "Customer" if m.get("role") == "user" else "Marina"
+                history_lines.append(f"  {role_label}: {m.get('text', '')}")
+            history_section = (
+                "CONVERSATION HISTORY (recent messages):\n"
+                + "\n".join(history_lines) + "\n\n"
+            )
+        else:
+            history_section = "CONVERSATION HISTORY (recent messages):\n  (new conversation)\n\n"
+
+    # Build inbound message section
+    if channel == "whatsapp":
+        inbound_section = (
+            f"INBOUND MESSAGE:\n"
+            f"  From: {from_email}\n"
+            f"  Text: {body}"
+        )
+    else:
+        inbound_section = (
+            f"INBOUND MESSAGE:\n"
+            f"  From: {from_email}\n"
+            f"  Subject: {subject}\n"
+            f"  Body: {body}"
+        )
+
     return f"""{returning_customer_section}{unknown_ref_section}{completed_bookings_section}{past_customer_bookings_section}{max_bookings_section}
 TODAY (Curaçao time): {today}
 TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
@@ -319,10 +372,7 @@ THREAD CONTEXT (already collected this conversation):
   Fields: {json.dumps(thread_fields, ensure_ascii=False)}
   Flags: {json.dumps(thread_flags, ensure_ascii=False)}
 
-INBOUND MESSAGE:
-  From: {from_email}
-  Subject: {subject}
-  Body: {body}"""
+{history_section}{inbound_section}"""
 
 
 def _build_prompt(
@@ -332,12 +382,15 @@ def _build_prompt(
     thread_fields: dict,
     thread_flags: dict,
     action_context: str = "",
+    channel: str = "email",
+    messages: list = None,
 ) -> str:
     """Backward-compatible wrapper: returns full prompt (system + user combined).
     Used by tests. process_message() uses the split functions directly."""
     return (
-        _build_system_prompt(thread_flags) + "\n\n" +
-        _build_user_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
+        _build_system_prompt(thread_flags, channel=channel) + "\n\n" +
+        _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
+                           action_context, channel=channel, messages=messages)
     )
 
 
@@ -348,6 +401,8 @@ def process_message(
     thread_fields: dict,
     thread_flags: dict,
     action_context: str = "",
+    channel: str = "email",
+    messages: list = None,
 ) -> dict:
     signature = config_loader.get_agent_signature()
 
@@ -366,12 +421,15 @@ def process_message(
         "flags": {},
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",
     }
+    if channel == "whatsapp":
+        fallback["reply"] = ""
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        system_prompt = _build_system_prompt(thread_flags)
-        user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags, action_context)
+        system_prompt = _build_system_prompt(thread_flags, channel=channel)
+        user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
+                                          action_context, channel=channel, messages=messages)
 
         response = client.messages.create(
             model="claude-sonnet-4-6",

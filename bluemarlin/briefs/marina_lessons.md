@@ -144,3 +144,7 @@ First greenfield infrastructure brief — standing up nginx, SSL, FastAPI, syste
 ## Brief 068 — WhatsApp Message Pipeline: Parse, Dedup, Reply
 Date: 2026-03-11
 Cleanest multi-file brief in the social agent series — parse, dedup, stub agent, and send all worked first try with zero test failures. The brief reviewer flagged the hardcoded reply as a Rule 3 violation; patched by documenting it as a temporary verification fixture (same class as marina_agent.py's accepted API-failure fallback). Key discovery: Meta sends status webhooks (sent/delivered) back through the same endpoint immediately after our reply — the status filtering logic in `parse_webhook_payload` correctly handled these without any extra work. Using `urllib.request` (stdlib) for outbound API calls avoided dependency issues on the VPS.
+
+## Brief 069 — WhatsApp Channel Support: marina_agent + State Foundation
+Date: 2026-03-11
+The `channel` parameter approach worked cleanly — marina_agent.py stays as the single Claude brain for both email and WhatsApp with zero duplication. Key design tradeoff: conversation history is stored only on successful reply (webhook_server stores user+assistant after send succeeds). This means failed API calls leave no trace in history, which is arguably correct — no response means nothing to remember. The conditional writing style block in `_build_system_prompt` keeps the two styles fully isolated without any shared template logic. All 17 tests passed first try with zero regression across 067/068.

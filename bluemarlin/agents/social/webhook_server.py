@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 068
+# Last modified: Brief 069
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import os
@@ -62,10 +62,12 @@ def _process_whatsapp_event(payload: dict):
                 log("whatsapp_non_text_skipped", source="meta_whatsapp",
                     message_type=msg.get("message_type"), message_id=message_id)
                 continue
-            # Agent generates reply
+            # Agent generates reply (reads history + state internally)
             reply_text = handle_incoming_whatsapp_message(msg)
             if reply_text:
+                state_registry.wa_store_message(msg["from"], "user", msg["text"])
                 send_text_message(to=msg["from"], text=reply_text)
+                state_registry.wa_store_message(msg["from"], "assistant", reply_text)
     except Exception as e:
         log("webhook_process_error", source="meta_whatsapp", error=str(e))
 
