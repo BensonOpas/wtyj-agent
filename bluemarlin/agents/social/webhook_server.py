@@ -1,9 +1,10 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 069
+# Last modified: Brief 073
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import os
+import time
 from fastapi import BackgroundTasks, FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 
@@ -15,6 +16,19 @@ from agents.social.social_agent import handle_incoming_whatsapp_message
 app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None)
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+_last_cleanup_ts = 0
+
+
+def _maybe_run_cleanup():
+    """Run stale data cleanup at most once per hour."""
+    global _last_cleanup_ts
+    now = time.time()
+    if now - _last_cleanup_ts < 3600:
+        return
+    _last_cleanup_ts = now
+    result = state_registry.wa_cleanup_stale_data()
+    if result["threads_cleaned"] or result["processed_cleaned"]:
+        log("whatsapp_cleanup", **result)
 
 
 @app.get("/webhooks/meta/whatsapp")
@@ -45,6 +59,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
 def _process_whatsapp_event(payload: dict):
     """Background task: parse messages, dedup, call agent, send reply."""
+    _maybe_run_cleanup()
     try:
         messages = parse_webhook_payload(payload)
         for msg in messages:

@@ -167,7 +167,7 @@ def test_wa_booking_state_fresh():
     phone = "TEST_069_FRESH_001"
     _cleanup_phone(phone)
     state = state_registry.wa_get_booking_state(phone)
-    assert state == {"fields": {}, "flags": {}, "completed_bookings": []}
+    assert state == {"fields": {}, "flags": {}, "completed_bookings": [], "last_activity": None}
 
 
 def test_wa_booking_state_round_trip():

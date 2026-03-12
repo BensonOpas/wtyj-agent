@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 072
+# Last modified: Brief 073
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
@@ -32,6 +32,7 @@ _PERSISTENT_FIELDS = {"customer_name", "phone"}
 
 _MAX_REPLIES_PER_HOUR = 15
 _REPLY_WINDOW_SECONDS = 3600
+_STALE_CONVERSATION_SECONDS = 86400  # 24 hours — matches wa_get_history window
 
 
 def _day_matches(day_name, days_available):
@@ -162,6 +163,46 @@ def _post_validate(fields, flags, result, trip):
     return summary, True
 
 
+def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_bookings):
+    """Reset booking state if >24h since last activity. Returns True if reset happened."""
+    if not last_activity:
+        return False
+    try:
+        last = datetime.fromisoformat(last_activity)
+        now = datetime.now(timezone.utc)
+        if (now - last).total_seconds() < _STALE_CONVERSATION_SECONDS:
+            return False
+    except (ValueError, TypeError):
+        return False
+
+    # Archive current booking if one exists
+    if flags.get("hold_created"):
+        archived = {
+            "booking_ref": flags.get("booking_ref", ""),
+            "trip_key": fields.get("trip_key", ""),
+            "experience": fields.get("experience", ""),
+            "date": fields.get("date", ""),
+            "guests": fields.get("guests", ""),
+            "departure_time": fields.get("departure_time", ""),
+            "payment_link": flags.get("payment_link", ""),
+        }
+        completed_bookings.append(archived)
+
+    # Reset fields — keep customer identity
+    preserved = {k: v for k, v in fields.items() if k in _PERSISTENT_FIELDS}
+    fields.clear()
+    fields.update(preserved)
+
+    # Reset all booking + escalation + rate-limit flags
+    for fk in _BOOKING_FLAGS_TO_RESET:
+        flags.pop(fk, None)
+    for fk in ("fully_escalated", "awaiting_relay", "relay_token",
+               "relay_question", "reply_times", "returning_booking"):
+        flags.pop(fk, None)
+
+    return True
+
+
 def handle_incoming_whatsapp_message(message: dict) -> str:
     """
     Process a WhatsApp message: full booking orchestrator.
@@ -178,6 +219,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     fields = state.get("fields", {})
     flags = state.get("flags", {})
     completed_bookings = state.get("completed_bookings", [])
+    last_activity = state.get("last_activity")
+
+    # Stale conversation reset — 24h inactivity gap means new conversation
+    if _maybe_reset_stale_conversation(last_activity, fields, flags, completed_bookings):
+        bm_logger.log("whatsapp_stale_reset", phone=phone)
 
     # Anti-loop guard — rate limit per phone
     _reply_times = flags.get("reply_times", [])

@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 069
+# Last modified: Brief 073
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -442,20 +442,21 @@ def wa_get_history(phone: str, limit: int = 10) -> list:
 
 
 def wa_get_booking_state(phone: str) -> dict:
-    """Get booking state for a phone number. Returns {fields, flags, completed_bookings}."""
+    """Get booking state for a phone number. Returns {fields, flags, completed_bookings, last_activity}."""
     conn = _get_conn()
     row = conn.execute(
-        "SELECT fields_json, flags_json, completed_bookings_json "
+        "SELECT fields_json, flags_json, completed_bookings_json, last_activity "
         "FROM whatsapp_booking_state WHERE phone = ?",
         (phone,)
     ).fetchone()
     conn.close()
     if not row:
-        return {"fields": {}, "flags": {}, "completed_bookings": []}
+        return {"fields": {}, "flags": {}, "completed_bookings": [], "last_activity": None}
     return {
         "fields": json.loads(row[0] or "{}"),
         "flags": json.loads(row[1] or "{}"),
         "completed_bookings": json.loads(row[2] or "[]"),
+        "last_activity": row[3],
     }
 
 
@@ -475,6 +476,23 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     )
     conn.commit()
     conn.close()
+
+
+def wa_cleanup_stale_data() -> dict:
+    """Clean up old WhatsApp data. Returns counts of cleaned rows."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    # Conversation messages >30 days
+    cutoff_30d = (now - timedelta(days=30)).isoformat()
+    cur = conn.execute("DELETE FROM whatsapp_threads WHERE created_at < ?", (cutoff_30d,))
+    threads_cleaned = cur.rowcount
+    # Processed message IDs >7 days
+    cutoff_7d = (now - timedelta(days=7)).isoformat()
+    cur = conn.execute("DELETE FROM whatsapp_processed WHERE created_at < ?", (cutoff_7d,))
+    processed_cleaned = cur.rowcount
+    conn.commit()
+    conn.close()
+    return {"threads_cleaned": threads_cleaned, "processed_cleaned": processed_cleaned}
 
 
 # Initialise database on module load so the file exists as soon as the module is imported
