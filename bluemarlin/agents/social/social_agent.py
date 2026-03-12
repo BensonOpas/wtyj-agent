@@ -1,8 +1,9 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 071
+# Last modified: Brief 072
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
+import re
 import time
 import json
 import uuid
@@ -28,6 +29,9 @@ _BOOKING_FLAGS_TO_RESET = {
 }
 
 _PERSISTENT_FIELDS = {"customer_name", "phone"}
+
+_MAX_REPLIES_PER_HOUR = 15
+_REPLY_WINDOW_SECONDS = 3600
 
 
 def _day_matches(day_name, days_available):
@@ -175,6 +179,17 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     flags = state.get("flags", {})
     completed_bookings = state.get("completed_bookings", [])
 
+    # Anti-loop guard — rate limit per phone
+    _reply_times = flags.get("reply_times", [])
+    _now_ts = int(time.time())
+    _reply_times = [t for t in _reply_times if _now_ts - t <= _REPLY_WINDOW_SECONDS]
+    flags["reply_times"] = _reply_times
+    if len(_reply_times) >= _MAX_REPLIES_PER_HOUR:
+        bm_logger.log("whatsapp_rate_limited", phone=phone,
+                      count=len(_reply_times))
+        state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
+        return ""
+
     # Get conversation history (last 10 messages, 24h window)
     history = state_registry.wa_get_history(phone, limit=10)
 
@@ -184,7 +199,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
     if flags.get("fully_escalated"):
         _esc_flags = dict(flags)
-        for _rk in ("awaiting_relay", "relay_token", "relay_question"):
+        for _rk in ("awaiting_relay", "relay_token", "relay_question", "reply_times"):
             _esc_flags.pop(_rk, None)
         esc_result = marina_agent.process_message(
             from_email=from_id, subject="", body=text,
@@ -194,17 +209,69 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         esc_reply = esc_result.get("reply", "")
         bm_logger.log("whatsapp_escalated_reply", phone=phone,
                       reply_length=len(esc_reply))
+        # Record reply timestamp + persist (early return bypasses end-of-function persistence)
+        if esc_reply:
+            _reply_times = flags.get("reply_times", [])
+            _reply_times.append(int(time.time()))
+            flags["reply_times"] = _reply_times
+        state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return esc_reply
 
     # Step 1: Build action context
     action_context = _build_action_context(flags)
 
-    # Filter relay flags before marina_agent call — prevents RELAY MODE prompt injection
+    # Filter relay flags + internal state before marina_agent call
     agent_flags = dict(flags)
-    for _rk in ("awaiting_relay", "relay_token", "relay_question"):
+    for _rk in ("awaiting_relay", "relay_token", "relay_question", "reply_times"):
         agent_flags.pop(_rk, None)
 
-    # Step 2: Call marina_agent with channel="whatsapp"
+    # Returning customer — booking ref detection
+    _detected_ref = None
+    _ref_match = re.search(r'BF-\d{4}-\d{5}', text)
+    if _ref_match:
+        _detected_ref = _ref_match.group()
+        if not flags.get("booking_ref"):
+            _past_booking = state_registry.get_booking(_detected_ref)
+            if _past_booking:
+                flags["returning_booking"] = _detected_ref
+                agent_flags["returning_booking"] = _detected_ref
+                for _rbk in ("trip_key", "date", "guests", "customer_name", "departure_time"):
+                    _rbv = _past_booking.get(_rbk)
+                    if _rbv and not fields.get(_rbk):
+                        fields[_rbk] = _rbv if not isinstance(_rbv, int) else str(_rbv)
+                bm_logger.log("whatsapp_returning_customer", phone=phone, booking_ref=_detected_ref)
+            else:
+                flags["unknown_ref"] = _detected_ref
+                agent_flags["unknown_ref"] = _detected_ref
+                bm_logger.log("whatsapp_unknown_ref", phone=phone, ref=_detected_ref)
+
+    # Returning customer — phone-based lookup (cross-thread memory)
+    if not _detected_ref and not completed_bookings:
+        _phone_bookings = state_registry.get_bookings_by_email(phone)
+        if _phone_bookings:
+            _eb_lines = []
+            for _eb in _phone_bookings[:3]:
+                _eb_lines.append(
+                    f"  - {_eb['trip_key']} on {_eb['date']} for {_eb['guests']} guests "
+                    f"(ref: {_eb['booking_ref']})")
+            agent_flags["_past_customer_bookings"] = "\n".join(_eb_lines)
+            bm_logger.log("whatsapp_returning_by_phone", phone=phone,
+                          past_count=len(_phone_bookings))
+
+    # Completed bookings context for multi-trip conversations
+    if completed_bookings:
+        _cb_lines = []
+        for _cb in completed_bookings:
+            _cb_lines.append(
+                f"  - {_cb.get('experience', _cb.get('trip_key', '?'))} on "
+                f"{_cb.get('date', '?')} for {_cb.get('guests', '?')} guests "
+                f"(ref: {_cb.get('booking_ref', 'N/A')})")
+        agent_flags["_completed_bookings_summary"] = "\n".join(_cb_lines)
+        _max_bk = config_loader.get_booking_rules().get("max_bookings_per_thread", 3)
+        if len(completed_bookings) >= _max_bk and flags.get("hold_created"):
+            agent_flags["_max_bookings_reached"] = True
+
+    # Call marina_agent with channel="whatsapp"
     result = marina_agent.process_message(
         from_email=from_id,
         subject="",
@@ -220,6 +287,32 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
     if not reply:
         return ""
+
+    # Multi-trip: if booking intent + previous booking completed, archive and reset
+    if (any(i in _BOOKING_INTENTS for i in result.get("intents", []))
+            and flags.get("hold_created")):
+        _max_bk = config_loader.get_booking_rules().get("max_bookings_per_thread", 3)
+        if len(completed_bookings) < _max_bk:
+            archived = {
+                "booking_ref": flags.get("booking_ref", ""),
+                "trip_key": fields.get("trip_key", ""),
+                "experience": fields.get("experience", ""),
+                "date": fields.get("date", ""),
+                "guests": fields.get("guests", ""),
+                "departure_time": fields.get("departure_time", ""),
+                "payment_link": flags.get("payment_link", ""),
+            }
+            completed_bookings.append(archived)
+            preserved = {k: v for k, v in fields.items() if k in _PERSISTENT_FIELDS}
+            fields.clear()
+            fields.update(preserved)
+            for _fk in _BOOKING_FLAGS_TO_RESET:
+                flags.pop(_fk, None)
+            bm_logger.log("whatsapp_multi_trip_reset", phone=phone,
+                          booking_number=len(completed_bookings))
+
+    # Clear one-shot flags after Claude has seen them
+    flags.pop("unknown_ref", None)
 
     # Step 3: Merge fields — overwrite when Claude returns non-empty values
     new_fields = result.get("fields", {}) or {}
@@ -489,7 +582,13 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Step 9: Strip remaining placeholders (safety net)
     reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
 
-    # Step 10: Persist state + log
+    # Record reply timestamp for anti-loop tracking
+    if reply_text:
+        _reply_times = flags.get("reply_times", [])
+        _reply_times.append(int(time.time()))
+        flags["reply_times"] = _reply_times
+
+    # Persist state + log
     state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
     bm_logger.log("whatsapp_agent_reply", phone=phone,
                   intents=result.get("intents", []), reply_length=len(reply_text))
