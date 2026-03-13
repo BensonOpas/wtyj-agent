@@ -120,6 +120,101 @@ def test_get_relay_by_token_ignores_replied():
     _cleanup_notification(customer_id)
 
 
+# --- Test 2c: Full escalation creates relay token ---
+
+@patch("agents.social.social_agent.sheets_writer.log_escalation")
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_full_escalation_creates_relay_token(mock_process, mock_sheets):
+    """Full escalation notification has relay token for WhatsApp reply-back."""
+    phone = "TEST_081_FULLRELAY_001"
+    _cleanup_phone(phone)
+    mock_process.return_value = _base_result(
+        intents=["complaint"],
+        reply="I'm sorry to hear that, let me get someone to help!",
+        requires_human=True,
+        internal_note="Customer unhappy",
+    )
+    msg = {"from": phone, "text": "I want a refund", "from_name": "Test"}
+    handle_incoming_whatsapp_message(msg)
+    # Check flags
+    state = state_registry.wa_get_booking_state(phone)
+    assert state["flags"].get("fully_escalated") is True
+    assert state["flags"].get("awaiting_relay") is True
+    assert state["flags"].get("relay_token") is not None
+    assert len(state["flags"]["relay_token"]) == 12
+    # Check notification has relay token in subject
+    pending = state_registry.get_pending_notifications()
+    match = [p for p in pending if p["customer_id"] == phone]
+    assert len(match) == 1
+    assert match[0]["relay_token"] == state["flags"]["relay_token"]
+    assert "[RELAY-" in match[0]["subject"]
+    assert "[ESCALATION]" in match[0]["subject"]
+    assert "INSTRUCTIONS: Reply to this email" in match[0]["body"]
+    _cleanup_phone(phone)
+
+
+# --- Test 2d: Booking decline does not re-send summary ---
+
+@patch("agents.social.social_agent.sheets_writer.log_escalation")
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_booking_decline_no_loop(mock_process, mock_sheets):
+    """Customer saying 'no' to booking summary should not get summary again."""
+    phone = "TEST_081_DECLINE_001"
+    _cleanup_phone(phone)
+    # Set up state: awaiting booking confirmation with all fields
+    fields = {
+        "trip_key": "sunset_cruise", "experience": "Sunset Cruise",
+        "date": "2026-03-21", "guests": "4", "departure_time": "17:30",
+        "customer_name": "Test Decline",
+    }
+    flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
+             "slot_available": True}
+    state_registry.wa_save_booking_state(phone, fields, flags)
+    # Claude responds to "no" with decline — intent: inquiry, not booking
+    mock_process.return_value = _base_result(
+        intents=["inquiry"],
+        reply="No problem! Would you like to look at other trips?",
+        flags={"awaiting_booking_confirmation": False},
+    )
+    msg = {"from": phone, "text": "no thanks", "from_name": "Test"}
+    reply = handle_incoming_whatsapp_message(msg)
+    assert "No problem" in reply
+    assert "Just to confirm" not in reply  # Must NOT contain booking summary
+    state = state_registry.wa_get_booking_state(phone)
+    assert state["flags"].get("awaiting_booking_confirmation") is not True
+    _cleanup_phone(phone)
+
+
+# --- Test 2e: Booking decline with booking intent still doesn't loop ---
+
+@patch("agents.social.social_agent.sheets_writer.log_escalation")
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_booking_decline_with_booking_intent_no_loop(mock_process, mock_sheets):
+    """Even if Claude returns booking intent for a decline, guard prevents loop."""
+    phone = "TEST_081_DECLINE_002"
+    _cleanup_phone(phone)
+    fields = {
+        "trip_key": "sunset_cruise", "experience": "Sunset Cruise",
+        "date": "2026-03-21", "guests": "4", "departure_time": "17:30",
+        "customer_name": "Test Decline2",
+    }
+    flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
+             "slot_available": True}
+    state_registry.wa_save_booking_state(phone, fields, flags)
+    # Claude returns booking intent but no new fields — decline scenario
+    mock_process.return_value = _base_result(
+        intents=["booking"],
+        reply="Understood, no booking needed.",
+        fields={},
+        flags={"awaiting_booking_confirmation": False},
+    )
+    msg = {"from": phone, "text": "no", "from_name": "Test"}
+    reply = handle_incoming_whatsapp_message(msg)
+    assert "Understood" in reply
+    assert "Just to confirm" not in reply  # Must NOT re-send booking summary
+    _cleanup_phone(phone)
+
+
 # --- Test 3: update_notification_status ---
 
 def test_update_notification_status():
@@ -217,7 +312,8 @@ def test_full_escalation_inserts_notification(mock_process, mock_sheets):
     assert len(match) == 1
     assert match[0]["notification_type"] == "escalation"
     assert "[ESCALATION]" in match[0]["subject"]
-    assert match[0]["relay_token"] is None
+    assert match[0]["relay_token"] is not None
+    assert len(match[0]["relay_token"]) == 12
     _cleanup_phone(phone)
 
 

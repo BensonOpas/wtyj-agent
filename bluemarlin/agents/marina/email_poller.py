@@ -420,8 +420,12 @@ def _build_action_context(th):
             "Also write reply_hold_failed — an apologetic message if the slot turns "
             "out to be unavailable, without [PAYMENT_LINK]; "
             "(b) changing something — extract new fields, set "
-            "awaiting_booking_confirmation: false; (c) unclear — ask "
-            "for clarification. Do NOT generate a new booking summary."
+            "awaiting_booking_confirmation: false; "
+            "(c) unclear — ask for clarification; "
+            "(d) declining or saying no — set awaiting_booking_confirmation: false, "
+            "use intent 'inquiry' (not 'booking'), acknowledge gracefully and ask "
+            "if they'd like to look at something else. "
+            "Do NOT generate a new booking summary."
         )
     return ""
 
@@ -606,10 +610,11 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
-                # Drop operator replies to [ESCALATION] alerts — escalation is one-way
-                if from_email.lower() == demo_support_email.lower() and "[ESCALATION]" in subj:
+                # Drop operator replies to [ESCALATION] alerts without relay token — one-way flow
+                if (from_email.lower() == demo_support_email.lower()
+                        and "[ESCALATION]" in subj and "[RELAY-" not in subj):
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
-                    log(f"Dropped escalation reply from {from_email} — one-way flow")
+                    log(f"Dropped escalation reply from {from_email} — no relay token, one-way flow")
                     continue
 
                 # [RELAY] inbound from human team — reformulate and forward to original customer
@@ -653,6 +658,7 @@ def main():
                             _wa_flags.pop("awaiting_relay", None)
                             _wa_flags.pop("relay_token", None)
                             _wa_flags.pop("relay_question", None)
+                            _wa_flags.pop("fully_escalated", None)
                             state_registry.wa_save_booking_state(
                                 _wa_phone, _wa_fields, _wa_flags,
                                 _wa_state.get("completed_bookings", []))
@@ -839,7 +845,14 @@ def main():
                 reply_text = result["reply"]
                 _pv_trip_key = th["fields"].get("trip_key", "")
                 _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
-                if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+                _run_pv = any(i in _BOOKING_INTENTS for i in result.get("intents", []))
+                # Guard: if customer was responding to a booking summary and didn't change
+                # any booking fields, skip post-validate to prevent decline loop
+                if _run_pv and _was_awaiting and not th["flags"].get("booking_confirmed"):
+                    _new_f = result.get("fields", {}) or {}
+                    if not any(_new_f.get(k) for k in ("experience", "date", "guests", "trip_key", "departure_time")):
+                        _run_pv = False
+                if _run_pv:
                     _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_trip)
                     if _pv_override:
                         _intents = result.get("intents", [])

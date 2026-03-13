@@ -95,8 +95,12 @@ def _build_action_context(flags):
             "Also write reply_hold_failed — an apologetic message if the slot turns "
             "out to be unavailable, without [PAYMENT_LINK]; "
             "(b) changing something — extract new fields, set "
-            "awaiting_booking_confirmation: false; (c) unclear — ask "
-            "for clarification. Do NOT generate a new booking summary."
+            "awaiting_booking_confirmation: false; "
+            "(c) unclear — ask for clarification; "
+            "(d) declining or saying no — set awaiting_booking_confirmation: false, "
+            "use intent 'inquiry' (not 'booking'), acknowledge gracefully and ask "
+            "if they'd like to look at something else. "
+            "Do NOT generate a new booking summary."
         )
     return ""
 
@@ -396,7 +400,14 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Step 6: Post-validation (booking intents only)
     _pv_trip_key = fields.get("trip_key", "")
     _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
-    if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+    _run_pv = any(i in _BOOKING_INTENTS for i in result.get("intents", []))
+    # Guard: if customer was responding to a booking summary and didn't change
+    # any booking fields, skip post-validate to prevent decline loop
+    if _run_pv and _was_awaiting and not flags.get("booking_confirmed"):
+        _new_f = result.get("fields", {}) or {}
+        if not any(_new_f.get(k) for k in ("experience", "date", "guests", "trip_key", "departure_time")):
+            _run_pv = False
+    if _run_pv:
         _pv_override, _pv_set_awaiting = _post_validate(fields, flags, result, _pv_trip)
         if _pv_override:
             _intents = result.get("intents", [])
@@ -530,6 +541,10 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         flags["slot_available"] = False
         flags["fully_escalated"] = True
         flags["awaiting_booking_confirmation"] = False
+        # Generate relay token for WhatsApp escalations — allows operator reply-back
+        _esc_relay_token = uuid.uuid4().hex[:12]
+        flags["awaiting_relay"] = True
+        flags["relay_token"] = _esc_relay_token
         reply_text = result["reply"]  # Claude's warm holding reply
         _cname = fields.get("customer_name", "Unknown")
         sheets_writer.log_escalation({
@@ -555,7 +570,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _esc_chat_lines.append("---")
         _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
         _esc_subject = (
-            f"[ESCALATION] {_esc_ref} - {_cname} "
+            f"[RELAY-{_esc_relay_token}] [ESCALATION] {_esc_ref} - {_cname} "
             f"(WhatsApp: {phone}) - {_esc_intents}")
         _esc_body = (
             f"=== CUSTOMER ===\n"
@@ -566,10 +581,12 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n"
             f"=== MARINA'S INTERNAL NOTE ===\n"
             f"{result.get('internal_note', '')}"
+            f"\n\nINSTRUCTIONS: Reply to this email with your answer.\n"
+            f"Marina will relay it to the customer in her own words."
         )
         state_registry.create_pending_notification(
             'escalation', 'whatsapp', phone, _cname,
-            _esc_subject, _esc_body)
+            _esc_subject, _esc_body, relay_token=_esc_relay_token)
         _skip_booking = True
 
     # Step 8: Booking confirmation flow (skip if escalated)
