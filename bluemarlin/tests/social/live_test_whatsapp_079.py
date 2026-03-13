@@ -385,22 +385,22 @@ def test_phone_returning_customer():
     _cleanup_phone(phone)
 
 
-# --- Scenario CC: French Language (1 turn) ---
+# --- Scenario CC: German Language (1 turn) ---
 
-def test_french_language():
-    """Scenario CC: French language inquiry — should reply with trip info."""
-    phone = f"{_PHONE_PREFIX}FRENCH_001"
+def test_german_language():
+    """Scenario CC: German language inquiry — should reply with trip info."""
+    phone = f"{_PHONE_PREFIX}GERMAN_001"
     _cleanup_phone(phone)
-    print("\n=== Scenario CC: French Language ===")
+    print("\n=== Scenario CC: German Language ===")
 
     reply = send_message(phone,
-        "Bonjour! Nous sommes 4 personnes et nous cherchons une excursion "
-        "en bateau à Curaçao. Quelles sont vos options et les prix?")
+        "Hallo! Wir sind 4 Personen und suchen einen Bootsausflug "
+        "in Curaçao. Welche Optionen habt ihr und was kostet das?")
     print(f"  Reply: {reply[:300]}...")
 
     check("CC: got reply", len(reply) > 20, f"len={len(reply)}")
-    check_contains_any(reply, ["$", "Klein", "Sunset", "excursion", "bateau", "trip",
-                                "cruise", "snorkel", "USD"],
+    check_contains_any(reply, ["$", "Klein", "Sunset", "Ausflug", "Boot", "trip",
+                                "cruise", "Schnorchel", "USD", "Tour", "Fahrt"],
                        "CC: mentions trips or pricing")
 
     _cleanup_phone(phone)
@@ -555,7 +555,7 @@ def main():
         ("Z: Stale Conversation Reset", test_stale_conversation_reset),
         ("AA: Unknown Booking Ref", test_unknown_booking_ref),
         ("BB: Phone-Based Returning Customer", test_phone_returning_customer),
-        ("CC: French Language", test_french_language),
+        ("CC: German Language", test_german_language),
         ("DD: Rate Limit Boundary", test_rate_limit_boundary),
         ("EE: Max Bookings Cap", test_max_bookings_cap),
         ("FF: Placeholder Safety Net", test_placeholder_safety),
