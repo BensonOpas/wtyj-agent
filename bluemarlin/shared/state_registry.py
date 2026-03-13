@@ -559,12 +559,12 @@ def update_notification_status(notification_id: int, status: str) -> bool:
 
 
 def get_relay_by_token(relay_token: str) -> "dict | None":
-    """Look up a relay notification by token. Returns dict or None."""
+    """Look up a pending relay notification by token. Returns dict or None."""
     conn = _get_conn()
     row = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
         "customer_name, subject, body, status, created_at "
-        "FROM pending_notifications WHERE relay_token = ?",
+        "FROM pending_notifications WHERE relay_token = ? AND status = 'pending'",
         (relay_token,)
     ).fetchone()
     conn.close()

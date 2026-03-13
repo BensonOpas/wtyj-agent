@@ -93,6 +93,33 @@ def test_get_relay_by_token():
     _cleanup_notification(customer_id)
 
 
+# --- Test 2b: get_relay_by_token filters out non-pending ---
+
+def test_get_relay_by_token_ignores_replied():
+    """get_relay_by_token returns None if notification already replied."""
+    customer_id = "TEST_077_TOKEN_002"
+    _cleanup_notification(customer_id)
+    row_id = state_registry.create_pending_notification(
+        'relay', 'whatsapp', customer_id, 'Test',
+        '[RELAY-ddd444eee555] NO-REF', 'body',
+        relay_token='ddd444eee555')
+    # Pending → should find it
+    assert state_registry.get_relay_by_token('ddd444eee555') is not None
+    # Mark replied
+    state_registry.update_notification_status(row_id, 'replied')
+    # After replied → should NOT find it
+    assert state_registry.get_relay_by_token('ddd444eee555') is None
+    # Also test 'sent' status
+    _cleanup_notification(customer_id)
+    row_id2 = state_registry.create_pending_notification(
+        'relay', 'whatsapp', customer_id, 'Test',
+        '[RELAY-fff666ggg777] NO-REF', 'body',
+        relay_token='fff666ggg777')
+    state_registry.update_notification_status(row_id2, 'sent')
+    assert state_registry.get_relay_by_token('fff666ggg777') is None
+    _cleanup_notification(customer_id)
+
+
 # --- Test 3: update_notification_status ---
 
 def test_update_notification_status():

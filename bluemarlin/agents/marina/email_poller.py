@@ -661,7 +661,7 @@ def main():
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             save_json(THREAD_STATE_PATH, state)
                             continue
-                        log(f"RELAY: no matching thread for token={relay_token_in} — skipping")
+                        log(f"RELAY: no pending relay for token={relay_token_in} — skipping (may be already replied)")
                         im.uid("store", uid, "+FLAGS", r"(\Seen)")
                         save_json(THREAD_STATE_PATH, state)
                         continue
