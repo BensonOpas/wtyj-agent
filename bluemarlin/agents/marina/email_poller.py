@@ -610,11 +610,10 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
-                # Drop operator replies to [ESCALATION] alerts without relay token — one-way flow
-                if (from_email.lower() == demo_support_email.lower()
-                        and "[ESCALATION]" in subj and "[RELAY-" not in subj):
+                # Drop operator replies to [ESCALATION] alerts — escalation is one-way
+                if from_email.lower() == demo_support_email.lower() and "[ESCALATION]" in subj:
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
-                    log(f"Dropped escalation reply from {from_email} — no relay token, one-way flow")
+                    log(f"Dropped escalation reply from {from_email} — one-way flow")
                     continue
 
                 # [RELAY] inbound from human team — reformulate and forward to original customer
@@ -641,8 +640,7 @@ def main():
                             _wa_flags = _wa_state.get("flags", {})
                             _wa_history = state_registry.wa_get_history(_wa_phone, limit=10)
                             _wa_agent_flags = dict(_wa_flags)
-                            for _rk in ("awaiting_relay", "relay_token",
-                                        "relay_question", "reply_times"):
+                            for _rk in ("relay_token", "reply_times"):
                                 _wa_agent_flags.pop(_rk, None)
                             relay_result = marina_agent.process_message(
                                 _wa_phone, "", body,
@@ -658,7 +656,6 @@ def main():
                             _wa_flags.pop("awaiting_relay", None)
                             _wa_flags.pop("relay_token", None)
                             _wa_flags.pop("relay_question", None)
-                            _wa_flags.pop("fully_escalated", None)
                             state_registry.wa_save_booking_state(
                                 _wa_phone, _wa_fields, _wa_flags,
                                 _wa_state.get("completed_bookings", []))

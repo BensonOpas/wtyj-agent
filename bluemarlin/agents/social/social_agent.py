@@ -541,10 +541,6 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         flags["slot_available"] = False
         flags["fully_escalated"] = True
         flags["awaiting_booking_confirmation"] = False
-        # Generate relay token for WhatsApp escalations — allows operator reply-back
-        _esc_relay_token = uuid.uuid4().hex[:12]
-        flags["awaiting_relay"] = True
-        flags["relay_token"] = _esc_relay_token
         reply_text = result["reply"]  # Claude's warm holding reply
         _cname = fields.get("customer_name", "Unknown")
         sheets_writer.log_escalation({
@@ -570,7 +566,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _esc_chat_lines.append("---")
         _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
         _esc_subject = (
-            f"[RELAY-{_esc_relay_token}] [ESCALATION] {_esc_ref} - {_cname} "
+            f"[ESCALATION] {_esc_ref} - {_cname} "
             f"(WhatsApp: {phone}) - {_esc_intents}")
         _esc_body = (
             f"=== CUSTOMER ===\n"
@@ -581,12 +577,10 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n"
             f"=== MARINA'S INTERNAL NOTE ===\n"
             f"{result.get('internal_note', '')}"
-            f"\n\nINSTRUCTIONS: Reply to this email with your answer.\n"
-            f"Marina will relay it to the customer in her own words."
         )
         state_registry.create_pending_notification(
             'escalation', 'whatsapp', phone, _cname,
-            _esc_subject, _esc_body, relay_token=_esc_relay_token)
+            _esc_subject, _esc_body)
         _skip_booking = True
 
     # Step 8: Booking confirmation flow (skip if escalated)

@@ -123,40 +123,7 @@ def test_get_relay_by_token_ignores_replied():
     _cleanup_notification(customer_id)
 
 
-# --- Test 2c: Full escalation creates relay token ---
-
-@patch("agents.social.social_agent.sheets_writer.log_escalation")
-@patch("agents.social.social_agent.marina_agent.process_message")
-def test_full_escalation_creates_relay_token(mock_process, mock_sheets):
-    """Full escalation notification has relay token for WhatsApp reply-back."""
-    phone = "TEST_081_FULLRELAY_001"
-    _cleanup_phone(phone)
-    mock_process.return_value = _base_result(
-        intents=["complaint"],
-        reply="I'm sorry to hear that, let me get someone to help!",
-        requires_human=True,
-        internal_note="Customer unhappy",
-    )
-    msg = {"from": phone, "text": "I want a refund", "from_name": "Test"}
-    handle_incoming_whatsapp_message(msg)
-    # Check flags
-    state = state_registry.wa_get_booking_state(phone)
-    assert state["flags"].get("fully_escalated") is True
-    assert state["flags"].get("awaiting_relay") is True
-    assert state["flags"].get("relay_token") is not None
-    assert len(state["flags"]["relay_token"]) == 12
-    # Check notification has relay token in subject
-    pending = state_registry.get_pending_notifications()
-    match = [p for p in pending if p["customer_id"] == phone]
-    assert len(match) == 1
-    assert match[0]["relay_token"] == state["flags"]["relay_token"]
-    assert "[RELAY-" in match[0]["subject"]
-    assert "[ESCALATION]" in match[0]["subject"]
-    assert "INSTRUCTIONS: Reply to this email" in match[0]["body"]
-    _cleanup_phone(phone)
-
-
-# --- Test 2d: Booking decline does not re-send summary ---
+# --- Test 2c: Booking decline does not re-send summary ---
 
 @patch("agents.social.social_agent.sheets_writer.log_escalation")
 @patch("agents.social.social_agent.marina_agent.process_message")
@@ -315,8 +282,7 @@ def test_full_escalation_inserts_notification(mock_process, mock_sheets):
     assert len(match) == 1
     assert match[0]["notification_type"] == "escalation"
     assert "[ESCALATION]" in match[0]["subject"]
-    assert match[0]["relay_token"] is not None
-    assert len(match[0]["relay_token"]) == 12
+    assert match[0]["relay_token"] is None
     _cleanup_phone(phone)
 
 
