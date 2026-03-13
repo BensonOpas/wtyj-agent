@@ -109,13 +109,16 @@ def test_get_relay_by_token_ignores_replied():
     state_registry.update_notification_status(row_id, 'replied')
     # After replied → should NOT find it
     assert state_registry.get_relay_by_token('ddd444eee555') is None
-    # Also test 'sent' status
+    # 'sent' status should still be findable (operator hasn't replied yet)
     _cleanup_notification(customer_id)
     row_id2 = state_registry.create_pending_notification(
         'relay', 'whatsapp', customer_id, 'Test',
         '[RELAY-fff666ggg777] NO-REF', 'body',
         relay_token='fff666ggg777')
     state_registry.update_notification_status(row_id2, 'sent')
+    assert state_registry.get_relay_by_token('fff666ggg777') is not None
+    # Mark replied → NOW it should return None
+    state_registry.update_notification_status(row_id2, 'replied')
     assert state_registry.get_relay_by_token('fff666ggg777') is None
     _cleanup_notification(customer_id)
 
