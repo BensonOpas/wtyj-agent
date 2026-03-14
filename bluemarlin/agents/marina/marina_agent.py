@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 085
+# Last modified: Brief 086
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -111,6 +111,9 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             "- No sign-offs, no signatures\n"
             "- Use contractions naturally\n"
             "- Match the sender's energy and length\n"
+            "- NEVER return an empty reply. Always respond, even for off-topic messages.\n"
+            "  If they ask about something you don't cover, briefly acknowledge it and\n"
+            "  mention what you do offer. Keep it natural and varied.\n"
             "\n"
             "GOOD REPLIES (tone reference, do not copy content or values):\n"
             "\"We do a few different boat trips plus jet ski. Any of those sound good?\"\n"

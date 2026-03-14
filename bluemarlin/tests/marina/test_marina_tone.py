@@ -129,6 +129,12 @@ def test_persona_in_client_json():
     assert "never guesses" in persona or "never overexplains" in persona
 
 
+def test_whatsapp_prompt_never_empty_rule():
+    """T13: WhatsApp prompt contains the never-empty-reply rule."""
+    prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
+    assert "NEVER return an empty reply" in prompt
+
+
 if __name__ == "__main__":
     tests = [
         test_system_prompt_contains_writing_style,
