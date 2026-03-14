@@ -211,6 +211,34 @@ def test_relay_notification_uses_profile_name(mock_process, mock_sheets):
     _cleanup_phone(phone)
 
 
+# --- Test 2f: User message stored even when reply is empty ---
+
+def test_user_message_stored_on_empty_reply():
+    """_flush_buffer stores user message even if handle returns empty reply."""
+    from unittest.mock import patch as _p, MagicMock
+    phone = "TEST_089_STORE_001"
+    _cleanup_phone(phone)
+    with _p("agents.social.webhook_server.handle_incoming_whatsapp_message", return_value="") as mock_handle, \
+         _p("agents.social.webhook_server.send_text_message") as mock_send:
+        from agents.social.webhook_server import _flush_buffer
+        from agents.social import webhook_server
+        webhook_server._message_buffers[phone] = {
+            "messages": [{"from": phone, "text": "lost message", "from_name": "Test",
+                          "message_id": "test_089"}],
+            "timer": None,
+            "started": 0,
+        }
+        _flush_buffer(phone)
+    # Reply was empty — send should NOT be called
+    mock_send.assert_not_called()
+    # But user message MUST be stored in history
+    history = state_registry.wa_get_history(phone, limit=10)
+    user_msgs = [m for m in history if m["role"] == "user"]
+    assert len(user_msgs) == 1
+    assert "lost message" in user_msgs[0]["text"]
+    _cleanup_phone(phone)
+
+
 # --- Test 3: update_notification_status ---
 
 def test_update_notification_status():

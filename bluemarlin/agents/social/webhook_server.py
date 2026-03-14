@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 076
+# Last modified: Brief 089
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import os
@@ -138,8 +138,9 @@ def _flush_buffer(phone):
             combined_length=len(combined_text))
     try:
         reply_text = handle_incoming_whatsapp_message(final_msg)
+        # Always store user message — even if reply is empty, context must be preserved
+        state_registry.wa_store_message(phone, "user", combined_text)
         if reply_text:
-            state_registry.wa_store_message(phone, "user", combined_text)
             send_text_message(to=phone, text=reply_text)
             state_registry.wa_store_message(phone, "assistant", reply_text)
     except Exception as e:
