@@ -122,10 +122,11 @@ def test_post_validate_day_of_week_no_em_dashes():
 
 
 def test_persona_in_client_json():
-    """T12: marina_persona in client.json has hospitality reference."""
+    """T12: marina_persona in client.json has core persona traits."""
     persona = config_loader.get_common_sense_knowledge().get("marina_persona", "")
-    assert "hospitality" in persona
-    assert "mirrors the tone" in persona
+    assert "warm" in persona
+    assert "mirrors" in persona
+    assert "never guesses" in persona or "never overexplains" in persona
 
 
 if __name__ == "__main__":
