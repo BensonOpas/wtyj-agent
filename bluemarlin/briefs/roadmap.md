@@ -204,6 +204,53 @@ See `marina_status_90.md` for full details.
 
 **Brief numbering continues from 067.**
 
+## Competitive Landscape (researched 2026-03-14)
+
+### Direct Competitors
+
+| | Visito | Yonder | BlueMarlin |
+|---|---|---|---|
+| Channel | WhatsApp + Instagram + web | Website + Messenger | Email + WhatsApp |
+| Books IN chat | Yes | No (links out) | Yes |
+| Calendar mgmt | Via hotel PMS | Via Rezdy/FareHarbor | Direct (Google Calendar) |
+| Setup | Minutes (paste URL) | 1-4 weeks (their team) | Claude configures per client |
+| Pricing | $49/mo+ | Usage-based | $300-1,000/mo |
+| Target | Hotels | Tour operators | Small operators (any industry) |
+| Auto-resolution | 97% | 65-98% | TBD — need to measure |
+| Review mgmt | No | Yes (main differentiator) | No (future feature) |
+
+### Our Edge
+- Full booking lifecycle IN chat (calendar, capacity, holds, payment)
+- Email + WhatsApp with shared state
+- Escalation relay (semi + full)
+- Custom per client, not template-based
+- Multi-language Caribbean (EN, NL, DE, ES, PT)
+
+### Our Gap
+- No marketing, landing page, case studies
+- No self-serve onboarding
+- No review management
+- No booking system integration (Rezdy, FareHarbor)
+
+### Market Data
+- WhatsApp: 98% open rate vs 20% email, 2.7B users
+- Only 2% of consumers let AI book autonomously — Marina facilitates, doesn't replace
+- AI in tourism: $3B → $30B this decade
+- Yonder ROI: 2-month payback typical
+
+### Strategic Actions
+1. Track BlueFinn ROI (bookings, hours saved) — need real numbers for pitch
+2. Add review management (post-trip auto-request) — simple, high value
+3. Onboarding story: "give us your info, system live in a day"
+4. Booking system integration (Rezdy, FareHarbor) for Phase 3
+5. Sweet spot: small operators with no existing system (BlueFinn type)
+
+### Open Items
+- Add departure point addresses/directions to client.json (Mood Beach, Village Marina, Spanish Water) — Marina knows the names but can't give directions
+- WhatsApp fallback on API failure still silent — need a solution that doesn't violate Rule 3 (no static reply templates)
+
+---
+
 ## Risks with Lead Time
 
 | Risk | Lead Time | When to Act |
