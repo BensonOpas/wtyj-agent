@@ -246,6 +246,9 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Build from identifier with name if available
     from_id = f"{phone} ({from_name})" if from_name else phone
 
+    bm_logger.log("whatsapp_processing", phone=phone, text=text[:100],
+                  from_name=from_name)
+
     # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
     if flags.get("fully_escalated"):
         _esc_flags = dict(flags)
@@ -336,6 +339,10 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     reply = result.get("reply", "")
 
     if not reply:
+        bm_logger.log("whatsapp_empty_reply", phone=phone,
+                      intents=result.get("intents", []),
+                      confidence=result.get("confidence", ""),
+                      internal_note=result.get("internal_note", "")[:200])
         return ""
 
     # Multi-trip: if booking intent + previous booking completed, archive and reset

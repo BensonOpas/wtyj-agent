@@ -485,7 +485,9 @@ def process_message(
             bm_logger.log("api_usage",
                 input_tokens=_usage.input_tokens,
                 output_tokens=_usage.output_tokens,
-                model="claude-sonnet-4-6")
+                model="claude-sonnet-4-6",
+                channel=channel,
+                from_id=from_email[:50])
 
         # Strip markdown code fences if present
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -494,12 +496,25 @@ def process_message(
         result = json.loads(raw)
 
         if not isinstance(result, dict):
+            bm_logger.log("claude_response_invalid", reason="not_a_dict",
+                          raw_preview=raw[:200], channel=channel, from_id=from_email[:50])
             return fallback
         for field in _REQUIRED_RESPONSE_FIELDS:
             if field not in result:
+                bm_logger.log("claude_response_invalid", reason=f"missing_field:{field}",
+                              raw_preview=raw[:200], channel=channel, from_id=from_email[:50])
                 return fallback
+
+        if not result.get("reply"):
+            bm_logger.log("claude_empty_reply",
+                          intents=result.get("intents", []),
+                          channel=channel, from_id=from_email[:50],
+                          raw_preview=raw[:300])
 
         return result
 
-    except Exception:
+    except Exception as _exc:
+        bm_logger.log("claude_api_error",
+                      error=str(_exc)[:200],
+                      channel=channel, from_id=from_email[:50])
         return fallback
