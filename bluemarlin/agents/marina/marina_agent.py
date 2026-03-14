@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 087
+# Last modified: Brief 088
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -13,9 +13,15 @@ from shared import bm_logger
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 
-_REQUIRED_RESPONSE_FIELDS = {
-    "intents", "fields", "confidence", "reply",
-    "clarifications_needed", "requires_human", "flags", "internal_note",
+_RESPONSE_DEFAULTS = {
+    "intents": ["inquiry"],
+    "fields": {},
+    "confidence": "medium",
+    "reply": "",
+    "clarifications_needed": [],
+    "requires_human": False,
+    "flags": {},
+    "internal_note": "",
 }
 
 
@@ -244,7 +250,7 @@ When semi_escalation applies:
 
 Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Just the JSON.
 
-The JSON must have exactly these fields:
+The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] for arrays, "" for strings, false for booleans):
 {{
   "intents": ["<one or more of: booking, inquiry, cancellation, reschedule, complaint, social, off_topic>"],
   "fields": {{"<extracted booking fields — only if present and certain:
@@ -499,17 +505,21 @@ def process_message(
             bm_logger.log("claude_response_invalid", reason="not_a_dict",
                           raw_preview=raw[:200], channel=channel, from_id=from_email[:50])
             return fallback
-        for field in _REQUIRED_RESPONSE_FIELDS:
-            if field not in result:
-                bm_logger.log("claude_response_invalid", reason=f"missing_field:{field}",
-                              raw_preview=raw[:200], channel=channel, from_id=from_email[:50])
-                return fallback
 
+        # Default missing fields instead of rejecting the entire response
+        for field, default in _RESPONSE_DEFAULTS.items():
+            if field not in result:
+                result[field] = default
+                bm_logger.log("claude_field_defaulted", field=field,
+                              channel=channel, from_id=from_email[:50])
+
+        # If reply is empty after defaults, fall back (preserves email fallback reply)
         if not result.get("reply"):
             bm_logger.log("claude_empty_reply",
                           intents=result.get("intents", []),
                           channel=channel, from_id=from_email[:50],
                           raw_preview=raw[:300])
+            return fallback
 
         return result
 

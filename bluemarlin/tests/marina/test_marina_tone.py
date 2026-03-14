@@ -135,6 +135,40 @@ def test_whatsapp_prompt_never_empty_rule():
     assert "NEVER return an empty reply" in prompt
 
 
+def test_response_defaults_missing_fields():
+    """T14: process_message defaults missing fields instead of rejecting."""
+    from unittest.mock import patch, MagicMock
+    # Simulate Claude returning valid JSON missing flags and internal_note
+    incomplete_json = '{"intents": ["inquiry"], "fields": {}, "confidence": "high", ' \
+                      '"reply": "We do boat trips!", "clarifications_needed": [], "requires_human": false}'
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=incomplete_json)]
+    mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+    with patch("agents.marina.marina_agent.anthropic.Anthropic") as mock_client:
+        mock_client.return_value.messages.create.return_value = mock_response
+        result = marina_agent.process_message("test", "", "hello", {}, {})
+    assert result["reply"] == "We do boat trips!"
+    assert result["flags"] == {}
+    assert result["internal_note"] == ""
+
+
+def test_response_empty_reply_returns_fallback():
+    """T15: process_message returns fallback when reply is empty, even if other fields present."""
+    from unittest.mock import patch, MagicMock
+    # Simulate Claude returning valid JSON with empty reply
+    empty_reply_json = '{"intents": ["inquiry"], "fields": {}, "confidence": "high", ' \
+                       '"reply": "", "clarifications_needed": [], "requires_human": false, ' \
+                       '"flags": {}, "internal_note": ""}'
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=empty_reply_json)]
+    mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+    with patch("agents.marina.marina_agent.anthropic.Anthropic") as mock_client:
+        mock_client.return_value.messages.create.return_value = mock_response
+        result = marina_agent.process_message("test", "", "hello", {}, {})
+    # Email fallback should fire — non-empty reply
+    assert "trip" in result["reply"].lower() or "guests" in result["reply"].lower()
+
+
 if __name__ == "__main__":
     tests = [
         test_system_prompt_contains_writing_style,
