@@ -169,6 +169,34 @@ def test_response_empty_reply_returns_fallback():
     assert "trip" in result["reply"].lower() or "guests" in result["reply"].lower()
 
 
+def test_client_context_includes_all_sections():
+    """T16: All customer-facing client.json sections appear in the prompt."""
+    from shared import config_loader
+    raw = config_loader.get_raw()
+    prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
+    # Every top-level key (except skipped ones) should have a section
+    skip = {"trip_aliases"}  # Already in system prompt
+    for key in raw:
+        if key in skip:
+            continue
+        section_header = key.upper().replace("_", " ")
+        assert section_header in prompt, f"Section '{section_header}' missing from prompt (key: {key})"
+
+
+def test_client_context_excludes_internal_keys():
+    """T17: Internal keys (calendar_id, spreadsheet_id) are not in the prompt."""
+    prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
+    assert "spreadsheet_id" not in prompt.lower()
+    assert "calendar_id" not in prompt.lower()
+    assert "demo_support_email" not in prompt.lower()
+
+
+def test_client_context_no_duplicate_aliases():
+    """T18: trip_aliases not duplicated in user prompt (already in system prompt)."""
+    prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
+    assert "TRIP ALIASES" not in prompt
+
+
 if __name__ == "__main__":
     tests = [
         test_system_prompt_contains_writing_style,

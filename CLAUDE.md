@@ -23,7 +23,12 @@ the real client. Business data lives in `client.json` only — never in source.
 @briefs/roadmap.md
 @briefs/system_state.md
 @briefs/infra.md
+@~/.claude/projects/-Users-benson-Projects-bluemarlin-agent/memory/MEMORY.md
 ```
+
+Read MEMORY.md and any relevant memory files it references. Memory contains
+user preferences, feedback, design principles, and project context that
+persists across sessions. Check it before planning or executing any work.
 
 If you are about to modify a file, read it first. Every time. No exceptions.
 

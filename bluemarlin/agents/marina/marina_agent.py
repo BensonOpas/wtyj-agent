@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 088
+# Last modified: Brief 090
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -25,17 +25,55 @@ _RESPONSE_DEFAULTS = {
 }
 
 
-def _filter_verify(d: dict) -> dict:
-    return {k: v for k, v in d.items() if not (isinstance(v, str) and v.startswith("[VERIFY"))}
+# Keys to exclude from the client context (internal system config, not customer-facing)
+_INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature", "calendar_id"}
+# Top-level keys to skip (already injected elsewhere or handled separately)
+_SKIP_TOP_LEVEL = {"trip_aliases"}  # Already in system prompt via _build_trip_alias_text()
 
 
-def _build_trips_text() -> str:
-    trips = config_loader.get_trips()
-    lines = []
-    for trip_key, trip in trips.items():
-        clean = _filter_verify(trip)
-        lines.append(f"  {trip_key}: {json.dumps(clean, ensure_ascii=False)}")
-    return "\n".join(lines)
+def _strip_verify(obj):
+    """Recursively strip [VERIFY...] placeholder values from nested structures."""
+    if isinstance(obj, dict):
+        return {k: _strip_verify(v) for k, v in obj.items()
+                if not (isinstance(v, str) and v.startswith("[VERIFY"))}
+    if isinstance(obj, list):
+        return [_strip_verify(i) for i in obj
+                if not (isinstance(i, str) and i.startswith("[VERIFY"))]
+    return obj
+
+
+def _build_client_context() -> str:
+    """Auto-generate labeled sections from all customer-facing data in client.json.
+    Filters internal keys and [VERIFY] placeholders. New sections are automatically included."""
+    raw = config_loader.get_raw()
+    sections = []
+    for key, value in raw.items():
+        if key in _SKIP_TOP_LEVEL:
+            continue
+        # Clean internal keys from nested structures
+        if isinstance(value, dict):
+            clean = {}
+            for k, v in value.items():
+                if k in _INTERNAL_KEYS:
+                    continue
+                # Strip calendar_id from trip departures
+                if isinstance(v, dict) and "departures" in v:
+                    v = dict(v)
+                    v["departures"] = [
+                        {dk: dv for dk, dv in dep.items() if dk not in _INTERNAL_KEYS}
+                        for dep in v.get("departures", [])
+                    ]
+                clean[k] = v
+            clean = _strip_verify(clean)
+            if clean:
+                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
+        elif isinstance(value, list):
+            clean = _strip_verify(value)
+            sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
+        elif isinstance(value, str) and key not in _INTERNAL_KEYS:
+            if not value.startswith("[VERIFY"):
+                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{value}")
+    return "\n\n".join(sections)
 
 
 def _build_trip_alias_text() -> str:
@@ -49,15 +87,6 @@ def _build_trip_alias_text() -> str:
         lines.append(f'      {quoted} → {trip_key}')
     return "\n".join(lines)
 
-
-def _build_faq_text() -> str:
-    faq = config_loader.get_faq()
-    lines = []
-    for key, answer in faq.items():
-        if isinstance(answer, str) and answer.startswith("[VERIFY"):
-            continue
-        lines.append(f"  {key}: {answer}")
-    return "\n".join(lines)
 
 
 def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
@@ -300,11 +329,9 @@ def _build_user_prompt(
     messages: list = None,
 ) -> str:
     """Build the user prompt: business data, thread context, inbound message."""
-    business = config_loader.get_business()
-    booking_rules = config_loader.get_booking_rules()
-    payment = config_loader.get_payment()
     today = datetime.now(_CURACAO_TZ).strftime("%Y-%m-%d")
     csk = config_loader.get_common_sense_knowledge()
+    client_context = _build_client_context()
 
     returning_customer_section = ""
     if thread_flags.get("returning_booking"):
@@ -350,9 +377,6 @@ def _build_user_prompt(
             "to book additional trips. Do not start a new booking intake.\n"
         )
 
-    trips_text = _build_trips_text()
-    faq_text = _build_faq_text()
-
     # Build conversation history section for WhatsApp
     history_section = ""
     if channel == "whatsapp":
@@ -388,29 +412,8 @@ TODAY (Curaçao time): {today}
 TIMEZONE: {csk.get('curacao_timezone', 'America/Curacao (UTC-4, no DST)')}
 CURRENCY: {csk.get('currency', 'USD')}
 
-BUSINESS:
-  Email: {business.get('email', '')}
-  Phone: {business.get('phone', '')}
-  Location: {business.get('location', '')}
-  Languages: {', '.join(business.get('languages', []))}
-  Operating days: {business.get('operating_days', '')}
-
-TRIPS (exact pricing and schedules):
-{trips_text}
-
-FAQ:
-{faq_text}
-
-BOOKING RULES:
-  Required fields to confirm a booking: {booking_rules.get('required_fields', [])}
-  Group threshold requiring human: {booking_rules.get('group_threshold_requires_human', 15)} or more guests
-  Typical advance booking: {booking_rules.get('advance_booking_typical_days', '')} days
-
-PAYMENT:
-  Methods: {', '.join(payment.get('methods', []))}
-  Cash policy: {payment.get('cash_policy', '')}
-  No payment at boarding: {payment.get('no_payment_at_boarding', True)}
-  Hold duration: {payment.get('hold_duration_hours', 6)} hours
+CLIENT DATA (source of truth for all customer-facing information):
+{client_context}
 
 {action_context}
 

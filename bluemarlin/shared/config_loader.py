@@ -1,5 +1,5 @@
 # bluemarlin/shared/config_loader.py
-# Last modified: Brief 066
+# Last modified: Brief 090
 # Purpose: Read-only client.json interface. Caches on first read. Never raises.
 
 import json
@@ -94,5 +94,13 @@ def get_agent_signature() -> str:
 def get_common_sense_knowledge() -> dict:
     try:
         return _load().get("common_sense_knowledge", {})
+    except Exception:
+        return {}
+
+
+def get_raw() -> dict:
+    """Return the full parsed client.json. Used for dynamic prompt injection."""
+    try:
+        return dict(_load())
     except Exception:
         return {}
