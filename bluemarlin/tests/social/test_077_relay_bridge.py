@@ -185,6 +185,32 @@ def test_booking_decline_with_booking_intent_no_loop(mock_process, mock_sheets):
     _cleanup_phone(phone)
 
 
+# --- Test 2e: Relay notification uses WhatsApp profile name ---
+
+@patch("agents.social.social_agent.sheets_writer.log_escalation")
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_relay_notification_uses_profile_name(mock_process, mock_sheets):
+    """When customer_name not in fields, relay notification uses WhatsApp profile name."""
+    phone = "TEST_083_NAME_001"
+    _cleanup_phone(phone)
+    mock_process.return_value = _base_result(
+        intents=["inquiry"],
+        reply="Let me check with the team!",
+        semi_escalation=True,
+        relay_question="Is there shade on the boat?",
+    )
+    # from_name set, but no customer_name in fields
+    msg = {"from": phone, "text": "Is there shade?", "from_name": "Jan de Vries"}
+    handle_incoming_whatsapp_message(msg)
+    pending = state_registry.get_pending_notifications()
+    match = [p for p in pending if p["customer_id"] == phone]
+    assert len(match) == 1
+    assert "Jan de Vries" in match[0]["subject"]
+    assert "Jan de Vries" in match[0]["body"]
+    assert "Unknown" not in match[0]["subject"]
+    _cleanup_phone(phone)
+
+
 # --- Test 3: update_notification_status ---
 
 def test_update_notification_status():

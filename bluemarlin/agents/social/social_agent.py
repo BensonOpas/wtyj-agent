@@ -497,7 +497,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         reply_text = result["reply"]
         # Build relay alert for operator
         _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
-        _cname = fields.get("customer_name", "Unknown")
+        _cname = fields.get("customer_name") or from_name or "Unknown"
         _alert_subject = f"[RELAY-{relay_token}] {_ref} - {_cname}"
         _alert_body = (
             f"Customer: {_cname} (WhatsApp: {phone})\n"
@@ -542,7 +542,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         flags["fully_escalated"] = True
         flags["awaiting_booking_confirmation"] = False
         reply_text = result["reply"]  # Claude's warm holding reply
-        _cname = fields.get("customer_name", "Unknown")
+        _cname = fields.get("customer_name") or from_name or "Unknown"
         sheets_writer.log_escalation({
             "email": phone,
             "subject": "WhatsApp",
