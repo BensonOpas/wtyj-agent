@@ -239,6 +239,42 @@ def test_user_message_stored_on_empty_reply():
     _cleanup_phone(phone)
 
 
+# --- Test 2g: from_id uses customer_name over WhatsApp profile ---
+
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_from_id_uses_customer_name(mock_process):
+    """from_id should use extracted customer_name over WhatsApp profile name."""
+    phone = "TEST_091_NAME_001"
+    _cleanup_phone(phone)
+    # Pre-set customer_name in booking state
+    state_registry.wa_save_booking_state(phone,
+        {"customer_name": "John"}, {})
+    mock_process.return_value = _base_result(
+        intents=["inquiry"],
+        reply="Hey John!",
+    )
+    msg = {"from": phone, "text": "hello", "from_name": "Calvin Profile"}
+    handle_incoming_whatsapp_message(msg)
+    # marina_agent should have been called with "John" in from_email, not "Calvin Profile"
+    call_args = mock_process.call_args
+    from_email_arg = call_args.kwargs.get("from_email", "")
+    assert "John" in from_email_arg
+    assert "Calvin Profile" not in from_email_arg
+    _cleanup_phone(phone)
+
+
+# --- Test 2h: Escalated guard prompt allows factual questions ---
+
+def test_escalated_prompt_allows_factual():
+    """Escalated prompt should mention answering factual questions from CLIENT DATA."""
+    from agents.marina import marina_agent as ma
+    prompt = ma._build_system_prompt({"fully_escalated": True}, channel="whatsapp")
+    assert "factual question" in prompt.lower()
+    assert "CLIENT DATA" in prompt
+    # Should NOT say "holding message only"
+    assert "holding message only" not in prompt
+
+
 # --- Test 3: update_notification_status ---
 
 def test_update_notification_status():

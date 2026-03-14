@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 087
+# Last modified: Brief 091
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
@@ -244,7 +244,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     history = state_registry.wa_get_history(phone, limit=10)
 
     # Build from identifier with name if available
-    from_id = f"{phone} ({from_name})" if from_name else phone
+    display_name = fields.get("customer_name") or from_name
+    from_id = f"{phone} ({display_name})" if display_name else phone
 
     bm_logger.log("whatsapp_processing", phone=phone, text=text[:100],
                   from_name=from_name)

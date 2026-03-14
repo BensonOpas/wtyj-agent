@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 090
+# Last modified: Brief 091
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -108,10 +108,11 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
     fully_escalated_section = ""
     if thread_flags.get("fully_escalated"):
         fully_escalated_section = (
-            "\nFULLY ESCALATED THREAD: This conversation has already been passed to the human team. "
-            "Send a warm, brief holding message only. Acknowledge the customer warmly. "
-            "Remind them the team will be in touch soon. Do not restart the booking process. "
-            "Do not ask for information. Do not set any booking or escalation flags.\n"
+            "\nFULLY ESCALATED THREAD: The original issue has been passed to the human team. "
+            "If the customer asks a new factual question, answer it normally from the "
+            "available CLIENT DATA. If they ask about the escalated issue (complaint, "
+            "refund, status update), remind them the team will be in touch. "
+            "Do not restart the booking process. Do not set any booking or escalation flags.\n"
         )
 
     if channel == "whatsapp":
