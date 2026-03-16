@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 092
+# Last modified: Brief 093
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -124,6 +124,15 @@ def _get_conn():
         "created_at TEXT NOT NULL, "
         "approved_at TEXT, "
         "published_at TEXT"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS content_learnings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "rule TEXT NOT NULL, "
+        "source_draft_ids TEXT DEFAULT '[]', "
+        "active INTEGER DEFAULT 1, "
+        "created_at TEXT NOT NULL"
         ")"
     )
     try:
@@ -743,6 +752,49 @@ def get_availability_summary(days_ahead: int = 7) -> list:
 
     conn.close()
     return results
+
+
+def save_content_learning(rule: str, source_draft_ids: list = None) -> int:
+    """Save a brand learning rule. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO content_learnings (rule, source_draft_ids, active, created_at) "
+        "VALUES (?, ?, 1, ?)",
+        (rule, json.dumps(source_draft_ids or [], ensure_ascii=False),
+         datetime.now(timezone.utc).isoformat())
+    )
+    learning_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return learning_id
+
+
+def get_active_learnings() -> list:
+    """Get all active brand learning rules. Oldest first (chronological order)."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, rule, source_draft_ids, created_at "
+        "FROM content_learnings WHERE active = 1 ORDER BY created_at ASC"
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "rule": r[1],
+         "source_draft_ids": json.loads(r[2] or "[]"), "created_at": r[3]}
+        for r in rows
+    ]
+
+
+def deactivate_learning(learning_id: int) -> bool:
+    """Deactivate a brand learning rule. Returns True if row updated."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_learnings SET active = 0 WHERE id = ? AND active = 1",
+        (learning_id,)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 # Initialise database on module load so the file exists as soon as the module is imported

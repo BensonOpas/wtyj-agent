@@ -188,3 +188,7 @@ Live tests with real Claude calls expose things unit tests can't: (1) multi-depa
 ## Brief 092 — Content Agent Core + Draft Store
 Date: 2026-03-16
 First Milestone B brief. The `_build_client_context()` pattern from marina_agent.py was duplicated (not shared) in content_agent.py — acceptable for now since the two agents may diverge, but worth extracting to shared/ if a third consumer appears. The config vs source tradeoff was the key design decision: structural rules (priority stack, classification definitions) that apply to ALL clients stay in Python source, while client-specific values (brand_voice, content_boundaries, emoji_style) are read from client.json at prompt build time. This keeps the system scalable without over-configuring. The `get_availability_summary()` function in state_registry.py avoids a cross-agent import from gws_calendar.py by querying trip_bookings directly — cleaner dependency graph.
+
+## Brief 093 — Rejection Learning
+Date: 2026-03-16
+Key design: raw rejections in the USER prompt (contextual), distilled learnings in the SYSTEM prompt (persistent rules). This mirrors marina_agent's pattern where thread context goes in user prompt and behavioral rules go in system prompt. The distillation is a manual trigger — not automatic after each rejection — because automatic would waste Claude calls with only 1-2 rejections. The existing learnings are included in the distill prompt to prevent duplicates, which is the same anti-repetition pattern used for recent drafts in generation.

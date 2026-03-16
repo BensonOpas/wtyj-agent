@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/content_agent.py
 # Created: Brief 092
-# Last modified: Brief 092
+# Last modified: Brief 093
 # Purpose: Social media content generation agent. Generates draft posts from client.json + calendar data.
 
 import json
@@ -85,6 +85,15 @@ def _build_system_prompt(count: int) -> str:
     cta = sc.get("cta_default", "Contact us to book")
     emoji_style = sc.get("emoji_style", "minimal, intentional")
     hashtag_style = sc.get("hashtag_style", "selective, curated, few not maximum")
+    learnings = state_registry.get_active_learnings()
+
+    learnings_block = ""
+    if learnings:
+        rules = "\n".join(f"- {l['rule']}" for l in learnings)
+        learnings_block = (
+            f"\nBRAND LEARNINGS (from operator feedback — follow these strictly):\n"
+            f"{rules}\n"
+        )
 
     return f"""You are the social media content strategist for {business_name}.
 You generate draft social media posts. You do not publish — a human reviews and approves every post.
@@ -135,7 +144,7 @@ DEMAND-STATE RULES:
 - Low bookings: propose content to attract interest. Never sound desperate.
 - Sold out: don't stop posting. Redirect to next available option. Turn full capacity into social proof.
 - Cancellation reopens spots: propose timely content reflecting the opportunity.
-
+{learnings_block}
 RESPONSE FORMAT:
 Return ONLY a JSON object. No explanation. No markdown. No code fences.
 The "drafts" array must contain exactly {count} items.
@@ -296,10 +305,112 @@ def generate_drafts(count: int = 3, days_ahead: int = 7) -> list:
         bm_logger.log("content_drafts_generated", count=len(stored))
         return stored
 
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnboundLocalError):
         bm_logger.log("content_response_invalid", reason="json_parse_error",
                       raw_preview=raw[:300] if 'raw' in dir() else "")
         return []
     except Exception as exc:
         bm_logger.log("content_api_error", error=str(exc)[:200])
+        return []
+
+
+def distill_learnings() -> list:
+    """Analyze rejected drafts and propose brand learning rules.
+    Separate Claude call — not part of the generation flow.
+    Returns list of saved learning dicts (with id from SQLite)."""
+    rejected = state_registry.get_content_drafts(status="rejected", limit=50)
+    rejections_with_reasons = [d for d in rejected if d.get("rejection_reason")]
+
+    if not rejections_with_reasons:
+        bm_logger.log("distill_no_rejections")
+        return []
+
+    # Build rejection summary for Claude
+    rej_lines = []
+    for d in rejections_with_reasons:
+        cap = (d.get("instagram_caption") or "")[:100]
+        rej_lines.append(
+            f'  Draft #{d["id"]} [{d["content_class"]}]: "{cap}..."\n'
+            f'  Rejection reason: {d["rejection_reason"]}'
+        )
+    rejection_summary = "\n\n".join(rej_lines)
+
+    business = config_loader.get_business()
+    business_name = business.get("name", "the business")
+
+    # Existing learnings to avoid duplicates
+    existing = state_registry.get_active_learnings()
+    existing_block = ""
+    if existing:
+        existing_rules = "\n".join(f"- {l['rule']}" for l in existing)
+        existing_block = (
+            f"\nEXISTING RULES (already learned — do NOT duplicate these):\n"
+            f"{existing_rules}\n"
+        )
+
+    system_prompt = (
+        f"You analyze rejected social media draft posts for {business_name} and identify patterns.\n"
+        f"Your job is to propose brand rules that will prevent similar rejections.\n"
+        f"Each rule must be actionable and specific — not vague.\n"
+        f"Only propose rules if you see a clear pattern across multiple rejections.\n"
+        f"A single rejection is not enough to create a rule unless the reason is very specific.\n"
+        f"{existing_block}\n"
+        f"Return ONLY a JSON object. No explanation. No markdown. No code fences.\n"
+        f'{{"learnings": [{{"rule": "<specific actionable rule>", '
+        f'"source_pattern": "<what rejections led to this rule>"}}]}}'
+    )
+
+    user_prompt = (
+        f"REJECTED DRAFTS ({len(rejections_with_reasons)} total):\n\n"
+        f"{rejection_summary}\n\n"
+        f"Analyze these rejections. Identify patterns. Propose brand rules."
+    )
+
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        client = anthropic.Anthropic(api_key=api_key)
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw = response.content[0].text.strip()
+
+        _usage = getattr(response, "usage", None)
+        if _usage:
+            bm_logger.log("api_usage",
+                          input_tokens=_usage.input_tokens,
+                          output_tokens=_usage.output_tokens,
+                          model="claude-sonnet-4-6",
+                          channel="distill")
+
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
+
+        result = json.loads(raw)
+        if not isinstance(result, dict) or "learnings" not in result:
+            bm_logger.log("distill_response_invalid", reason="missing_learnings_key")
+            return []
+
+        saved = []
+        for item in result["learnings"]:
+            if not isinstance(item, dict) or not item.get("rule"):
+                continue
+            source_ids = [d["id"] for d in rejections_with_reasons]
+            learning_id = state_registry.save_content_learning(
+                rule=item["rule"],
+                source_draft_ids=source_ids,
+            )
+            learning = {"id": learning_id, "rule": item["rule"],
+                        "source_draft_ids": source_ids,
+                        "created_at": datetime.now(timezone.utc).isoformat()}
+            saved.append(learning)
+
+        bm_logger.log("distill_learnings_saved", count=len(saved))
+        return saved
+
+    except Exception as exc:
+        bm_logger.log("distill_api_error", error=str(exc)[:200])
         return []
