@@ -192,3 +192,7 @@ First Milestone B brief. The `_build_client_context()` pattern from marina_agent
 ## Brief 093 — Rejection Learning
 Date: 2026-03-16
 Key design: raw rejections in the USER prompt (contextual), distilled learnings in the SYSTEM prompt (persistent rules). This mirrors marina_agent's pattern where thread context goes in user prompt and behavioral rules go in system prompt. The distillation is a manual trigger — not automatic after each rejection — because automatic would waste Claude calls with only 1-2 rejections. The existing learnings are included in the distill prompt to prevent duplicates, which is the same anti-repetition pattern used for recent drafts in generation.
+
+## Brief 094 — Auto Poster + CLI Review
+Date: 2026-03-16
+Straightforward CLI wrapper — no new business logic, just argparse + print + stdin. The `sys.path.insert` at the top of auto_poster.py is necessary because it runs standalone (not imported as a module), same pattern as the live test harnesses. The stub publisher is intentionally minimal — one `bm_logger.log` + one `update_draft_status` per draft. When we plug in the real Late/Buffer API, only `cmd_publish` changes. The review mode uses `builtins.input` which required `patch("builtins.input")` in tests — straightforward but easy to forget the "builtins." prefix.
