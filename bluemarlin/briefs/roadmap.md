@@ -251,6 +251,7 @@ See `marina_status_90.md` for full details.
 - **Graphics engine overhaul (Brief 095 follow-up):** default Pillow font doesn't support Unicode (ñ, ç in Curaçao renders as placeholder boxes). Need a proper font (Inter/Montserrat .ttf with Latin Extended). Overall template quality needs work — better layouts, different templates per content class, premium look. Current output is functional but not demo-quality.
 - **Facebook publishing:** Late account only has Instagram connected. Add Facebook Page to Late dashboard, update social_publisher.py to post to both.
 - **Content pipeline scheduling:** auto_poster.py is manual CLI. Needs cron/systemd timer for automated daily generation + queued publishing after approval.
+- **Brand voice learning from existing posts:** Scrape/ingest the client's existing Instagram/Facebook posts and feed them into the content agent prompt as style examples. The AI should learn how the business already communicates — tone, word choice, emoji usage, caption structure, hashtag patterns — and mirror that in generated drafts. This is separate from rejection learning (which teaches what NOT to do). This teaches what TO do. Critical for onboarding new clients who already have a social presence.
 
 ---
 
