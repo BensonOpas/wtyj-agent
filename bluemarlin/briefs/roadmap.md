@@ -248,6 +248,9 @@ See `marina_status_90.md` for full details.
 ### Open Items
 - Add departure point addresses/directions to client.json (Mood Beach, Village Marina, Spanish Water) — Marina knows the names but can't give directions
 - WhatsApp fallback on API failure still silent — need a solution that doesn't violate Rule 3 (no static reply templates)
+- **Graphics engine overhaul (Brief 095 follow-up):** default Pillow font doesn't support Unicode (ñ, ç in Curaçao renders as placeholder boxes). Need a proper font (Inter/Montserrat .ttf with Latin Extended). Overall template quality needs work — better layouts, different templates per content class, premium look. Current output is functional but not demo-quality.
+- **Facebook publishing:** Late account only has Instagram connected. Add Facebook Page to Late dashboard, update social_publisher.py to post to both.
+- **Content pipeline scheduling:** auto_poster.py is manual CLI. Needs cron/systemd timer for automated daily generation + queued publishing after approval.
 
 ---
 
