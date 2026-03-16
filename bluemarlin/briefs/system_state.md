@@ -767,3 +767,7 @@ Outcome: complete — 10/10 tests pass, 153/153 social regression pass
 Brief 096 — Late Publishing Integration
 Decision: Created social_publisher.py using late-sdk Python package (v1.2.89). Three functions: get_instagram_account_id() discovers connected IG account at runtime via SDK, upload_media() uploads JPEG to Late's media storage, publish_to_instagram() creates post with caption + hashtags + image via publishNow=True. Replaced stub cmd_publish() in auto_poster.py with real flow: discover account → auto-generate graphic if missing → upload image → publish → update status. SDK verified against real API — accounts endpoint confirmed, media upload confirmed, post creation signature verified from SDK source. Updated test_094 publish test to mock new publisher functions.
 Outcome: complete — 10/10 tests pass, 163/163 social regression pass
+
+Brief 097 — Graphics Overhaul
+Decision: Fixed three live-testing issues. (1) Bundled Inter Bold .ttf font (420KB, SIL license) with full Latin Extended support — ç, ñ, ü now render correctly. (2) Replaced flat solid background with vertical gradient (primary_color → gradient_bottom_color). (3) Increased text sizes from 54/42pt to 72/58/46pt, widened margins, repositioned text to upper 40% with 15% top breathing room. Added brand name ("BlueFinn Charters Curaçao") in muted text above thicker accent bar (12px, was 8). All config-driven via client.json brand_graphics section.
+Outcome: complete — 12/12 tests pass, 165/165 social regression pass

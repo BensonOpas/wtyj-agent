@@ -13,7 +13,7 @@ os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "test_token_067")
 os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_access_token")
 os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "990622044139349")
 
-from PIL import Image
+from PIL import Image, ImageFont
 from agents.social.graphics_engine import (
     generate_graphic,
     generate_all_pending_graphics,
@@ -44,7 +44,8 @@ def test_load_brand_config_from_client_json():
     config = _load_brand_config()
     assert config["primary_color"] == (27, 58, 92)
     assert config["text_color"] == (255, 255, 255)
-    assert config["font_path"] == ""
+    assert config["font_path"] == "config/brand/Inter-Bold.ttf"
+    assert config["gradient_bottom_color"] == (15, 30, 50)
 
 
 def test_extract_headline_single_sentence():
@@ -143,5 +144,32 @@ def test_graphic_has_brand_colors():
         assert abs(pixel[0] - 27) <= 5
         assert abs(pixel[1] - 58) <= 5
         assert abs(pixel[2] - 92) <= 5
+    finally:
+        _cleanup_all()
+
+
+def test_font_is_truetype_not_default():
+    """Verify the configured font loads as TrueType (supports Latin Extended)."""
+    from agents.social.graphics_engine import _load_font, _load_brand_config
+    brand = _load_brand_config()
+    font = _load_font(brand["font_path"], 48)
+    assert isinstance(font, ImageFont.FreeTypeFont), "Font should be TrueType, not default"
+    assert font.getlength("Curaçao") > 0
+    assert font.getlength("piña") > 0
+
+
+def test_graphic_has_gradient():
+    """Verify top and bottom of image have different colors (gradient)."""
+    _cleanup_all()
+    try:
+        d = state_registry.save_content_draft(
+            "A", "Gradient test post.", "", [], "", ""
+        )
+        path = generate_graphic(d)
+        img = Image.open(path)
+        top_pixel = img.getpixel((10, 10))
+        bottom_pixel = img.getpixel((10, 1300))
+        # Top should be lighter (primary_color), bottom should be darker (gradient_bottom)
+        assert top_pixel[2] > bottom_pixel[2]  # blue channel: top > bottom
     finally:
         _cleanup_all()

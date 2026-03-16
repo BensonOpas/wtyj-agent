@@ -290,10 +290,11 @@
     "emoji_style": "minimal, intentional, never cheap or cluttered",
     "brand_graphics": {
       "primary_color": [27, 58, 92],
+      "gradient_bottom_color": [15, 30, 50],
       "text_color": [255, 255, 255],
       "accent_color": [212, 168, 83],
       "logo_path": "",
-      "font_path": ""
+      "font_path": "config/brand/Inter-Bold.ttf"
     }
   }
 }
