@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/auto_poster.py
 # Created: Brief 094
-# Last modified: Brief 095
+# Last modified: Brief 096
 # Purpose: CLI entry point for content pipeline — generate, review, publish, distill.
 
 import argparse
@@ -10,7 +10,7 @@ import os
 # Ensure bluemarlin package root is on sys.path
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from agents.social import content_agent, graphics_engine
+from agents.social import content_agent, graphics_engine, social_publisher
 from shared import state_registry, bm_logger
 
 
@@ -64,26 +64,58 @@ def cmd_review():
 
 
 def cmd_publish():
-    """Publish approved drafts (stub mode — logs but doesn't post to real platforms)."""
+    """Publish approved drafts to Instagram via Late API."""
     approved = state_registry.get_content_drafts(status="approved")
     if not approved:
         print("No approved drafts to publish.")
         return
 
-    count = 0
+    # Discover Instagram account
+    account_id = social_publisher.get_instagram_account_id()
+    if not account_id:
+        print("ERROR: No Instagram account found. Check LATE_API_KEY and Late dashboard.")
+        return
+
+    published = 0
+    failed = 0
     for draft in approved:
         print(f"Publishing #{draft['id']} [{draft['content_class']}]...")
-        print(f"  IG: {(draft.get('instagram_caption') or '')[:100]}")
-        print(f"  FB: {(draft.get('facebook_caption') or '')[:100]}")
-        print(f"  Tags: {' '.join(draft.get('hashtags') or [])}")
-        bm_logger.log("content_published_stub",
-                      draft_id=draft["id"],
-                      platform="instagram+facebook")
-        state_registry.update_draft_status(draft["id"], "published")
-        print("  → Published (stub).")
-        count += 1
 
-    print(f"Published {count} drafts (stub mode).")
+        # Auto-generate graphic if missing
+        image_path = draft.get("image_path", "")
+        if not image_path or not os.path.exists(image_path):
+            print("  Generating graphic...")
+            image_path = graphics_engine.generate_graphic(draft["id"])
+            if not image_path:
+                print("  SKIP — could not generate graphic (no caption).")
+                failed += 1
+                continue
+
+        # Upload image to Late
+        print("  Uploading image...")
+        media_url = social_publisher.upload_media(image_path)
+        if not media_url:
+            print("  SKIP — image upload failed.")
+            failed += 1
+            continue
+
+        # Publish
+        caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+        hashtags = draft.get("hashtags") or []
+        result = social_publisher.publish_to_instagram(
+            caption=caption, media_url=media_url,
+            account_id=account_id, hashtags=hashtags
+        )
+        if result:
+            state_registry.update_draft_status(draft["id"], "published")
+            post_url = result.get("post_url", "")
+            print(f"  → Published! {post_url}")
+            published += 1
+        else:
+            print("  SKIP — publish failed (check logs).")
+            failed += 1
+
+    print(f"\nDone. {published} published, {failed} failed.")
 
 
 def cmd_distill():

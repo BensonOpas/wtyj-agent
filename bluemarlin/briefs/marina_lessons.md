@@ -200,3 +200,7 @@ Straightforward CLI wrapper — no new business logic, just argparse + print + s
 ## Brief 095 — Branded Graphics Engine
 Date: 2026-03-16
 Brief reviewer caught a critical font fallback bug: `ImageFont.load_default()` (no size arg) returns a bitmap font that doesn't support `.getlength()` or `.size`, crashing `_draw_wrapped_text`. Fix: always use `load_default(size=N)` (Pillow 10+) which returns a proper FreeTypeFont. This eliminated the need for an external font download entirely. Also caught that Python default colors should be generic (not client-specific) — the original brief had BlueFinn's navy/gold as fallback defaults in source code, violating the config-driven principle. Changed to generic dark grey/white with client colors in client.json only.
+
+## Brief 096 — Late Publishing Integration
+Date: 2026-03-16
+The research agent's API endpoints were partially fabricated — the presigned URL path was wrong (404). Always verify external API endpoints against the real API before writing a brief. The Late SDK (`late-sdk` on PyPI) was the right choice: it abstracts the presigned URL flow entirely via `client.media.upload()`. Key gotcha: the SDK uses `field_id` (not `id` or `_id`) for account IDs due to Pydantic field name mapping. The brief reviewer correctly caught that replacing `cmd_publish()` would break existing test_094 assertions — always check which tests call functions you're replacing.

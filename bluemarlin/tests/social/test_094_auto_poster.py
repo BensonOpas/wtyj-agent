@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "test_token_067")
 os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_access_token")
 os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "990622044139349")
+os.environ.setdefault("LATE_API_KEY", "sk_test_key_for_testing")
 
 from agents.social.auto_poster import cmd_generate, cmd_review, cmd_publish, cmd_distill, cmd_status
 from agents.social import content_agent
@@ -183,16 +184,19 @@ def test_cmd_review_empty(capsys):
         _cleanup_all()
 
 
-def test_cmd_publish_stub(capsys):
+def test_cmd_publish_with_mocked_publisher(capsys):
     _cleanup_all()
     try:
         d = state_registry.save_content_draft("A", "Publish me IG", "Publish me FB",
                                                ["#test"], "visual", "reason")
         state_registry.update_draft_status(d, "approved")
-        cmd_publish()
+        with patch("agents.social.auto_poster.social_publisher.get_instagram_account_id", return_value="acc_test"), \
+             patch("agents.social.auto_poster.social_publisher.upload_media", return_value="https://cdn/test.jpg"), \
+             patch("agents.social.auto_poster.social_publisher.publish_to_instagram", return_value={"post_id": "p1", "post_url": "https://ig/test"}), \
+             patch("agents.social.auto_poster.graphics_engine.generate_graphic", return_value="/tmp/fake.jpg"):
+            cmd_publish()
         captured = capsys.readouterr()
         assert "Published" in captured.out
-        assert "stub" in captured.out
         drafts = state_registry.get_content_drafts()
         match = [x for x in drafts if x["id"] == d]
         assert match[0]["status"] == "published"
