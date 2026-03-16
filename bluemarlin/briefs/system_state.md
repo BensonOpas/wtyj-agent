@@ -775,3 +775,7 @@ Outcome: complete — 12/12 tests pass, 165/165 social regression pass
 Brief 098 — Seasonal Awareness + Post-Publication Control
 Decision: Two features in one brief. Part A: Added seasonal_calendar to client.json with Curaçao high/low season (Dec-Apr / May-Nov) and 8 events. New _build_seasonal_context() in content_agent.py determines current season via month wrap-around, finds upcoming events within 30 days (handles Dec→Jan year boundary), injected as === SEASONAL CONTEXT === in user prompt. Part B: Added late_post_id and instagram_url columns to content_drafts (ALTER TABLE). cmd_publish now stores both when publishing. Added delete_post() to social_publisher.py (Late SDK posts.delete). Added --delete CLI command to auto_poster.py.
 Outcome: complete — 10/10 tests pass, 175/175 social regression pass
+
+Brief 099 — Dashboard API Endpoints
+Decision: Created dashboard/api.py with FastAPI router — 15 REST endpoints wrapping existing content pipeline functions. Mounted on existing webhook_server.py (same process, no new systemd service). Auth: password from DASHBOARD_PASSWORD env var, session token in memory, Bearer header on all endpoints. CORS middleware for React dev server. Fixed import-time env var bug (DASHBOARD_PASSWORD read at call time, not import time). All endpoints return JSON — React dashboard (Brief 100) consumes them.
+Outcome: complete — 12/12 tests pass, 187/187 social regression pass

@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 089
+# Last modified: Brief 099
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import os
@@ -15,6 +15,19 @@ from agents.social.whatsapp_client import parse_webhook_payload, send_text_messa
 from agents.social.social_agent import handle_incoming_whatsapp_message
 
 app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None)
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from dashboard.api import router as dashboard_router
+app.include_router(dashboard_router)
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
