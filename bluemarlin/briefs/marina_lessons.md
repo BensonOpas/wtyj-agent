@@ -196,3 +196,7 @@ Key design: raw rejections in the USER prompt (contextual), distilled learnings 
 ## Brief 094 — Auto Poster + CLI Review
 Date: 2026-03-16
 Straightforward CLI wrapper — no new business logic, just argparse + print + stdin. The `sys.path.insert` at the top of auto_poster.py is necessary because it runs standalone (not imported as a module), same pattern as the live test harnesses. The stub publisher is intentionally minimal — one `bm_logger.log` + one `update_draft_status` per draft. When we plug in the real Late/Buffer API, only `cmd_publish` changes. The review mode uses `builtins.input` which required `patch("builtins.input")` in tests — straightforward but easy to forget the "builtins." prefix.
+
+## Brief 095 — Branded Graphics Engine
+Date: 2026-03-16
+Brief reviewer caught a critical font fallback bug: `ImageFont.load_default()` (no size arg) returns a bitmap font that doesn't support `.getlength()` or `.size`, crashing `_draw_wrapped_text`. Fix: always use `load_default(size=N)` (Pillow 10+) which returns a proper FreeTypeFont. This eliminated the need for an external font download entirely. Also caught that Python default colors should be generic (not client-specific) — the original brief had BlueFinn's navy/gold as fallback defaults in source code, violating the config-driven principle. Changed to generic dark grey/white with client colors in client.json only.

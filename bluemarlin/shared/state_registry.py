@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 093
+# Last modified: Brief 095
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -135,6 +135,10 @@ def _get_conn():
         "created_at TEXT NOT NULL"
         ")"
     )
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn.execute("ALTER TABLE trip_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -629,7 +633,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at "
+            "created_at, approved_at, published_at, image_path "
             "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
             (status, limit)
         ).fetchall()
@@ -637,7 +641,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at "
+            "created_at, approved_at, published_at, image_path "
             "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
@@ -648,7 +652,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "facebook_caption": r[3], "hashtags": json.loads(r[4] or "[]"),
             "visual_suggestion": r[5], "reasoning": r[6], "status": r[7],
             "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
-            "published_at": r[11],
+            "published_at": r[11], "image_path": r[12],
         }
         for r in rows
     ]
@@ -752,6 +756,19 @@ def get_availability_summary(days_ahead: int = 7) -> list:
 
     conn.close()
     return results
+
+
+def set_draft_image_path(draft_id: int, image_path: str) -> bool:
+    """Set the generated image path for a content draft."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET image_path = ? WHERE id = ?",
+        (image_path, draft_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def save_content_learning(rule: str, source_draft_ids: list = None) -> int:

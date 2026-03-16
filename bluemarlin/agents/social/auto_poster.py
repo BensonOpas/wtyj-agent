@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/auto_poster.py
 # Created: Brief 094
-# Last modified: Brief 094
+# Last modified: Brief 095
 # Purpose: CLI entry point for content pipeline — generate, review, publish, distill.
 
 import argparse
@@ -10,7 +10,7 @@ import os
 # Ensure bluemarlin package root is on sys.path
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from agents.social import content_agent
+from agents.social import content_agent, graphics_engine
 from shared import state_registry, bm_logger
 
 
@@ -97,6 +97,17 @@ def cmd_distill():
     print(f"Distilled {len(learnings)} new brand learnings.")
 
 
+def cmd_graphics():
+    """Generate branded graphics for drafts that need images."""
+    results = graphics_engine.generate_all_pending_graphics()
+    if not results:
+        print("No drafts need graphics (all pending/approved drafts already have images).")
+        return
+    for draft_id, path in results:
+        print(f"  #{draft_id} → {path}")
+    print(f"Generated {len(results)} graphics.")
+
+
 def cmd_status():
     """Show pipeline status counts."""
     pending = len(state_registry.get_content_drafts(status="pending"))
@@ -119,10 +130,11 @@ def main():
     parser.add_argument("--review", action="store_true", help="Review pending drafts interactively")
     parser.add_argument("--publish", action="store_true", help="Publish approved drafts (stub)")
     parser.add_argument("--distill", action="store_true", help="Distill brand learnings from rejections")
+    parser.add_argument("--graphics", action="store_true", help="Generate branded graphics for drafts")
     parser.add_argument("--status", action="store_true", help="Show pipeline status counts")
     args = parser.parse_args()
 
-    if not any([args.generate, args.review, args.publish, args.distill, args.status]):
+    if not any([args.generate, args.review, args.publish, args.distill, args.status, args.graphics]):
         parser.print_help()
         return
 
@@ -132,6 +144,8 @@ def main():
         cmd_generate(args.count)
     if args.review:
         cmd_review()
+    if args.graphics:
+        cmd_graphics()
     if args.publish:
         cmd_publish()
     if args.distill:

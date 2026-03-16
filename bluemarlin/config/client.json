@@ -287,6 +287,13 @@
     "content_boundaries": ["competitors", "politics", "religion", "controversial topics"],
     "cta_default": "Message us on WhatsApp to book",
     "hashtag_style": "selective, curated, few not maximum",
-    "emoji_style": "minimal, intentional, never cheap or cluttered"
+    "emoji_style": "minimal, intentional, never cheap or cluttered",
+    "brand_graphics": {
+      "primary_color": [27, 58, 92],
+      "text_color": [255, 255, 255],
+      "accent_color": [212, 168, 83],
+      "logo_path": "",
+      "font_path": ""
+    }
   }
 }
