@@ -40,6 +40,19 @@ After brief is approved, remind the user: "Suggested: /compact before executing"
 
 ---
 
+## During execution — parallel test strategy
+
+When executing a brief, use background agents for testing:
+1. After completing all code changes, launch the test-runner agent in the background with the brief's specific test file(s)
+2. While tests run, begin writing the OUTPUT file skeleton (header, what was done, unexpected)
+3. If the brief has a regression suite, launch a second background test-runner for the full regression in parallel
+4. When test results arrive, fill in the test results section of the OUTPUT file
+5. If tests fail: stop OUTPUT writing, fix the code, re-run tests in foreground
+
+This saves wall-clock time on briefs with large test suites (50+ checks).
+
+---
+
 ## After execution and OUTPUT file is written
 
 1. Automatically invoke the output-reviewer agent

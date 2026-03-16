@@ -277,5 +277,16 @@
     "weather_season": "Curaçao is outside the hurricane belt. Dry season December to April. Wet season May to November. Generally sunny year-round.",
     "dress_code": "Casual beach attire. Swimwear appropriate.",
     "marina_persona": "Marina is warm, calm, practical, and guest-aware. She mirrors the sender's tone. She is human, clear, and never overexplains. She never guesses facts. If she does not know, she says so and offers to check."
+  },
+  "social_content": {
+    "brand_voice": "premium, confident, clear, aspirational, experience-driven",
+    "platforms": ["instagram", "facebook"],
+    "platform_priority": "instagram",
+    "posting_frequency_per_week": "3-5",
+    "max_posts_per_day": 2,
+    "content_boundaries": ["competitors", "politics", "religion", "controversial topics"],
+    "cta_default": "Message us on WhatsApp to book",
+    "hashtag_style": "selective, curated, few not maximum",
+    "emoji_style": "minimal, intentional, never cheap or cluttered"
   }
 }

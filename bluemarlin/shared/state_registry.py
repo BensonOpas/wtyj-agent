@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 077
+# Last modified: Brief 092
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -108,6 +108,22 @@ def _get_conn():
         "body TEXT NOT NULL, "
         "status TEXT DEFAULT 'pending', "
         "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS content_drafts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "content_class TEXT NOT NULL, "
+        "instagram_caption TEXT, "
+        "facebook_caption TEXT, "
+        "hashtags_json TEXT DEFAULT '[]', "
+        "visual_suggestion TEXT DEFAULT '', "
+        "reasoning TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'pending', "
+        "rejection_reason TEXT DEFAULT '', "
+        "created_at TEXT NOT NULL, "
+        "approved_at TEXT, "
+        "published_at TEXT"
         ")"
     )
     try:
@@ -575,6 +591,158 @@ def get_relay_by_token(relay_token: str) -> "dict | None":
     return {"id": row[0], "notification_type": row[1], "relay_token": row[2],
             "channel": row[3], "customer_id": row[4], "customer_name": row[5],
             "subject": row[6], "body": row[7], "status": row[8], "created_at": row[9]}
+
+
+def save_content_draft(content_class: str, instagram_caption: str,
+                       facebook_caption: str, hashtags: list,
+                       visual_suggestion: str, reasoning: str) -> int:
+    """Save a content draft. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO content_drafts "
+        "(content_class, instagram_caption, facebook_caption, hashtags_json, "
+        "visual_suggestion, reasoning, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (content_class, instagram_caption, facebook_caption,
+         json.dumps(hashtags, ensure_ascii=False), visual_suggestion, reasoning,
+         datetime.now(timezone.utc).isoformat())
+    )
+    draft_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return draft_id
+
+
+def get_content_drafts(status: str = None, limit: int = 50) -> list:
+    """Get content drafts, optionally filtered by status. Newest first."""
+    conn = _get_conn()
+    if status:
+        rows = conn.execute(
+            "SELECT id, content_class, instagram_caption, facebook_caption, "
+            "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
+            "created_at, approved_at, published_at "
+            "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+            (status, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, content_class, instagram_caption, facebook_caption, "
+            "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
+            "created_at, approved_at, published_at "
+            "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "content_class": r[1], "instagram_caption": r[2],
+            "facebook_caption": r[3], "hashtags": json.loads(r[4] or "[]"),
+            "visual_suggestion": r[5], "reasoning": r[6], "status": r[7],
+            "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
+            "published_at": r[11],
+        }
+        for r in rows
+    ]
+
+
+def update_draft_status(draft_id: int, status: str,
+                        rejection_reason: str = "") -> bool:
+    """Update draft status. For 'approved', sets approved_at. For 'published', sets published_at.
+    For 'rejected', stores rejection_reason. Returns True if row updated."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    if status == "approved":
+        cur = conn.execute(
+            "UPDATE content_drafts SET status = ?, approved_at = ? WHERE id = ?",
+            (status, now, draft_id)
+        )
+    elif status == "published":
+        cur = conn.execute(
+            "UPDATE content_drafts SET status = ?, published_at = ? WHERE id = ?",
+            (status, now, draft_id)
+        )
+    elif status == "rejected":
+        cur = conn.execute(
+            "UPDATE content_drafts SET status = ?, rejection_reason = ? WHERE id = ?",
+            (status, rejection_reason, draft_id)
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE content_drafts SET status = ? WHERE id = ?",
+            (status, draft_id)
+        )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_availability_summary(days_ahead: int = 7) -> list:
+    """Get booking counts for all trip slots in the next N days.
+    Returns list of {trip_key, date, departure_time, booked_guests, capacity, spots_remaining}.
+    Used by content_agent to generate operationally-aware posts."""
+    from shared import config_loader
+
+    expire_stale_holds()
+    trips = config_loader.get_trips()
+    now_curacao = datetime.now(timezone(timedelta(hours=-4)))
+    today = now_curacao.date()
+
+    day_name_map = {
+        0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
+        4: "Friday", 5: "Saturday", 6: "Sunday"
+    }
+
+    results = []
+    conn = _get_conn()
+
+    for trip_key, trip_data in trips.items():
+        capacity = trip_data.get("capacity", 0)
+        days_available = trip_data.get("days_available", "daily")
+        departures = trip_data.get("departures", [])
+
+        # Parse which days this trip operates
+        if days_available.lower() == "daily":
+            valid_days = set(range(7))
+        else:
+            valid_days = set()
+            for d_idx, d_name in day_name_map.items():
+                if d_name.lower() in days_available.lower():
+                    valid_days.add(d_idx)
+            # Handle plural forms: "Fridays" → "Friday"
+            if not valid_days:
+                for d_idx, d_name in day_name_map.items():
+                    if d_name.lower() + "s" in days_available.lower():
+                        valid_days.add(d_idx)
+
+        for day_offset in range(days_ahead):
+            check_date = today + timedelta(days=day_offset)
+            if check_date.weekday() not in valid_days:
+                continue
+            date_str = check_date.isoformat()
+
+            for dep in departures:
+                dep_time = dep.get("time", "")
+                now_utc = datetime.now(timezone.utc).isoformat()
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(guests), 0) FROM trip_bookings "
+                    "WHERE trip_key=? AND date=? AND departure_time=? "
+                    "AND status IN ('soft_hold', 'confirmed') "
+                    "AND (status='confirmed' OR expires_at > ?)",
+                    (trip_key, date_str, dep_time, now_utc)
+                ).fetchone()
+                booked = row[0] if row else 0
+                results.append({
+                    "trip_key": trip_key,
+                    "date": date_str,
+                    "departure_time": dep_time,
+                    "booked_guests": booked,
+                    "capacity": capacity,
+                    "spots_remaining": max(0, capacity - booked),
+                })
+
+    conn.close()
+    return results
 
 
 # Initialise database on module load so the file exists as soon as the module is imported
