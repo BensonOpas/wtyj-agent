@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/content_agent.py
 # Created: Brief 092
-# Last modified: Brief 093
+# Last modified: Brief 098
 # Purpose: Social media content generation agent. Generates draft posts from client.json + calendar data.
 
 import json
@@ -72,6 +72,79 @@ def _build_client_context() -> str:
             if not value.startswith("[VERIFY"):
                 sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{value}")
     return "\n\n".join(sections)
+
+
+def _build_seasonal_context() -> str:
+    """Build seasonal context from client.json seasonal_calendar."""
+    raw = config_loader.get_raw()
+    cal = raw.get("seasonal_calendar", {})
+    if not cal:
+        return "No seasonal data configured."
+
+    today = datetime.now(_CURACAO_TZ)
+    current_month = today.month
+    lines = []
+
+    # Determine current season
+    high = cal.get("high_season", {})
+    if high:
+        start = high.get("start_month", 12)
+        end = high.get("end_month", 4)
+        if start > end:
+            in_high = current_month >= start or current_month <= end
+        else:
+            in_high = start <= current_month <= end
+        label = high.get("label", "High season") if in_high else cal.get("low_season", {}).get("label", "Low season")
+        lines.append(f"Season: {label}")
+
+    # Find upcoming events (next 30 days)
+    events = cal.get("events", [])
+    upcoming = []
+    for event in events:
+        e_month = event.get("month", 1)
+        e_day = event.get("day", 1)
+        e_name = event.get("name", "")
+        duration = event.get("duration_days", 1)
+        note = event.get("note", "")
+
+        candidates = []
+        for year in [today.year, today.year + 1]:
+            try:
+                candidates.append(today.replace(year=year, month=e_month, day=e_day))
+            except ValueError:
+                continue
+
+        best = None
+        for c in candidates:
+            days_until_c = (c - today).days
+            if -duration < days_until_c <= 30:
+                best = c
+                break
+        if best is None:
+            continue
+
+        e_date = best
+        days_until = (e_date - today).days
+        event_end = e_date + timedelta(days=duration)
+        days_remaining = (event_end - today).days
+
+        if days_until < 0 and days_remaining > 0:
+            desc = f"  {e_name} — ongoing, {days_remaining} days remaining"
+        elif days_until == 0:
+            desc = f"  {e_name} — today"
+        else:
+            desc = f"  {e_name} — in {days_until} days"
+        if note:
+            desc += f" ({note})"
+        upcoming.append(desc)
+
+    if upcoming:
+        lines.append("Upcoming events (next 30 days):")
+        lines.extend(upcoming)
+    else:
+        lines.append("No events in the next 30 days.")
+
+    return "\n".join(lines)
 
 
 def _build_system_prompt(count: int) -> str:
@@ -185,6 +258,9 @@ def _build_user_prompt(count: int, days_ahead: int = 7) -> str:
     else:
         avail_section = "No booking data available. Focus on Class A (evergreen) and Class D (reactive) content."
 
+    # Seasonal context
+    seasonal_context = _build_seasonal_context()
+
     # Recent drafts (last 14 days)
     all_drafts = state_registry.get_content_drafts(limit=20)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
@@ -218,6 +294,9 @@ DAY OF WEEK: {day_of_week}
 
 === AVAILABILITY (next {days_ahead} days) ===
 {avail_section}
+
+=== SEASONAL CONTEXT ===
+{seasonal_context}
 
 === RECENT DRAFTS (last 14 days) ===
 {recent_section}

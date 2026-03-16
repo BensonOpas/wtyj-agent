@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/auto_poster.py
 # Created: Brief 094
-# Last modified: Brief 096
+# Last modified: Brief 098
 # Purpose: CLI entry point for content pipeline — generate, review, publish, distill.
 
 import argparse
@@ -108,6 +108,11 @@ def cmd_publish():
         )
         if result:
             state_registry.update_draft_status(draft["id"], "published")
+            state_registry.set_draft_published_info(
+                draft["id"],
+                late_post_id=result.get("post_id", ""),
+                instagram_url=result.get("post_url", "")
+            )
             post_url = result.get("post_url", "")
             print(f"  → Published! {post_url}")
             published += 1
@@ -140,6 +145,29 @@ def cmd_graphics():
     print(f"Generated {len(results)} graphics.")
 
 
+def cmd_delete(draft_id):
+    """Delete a published post from Instagram."""
+    drafts = state_registry.get_content_drafts()
+    draft = next((d for d in drafts if d["id"] == draft_id), None)
+    if not draft:
+        print(f"Draft #{draft_id} not found.")
+        return
+    if draft["status"] != "published":
+        print(f"Draft #{draft_id} is not published (status: {draft['status']}).")
+        return
+    late_id = draft.get("late_post_id", "")
+    if not late_id:
+        print(f"Draft #{draft_id} has no Late post ID — cannot delete from Instagram.")
+        return
+
+    print(f"Deleting #{draft_id} from Instagram...")
+    if social_publisher.delete_post(late_id):
+        state_registry.update_draft_status(draft_id, "deleted")
+        print("  → Deleted.")
+    else:
+        print("  → Delete failed (check logs).")
+
+
 def cmd_status():
     """Show pipeline status counts."""
     pending = len(state_registry.get_content_drafts(status="pending"))
@@ -163,10 +191,11 @@ def main():
     parser.add_argument("--publish", action="store_true", help="Publish approved drafts (stub)")
     parser.add_argument("--distill", action="store_true", help="Distill brand learnings from rejections")
     parser.add_argument("--graphics", action="store_true", help="Generate branded graphics for drafts")
+    parser.add_argument("--delete", type=int, metavar="ID", help="Delete a published post by draft ID")
     parser.add_argument("--status", action="store_true", help="Show pipeline status counts")
     args = parser.parse_args()
 
-    if not any([args.generate, args.review, args.publish, args.distill, args.status, args.graphics]):
+    if not any([args.generate, args.review, args.publish, args.distill, args.status, args.graphics, args.delete]):
         parser.print_help()
         return
 
@@ -180,6 +209,8 @@ def main():
         cmd_graphics()
     if args.publish:
         cmd_publish()
+    if args.delete:
+        cmd_delete(args.delete)
     if args.distill:
         cmd_distill()
 

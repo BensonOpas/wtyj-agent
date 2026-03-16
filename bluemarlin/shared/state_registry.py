@@ -1,5 +1,5 @@
 # bluemarlin/shared/state_registry.py
-# Last modified: Brief 095
+# Last modified: Brief 098
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
 import json
@@ -137,6 +137,14 @@ def _get_conn():
     )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN late_post_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN instagram_url TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     try:
@@ -633,7 +641,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url "
             "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
             (status, limit)
         ).fetchall()
@@ -641,7 +649,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url "
             "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
@@ -653,6 +661,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "visual_suggestion": r[5], "reasoning": r[6], "status": r[7],
             "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
             "published_at": r[11], "image_path": r[12],
+            "late_post_id": r[13], "instagram_url": r[14],
         }
         for r in rows
     ]
@@ -764,6 +773,19 @@ def set_draft_image_path(draft_id: int, image_path: str) -> bool:
     cur = conn.execute(
         "UPDATE content_drafts SET image_path = ? WHERE id = ?",
         (image_path, draft_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def set_draft_published_info(draft_id: int, late_post_id: str, instagram_url: str) -> bool:
+    """Store the Late post ID and Instagram URL after publishing."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET late_post_id = ?, instagram_url = ? WHERE id = ?",
+        (late_post_id, instagram_url, draft_id)
     )
     changed = cur.rowcount > 0
     conn.commit()

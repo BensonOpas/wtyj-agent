@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/social_publisher.py
 # Created: Brief 096
-# Last modified: Brief 096
+# Last modified: Brief 098
 # Purpose: Publishes content to Instagram via Late API SDK (getlate.dev).
 
 import os
@@ -91,3 +91,20 @@ def publish_to_instagram(caption: str, media_url: str, account_id: str,
     except Exception as e:
         bm_logger.log("late_publish_failed", error=str(e)[:200])
         return None
+
+
+def delete_post(late_post_id: str) -> bool:
+    """Delete a published post from Instagram via Late. Returns True on success."""
+    if not late_post_id:
+        bm_logger.log("late_delete_no_post_id")
+        return False
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        client.posts.delete(late_post_id)
+        bm_logger.log("late_post_deleted", post_id=late_post_id)
+        return True
+    except Exception as e:
+        bm_logger.log("late_delete_failed", post_id=late_post_id, error=str(e)[:200])
+        return False

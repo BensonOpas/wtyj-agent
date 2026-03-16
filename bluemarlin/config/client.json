@@ -296,5 +296,19 @@
       "logo_path": "",
       "font_path": "config/brand/Inter-Bold.ttf"
     }
+  },
+  "seasonal_calendar": {
+    "high_season": {"start_month": 12, "end_month": 4, "label": "High season — peak tourism, premium positioning"},
+    "low_season": {"start_month": 5, "end_month": 11, "label": "Low season — awareness building, occupancy support"},
+    "events": [
+      {"month": 1, "day": 1, "name": "New Year's Day"},
+      {"month": 2, "day": 1, "duration_days": 45, "name": "Carnival season", "note": "Biggest cultural event in Curaçao"},
+      {"month": 4, "day": 27, "name": "King's Day", "note": "Dutch national holiday, celebrated in Curaçao"},
+      {"month": 4, "day": 30, "name": "Dia di Rincon", "note": "Curaçao cultural celebration"},
+      {"month": 5, "day": 1, "name": "Labour Day"},
+      {"month": 7, "day": 2, "name": "Flag Day", "note": "Curaçao national flag day"},
+      {"month": 10, "day": 10, "name": "Curaçao Day", "note": "Autonomy day — national holiday"},
+      {"month": 12, "day": 25, "duration_days": 7, "name": "Christmas/New Year week", "note": "Peak bookings period"}
+    ]
   }
 }

@@ -771,3 +771,7 @@ Outcome: complete — 10/10 tests pass, 163/163 social regression pass
 Brief 097 — Graphics Overhaul
 Decision: Fixed three live-testing issues. (1) Bundled Inter Bold .ttf font (420KB, SIL license) with full Latin Extended support — ç, ñ, ü now render correctly. (2) Replaced flat solid background with vertical gradient (primary_color → gradient_bottom_color). (3) Increased text sizes from 54/42pt to 72/58/46pt, widened margins, repositioned text to upper 40% with 15% top breathing room. Added brand name ("BlueFinn Charters Curaçao") in muted text above thicker accent bar (12px, was 8). All config-driven via client.json brand_graphics section.
 Outcome: complete — 12/12 tests pass, 165/165 social regression pass
+
+Brief 098 — Seasonal Awareness + Post-Publication Control
+Decision: Two features in one brief. Part A: Added seasonal_calendar to client.json with Curaçao high/low season (Dec-Apr / May-Nov) and 8 events. New _build_seasonal_context() in content_agent.py determines current season via month wrap-around, finds upcoming events within 30 days (handles Dec→Jan year boundary), injected as === SEASONAL CONTEXT === in user prompt. Part B: Added late_post_id and instagram_url columns to content_drafts (ALTER TABLE). cmd_publish now stores both when publishing. Added delete_post() to social_publisher.py (Late SDK posts.delete). Added --delete CLI command to auto_poster.py.
+Outcome: complete — 10/10 tests pass, 175/175 social regression pass
