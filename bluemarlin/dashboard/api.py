@@ -37,6 +37,12 @@ class RejectRequest(BaseModel):
     reason: str
 
 
+class UpdateDraftRequest(BaseModel):
+    instagram_caption: str = None
+    facebook_caption: str = None
+    hashtags: list = None
+
+
 router = APIRouter(prefix="/dashboard/api", tags=["dashboard"])
 
 
@@ -84,6 +90,19 @@ async def get_draft(draft_id: int):
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
     return draft
+
+
+@router.put("/drafts/{draft_id}", dependencies=[Depends(_check_auth)])
+async def update_draft(draft_id: int, req: UpdateDraftRequest):
+    ok = state_registry.update_draft_content(
+        draft_id,
+        instagram_caption=req.instagram_caption,
+        facebook_caption=req.facebook_caption,
+        hashtags=req.hashtags,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="Draft not found or not in pending status")
+    return {"ok": True}
 
 
 @router.post("/drafts/generate", dependencies=[Depends(_check_auth)])

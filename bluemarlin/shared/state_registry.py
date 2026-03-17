@@ -699,6 +699,35 @@ def update_draft_status(draft_id: int, status: str,
     return changed
 
 
+def update_draft_content(draft_id: int, instagram_caption: str = None,
+                         facebook_caption: str = None, hashtags: list = None) -> bool:
+    """Update draft content fields. Only works on pending drafts.
+    Only updates non-None params. Returns True if row updated."""
+    sets = []
+    params = []
+    if instagram_caption is not None:
+        sets.append("instagram_caption = ?")
+        params.append(instagram_caption)
+    if facebook_caption is not None:
+        sets.append("facebook_caption = ?")
+        params.append(facebook_caption)
+    if hashtags is not None:
+        sets.append("hashtags_json = ?")
+        params.append(json.dumps(hashtags, ensure_ascii=False))
+    if not sets:
+        return False
+    params.append(draft_id)
+    conn = _get_conn()
+    cur = conn.execute(
+        f"UPDATE content_drafts SET {', '.join(sets)} WHERE id = ? AND status = 'pending'",
+        tuple(params)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def get_availability_summary(days_ahead: int = 7) -> list:
     """Get booking counts for all trip slots in the next N days.
     Returns list of {trip_key, date, departure_time, booked_guests, capacity, spots_remaining}.
