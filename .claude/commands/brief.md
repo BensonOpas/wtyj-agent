@@ -1,65 +1,45 @@
 ---
-You are in BRIEF WRITING MODE. Do not execute any code. Do not edit source files.
-For complex or ambiguous problems, use ultrathink to reason deeply before responding.
+Brief mode. Write the brief, review it, and if approved execute it end-to-end.
 
-On activation:
+## Writing the brief
+
 1. Read CLAUDE.md and briefs/system_state.md
-2. Read the Decision Log entry for this brief
-3. Read every file you will reference or instruct changes to
-4. Determine the next brief number by counting existing files in briefs/
-5. Write the brief to briefs/marina_brief_0xx_name.md using the mandatory template
-6. When written, automatically invoke the brief-reviewer agent
-7. If brief-reviewer flags discrepancies: patch the brief, invoke brief-reviewer again (one retry max)
-8. If approved: tell the user "Brief approved — ready to execute"
+2. Read every file you will reference or modify
+3. Determine the next brief number from existing files in briefs/
+4. Write to briefs/marina_brief_XXX_name.md using the template in CLAUDE.md
 
-Mandatory brief template:
+Test philosophy: a few basic "it works" tests + harder tests for edge cases,
+failure modes, and real behavioral checks. Number of tests is your judgment
+based on complexity. Tests should catch bugs, not just confirm types.
 
-# BRIEF 0XX — Title
-**Status:** Draft | **Files:** [list] | **Depends on:** [brief or none] | **Blocks:** [brief or none]
+## Review cycle
 
-## Context
-Current state and why this brief exists.
+5. Invoke the brief-reviewer agent automatically
+6. If flagged: patch and re-invoke (one retry max)
+7. If approved: continue to execution (do NOT wait for user approval)
 
-## Why This Approach
-What was considered, what was rejected, what tradeoff this carries.
+## Execution
 
-## Source Material
-Files read. Relevant excerpts.
+8. Read the brief completely before touching any file
+9. Read every file listed in the brief header
+10. Execute instructions exactly as written
+11. Run the tests. If they fail: fix and re-run in foreground
+12. Run the full social regression suite in background
+13. Write briefs/marina_output_XXX.md (what was done, test results, unexpected)
 
-## Instructions
-[Step by step for Claude Code executor]
+## Post-execution
 
-## Tests
-[Exact assertions, specific values not just types]
+14. Invoke the output-reviewer agent automatically
+15. If flagged: patch source + OUTPUT, re-invoke (one retry max)
+16. If approved:
+    a. Update system_state.md Decision Log (outcome: complete)
+    b. Append to briefs/marina_lessons.md
+    c. git add -A && git commit && git push
+17. End with a TLDR: what changed, what file, what it does now. Plain English.
 
-## Success Condition
+## Quick fix path
 
-## Rollback
-
-After brief is approved, remind the user: "Suggested: /compact before executing"
-
----
-
-## During execution — parallel test strategy
-
-When executing a brief, use background agents for testing:
-1. After completing all code changes, launch the test-runner agent in the background with the brief's specific test file(s)
-2. While tests run, begin writing the OUTPUT file skeleton (header, what was done, unexpected)
-3. If the brief has a regression suite, launch a second background test-runner for the full regression in parallel
-4. When test results arrive, fill in the test results section of the OUTPUT file
-5. If tests fail: stop OUTPUT writing, fix the code, re-run tests in foreground
-
-This saves wall-clock time on briefs with large test suites (50+ checks).
-
----
-
-## After execution and OUTPUT file is written
-
-1. Automatically invoke the output-reviewer agent
-2. If output-reviewer flags issues: patch the source files and OUTPUT file, then re-invoke (one retry max)
-3. If output-reviewer approves:
-   a. Update system_state.md Decision Log — change the brief's outcome from `pending` to `complete`
-   b. Append an entry to marina_lessons.md in briefs/ (create file if it doesn't exist):
-      - Format: `## Brief 0XX — Title` / `Date:` / one or two sentences on what worked, what was tricky, or what to watch for in future briefs
-   c. Run: `git add -A && git commit -m "Brief 0XX — title — N/N tests pass" && git push`
+If the user says "just fix it" or the change is a one-liner / config tweak
+with no architectural significance: skip the brief. Just make the change,
+test it, commit with a descriptive message, and TLDR.
 ---

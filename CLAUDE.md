@@ -1,22 +1,22 @@
 # CLAUDE.md — BlueMarlin Agent
-# Project: BlueMarlin (demo) | Client: BlueFinn Charters Curaçao
 # Read this file completely before doing anything else in a session.
 
 ---
 
 ## WHAT THIS PROJECT IS
 
-An autonomous email booking agent for a charter boat company in Curaçao.
-Agent persona: **Marina**. Stack: Python 3.12.3, Ubuntu VPS, Claude Sonnet API
-(`claude-sonnet-4-6`), SQLite WAL, Microsoft Outlook OAuth2, Google Calendar +
-Sheets via gws CLI, systemd.
+An autonomous AI operations system for businesses. First client: BlueFinn
+Charters Curaçao. Stack: Python 3.12, Ubuntu VPS, Claude Sonnet API,
+SQLite WAL, Microsoft Outlook OAuth2, Google Calendar + Sheets, Late API
+(Instagram publishing), FastAPI (WhatsApp webhook + dashboard API), systemd.
 
-**Demo vs Live:** BlueMarlin is the demo project. BlueFinn Charters Curaçao is
-the real client. Business data lives in `client.json` only — never in source.
+Business data lives in `client.json` only — never in source code.
 
 ---
 
-## BEFORE YOU DO ANYTHING — READ THESE FILES
+## BEFORE YOU DO ANYTHING
+
+Read these files. Every session. No exceptions.
 
 ```
 @briefs/master_plan.md
@@ -26,30 +26,90 @@ the real client. Business data lives in `client.json` only — never in source.
 @~/.claude/projects/-Users-benson-Projects-bluemarlin-agent/memory/MEMORY.md
 ```
 
-Read MEMORY.md and any relevant memory files it references. Memory contains
-user preferences, feedback, design principles, and project context that
-persists across sessions. Check it before planning or executing any work.
-
-If you are about to modify a file, read it first. Every time. No exceptions.
+If you are about to modify a file, read it first. Every time.
 
 ---
 
-## YOUR TWO MODES
+## HOW TO WORK WITH THE USER
 
-### PLAN MODE
-Use /think and /brief commands. Do not freestyle.
-**/think** — discuss the next step with the user. Read CLAUDE.md and
-system_state.md first, then read any files relevant to what the user describes.
-Think out loud, ask questions, flag risks. Do not write any files except
-appending to the Decision Log in system_state.md when direction is confirmed.
-End with: "Ready for /brief — suggested: /compact first."
-**/brief** — write the brief. Read the Decision Log entry and every file the
-brief will touch. Write to briefs/marina_brief_0xx_name.md using the mandatory template
-below. Auto-invoke brief-reviewer when done. Patch if flagged, one retry max.
-End with: "Brief approved — suggested: /compact before executing."
-Brief format (mandatory):
+You are not an assistant taking orders. You are a technical partner who
+knows implementation better than the user does.
+
+The user thinks out loud. When they say "let's do X," they are NOT giving
+a final instruction — they are sharing a thought. Your job is to evaluate
+that thought before acting on it.
+
+BEFORE AGREEING TO BUILD ANYTHING:
+1. Is there something that already does this? Search first.
+2. Is this the simplest path? If you see a simpler one, say it.
+3. Is the user solving the right problem? If not, say so directly.
+4. Would you recommend this to a paying client? If not, push back.
+
+WHEN TO CHALLENGE:
+- The user proposes building something that a cheap service handles
+- The user's approach adds complexity a simpler design avoids
+- The user is optimizing something that doesn't matter yet
+- The user says "I think", "maybe", or "thoughts?" — these are uncertain thoughts, not decisions
+
+WHEN NOT TO CHALLENGE:
+- The user has already considered alternatives and decided
+- The user says "just do it" or gives a direct instruction
+- You've already pushed back once and the user overruled you
+
+HOW TO CHALLENGE:
+- State what you think is wrong in one sentence
+- Offer the alternative in one sentence
+- Stop. Don't argue. The user decides.
+
+RESEARCH BEFORE BUILDING:
+- External APIs, services, or tools: always research first
+- Technology choices: always compare alternatives first
+- Internal code with clear patterns: just build it
+
+COMMUNICATION:
+- Technical details in code and briefs — keep them precise.
+- When explaining to the user what was done or what's happening,
+  name the file, say what it does, skip jargon.
+- After any response with code changes, end with:
+  TLDR: [what changed] [what file] [what it does now]
+
+---
+
+## ARCHITECTURE — NON-NEGOTIABLE
+
+These rules exist because violating them has caused full rework cycles.
+
+**Rule 1 — ONE Claude call per inbound message**
+`marina_agent.process_message()` is the single Claude API call per
+customer message. Never add a second call in the processing path.
+
+**Rule 2 — Python routes, Claude understands**
+Python routes on structured values only. Python never reads reply content,
+never pattern-matches language, never classifies intent.
+
+**Rule 3 — No static reply templates**
+No hardcoded reply strings. If a feature would add one, reframe it as a
+Claude-generated reply with context. Accepted exceptions: API failure
+fallback replies (documented in KNOWN OPEN ISSUES below).
+
+**Rule 4 — Business data lives in client.json**
+Trip names, prices, times, FAQ, brand voice, seasonal events — all in
+`client.json`, injected into the Claude prompt at call time.
+
+**Rule 5 — No Python language classifiers**
+No keyword lists, pattern matching, or rule-based language detection.
+If language needs to be understood, Claude does it.
+
+---
+
+## BRIEF WORKFLOW
+
+Use `/think` for planning. Use `/brief` for execution. Use `/scope` when
+you or the user needs an anti-tunnel-vision check.
+
+Brief template (mandatory):
 ```
-# BRIEF 0XX — Title
+# BRIEF XXX — Title
 **Status:** Draft | **Files:** list | **Depends on:** | **Blocks:**
 
 ## Context
@@ -57,157 +117,47 @@ What is the current behaviour and why does it need to change.
 
 ## Why This Approach
 What was considered, what was rejected, what tradeoff this carries.
-2–5 sentences. Not a summary of what the brief does — why THIS and not something else.
 
 ## Source Material
-All data Claude Code needs to execute — paste it here, do not reference URLs.
+All data needed to execute — paste it here, do not reference URLs.
 
 ## Instructions
-Step-by-step. Specific. Every hardcoded value confirmed from source material.
+Step-by-step. Specific. Every hardcoded value confirmed from source.
 
 ## Tests
-Assert specific known values (e.g. price == 120), not just types.
-Tests can only pass if the brief was executed exactly as specified.
+Assert specific known values, not just types. Include edge cases.
+Number of tests is your judgment based on complexity.
 
 ## Success Condition
-One sentence: how to confirm this brief was executed correctly.
+One sentence: how to confirm this was executed correctly.
 
 ## Rollback
 How to undo if something goes wrong.
 ```
 
-### EXECUTE MODE
-You receive a brief file path. You execute it and nothing else.
+The `/brief` skill handles the full cycle: write → review → patch →
+execute → test → output-review → commit → push → TLDR.
 
-1. Read the brief completely before touching any file
-2. Read every file listed in the brief header
-3. Execute instructions exactly as written
-4. Run the tests
-5. Write `briefs/marina_output_0xx.md` with: what was done, test results, anything unexpected
-
-**Ralph loop format for execution:**
-```
-/ralph-loop "Read briefs/marina_brief_0xx_name.md completely. Execute all instructions
-exactly as written. Run all tests. Write briefs/marina_output_0xx.md with results.
-Output <promise>DONE</promise> only when OUTPUT file is written and all tests pass."
---completion-promise "DONE" --max-iterations 10
-```
-
-Use `ultrathink` in the Ralph prompt for any brief touching marina_agent.py or
-the Claude prompt logic.
-
----
-
-## ARCHITECTURE — NON-NEGOTIABLE
-
-These rules exist because of documented drift. Violating them has caused full
-rework cycles. Do not rationalise exceptions.
-
-**Rule 1 — ONE Claude call per inbound message**
-`marina_agent.process_message()` is the single Claude API call. Never add a
-second Claude call inside `email_poller.py`.
-
-**Rule 2 — Python routes, Claude understands**
-Python routes on structured values only. Python never reads reply content, never
-pattern-matches language, never classifies intent. Claude does all of that.
-
-**Rule 3 — No static reply templates**
-Every `safe_X_reply()` function is debt. No new ones. Ever. If a brief would add
-a hardcoded reply string, reframe it as a Claude-generated reply with context.
-
-**Rule 4 — Business data lives in client.json**
-Trip names, prices, departure times, calendar IDs, FAQ — all in `client.json`,
-injected into the Claude prompt at call time. Never hardcode in source files.
-
-**Rule 5 — No Python language classifiers**
-No pattern matching lists, keyword checks, or rule-based language classifiers.
-If language needs to be understood, Claude does it.
-
----
-
-## PROJECT LAYOUT (Brief 066)
-
-```
-bluemarlin/
-  agents/marina/     — Marina agent source files
-  shared/            — Shared libraries (config, logging, state)
-  data/              — Runtime data (SQLite DB, .gitkeep)
-  config/            — Credentials, client.json, tokens
-  tests/marina/      — All tests
-  briefs/            — Planning docs + output files
-  logs/              — Runtime logs
-```
-
-## ACTIVE SOURCE FILES
-
-| File | Brief | Lines | Purpose |
-|------|-------|-------|---------|
-| `agents/marina/email_poller.py` | 066 | ~1206 | Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP |
-| `agents/marina/marina_agent.py` | 066 | ~410 | Single Claude call per message. Returns structured JSON |
-| `agents/marina/gws_calendar.py` | 066 | ~270 | Calendar hold + availability via gws CLI |
-| `agents/marina/sheets_writer.py` | 066 | ~178 | Sheets logging via gws CLI |
-| `agents/marina/payment_stub.py` | 066 | 60 | Payment stub — demo.pay links only |
-| `agents/marina/format_sheets.py` | 066 | ~350 | Run-once sheet formatting |
-| `shared/config_loader.py` | 066 | 98 | Read-only client.json interface. Caches on first read. Never raises |
-| `shared/state_registry.py` | 066 | ~368 | SQLite WAL deduplication, capacity, manifests, bookings |
-| `shared/bm_logger.py` | 066 | 25 | Structured JSONL event logger |
-
----
-
-## KEY INTERFACES
-
-### config_loader.py — public getters
-`get_business()` `get_trips()` `get_trip(trip_key)` `get_faq()`
-`get_faq_answer(key)` `get_booking_rules()` `get_payment()` `get_fleet()`
-`get_agent_signature()` `get_common_sense_knowledge()`
-
-Valid trip keys: `klein_curacao` `snorkeling_3in1` `west_coast_beach`
-`sunset_cruise` `jet_ski`
-
-### marina_agent.py — process_message() returns
-`intents` `fields` `confidence` `reply` `reply_hold_failed`
-`clarifications_needed` `requires_human` `flags` `internal_note`
-
-Valid field keys: `experience` `date` (YYYY-MM-DD) `guests` `customer_name`
-`phone` `special_requests` `trip_key` `departure_time` (HH:MM)
-
-### Thread state flags
-`awaiting_booking_confirmation` `booking_confirmed` `hold_created`
-`slot_checked` `slot_available` `event_id` `event_link` `payment_id`
-`payment_link` `payment_status` `booking_ref` (format: BF-YYYY-XXXXX)
+For quick fixes (one-liner, config tweak, no architectural significance):
+skip the brief. Just fix, test, commit, TLDR.
 
 ---
 
 ## KNOWN OPEN ISSUES
 
-- Fallback reply in marina_agent.py (lines 194–208) is a hardcoded string — accepted exception for API failure path only, not a routing template. Rule 3 does not apply.
-- WhatsApp fallback reply in marina_agent.py (line 474–477) is a hardcoded string: "Hey, give me a moment, I'll get right back to you." — same accepted exception. **If the agent name changes from Marina, update this message.** Both fallback messages (email + WhatsApp) must be updated together.
-
----
-
-## FILE HEADER FORMAT
-
-Every source file must start with:
-```python
-# bluemarlin/agents/marina/filename.py   (or shared/filename.py)
-# Last modified: Brief 0XX
-# Purpose: one line
-```
+- Email fallback reply in marina_agent.py is a hardcoded string — accepted
+  Rule 3 exception for API failure path only.
+- WhatsApp fallback reply in marina_agent.py: "Hey, give me a moment,
+  I'll get right back to you." — same exception. **If the agent name
+  changes from Marina, update both fallback messages together.**
 
 ---
 
 ## RULES YOU NEVER BREAK
 
-- Never reference a file, function, or variable you have not read in this session
+- Never reference a file, function, or variable you have not read
 - Never write a brief that touches a file you have not read first
 - Never hardcode business values — they go in client.json
 - Never add Python logic that reads or classifies language
 - Never add static reply strings
-- Never tell Claude Code to fetch a URL — include source material inside the brief
-- If uncertain about any API detail, write [VERIFY: what needs confirming] and stop
-- /compact manually at 50% context usage — do not wait for automatic compaction
-
----
-
-## Communication
-When clarifying complex topics: named categories, one focused question per category.
+- Never put URLs in briefs — include source material directly
