@@ -472,7 +472,10 @@ def process_message(
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",
     }
     if channel == "whatsapp":
-        fallback["reply"] = ""
+        # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
+        # If agent name changes from "Marina", update this message.
+        # See also: email fallback above (lines 459-473) — same exception.
+        fallback["reply"] = "Hey, give me a moment, I'll get right back to you."
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

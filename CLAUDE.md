@@ -181,6 +181,7 @@ Valid field keys: `experience` `date` (YYYY-MM-DD) `guests` `customer_name`
 ## KNOWN OPEN ISSUES
 
 - Fallback reply in marina_agent.py (lines 194–208) is a hardcoded string — accepted exception for API failure path only, not a routing template. Rule 3 does not apply.
+- WhatsApp fallback reply in marina_agent.py (line 474–477) is a hardcoded string: "Hey, give me a moment, I'll get right back to you." — same accepted exception. **If the agent name changes from Marina, update this message.** Both fallback messages (email + WhatsApp) must be updated together.
 
 ---
 
