@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/social_agent.py
 # Created: Brief 068
-# Last modified: Brief 091
+# Last modified: Brief 100
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
 import re
@@ -26,9 +26,10 @@ _BOOKING_FLAGS_TO_RESET = {
     "slot_checked", "slot_available", "spots_remaining", "trip_capacity",
     "awaiting_booking_confirmation",
     "hold_trip_key", "hold_date", "hold_departure_time",
+    "awaiting_escalation_email", "needs_escalation_email",
 }
 
-_PERSISTENT_FIELDS = {"customer_name", "phone"}
+_PERSISTENT_FIELDS = {"customer_name", "phone", "email"}
 
 _MAX_REPLIES_PER_HOUR = 50
 _REPLY_WINDOW_SECONDS = 3600
@@ -449,7 +450,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 _ck_guests,
                 avail.get("capacity", 20),
                 customer_name=fields.get("customer_name", ""),
-                customer_email=phone,
+                customer_email=fields.get("email") or phone,
             )
             if hold_id is not None:
                 flags["hold_id"] = hold_id
@@ -534,6 +535,20 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                       relay_question=relay_question, relay_token=relay_token)
         _skip_booking = True
 
+    # Step 7.5: Awaiting escalation email — email provided, now fire escalation
+    if flags.get("awaiting_escalation_email") and fields.get("email"):
+        flags.pop("awaiting_escalation_email", None)
+        flags.pop("needs_escalation_email", None)
+        result["requires_human"] = True
+        bm_logger.log("whatsapp_escalation_email_received", phone=phone,
+                      email=fields.get("email", "")[:50])
+
+    # Step 7.55: Needs escalation email — hold escalation, ask for email
+    if not _skip_booking and result.get("flags", {}).get("needs_escalation_email"):
+        flags["awaiting_escalation_email"] = True
+        reply_text = result["reply"]
+        _skip_booking = True
+
     # Step 7.6: Full escalation — requires_human, holding reply to customer
     if not _skip_booking and result.get("requires_human"):
         # Cancel any soft hold (same pattern as semi-escalation — capacity leak prevention)
@@ -576,10 +591,12 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _esc_subject = (
             f"[ESCALATION] {_esc_ref} - {_cname} "
             f"(WhatsApp: {phone}) - {_esc_intents}")
+        _customer_email = fields.get("email", "")
         _esc_body = (
             f"=== CUSTOMER ===\n"
             f"WhatsApp: {phone}\n"
-            f"Name: {_cname}\n\n"
+            f"Name: {_cname}\n"
+            f"Email: {_customer_email or '(not provided)'}\n\n"
             f"=== CHAT LOG ===\n{_esc_chat_log}\n\n"
             f"=== BOOKING FIELDS ===\n"
             f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n"
@@ -686,7 +703,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 # Save booking for cross-thread memory
                 state_registry.save_booking(
                     booking_ref, fields, flags,
-                    customer_email=phone,
+                    customer_email=fields.get("email") or phone,
                 )
 
     # Step 9: Strip remaining placeholders (safety net)

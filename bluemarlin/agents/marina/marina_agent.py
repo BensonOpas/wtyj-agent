@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 091
+# Last modified: Brief 100
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -151,6 +151,12 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             "  If they ask about something you don't cover, briefly acknowledge it and\n"
             "  mention what you do offer. Keep it natural and varied.\n"
             "\n"
+            "EMAIL:\n"
+            "- When collecting booking details, also ask for the customer's email\n"
+            "- It's needed for the booking confirmation\n"
+            "- Ask naturally: 'And your email for the confirmation?'\n"
+            "- If they decline, proceed without it\n"
+            "\n"
             "GOOD REPLIES (tone reference, do not copy content or values):\n"
             "\"We do a few different boat trips plus jet ski. Any of those sound good?\"\n"
             "\n"
@@ -220,7 +226,7 @@ LANGUAGE RULE: Identify the reply language by reading the body text of the inbou
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find (experience,
-date, guests, trip_key, departure_time, customer_name, phone, special_requests).
+date, guests, trip_key, departure_time, customer_name, phone, email, special_requests).
 Python handles all booking validation, state management, and summary generation.
 If you receive an ACTION instruction below, follow it exactly.
 When no ACTION is given, reply naturally — ask for any missing required fields
@@ -242,16 +248,24 @@ will replace it with the real reference number after the hold is confirmed.
 Example: "Your booking reference is [BOOKING_REF]."
 
 ESCALATION BEHAVIOUR:
-When the intent is complaint, refund request, or cancellation, set requires_human
-to true. Your reply MUST:
+When the intent is complaint, refund request, or cancellation:
+
+EMAIL CHANNEL: Set requires_human to true. Your reply MUST:
 - Acknowledge what the customer said warmly and with genuine empathy
-- Tell them exactly: "I've passed this along to our customer care team.
-  You can expect an email from info@bluefinncharters.com shortly —
-  they'll take great care of you."
-- Do NOT ask for booking details, reference numbers, dates, or
-  any other information. The crew will handle that.
-- Do NOT attempt to resolve the issue or make promises about outcomes.
+- Tell them the team will follow up via email
+- Do NOT ask for booking details. The crew will handle that.
 - Sign off warmly.
+
+WHATSAPP CHANNEL: Check if an email address is in the collected fields.
+- IF email IS in fields: set requires_human to true. Acknowledge warmly
+  and tell them the team will reach out at their email.
+- IF email is NOT in fields: do NOT set requires_human yet. Instead:
+  - Acknowledge warmly
+  - Ask for their email so the team can follow up
+  - Set needs_escalation_email to true in flags
+  - Do NOT promise an email will come yet
+
+In both cases: do NOT ask for booking details, do NOT attempt to resolve.
 
 CONTACT INFO RULE: info@bluefinncharters.com and the business phone number
 are ONLY for the escalation reply above (complaints, refunds, cancellations).
@@ -302,6 +316,7 @@ The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] 
       field entirely. Never infer a guest count from context or business rules.
     customer_name: customer's name
     phone: customer's phone number
+    email: customer's email address — only if explicitly provided
     special_requests: forward-looking preferences only
     trip_key: exact key from the trips list. Match the customer's wording to one of these keys:
 {_build_trip_alias_text()}
@@ -312,7 +327,7 @@ The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] 
   "reply_hold_failed": "<optional — write ONLY when setting booking_confirmed to true. Apologetic message if the slot is unavailable, without [PAYMENT_LINK].>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if group of 15 or more guests, complaint with no booking context, or explicit request to speak to a human — otherwise false>,
-  "flags": {{"booking_confirmed": <true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the trip has age-based pricing — omit or false otherwise>}},
+  "flags": {{"booking_confirmed": <true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the trip has age-based pricing — omit or false otherwise>, "needs_escalation_email": <true when a WhatsApp escalation needs the customer's email before proceeding — omit or false otherwise>}},
   "semi_escalation": <true only when the customer asks a specific unanswerable question — NOT for complaints or cancellations — omit or false otherwise>,
   "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
   "internal_note": "<one sentence for the operator log — never shown to the customer>"

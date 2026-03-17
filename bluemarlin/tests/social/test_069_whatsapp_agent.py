@@ -42,10 +42,11 @@ def test_system_prompt_whatsapp_style():
 
 
 def test_system_prompt_email_default():
-    """Default (email) system prompt has agent signature, no WHATSAPP."""
+    """Default (email) system prompt has agent signature and email writing style."""
     prompt = _build_system_prompt({})
     assert "AGENT SIGNATURE" in prompt
-    assert "WHATSAPP" not in prompt
+    # Email prompt should NOT have WhatsApp-specific writing style
+    assert "WRITING STYLE — WHATSAPP" not in prompt
 
 
 def test_user_prompt_whatsapp_no_subject():
@@ -101,12 +102,12 @@ def test_process_message_whatsapp_success(mock_cls):
 
 
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
-def test_process_message_whatsapp_failure_empty_reply(mock_cls):
-    """WhatsApp API failure returns empty reply (silence > canned response)."""
+def test_process_message_whatsapp_failure_fallback_reply(mock_cls):
+    """WhatsApp API failure returns a fallback reply (not silence)."""
     mock_cls.return_value.messages.create.side_effect = Exception("API down")
     result = process_message("5991234567", "", "Hello", {}, {},
                               channel="whatsapp")
-    assert result["reply"] == ""
+    assert "give me a moment" in result["reply"]
 
 
 # --- state_registry conversation history tests ---
