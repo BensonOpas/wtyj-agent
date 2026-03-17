@@ -5,11 +5,18 @@ import json
 import os
 import sys
 import tempfile
+from unittest.mock import patch
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
+
 from shared import state_registry
+from fastapi.testclient import TestClient
+from agents.social.webhook_server import app
+
+_client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
@@ -97,3 +104,35 @@ def test_update_draft_content_all_fields():
     assert draft["instagram_caption"] == "IG2"
     assert draft["facebook_caption"] == "FB2"
     assert draft["hashtags"] == ["#a", "#b"]
+
+
+# --- API endpoint tests ---
+
+def _login():
+    resp = _client.post("/dashboard/api/login", json={"password": "testpass"})
+    return resp.json()["token"]
+
+
+def test_api_update_draft_endpoint():
+    token = _login()
+    with patch.object(state_registry, "update_draft_content", return_value=True) as mock:
+        resp = _client.put(
+            "/dashboard/api/drafts/1",
+            json={"instagram_caption": "Edited"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    mock.assert_called_once_with(1, instagram_caption="Edited", facebook_caption=None, hashtags=None)
+
+
+def test_api_update_draft_not_pending():
+    token = _login()
+    with patch.object(state_registry, "update_draft_content", return_value=False):
+        resp = _client.put(
+            "/dashboard/api/drafts/1",
+            json={"instagram_caption": "Nope"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 400
+    assert "not in pending" in resp.json()["detail"].lower()
