@@ -174,12 +174,27 @@ async def publish_draft(draft_id: int):
     if draft["status"] != "approved":
         raise HTTPException(status_code=400, detail="Draft must be approved before publishing")
 
-    # Auto-generate graphic if missing
+    # Auto-image: try photo library first, then AI generation, then text card fallback
     image_path = draft.get("image_path", "")
     if not image_path or not os.path.exists(image_path):
-        image_path = graphics_engine.generate_graphic(draft_id)
+        photo = _match_photo_to_draft(draft)
+        if photo:
+            photo_path = os.path.join(_PHOTOS_DIR, photo["filename"])
+            image_path = graphics_engine.generate_composite(draft_id, photo_path=photo_path, mode="photo_only")
+            if image_path:
+                state_registry.set_draft_photo_id(draft_id, photo["id"])
+                state_registry.increment_photo_used_count(photo["id"])
+        if not image_path or not os.path.exists(image_path):
+            # Try AI generation
+            prompt = draft.get("visual_suggestion") or draft.get("instagram_caption") or ""
+            ai_path = _generate_ai_image(prompt, draft_id)
+            if ai_path:
+                image_path = graphics_engine.generate_composite(draft_id, photo_path=ai_path, mode="photo_only")
+        if not image_path or not os.path.exists(image_path):
+            # Final fallback: branded text card
+            image_path = graphics_engine.generate_graphic(draft_id)
         if not image_path:
-            raise HTTPException(status_code=500, detail="Could not generate graphic")
+            raise HTTPException(status_code=500, detail="Could not generate any image")
 
     # Get Instagram account
     account_id = social_publisher.get_instagram_account_id()
@@ -256,28 +271,80 @@ async def compose_draft(draft_id: int, req: ComposeRequest):
 
 
 def _generate_ai_image(prompt: str, draft_id: int) -> str:
-    """Generate an image using Google Imagen API. Returns file path or empty string."""
-    api_key = os.environ.get("GOOGLE_AI_API_KEY", "")
+    """Generate an image using Flux 2 Pro API. Returns file path or empty string."""
+    import time as _time
+    api_key = os.environ.get("BFL_API_KEY", "")
     if not api_key:
+        bm_logger.log("ai_image_no_api_key")
         return ""
     try:
-        import google.genai as genai
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_images(
-            model="imagen-3.0-generate-002",
-            prompt=prompt,
-            config={"number_of_images": 1},
+        # Submit generation request
+        resp = http_requests.post(
+            "https://api.bfl.ai/v1/flux-2-pro-preview",
+            headers={"accept": "application/json", "x-key": api_key, "Content-Type": "application/json"},
+            json={"prompt": prompt, "width": 1080, "height": 1350},
         )
-        if not response.generated_images:
+        if resp.status_code != 200:
+            bm_logger.log("ai_image_submit_failed", status=resp.status_code)
             return ""
-        img_bytes = response.generated_images[0].image.image_bytes
-        path = os.path.join(_PHOTOS_DIR, f"ai_draft_{draft_id}.jpg")
-        with open(path, "wb") as f:
-            f.write(img_bytes)
-        return path
+        data = resp.json()
+        polling_url = data.get("polling_url", "")
+        if not polling_url:
+            return ""
+        # Poll for result (max 60 seconds)
+        for _ in range(120):
+            _time.sleep(0.5)
+            result = http_requests.get(
+                polling_url,
+                headers={"accept": "application/json", "x-key": api_key},
+            ).json()
+            status = result.get("status", "")
+            if status == "Ready":
+                image_url = result.get("result", {}).get("sample", "")
+                if not image_url:
+                    return ""
+                # Download the image
+                img_resp = http_requests.get(image_url)
+                if img_resp.status_code != 200:
+                    return ""
+                path = os.path.join(_PHOTOS_DIR, f"ai_draft_{draft_id}.jpg")
+                with open(path, "wb") as f:
+                    f.write(img_resp.content)
+                bm_logger.log("ai_image_generated", draft_id=draft_id, path=path)
+                return path
+            elif status in ("Error", "Failed"):
+                bm_logger.log("ai_image_generation_failed", result=str(result)[:200])
+                return ""
+        bm_logger.log("ai_image_timeout", draft_id=draft_id)
+        return ""
     except Exception as exc:
         bm_logger.log("ai_image_generation_failed", error=str(exc)[:200])
         return ""
+
+
+def _match_photo_to_draft(draft: dict):
+    """Find the best matching photo from the library for a draft. Returns photo dict or None."""
+    caption = (draft.get("instagram_caption") or "").lower()
+    trips = config_loader.get_trips()
+    # Try to match by trip name in caption
+    for trip_key, trip_data in trips.items():
+        display = trip_data.get("display_name", "").lower()
+        if display and display in caption:
+            photos = state_registry.get_photos(trip_key=trip_key, limit=50)
+            if photos:
+                photos.sort(key=lambda p: p["used_count"])
+                return photos[0]
+        if trip_key.replace("_", " ") in caption:
+            photos = state_registry.get_photos(trip_key=trip_key, limit=50)
+            if photos:
+                photos.sort(key=lambda p: p["used_count"])
+                return photos[0]
+    # No trip match — pick any photo, least used
+    all_photos = state_registry.get_photos(limit=50)
+    if all_photos:
+        all_photos.sort(key=lambda p: p["used_count"])
+        return all_photos[0]
+    return None
 
 
 @router.delete("/drafts/{draft_id}", dependencies=[Depends(_check_auth)])
