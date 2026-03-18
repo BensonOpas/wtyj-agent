@@ -289,11 +289,11 @@ async def delete_draft(draft_id: int):
     if draft["status"] != "published":
         raise HTTPException(status_code=400, detail="Only published drafts can be deleted from Instagram")
     late_id = draft.get("late_post_id", "")
+    ig_deleted = False
     if late_id:
-        if not social_publisher.delete_post(late_id):
-            raise HTTPException(status_code=500, detail="Delete failed")
+        ig_deleted = social_publisher.delete_post(late_id)
     state_registry.update_draft_status(draft_id, "deleted")
-    return {"ok": True}
+    return {"ok": True, "instagram_deleted": ig_deleted}
 
 
 @router.get("/drafts/{draft_id}/image", dependencies=[Depends(_check_auth)])
