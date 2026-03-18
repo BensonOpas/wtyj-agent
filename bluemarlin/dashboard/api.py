@@ -271,52 +271,50 @@ async def compose_draft(draft_id: int, req: ComposeRequest):
 
 
 def _generate_ai_image(prompt: str, draft_id: int) -> str:
-    """Generate an image using Flux 2 Pro API. Returns file path or empty string."""
-    import time as _time
-    api_key = os.environ.get("BFL_API_KEY", "")
+    """Generate an image using OpenAI GPT Image 1.5 API. Returns file path or empty string."""
+    import base64 as _b64
+    api_key = os.environ.get("OPENAI_API", "")
     if not api_key:
         bm_logger.log("ai_image_no_api_key")
         return ""
     try:
-        # Submit generation request
         resp = http_requests.post(
-            "https://api.bfl.ai/v1/flux-2-pro-preview",
-            headers={"accept": "application/json", "x-key": api_key, "Content-Type": "application/json"},
-            json={"prompt": prompt, "width": 1080, "height": 1350},
+            "https://api.openai.com/v1/images/generations",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-image-1",
+                "prompt": prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "quality": "medium",
+            },
         )
         if resp.status_code != 200:
-            bm_logger.log("ai_image_submit_failed", status=resp.status_code)
+            bm_logger.log("ai_image_api_error", status=resp.status_code, body=resp.text[:200])
             return ""
         data = resp.json()
-        polling_url = data.get("polling_url", "")
-        if not polling_url:
-            return ""
-        # Poll for result (max 60 seconds)
-        for _ in range(120):
-            _time.sleep(0.5)
-            result = http_requests.get(
-                polling_url,
-                headers={"accept": "application/json", "x-key": api_key},
-            ).json()
-            status = result.get("status", "")
-            if status == "Ready":
-                image_url = result.get("result", {}).get("sample", "")
-                if not image_url:
-                    return ""
-                # Download the image
+        b64_data = data.get("data", [{}])[0].get("b64_json", "")
+        if not b64_data:
+            # Try URL format
+            image_url = data.get("data", [{}])[0].get("url", "")
+            if image_url:
                 img_resp = http_requests.get(image_url)
                 if img_resp.status_code != 200:
                     return ""
-                path = os.path.join(_PHOTOS_DIR, f"ai_draft_{draft_id}.jpg")
-                with open(path, "wb") as f:
-                    f.write(img_resp.content)
-                bm_logger.log("ai_image_generated", draft_id=draft_id, path=path)
-                return path
-            elif status in ("Error", "Failed"):
-                bm_logger.log("ai_image_generation_failed", result=str(result)[:200])
+                img_bytes = img_resp.content
+            else:
                 return ""
-        bm_logger.log("ai_image_timeout", draft_id=draft_id)
-        return ""
+        else:
+            img_bytes = _b64.b64decode(b64_data)
+        path = os.path.join(_PHOTOS_DIR, f"ai_draft_{draft_id}.jpg")
+        # Convert to JPEG via Pillow (API may return PNG)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img.save(path, "JPEG", quality=90)
+        bm_logger.log("ai_image_generated", draft_id=draft_id, path=path)
+        return path
     except Exception as exc:
         bm_logger.log("ai_image_generation_failed", error=str(exc)[:200])
         return ""
