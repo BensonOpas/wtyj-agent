@@ -174,6 +174,10 @@ def _get_conn():
     except sqlite3.OperationalError:
         pass
     try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN photo_id INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
         conn.execute("ALTER TABLE trip_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
@@ -667,7 +671,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id "
             "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
             (status, limit)
         ).fetchall()
@@ -675,7 +679,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id "
             "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
@@ -688,6 +692,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
             "published_at": r[11], "image_path": r[12],
             "late_post_id": r[13], "instagram_url": r[14],
+            "photo_id": r[15] if len(r) > 15 else 0,
         }
         for r in rows
     ]
@@ -912,6 +917,30 @@ def get_photo_stats() -> dict:
     ).fetchall()
     conn.close()
     return {"total": total, "by_trip": {r[0]: r[1] for r in rows}}
+
+
+def set_draft_photo_id(draft_id: int, photo_id: int) -> bool:
+    """Set the photo_id on a content draft."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET photo_id = ? WHERE id = ?",
+        (photo_id, draft_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def increment_photo_used_count(photo_id: int) -> None:
+    """Increment the used_count on a photo."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE photo_library SET used_count = used_count + 1 WHERE id = ?",
+        (photo_id,)
+    )
+    conn.commit()
+    conn.close()
 
 
 # --- OAuth Tokens ---

@@ -87,6 +87,114 @@ def _draw_wrapped_text(draw, text: str, font, text_color: tuple,
         draw.text((line_x, start_y + i * line_height), line, fill=text_color, font=font)
 
 
+def _cover_crop(img, target_w, target_h):
+    """Resize image to cover target dimensions, center-crop to exact size."""
+    scale = max(target_w / img.width, target_h / img.height)
+    img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+    left = (img.width - target_w) // 2
+    top = (img.height - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def generate_composite(draft_id: int, photo_path: str = "", mode: str = "photo_text") -> str:
+    """Generate a composed image for a content draft.
+    Modes: photo_text (photo + text overlay), photo_only (photo + watermark), text_card (gradient + text).
+    Returns output file path or empty string on failure."""
+    drafts = state_registry.get_content_drafts()
+    draft = next((d for d in drafts if d["id"] == draft_id), None)
+    if not draft:
+        bm_logger.log("composite_draft_not_found", draft_id=draft_id)
+        return ""
+
+    brand = _load_brand_config()
+    caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+
+    if mode == "text_card" or not photo_path or not os.path.exists(photo_path):
+        # Fall back to existing gradient text card
+        return generate_graphic(draft_id)
+
+    # Load and crop photo
+    try:
+        photo = Image.open(photo_path).convert("RGB")
+    except Exception:
+        bm_logger.log("composite_photo_load_failed", path=photo_path)
+        return generate_graphic(draft_id)
+
+    img = _cover_crop(photo, _IMG_WIDTH, _IMG_HEIGHT)
+    draw = ImageDraw.Draw(img)
+
+    if mode == "photo_only":
+        # Just add a small brand watermark bottom-right
+        business = config_loader.get_business()
+        brand_name = business.get("name", "")
+        if brand_name:
+            wm_font = _load_font(brand["font_path"], 18)
+            bbox = draw.textbbox((0, 0), brand_name, font=wm_font)
+            wm_w = bbox[2] - bbox[0]
+            wm_x = _IMG_WIDTH - wm_w - 30
+            wm_y = _IMG_HEIGHT - 40
+            # Semi-transparent white watermark via shadow
+            draw.text((wm_x + 1, wm_y + 1), brand_name, fill=(0, 0, 0, 128), font=wm_font)
+            draw.text((wm_x, wm_y), brand_name, fill=(255, 255, 255, 200), font=wm_font)
+
+    elif mode == "photo_text":
+        # Dark gradient overlay on lower 40%
+        overlay = Image.new("RGBA", (_IMG_WIDTH, _IMG_HEIGHT), (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        start_y = int(_IMG_HEIGHT * 0.6)
+        for y in range(start_y, _IMG_HEIGHT):
+            alpha = int(180 * ((y - start_y) / (_IMG_HEIGHT - start_y)))
+            overlay_draw.line([(0, y), (_IMG_WIDTH, y)], fill=(0, 0, 0, alpha))
+        img = img.convert("RGBA")
+        img = Image.alpha_composite(img, overlay)
+        img = img.convert("RGB")
+        draw = ImageDraw.Draw(img)
+
+        # Headline text in the overlay area
+        headline = _extract_headline(caption)
+        if headline:
+            if len(headline) < 60:
+                font_size = 58
+            elif len(headline) < 100:
+                font_size = 46
+            else:
+                font_size = 38
+            font = _load_font(brand["font_path"], font_size)
+            margin = 60
+            text_area_y = int(_IMG_HEIGHT * 0.62)
+            text_area_height = int(_IMG_HEIGHT * 0.30)
+            _draw_wrapped_text(
+                draw, headline, font, (255, 255, 255),
+                margin, text_area_y, _IMG_WIDTH - 2 * margin, text_area_height,
+                font_size=font_size
+            )
+
+        # Brand name bottom-right
+        business = config_loader.get_business()
+        brand_name = business.get("name", "")
+        if brand_name:
+            brand_font = _load_font(brand["font_path"], 20)
+            bbox = draw.textbbox((0, 0), brand_name, font=brand_font)
+            name_w = bbox[2] - bbox[0]
+            draw.text((_IMG_WIDTH - name_w - 30, _IMG_HEIGHT - 45),
+                      brand_name, fill=(255, 255, 255, 180), font=brand_font)
+
+        # Accent bar at bottom
+        bar_height = 8
+        draw.rectangle(
+            [0, _IMG_HEIGHT - bar_height, _IMG_WIDTH, _IMG_HEIGHT],
+            fill=brand["accent_color"]
+        )
+
+    # Save
+    os.makedirs(_GRAPHICS_DIR, exist_ok=True)
+    output_path = os.path.join(_GRAPHICS_DIR, f"draft_{draft_id}.jpg")
+    img.save(output_path, "JPEG", quality=_QUALITY)
+    state_registry.set_draft_image_path(draft_id, output_path)
+    bm_logger.log("composite_generated", draft_id=draft_id, mode=mode, path=output_path)
+    return output_path
+
+
 def generate_graphic(draft_id: int) -> str:
     """Generate a branded graphic for a content draft.
     Returns the output file path, or empty string on failure."""

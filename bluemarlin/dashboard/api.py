@@ -57,6 +57,11 @@ class PhotoUpdateRequest(BaseModel):
     trip_key: str = None
 
 
+class ComposeRequest(BaseModel):
+    mode: str  # "photo_text", "photo_only", "ai_generate", "text_card"
+    photo_id: int = 0
+
+
 _PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "photos")
 os.makedirs(_PHOTOS_DIR, exist_ok=True)
 
@@ -210,6 +215,69 @@ async def generate_graphic_for_draft(draft_id: int):
     if not path:
         raise HTTPException(status_code=400, detail="Could not generate graphic (no caption?)")
     return {"ok": True, "image_path": path}
+
+
+@router.post("/drafts/{draft_id}/compose", dependencies=[Depends(_check_auth)])
+async def compose_draft(draft_id: int, req: ComposeRequest):
+    """Create the visual for a draft. Modes: photo_text, photo_only, ai_generate, text_card."""
+    drafts = state_registry.get_content_drafts()
+    draft = next((d for d in drafts if d["id"] == draft_id), None)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    ai_generated = False
+    photo_path = ""
+
+    if req.mode in ("photo_text", "photo_only"):
+        if not req.photo_id:
+            raise HTTPException(status_code=400, detail="photo_id required for photo modes")
+        photo = state_registry.get_photo_by_id(req.photo_id)
+        if not photo:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        photo_path = os.path.join(_PHOTOS_DIR, photo["filename"])
+        state_registry.set_draft_photo_id(draft_id, req.photo_id)
+        state_registry.increment_photo_used_count(req.photo_id)
+
+    elif req.mode == "ai_generate":
+        prompt = draft.get("visual_suggestion") or draft.get("instagram_caption") or ""
+        if not prompt:
+            raise HTTPException(status_code=400, detail="No visual suggestion or caption to generate from")
+        photo_path = _generate_ai_image(prompt, draft_id)
+        if not photo_path:
+            raise HTTPException(status_code=500, detail="AI image generation failed — check API key configuration")
+        ai_generated = True
+
+    # Generate the composed image
+    path = graphics_engine.generate_composite(draft_id, photo_path=photo_path, mode=req.mode if req.mode != "ai_generate" else "photo_text")
+    if not path:
+        raise HTTPException(status_code=500, detail="Image composition failed")
+
+    return {"ok": True, "image_path": path, "ai_generated": ai_generated}
+
+
+def _generate_ai_image(prompt: str, draft_id: int) -> str:
+    """Generate an image using Google Imagen API. Returns file path or empty string."""
+    api_key = os.environ.get("GOOGLE_AI_API_KEY", "")
+    if not api_key:
+        return ""
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_images(
+            model="imagen-3.0-generate-002",
+            prompt=prompt,
+            config={"number_of_images": 1},
+        )
+        if not response.generated_images:
+            return ""
+        img_bytes = response.generated_images[0].image.image_bytes
+        path = os.path.join(_PHOTOS_DIR, f"ai_draft_{draft_id}.jpg")
+        with open(path, "wb") as f:
+            f.write(img_bytes)
+        return path
+    except Exception as exc:
+        bm_logger.log("ai_image_generation_failed", error=str(exc)[:200])
+        return ""
 
 
 @router.delete("/drafts/{draft_id}", dependencies=[Depends(_check_auth)])
