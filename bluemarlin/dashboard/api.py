@@ -289,10 +289,9 @@ async def delete_draft(draft_id: int):
     if draft["status"] != "published":
         raise HTTPException(status_code=400, detail="Only published drafts can be deleted from Instagram")
     late_id = draft.get("late_post_id", "")
-    if not late_id:
-        raise HTTPException(status_code=400, detail="No Late post ID — cannot delete")
-    if not social_publisher.delete_post(late_id):
-        raise HTTPException(status_code=500, detail="Delete failed")
+    if late_id:
+        if not social_publisher.delete_post(late_id):
+            raise HTTPException(status_code=500, detail="Delete failed")
     state_registry.update_draft_status(draft_id, "deleted")
     return {"ok": True}
 
