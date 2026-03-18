@@ -3,11 +3,13 @@
 # Last modified: Brief 102
 # Purpose: REST API endpoints for the operator dashboard.
 
+import io
 import os
 import secrets
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
 from agents.social import content_agent, social_publisher, graphics_engine
@@ -41,6 +43,30 @@ class UpdateDraftRequest(BaseModel):
     instagram_caption: str = None
     facebook_caption: str = None
     hashtags: list = None
+
+
+class PhotoUpdateRequest(BaseModel):
+    tags: list[str] = None
+    trip_key: str = None
+
+
+_PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "photos")
+os.makedirs(_PHOTOS_DIR, exist_ok=True)
+
+
+def _process_upload(file_bytes: bytes, photo_id: int) -> tuple:
+    """Process uploaded image: convert to RGB JPEG, resize if >1080px wide.
+    Returns (filename, width, height, file_size_bytes)."""
+    img = Image.open(io.BytesIO(file_bytes))
+    img = img.convert("RGB")
+    if img.width > 1080:
+        ratio = 1080 / img.width
+        img = img.resize((1080, int(img.height * ratio)), Image.LANCZOS)
+    filename = f"photo_{photo_id}_{secrets.token_hex(4)}.jpg"
+    path = os.path.join(_PHOTOS_DIR, filename)
+    img.save(path, "JPEG", quality=85)
+    file_size = os.path.getsize(path)
+    return filename, img.width, img.height, file_size
 
 
 router = APIRouter(prefix="/dashboard/api", tags=["dashboard"])
@@ -240,3 +266,73 @@ async def get_availability(days: int = 7):
 async def get_config():
     from agents.social.content_agent import _build_client_context
     return {"context": _build_client_context()}
+
+
+# --- Photos ---
+
+@router.post("/photos/upload", dependencies=[Depends(_check_auth)])
+async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), trip_key: str = Form("")):
+    file_bytes = await file.read()
+    try:
+        Image.open(io.BytesIO(file_bytes))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+    parsed_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    # Process image first with temp id
+    filename, width, height, file_size = _process_upload(file_bytes, 0)
+    # Save record
+    photo_id = state_registry.save_photo(
+        filename=filename, original_filename=file.filename or "unknown.jpg",
+        tags=parsed_tags, trip_key=trip_key, source="upload",
+        width=width, height=height, file_size=file_size,
+    )
+    # Rename file with real id
+    new_filename = f"photo_{photo_id}_{secrets.token_hex(4)}.jpg"
+    os.rename(
+        os.path.join(_PHOTOS_DIR, filename),
+        os.path.join(_PHOTOS_DIR, new_filename),
+    )
+    state_registry.update_photo_filename(photo_id, new_filename)
+    photo = state_registry.get_photo_by_id(photo_id)
+    return {"ok": True, "photo": photo}
+
+
+@router.get("/photos", dependencies=[Depends(_check_auth)])
+async def list_photos(trip_key: str = None, limit: int = 50):
+    return state_registry.get_photos(trip_key=trip_key, limit=limit)
+
+
+@router.get("/photos/stats", dependencies=[Depends(_check_auth)])
+async def photo_stats():
+    return state_registry.get_photo_stats()
+
+
+@router.get("/photos/{photo_id}/image", dependencies=[Depends(_check_auth)])
+async def get_photo_image(photo_id: int):
+    photo = state_registry.get_photo_by_id(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    path = os.path.join(_PHOTOS_DIR, photo["filename"])
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Image file missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.put("/photos/{photo_id}", dependencies=[Depends(_check_auth)])
+async def update_photo_endpoint(photo_id: int, req: PhotoUpdateRequest):
+    ok = state_registry.update_photo(photo_id, tags=req.tags, trip_key=req.trip_key)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return {"ok": True}
+
+
+@router.delete("/photos/{photo_id}", dependencies=[Depends(_check_auth)])
+async def delete_photo_endpoint(photo_id: int):
+    filename = state_registry.delete_photo(photo_id)
+    if not filename:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    try:
+        os.remove(os.path.join(_PHOTOS_DIR, filename))
+    except FileNotFoundError:
+        pass
+    return {"ok": True}

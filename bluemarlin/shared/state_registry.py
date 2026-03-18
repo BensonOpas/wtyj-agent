@@ -135,6 +135,22 @@ def _get_conn():
         "created_at TEXT NOT NULL"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS photo_library ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "filename TEXT NOT NULL, "
+        "original_filename TEXT NOT NULL, "
+        "tags_json TEXT DEFAULT '[]', "
+        "trip_key TEXT DEFAULT '', "
+        "source TEXT DEFAULT 'upload', "
+        "source_id TEXT DEFAULT '', "
+        "width INTEGER DEFAULT 0, "
+        "height INTEGER DEFAULT 0, "
+        "file_size INTEGER DEFAULT 0, "
+        "used_count INTEGER DEFAULT 0, "
+        "uploaded_at TEXT NOT NULL"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -726,6 +742,166 @@ def update_draft_content(draft_id: int, instagram_caption: str = None,
     conn.commit()
     conn.close()
     return changed
+
+
+# --- Photo Library ---
+
+
+def save_photo(filename: str, original_filename: str, tags: list,
+               trip_key: str = "", source: str = "upload",
+               source_id: str = "", width: int = 0, height: int = 0,
+               file_size: int = 0) -> int:
+    """Save a photo record. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO photo_library "
+        "(filename, original_filename, tags_json, trip_key, source, source_id, "
+        "width, height, file_size, uploaded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (filename, original_filename, json.dumps(tags, ensure_ascii=False),
+         trip_key, source, source_id, width, height, file_size,
+         datetime.now(timezone.utc).isoformat())
+    )
+    photo_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return photo_id
+
+
+def get_photos(trip_key: str = None, limit: int = 50) -> list:
+    """Get photos, optionally filtered by trip_key. Newest first."""
+    conn = _get_conn()
+    if trip_key:
+        rows = conn.execute(
+            "SELECT id, filename, original_filename, tags_json, trip_key, "
+            "source, source_id, width, height, file_size, used_count, uploaded_at "
+            "FROM photo_library WHERE trip_key = ? ORDER BY uploaded_at DESC LIMIT ?",
+            (trip_key, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, filename, original_filename, tags_json, trip_key, "
+            "source, source_id, width, height, file_size, used_count, uploaded_at "
+            "FROM photo_library ORDER BY uploaded_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "filename": r[1], "original_filename": r[2],
+            "tags": json.loads(r[3] or "[]"), "trip_key": r[4],
+            "source": r[5], "source_id": r[6], "width": r[7],
+            "height": r[8], "file_size": r[9], "used_count": r[10],
+            "uploaded_at": r[11],
+        }
+        for r in rows
+    ]
+
+
+def get_photo_by_id(photo_id: int) -> dict | None:
+    """Get a single photo by ID."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, filename, original_filename, tags_json, trip_key, "
+        "source, source_id, width, height, file_size, used_count, uploaded_at "
+        "FROM photo_library WHERE id = ?",
+        (photo_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0], "filename": row[1], "original_filename": row[2],
+        "tags": json.loads(row[3] or "[]"), "trip_key": row[4],
+        "source": row[5], "source_id": row[6], "width": row[7],
+        "height": row[8], "file_size": row[9], "used_count": row[10],
+        "uploaded_at": row[11],
+    }
+
+
+def get_photo_by_source_id(source_id: str) -> dict | None:
+    """Get a photo by external source ID (e.g. Google Drive file ID)."""
+    if not source_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, filename, original_filename, tags_json, trip_key, "
+        "source, source_id, width, height, file_size, used_count, uploaded_at "
+        "FROM photo_library WHERE source_id = ?",
+        (source_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0], "filename": row[1], "original_filename": row[2],
+        "tags": json.loads(row[3] or "[]"), "trip_key": row[4],
+        "source": row[5], "source_id": row[6], "width": row[7],
+        "height": row[8], "file_size": row[9], "used_count": row[10],
+        "uploaded_at": row[11],
+    }
+
+
+def update_photo(photo_id: int, tags: list = None, trip_key: str = None) -> bool:
+    """Update photo tags and/or trip_key. Returns True if row updated."""
+    sets = []
+    params = []
+    if tags is not None:
+        sets.append("tags_json = ?")
+        params.append(json.dumps(tags, ensure_ascii=False))
+    if trip_key is not None:
+        sets.append("trip_key = ?")
+        params.append(trip_key)
+    if not sets:
+        return False
+    params.append(photo_id)
+    conn = _get_conn()
+    cur = conn.execute(
+        f"UPDATE photo_library SET {', '.join(sets)} WHERE id = ?",
+        tuple(params)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def update_photo_filename(photo_id: int, filename: str) -> bool:
+    """Update photo filename (used after processing upload). Returns True if row updated."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE photo_library SET filename = ? WHERE id = ?",
+        (filename, photo_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def delete_photo(photo_id: int) -> str | None:
+    """Delete a photo record. Returns filename (caller deletes file) or None if not found."""
+    conn = _get_conn()
+    row = conn.execute("SELECT filename FROM photo_library WHERE id = ?", (photo_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("DELETE FROM photo_library WHERE id = ?", (photo_id,))
+    conn.commit()
+    conn.close()
+    return row[0]
+
+
+def get_photo_stats() -> dict:
+    """Get photo count total and grouped by trip_key."""
+    conn = _get_conn()
+    total = conn.execute("SELECT COUNT(*) FROM photo_library").fetchone()[0]
+    rows = conn.execute(
+        "SELECT COALESCE(NULLIF(trip_key, ''), 'untagged'), COUNT(*) "
+        "FROM photo_library GROUP BY COALESCE(NULLIF(trip_key, ''), 'untagged')"
+    ).fetchall()
+    conn.close()
+    return {"total": total, "by_trip": {r[0]: r[1] for r in rows}}
 
 
 def get_availability_summary(days_ahead: int = 7) -> list:
