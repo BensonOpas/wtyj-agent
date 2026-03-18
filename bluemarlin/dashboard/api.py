@@ -6,14 +6,21 @@
 import io
 import os
 import secrets
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form
-from fastapi.responses import FileResponse
+import urllib.parse
+import requests as http_requests
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.content_agent import _build_seasonal_context
+
+_GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+_GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+_GOOGLE_REDIRECT_URI = "https://api.wetakeyourjob.com/dashboard/api/google/callback"
+_GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.readonly"
 
 _SESSION_TOKEN = secrets.token_hex(32)
 
@@ -336,3 +343,204 @@ async def delete_photo_endpoint(photo_id: int):
     except FileNotFoundError:
         pass
     return {"ok": True}
+
+
+# --- Google Drive OAuth ---
+
+
+@router.get("/google/auth")
+async def google_auth(redirect_to: str = Query("")):
+    """Redirect operator to Google's OAuth consent screen."""
+    if not _GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    params = {
+        "client_id": _GOOGLE_CLIENT_ID,
+        "redirect_uri": _GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": _GOOGLE_SCOPES,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": redirect_to or "",
+    }
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    return RedirectResponse(url)
+
+
+@router.get("/google/callback")
+async def google_callback(code: str = Query(""), error: str = Query(""), state: str = Query("")):
+    """Google redirects here after consent. Exchange code for tokens."""
+    if error:
+        if state:
+            return RedirectResponse(f"{state}?google_error={error}")
+        raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="No authorization code")
+    # Exchange code for tokens
+    resp = http_requests.post("https://oauth2.googleapis.com/token", data={
+        "code": code,
+        "client_id": _GOOGLE_CLIENT_ID,
+        "client_secret": _GOOGLE_CLIENT_SECRET,
+        "redirect_uri": _GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    })
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail="Token exchange failed")
+    data = resp.json()
+    access_token = data.get("access_token", "")
+    refresh_token = data.get("refresh_token", "")
+    expires_in = data.get("expires_in", 3600)
+    from datetime import datetime, timezone, timedelta
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    state_registry.save_oauth_tokens("google_drive", access_token, refresh_token, expires_at)
+    # Redirect back to dashboard
+    redirect = state or "/"
+    sep = "&" if "?" in redirect else "?"
+    return RedirectResponse(f"{redirect}{sep}google_connected=true")
+
+
+def _get_google_access_token() -> str:
+    """Get a valid Google access token, refreshing if expired."""
+    tokens = state_registry.get_oauth_tokens("google_drive")
+    if not tokens:
+        return ""
+    # Check if expired
+    from datetime import datetime, timezone
+    expires_at = tokens.get("expires_at", "")
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(expires_at)
+            if datetime.now(timezone.utc) >= exp:
+                # Refresh
+                resp = http_requests.post("https://oauth2.googleapis.com/token", data={
+                    "client_id": _GOOGLE_CLIENT_ID,
+                    "client_secret": _GOOGLE_CLIENT_SECRET,
+                    "refresh_token": tokens["refresh_token"],
+                    "grant_type": "refresh_token",
+                })
+                if resp.status_code == 200:
+                    data = resp.json()
+                    new_token = data.get("access_token", "")
+                    expires_in = data.get("expires_in", 3600)
+                    from datetime import timedelta
+                    new_expires = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+                    state_registry.save_oauth_tokens(
+                        "google_drive", new_token,
+                        tokens["refresh_token"], new_expires
+                    )
+                    return new_token
+                return ""
+        except (ValueError, TypeError):
+            pass
+    return tokens["access_token"]
+
+
+@router.get("/google/status", dependencies=[Depends(_check_auth)])
+async def google_status():
+    """Check if Google Drive is connected."""
+    tokens = state_registry.get_oauth_tokens("google_drive")
+    if not tokens:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "folder_id": tokens.get("folder_id", ""),
+        "updated_at": tokens.get("updated_at", ""),
+    }
+
+
+@router.post("/google/disconnect", dependencies=[Depends(_check_auth)])
+async def google_disconnect():
+    """Remove Google Drive connection."""
+    state_registry.delete_oauth_tokens("google_drive")
+    return {"ok": True}
+
+
+@router.get("/google/folders", dependencies=[Depends(_check_auth)])
+async def google_folders():
+    """List top-level folders in the operator's Google Drive."""
+    token = _get_google_access_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="Google Drive not connected")
+    resp = http_requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "q": "mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false",
+            "fields": "files(id,name)",
+            "pageSize": "100",
+        },
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to list Drive folders")
+    return resp.json().get("files", [])
+
+
+class FolderSelectRequest(BaseModel):
+    folder_id: str
+
+
+@router.post("/google/folder", dependencies=[Depends(_check_auth)])
+async def set_google_folder(req: FolderSelectRequest):
+    """Set which Drive folder to sync from."""
+    ok = state_registry.set_oauth_folder("google_drive", req.folder_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Google Drive not connected")
+    return {"ok": True}
+
+
+@router.post("/google/sync", dependencies=[Depends(_check_auth)])
+async def google_sync():
+    """Sync photos from the selected Google Drive folder."""
+    tokens = state_registry.get_oauth_tokens("google_drive")
+    if not tokens or not tokens.get("folder_id"):
+        raise HTTPException(status_code=400, detail="No Drive folder selected")
+    token = _get_google_access_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="Google Drive not connected")
+    folder_id = tokens["folder_id"]
+    # List image files in folder
+    resp = http_requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "q": f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false",
+            "fields": "files(id,name,size)",
+            "pageSize": "100",
+        },
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to list Drive files")
+    files = resp.json().get("files", [])
+    synced = 0
+    for f in files:
+        drive_id = f["id"]
+        # Skip if already synced
+        if state_registry.get_photo_by_source_id(drive_id):
+            continue
+        # Download file
+        dl_resp = http_requests.get(
+            f"https://www.googleapis.com/drive/v3/files/{drive_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"alt": "media"},
+        )
+        if dl_resp.status_code != 200:
+            continue
+        file_bytes = dl_resp.content
+        try:
+            Image.open(io.BytesIO(file_bytes))
+        except Exception:
+            continue
+        # Process and store
+        filename, width, height, file_size = _process_upload(file_bytes, 0)
+        photo_id = state_registry.save_photo(
+            filename=filename, original_filename=f.get("name", "drive_photo.jpg"),
+            tags=[], trip_key="", source="google_drive", source_id=drive_id,
+            width=width, height=height, file_size=file_size,
+        )
+        new_filename = f"photo_{photo_id}_{secrets.token_hex(4)}.jpg"
+        os.rename(
+            os.path.join(_PHOTOS_DIR, filename),
+            os.path.join(_PHOTOS_DIR, new_filename),
+        )
+        state_registry.update_photo_filename(photo_id, new_filename)
+        synced += 1
+    return {"ok": True, "synced": synced, "total_in_folder": len(files)}

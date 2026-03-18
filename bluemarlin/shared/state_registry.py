@@ -151,6 +151,16 @@ def _get_conn():
         "uploaded_at TEXT NOT NULL"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS oauth_tokens ("
+        "provider TEXT PRIMARY KEY, "
+        "access_token TEXT NOT NULL, "
+        "refresh_token TEXT NOT NULL, "
+        "expires_at TEXT, "
+        "folder_id TEXT DEFAULT '', "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -902,6 +912,64 @@ def get_photo_stats() -> dict:
     ).fetchall()
     conn.close()
     return {"total": total, "by_trip": {r[0]: r[1] for r in rows}}
+
+
+# --- OAuth Tokens ---
+
+
+def save_oauth_tokens(provider: str, access_token: str, refresh_token: str,
+                      expires_at: str = "") -> None:
+    """Insert or replace OAuth tokens for a provider."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO oauth_tokens "
+        "(provider, access_token, refresh_token, expires_at, folder_id, updated_at) "
+        "VALUES (?, ?, ?, ?, COALESCE((SELECT folder_id FROM oauth_tokens WHERE provider = ?), ''), ?)",
+        (provider, access_token, refresh_token, expires_at, provider,
+         datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_oauth_tokens(provider: str) -> dict | None:
+    """Get OAuth tokens for a provider."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT provider, access_token, refresh_token, expires_at, folder_id, updated_at "
+        "FROM oauth_tokens WHERE provider = ?",
+        (provider,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "provider": row[0], "access_token": row[1], "refresh_token": row[2],
+        "expires_at": row[3], "folder_id": row[4], "updated_at": row[5],
+    }
+
+
+def set_oauth_folder(provider: str, folder_id: str) -> bool:
+    """Set the sync folder for a provider."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE oauth_tokens SET folder_id = ? WHERE provider = ?",
+        (folder_id, provider)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def delete_oauth_tokens(provider: str) -> bool:
+    """Remove OAuth tokens for a provider."""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM oauth_tokens WHERE provider = ?", (provider,))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def get_availability_summary(days_ahead: int = 7) -> list:
