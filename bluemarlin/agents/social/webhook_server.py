@@ -14,7 +14,15 @@ from shared import state_registry
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
 
-app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    from agents.social.scheduler import start_scheduler
+    start_scheduler()
+    yield
+
+app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
 

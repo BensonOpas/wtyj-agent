@@ -183,80 +183,13 @@ async def publish_draft(draft_id: int):
     draft = next((d for d in drafts if d["id"] == draft_id), None)
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
-    if draft["status"] != "approved":
-        raise HTTPException(status_code=400, detail="Draft must be approved before publishing")
-
-    # Auto-image: try photo library first, then AI generation, then text card fallback
-    image_path = draft.get("image_path", "")
-    if not image_path or not os.path.exists(image_path):
-        photo = _match_photo_to_draft(draft)
-        if photo:
-            photo_path = os.path.join(_PHOTOS_DIR, photo["filename"])
-            image_path = graphics_engine.generate_composite(draft_id, photo_path=photo_path, mode="photo_only")
-            if image_path:
-                state_registry.set_draft_photo_id(draft_id, photo["id"])
-                state_registry.increment_photo_used_count(photo["id"])
-        if not image_path or not os.path.exists(image_path):
-            # Try AI generation
-            prompt = draft.get("visual_suggestion") or draft.get("instagram_caption") or ""
-            ai_path = _generate_ai_image(prompt, draft_id)
-            if ai_path:
-                image_path = graphics_engine.generate_composite(draft_id, photo_path=ai_path, mode="photo_only")
-        if not image_path or not os.path.exists(image_path):
-            # Final fallback: branded text card
-            image_path = graphics_engine.generate_graphic(draft_id)
-        if not image_path:
-            raise HTTPException(status_code=500, detail="Could not generate any image")
-
-    # Upload image once (shared across platforms)
-    media_url = social_publisher.upload_media(image_path)
-    if not media_url:
-        raise HTTPException(status_code=500, detail="Image upload failed")
-
-    platforms = draft.get("platforms", ["instagram"])
-    hashtags = draft.get("hashtags") or []
-    results = {}
-
-    # Publish to Instagram
-    if "instagram" in platforms:
-        ig_account = social_publisher.get_instagram_account_id()
-        if ig_account:
-            ig_caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
-            ig_result = social_publisher.publish_to_instagram(
-                caption=ig_caption, media_url=media_url,
-                account_id=ig_account, hashtags=hashtags
-            )
-            if ig_result:
-                results["instagram"] = ig_result
-                state_registry.set_draft_published_info(
-                    draft_id,
-                    late_post_id=ig_result.get("post_id", ""),
-                    instagram_url=ig_result.get("post_url", "")
-                )
-
-    # Publish to Facebook
-    if "facebook" in platforms:
-        fb_account = social_publisher.get_facebook_account_id()
-        if fb_account:
-            fb_caption = draft.get("facebook_caption") or draft.get("instagram_caption") or ""
-            fb_result = social_publisher.publish_to_facebook(
-                caption=fb_caption, media_url=media_url,
-                account_id=fb_account, hashtags=hashtags
-            )
-            if fb_result:
-                results["facebook"] = fb_result
-                state_registry.set_draft_facebook_info(
-                    draft_id,
-                    late_post_id=fb_result.get("post_id", ""),
-                    facebook_url=fb_result.get("post_url", "")
-                )
-
-    if not results:
-        raise HTTPException(status_code=500, detail="Publish failed on all platforms")
-
-    state_registry.update_draft_status(draft_id, "published")
-    return {"ok": True, "platforms": list(results.keys()),
-            "post_url": results.get("instagram", results.get("facebook", {})).get("post_url", "")}
+    if draft["status"] not in ("approved", "scheduled"):
+        raise HTTPException(status_code=400, detail="Draft must be approved or scheduled before publishing")
+    from agents.social.scheduler import execute_publish
+    result = execute_publish(draft)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Publish failed"))
+    return result
 
 
 @router.post("/drafts/{draft_id}/graphics", dependencies=[Depends(_check_auth)])
@@ -711,6 +644,54 @@ async def google_sync():
         state_registry.update_photo_filename(photo_id, new_filename)
         synced += 1
     return {"ok": True, "synced": synced, "total_in_folder": len(files)}
+
+
+# --- Scheduling ---
+
+class ScheduleRequest(BaseModel):
+    scheduled_at: str = ""  # ISO 8601, empty = auto-assign next slot
+
+
+class ScheduleSlotsRequest(BaseModel):
+    slots: list  # [{"day_of_week": "Tuesday", "time_utc": "16:00"}, ...]
+
+
+@router.post("/drafts/{draft_id}/schedule", dependencies=[Depends(_check_auth)])
+async def schedule_draft(draft_id: int, req: ScheduleRequest):
+    scheduled_at = req.scheduled_at
+    if not scheduled_at:
+        scheduled_at = state_registry.get_next_open_slot()
+        if not scheduled_at:
+            raise HTTPException(status_code=400, detail="No open schedule slots. Set a time manually or configure weekly slots.")
+    ok = state_registry.schedule_draft(draft_id, scheduled_at)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Draft not found or not in approved status")
+    return {"ok": True, "scheduled_at": scheduled_at}
+
+
+@router.post("/drafts/{draft_id}/unschedule", dependencies=[Depends(_check_auth)])
+async def unschedule_draft(draft_id: int):
+    ok = state_registry.unschedule_draft(draft_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Draft not found or not in scheduled status")
+    return {"ok": True}
+
+
+@router.get("/schedule/slots", dependencies=[Depends(_check_auth)])
+async def get_schedule_slots():
+    return state_registry.get_schedule_slots()
+
+
+@router.put("/schedule/slots", dependencies=[Depends(_check_auth)])
+async def update_schedule_slots(req: ScheduleSlotsRequest):
+    state_registry.save_schedule_slots(req.slots)
+    return {"ok": True, "slots": state_registry.get_schedule_slots()}
+
+
+@router.get("/schedule/upcoming", dependencies=[Depends(_check_auth)])
+async def get_upcoming_schedule():
+    scheduled = state_registry.get_content_drafts(status="scheduled")
+    return scheduled
 
 
 # --- Platforms ---

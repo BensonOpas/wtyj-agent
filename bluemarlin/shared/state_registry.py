@@ -196,6 +196,19 @@ def _get_conn():
         conn.execute("ALTER TABLE content_drafts ADD COLUMN photo_id INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schedule_slots ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "day_of_week TEXT NOT NULL, "
+        "time_utc TEXT NOT NULL, "
+        "active INTEGER DEFAULT 1, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN scheduled_at TEXT")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN platforms_json TEXT DEFAULT '[\"instagram\"]'")
     except sqlite3.OperationalError:
@@ -703,7 +716,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
             "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
-            "platforms_json, facebook_url, late_facebook_post_id "
+            "platforms_json, facebook_url, late_facebook_post_id, scheduled_at "
             "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
             (status, limit)
         ).fetchall()
@@ -712,7 +725,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
             "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
-            "platforms_json, facebook_url, late_facebook_post_id "
+            "platforms_json, facebook_url, late_facebook_post_id, scheduled_at "
             "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
@@ -729,6 +742,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "platforms": json.loads(r[16]) if len(r) > 16 and r[16] else ["instagram"],
             "facebook_url": r[17] if len(r) > 17 else "",
             "late_facebook_post_id": r[18] if len(r) > 18 else "",
+            "scheduled_at": r[19] if len(r) > 19 else None,
         }
         for r in rows
     ]
@@ -1099,6 +1113,127 @@ def replace_brand_rules(category: str, rules: list, source: str = "analysis") ->
     conn.commit()
     conn.close()
     return new_ids
+
+
+# --- Scheduling ---
+
+
+def schedule_draft(draft_id: int, scheduled_at: str) -> bool:
+    """Set a draft to scheduled status with a publish time."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET status = 'scheduled', scheduled_at = ? WHERE id = ? AND status = 'approved'",
+        (scheduled_at, draft_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def unschedule_draft(draft_id: int) -> bool:
+    """Revert a scheduled draft back to approved."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET status = 'approved', scheduled_at = NULL WHERE id = ? AND status = 'scheduled'",
+        (draft_id,)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_scheduled_due() -> list:
+    """Get all drafts that are scheduled and due for publishing (scheduled_at <= now)."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = conn.execute(
+        "SELECT id, content_class, instagram_caption, facebook_caption, "
+        "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
+        "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
+        "platforms_json, facebook_url, late_facebook_post_id, scheduled_at "
+        "FROM content_drafts WHERE status = 'scheduled' AND scheduled_at <= ? "
+        "ORDER BY scheduled_at",
+        (now,)
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "content_class": r[1], "instagram_caption": r[2],
+            "facebook_caption": r[3], "hashtags": json.loads(r[4] or "[]"),
+            "visual_suggestion": r[5], "reasoning": r[6], "status": r[7],
+            "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
+            "published_at": r[11], "image_path": r[12],
+            "late_post_id": r[13], "instagram_url": r[14],
+            "photo_id": r[15] if r[15] else 0,
+            "platforms": json.loads(r[16]) if r[16] else ["instagram"],
+            "facebook_url": r[17] or "", "late_facebook_post_id": r[18] or "",
+            "scheduled_at": r[19],
+        }
+        for r in rows
+    ]
+
+
+def save_schedule_slots(slots: list) -> None:
+    """Replace all schedule slots. slots = [{"day_of_week": "Tuesday", "time_utc": "16:00"}, ...]"""
+    conn = _get_conn()
+    conn.execute("UPDATE schedule_slots SET active = 0")
+    now = datetime.now(timezone.utc).isoformat()
+    for slot in slots:
+        conn.execute(
+            "INSERT INTO schedule_slots (day_of_week, time_utc, active, created_at) VALUES (?, ?, 1, ?)",
+            (slot["day_of_week"], slot["time_utc"], now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_schedule_slots() -> list:
+    """Get active schedule slots."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, day_of_week, time_utc FROM schedule_slots WHERE active = 1 ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "day_of_week": r[1], "time_utc": r[2]} for r in rows]
+
+
+def get_next_open_slot() -> str:
+    """Compute the next available schedule slot that doesn't have a draft assigned.
+    Returns ISO 8601 timestamp or empty string."""
+    slots = get_schedule_slots()
+    if not slots:
+        return ""
+    # Get all future scheduled drafts
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = conn.execute(
+        "SELECT scheduled_at FROM content_drafts WHERE status = 'scheduled' AND scheduled_at > ?",
+        (now,)
+    ).fetchall()
+    conn.close()
+    taken = {r[0][:16] for r in rows if r[0]}  # Compare up to minute precision
+
+    day_map = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
+               "Friday": 4, "Saturday": 5, "Sunday": 6}
+    today = datetime.now(timezone.utc)
+
+    # Check next 14 days of slots
+    for day_offset in range(14):
+        check_date = today + timedelta(days=day_offset)
+        for slot in slots:
+            slot_day = day_map.get(slot["day_of_week"], -1)
+            if check_date.weekday() != slot_day:
+                continue
+            hour, minute = slot["time_utc"].split(":")
+            candidate = check_date.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+            if candidate <= today:
+                continue
+            candidate_key = candidate.isoformat()[:16]
+            if candidate_key not in taken:
+                return candidate.isoformat()
+    return ""
 
 
 def update_draft_platforms(draft_id: int, platforms: list) -> bool:
