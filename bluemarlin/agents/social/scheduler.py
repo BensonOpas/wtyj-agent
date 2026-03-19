@@ -58,6 +58,14 @@ def execute_publish(draft: dict) -> dict:
     if not image_path:
         return {"ok": False, "error": "Could not generate any image"}
 
+    # Check dry run mode
+    if state_registry.is_dry_run():
+        platforms = draft.get("platforms", ["instagram"])
+        bm_logger.log("dry_run_publish", draft_id=draft_id, platforms=platforms,
+                      image_path=image_path)
+        state_registry.update_draft_status(draft_id, "published")
+        return {"ok": True, "platforms": platforms, "post_url": "", "dry_run": True}
+
     # Upload image once
     media_url = social_publisher.upload_media(image_path)
     if not media_url:

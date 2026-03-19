@@ -166,6 +166,15 @@ async def approve_draft(draft_id: int):
     ok = state_registry.update_draft_status(draft_id, "approved")
     if not ok:
         raise HTTPException(status_code=404, detail="Draft not found")
+    # Auto-compose image on approval
+    drafts = state_registry.get_content_drafts()
+    draft = next((d for d in drafts if d["id"] == draft_id), None)
+    if draft:
+        prompt = draft.get("visual_suggestion") or draft.get("instagram_caption") or ""
+        if prompt:
+            ai_path = _generate_ai_image(prompt, draft_id)
+            if ai_path:
+                graphics_engine.generate_composite(draft_id, photo_path=ai_path, mode="photo_only")
     return {"ok": True}
 
 
@@ -644,6 +653,20 @@ async def google_sync():
         state_registry.update_photo_filename(photo_id, new_filename)
         synced += 1
     return {"ok": True, "synced": synced, "total_in_folder": len(files)}
+
+
+# --- Dry Run ---
+
+@router.get("/settings/dry-run", dependencies=[Depends(_check_auth)])
+async def get_dry_run():
+    return {"dry_run": state_registry.is_dry_run()}
+
+
+@router.post("/settings/dry-run", dependencies=[Depends(_check_auth)])
+async def toggle_dry_run():
+    current = state_registry.is_dry_run()
+    state_registry.set_setting("dry_run", "false" if current else "true")
+    return {"dry_run": not current}
 
 
 # --- Scheduling ---

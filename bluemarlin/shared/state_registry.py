@@ -180,6 +180,12 @@ def _get_conn():
         "created_at TEXT NOT NULL"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS system_settings ("
+        "key TEXT PRIMARY KEY, "
+        "value TEXT NOT NULL"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -1113,6 +1119,33 @@ def replace_brand_rules(category: str, rules: list, source: str = "analysis") ->
     conn.commit()
     conn.close()
     return new_ids
+
+
+# --- System Settings ---
+
+
+def get_setting(key: str, default: str = "") -> str:
+    """Get a system setting value."""
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    """Set a system setting value."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+        (key, value)
+    )
+    conn.commit()
+    conn.close()
+
+
+def is_dry_run() -> bool:
+    """Check if dry run mode is enabled."""
+    return get_setting("dry_run", "false") == "true"
 
 
 # --- Scheduling ---
