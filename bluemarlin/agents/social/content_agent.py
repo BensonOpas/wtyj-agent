@@ -168,6 +168,23 @@ def _build_system_prompt(count: int) -> str:
             f"{rules}\n"
         )
 
+    # Brand profile from training examples
+    brand_profile_block = ""
+    profile_rules = state_registry.get_brand_rules()
+    if profile_rules:
+        grouped = {}
+        for r in profile_rules:
+            grouped.setdefault(r['category'], []).append(r['rule'])
+        sections = []
+        for cat, cat_rules in grouped.items():
+            label = cat.upper().replace('_', ' ')
+            rules_str = "\n".join(f"- {r}" for r in cat_rules)
+            sections.append(f"{label}:\n{rules_str}")
+        brand_profile_block = (
+            "\nBRAND PROFILE (extracted from training examples — follow these strictly):\n"
+            + "\n".join(sections) + "\n"
+        )
+
     return f"""You are the social media content strategist for {business_name}.
 You generate draft social media posts. You do not publish — a human reviews and approves every post.
 
@@ -217,7 +234,7 @@ DEMAND-STATE RULES:
 - Low bookings: propose content to attract interest. Never sound desperate.
 - Sold out: don't stop posting. Redirect to next available option. Turn full capacity into social proof.
 - Cancellation reopens spots: propose timely content reflecting the opportunity.
-{learnings_block}
+{learnings_block}{brand_profile_block}
 RESPONSE FORMAT:
 Return ONLY a JSON object. No explanation. No markdown. No code fences.
 The "drafts" array must contain exactly {count} items.
@@ -493,3 +510,88 @@ def distill_learnings() -> list:
     except Exception as exc:
         bm_logger.log("distill_api_error", error=str(exc)[:200])
         return []
+
+
+def analyze_training_examples() -> dict:
+    """Analyze training examples and extract brand profile rules.
+    Returns dict with category keys mapping to lists of rule strings."""
+    examples = state_registry.get_training_examples()
+    if not examples:
+        bm_logger.log("analyze_no_examples")
+        return {}
+
+    business = config_loader.get_business()
+    business_name = business.get("name", "the business")
+
+    examples_text = []
+    for ex in examples:
+        platform_note = f" (from {ex['platform']})" if ex.get("platform") else ""
+        examples_text.append(f'Caption{platform_note}:\n"{ex["caption_text"]}"')
+    examples_block = "\n\n".join(examples_text)
+
+    system_prompt = (
+        f"You analyze example social media posts for {business_name} and extract brand rules.\n"
+        f"Your job is to identify patterns in voice, visual style, content approach, and boundaries.\n"
+        f"Each rule must be specific and actionable — not vague.\n"
+        f"Look for: sentence structure, tone, vocabulary, what they mention, what they avoid,\n"
+        f"how they use emojis/hashtags, how they reference their products/services.\n\n"
+        f"Return ONLY a JSON object. No explanation. No markdown. No code fences.\n"
+        f'{{"voice_rules": ["rule1", "rule2"], '
+        f'"visual_rules": ["rule1"], '
+        f'"content_rules": ["rule1", "rule2"], '
+        f'"boundaries": ["rule1"]}}'
+    )
+
+    user_prompt = (
+        f"EXAMPLE POSTS ({len(examples)} total):\n\n"
+        f"{examples_block}\n\n"
+        f"Analyze these posts. Extract brand rules by category."
+    )
+
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        client = anthropic.Anthropic(api_key=api_key)
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw = response.content[0].text.strip()
+
+        _usage = getattr(response, "usage", None)
+        if _usage:
+            bm_logger.log("api_usage",
+                          input_tokens=_usage.input_tokens,
+                          output_tokens=_usage.output_tokens,
+                          model="claude-sonnet-4-6",
+                          channel="analyze_training")
+
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
+
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            bm_logger.log("analyze_response_invalid", reason="not_a_dict")
+            return {}
+
+        # Replace analysis rules per category, preserve manual rules
+        valid_categories = {"voice_rules", "visual_rules", "content_rules", "boundaries"}
+        all_rules = {}
+        for category in valid_categories:
+            rules = result.get(category, [])
+            if isinstance(rules, list) and rules:
+                state_registry.replace_brand_rules(category, rules, source="analysis")
+                all_rules[category] = rules
+
+        bm_logger.log("analyze_training_complete", categories=len(all_rules),
+                      total_rules=sum(len(r) for r in all_rules.values()))
+        return all_rules
+
+    except (json.JSONDecodeError, UnboundLocalError):
+        bm_logger.log("analyze_response_invalid", reason="json_parse_error")
+        return {}
+    except Exception as exc:
+        bm_logger.log("analyze_api_error", error=str(exc)[:200])
+        return {}

@@ -62,8 +62,20 @@ class ComposeRequest(BaseModel):
     photo_id: int = 0
 
 
+class BrandRuleRequest(BaseModel):
+    category: str
+    rule: str
+
+
+class BrandRuleUpdateRequest(BaseModel):
+    rule: str = None
+    category: str = None
+
+
 _PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "photos")
 os.makedirs(_PHOTOS_DIR, exist_ok=True)
+_TRAINING_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "training")
+os.makedirs(_TRAINING_DIR, exist_ok=True)
 
 
 def _process_upload(file_bytes: bytes, photo_id: int) -> tuple:
@@ -676,3 +688,106 @@ async def google_sync():
         state_registry.update_photo_filename(photo_id, new_filename)
         synced += 1
     return {"ok": True, "synced": synced, "total_in_folder": len(files)}
+
+
+# --- Brand Training ---
+
+@router.post("/training/examples", dependencies=[Depends(_check_auth)])
+async def upload_training_example(caption_text: str = Form(""), platform: str = Form(""),
+                                   file: UploadFile = File(None)):
+    """Upload a training example (caption + optional image)."""
+    if not caption_text.strip():
+        raise HTTPException(status_code=400, detail="Caption text is required")
+    image_path = ""
+    if file:
+        file_bytes = await file.read()
+        try:
+            img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+            if img.width > 1080:
+                ratio = 1080 / img.width
+                img = img.resize((1080, int(img.height * ratio)), Image.LANCZOS)
+            fname = f"training_{secrets.token_hex(6)}.jpg"
+            path = os.path.join(_TRAINING_DIR, fname)
+            img.save(path, "JPEG", quality=85)
+            image_path = path
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image file")
+    example_id = state_registry.save_training_example(
+        caption_text=caption_text.strip(), image_path=image_path, platform=platform
+    )
+    return {"ok": True, "id": example_id}
+
+
+@router.get("/training/examples", dependencies=[Depends(_check_auth)])
+async def list_training_examples():
+    return state_registry.get_training_examples()
+
+
+@router.delete("/training/examples/{example_id}", dependencies=[Depends(_check_auth)])
+async def delete_training_example(example_id: int):
+    image_path = state_registry.delete_training_example(example_id)
+    if image_path:
+        try:
+            os.remove(image_path)
+        except FileNotFoundError:
+            pass
+    return {"ok": True}
+
+
+@router.get("/training/examples/{example_id}/image", dependencies=[Depends(_check_auth)])
+async def get_training_image(example_id: int):
+    examples = state_registry.get_training_examples()
+    ex = next((e for e in examples if e["id"] == example_id), None)
+    if not ex or not ex.get("image_path") or not os.path.exists(ex["image_path"]):
+        raise HTTPException(status_code=404, detail="No image")
+    return FileResponse(ex["image_path"], media_type="image/jpeg")
+
+
+@router.post("/training/analyze", dependencies=[Depends(_check_auth)])
+async def analyze_training():
+    """Analyze all training examples and extract brand profile rules."""
+    from agents.social.content_agent import analyze_training_examples
+    result = analyze_training_examples()
+    if not result:
+        raise HTTPException(status_code=400, detail="No examples to analyze or analysis failed")
+    # Return the full updated profile
+    all_rules = state_registry.get_brand_rules()
+    grouped = {}
+    for r in all_rules:
+        grouped.setdefault(r["category"], []).append(r)
+    return {"ok": True, "rules": grouped, "categories_analyzed": len(result)}
+
+
+# --- Brand Profile ---
+
+@router.get("/training/profile", dependencies=[Depends(_check_auth)])
+async def get_brand_profile():
+    rules = state_registry.get_brand_rules()
+    grouped = {}
+    for r in rules:
+        grouped.setdefault(r["category"], []).append(r)
+    return grouped
+
+
+@router.post("/training/profile", dependencies=[Depends(_check_auth)])
+async def add_brand_rule(req: BrandRuleRequest):
+    if req.category not in ("voice_rules", "visual_rules", "content_rules", "boundaries"):
+        raise HTTPException(status_code=400, detail="Invalid category")
+    rule_id = state_registry.save_brand_rule(category=req.category, rule=req.rule, source="manual")
+    return {"ok": True, "id": rule_id}
+
+
+@router.put("/training/profile/{rule_id}", dependencies=[Depends(_check_auth)])
+async def update_brand_rule_endpoint(rule_id: int, req: BrandRuleUpdateRequest):
+    ok = state_registry.update_brand_rule(rule_id, rule=req.rule, category=req.category)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"ok": True}
+
+
+@router.delete("/training/profile/{rule_id}", dependencies=[Depends(_check_auth)])
+async def delete_brand_rule_endpoint(rule_id: int):
+    ok = state_registry.delete_brand_rule(rule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Rule not found or already inactive")
+    return {"ok": True}

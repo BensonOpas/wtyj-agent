@@ -161,6 +161,25 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS training_examples ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "caption_text TEXT NOT NULL, "
+        "image_path TEXT DEFAULT '', "
+        "platform TEXT DEFAULT '', "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS brand_profile ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "category TEXT NOT NULL, "
+        "rule TEXT NOT NULL, "
+        "source TEXT DEFAULT 'analysis', "
+        "active INTEGER DEFAULT 1, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -917,6 +936,152 @@ def get_photo_stats() -> dict:
     ).fetchall()
     conn.close()
     return {"total": total, "by_trip": {r[0]: r[1] for r in rows}}
+
+
+# --- Training Examples ---
+
+
+def save_training_example(caption_text: str, image_path: str = "",
+                          platform: str = "") -> int:
+    """Save a training example. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO training_examples (caption_text, image_path, platform, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (caption_text, image_path, platform,
+         datetime.now(timezone.utc).isoformat())
+    )
+    example_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return example_id
+
+
+def get_training_examples() -> list:
+    """Get all training examples."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, caption_text, image_path, platform, created_at "
+        "FROM training_examples ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "caption_text": r[1], "image_path": r[2],
+         "platform": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+def delete_training_example(example_id: int) -> str:
+    """Delete a training example. Returns image_path (caller deletes file) or empty string."""
+    conn = _get_conn()
+    row = conn.execute("SELECT image_path FROM training_examples WHERE id = ?",
+                       (example_id,)).fetchone()
+    if not row:
+        conn.close()
+        return ""
+    conn.execute("DELETE FROM training_examples WHERE id = ?", (example_id,))
+    conn.commit()
+    conn.close()
+    return row[0] or ""
+
+
+# --- Brand Profile ---
+
+
+def save_brand_rule(category: str, rule: str, source: str = "manual") -> int:
+    """Save a brand profile rule. Returns row id."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO brand_profile (category, rule, source, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (category, rule, source, datetime.now(timezone.utc).isoformat())
+    )
+    rule_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return rule_id
+
+
+def get_brand_rules(category: str = None) -> list:
+    """Get active brand profile rules, optionally filtered by category."""
+    conn = _get_conn()
+    if category:
+        rows = conn.execute(
+            "SELECT id, category, rule, source, created_at "
+            "FROM brand_profile WHERE active = 1 AND category = ? ORDER BY created_at",
+            (category,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, category, rule, source, created_at "
+            "FROM brand_profile WHERE active = 1 ORDER BY category, created_at"
+        ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "category": r[1], "rule": r[2], "source": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+def update_brand_rule(rule_id: int, rule: str = None, category: str = None) -> bool:
+    """Update a brand rule's text or category."""
+    sets = []
+    params = []
+    if rule is not None:
+        sets.append("rule = ?")
+        params.append(rule)
+    if category is not None:
+        sets.append("category = ?")
+        params.append(category)
+    if not sets:
+        return False
+    params.append(rule_id)
+    conn = _get_conn()
+    cur = conn.execute(
+        f"UPDATE brand_profile SET {', '.join(sets)} WHERE id = ? AND active = 1",
+        tuple(params)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def delete_brand_rule(rule_id: int) -> bool:
+    """Deactivate a brand rule."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE brand_profile SET active = 0 WHERE id = ? AND active = 1",
+        (rule_id,)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def replace_brand_rules(category: str, rules: list, source: str = "analysis") -> list:
+    """Replace all analysis-sourced rules in a category with new ones.
+    Preserves manually-added rules. Returns list of new rule IDs."""
+    conn = _get_conn()
+    # Deactivate old analysis rules in this category
+    conn.execute(
+        "UPDATE brand_profile SET active = 0 WHERE category = ? AND source = 'analysis' AND active = 1",
+        (category,)
+    )
+    # Insert new rules
+    now = datetime.now(timezone.utc).isoformat()
+    new_ids = []
+    for rule_text in rules:
+        cur = conn.execute(
+            "INSERT INTO brand_profile (category, rule, source, created_at) VALUES (?, ?, ?, ?)",
+            (category, rule_text, source, now)
+        )
+        new_ids.append(cur.lastrowid)
+    conn.commit()
+    conn.close()
+    return new_ids
 
 
 def set_draft_photo_id(draft_id: int, photo_id: int) -> bool:
