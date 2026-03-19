@@ -197,6 +197,18 @@ def _get_conn():
     except sqlite3.OperationalError:
         pass
     try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN platforms_json TEXT DEFAULT '[\"instagram\"]'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN facebook_url TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN late_facebook_post_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
         conn.execute("ALTER TABLE trip_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
@@ -690,7 +702,8 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
+            "platforms_json, facebook_url, late_facebook_post_id "
             "FROM content_drafts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
             (status, limit)
         ).fetchall()
@@ -698,7 +711,8 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         rows = conn.execute(
             "SELECT id, content_class, instagram_caption, facebook_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
-            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id "
+            "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
+            "platforms_json, facebook_url, late_facebook_post_id "
             "FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
@@ -712,6 +726,9 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
             "published_at": r[11], "image_path": r[12],
             "late_post_id": r[13], "instagram_url": r[14],
             "photo_id": r[15] if len(r) > 15 else 0,
+            "platforms": json.loads(r[16]) if len(r) > 16 and r[16] else ["instagram"],
+            "facebook_url": r[17] if len(r) > 17 else "",
+            "late_facebook_post_id": r[18] if len(r) > 18 else "",
         }
         for r in rows
     ]
@@ -1082,6 +1099,31 @@ def replace_brand_rules(category: str, rules: list, source: str = "analysis") ->
     conn.commit()
     conn.close()
     return new_ids
+
+
+def update_draft_platforms(draft_id: int, platforms: list) -> bool:
+    """Update which platforms a draft publishes to."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE content_drafts SET platforms_json = ? WHERE id = ?",
+        (json.dumps(platforms), draft_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def set_draft_facebook_info(draft_id: int, late_post_id: str = "",
+                            facebook_url: str = "") -> None:
+    """Store Facebook post info after publishing."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE content_drafts SET late_facebook_post_id = ?, facebook_url = ? WHERE id = ?",
+        (late_post_id, facebook_url, draft_id)
+    )
+    conn.commit()
+    conn.close()
 
 
 def set_draft_photo_id(draft_id: int, photo_id: int) -> bool:

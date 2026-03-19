@@ -208,32 +208,55 @@ async def publish_draft(draft_id: int):
         if not image_path:
             raise HTTPException(status_code=500, detail="Could not generate any image")
 
-    # Get Instagram account
-    account_id = social_publisher.get_instagram_account_id()
-    if not account_id:
-        raise HTTPException(status_code=500, detail="No Instagram account found")
-
-    # Upload + publish
+    # Upload image once (shared across platforms)
     media_url = social_publisher.upload_media(image_path)
     if not media_url:
         raise HTTPException(status_code=500, detail="Image upload failed")
 
-    caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+    platforms = draft.get("platforms", ["instagram"])
     hashtags = draft.get("hashtags") or []
-    result = social_publisher.publish_to_instagram(
-        caption=caption, media_url=media_url,
-        account_id=account_id, hashtags=hashtags
-    )
-    if not result:
-        raise HTTPException(status_code=500, detail="Publish failed")
+    results = {}
+
+    # Publish to Instagram
+    if "instagram" in platforms:
+        ig_account = social_publisher.get_instagram_account_id()
+        if ig_account:
+            ig_caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+            ig_result = social_publisher.publish_to_instagram(
+                caption=ig_caption, media_url=media_url,
+                account_id=ig_account, hashtags=hashtags
+            )
+            if ig_result:
+                results["instagram"] = ig_result
+                state_registry.set_draft_published_info(
+                    draft_id,
+                    late_post_id=ig_result.get("post_id", ""),
+                    instagram_url=ig_result.get("post_url", "")
+                )
+
+    # Publish to Facebook
+    if "facebook" in platforms:
+        fb_account = social_publisher.get_facebook_account_id()
+        if fb_account:
+            fb_caption = draft.get("facebook_caption") or draft.get("instagram_caption") or ""
+            fb_result = social_publisher.publish_to_facebook(
+                caption=fb_caption, media_url=media_url,
+                account_id=fb_account, hashtags=hashtags
+            )
+            if fb_result:
+                results["facebook"] = fb_result
+                state_registry.set_draft_facebook_info(
+                    draft_id,
+                    late_post_id=fb_result.get("post_id", ""),
+                    facebook_url=fb_result.get("post_url", "")
+                )
+
+    if not results:
+        raise HTTPException(status_code=500, detail="Publish failed on all platforms")
 
     state_registry.update_draft_status(draft_id, "published")
-    state_registry.set_draft_published_info(
-        draft_id,
-        late_post_id=result.get("post_id", ""),
-        instagram_url=result.get("post_url", "")
-    )
-    return {"ok": True, "post_url": result.get("post_url", "")}
+    return {"ok": True, "platforms": list(results.keys()),
+            "post_url": results.get("instagram", results.get("facebook", {})).get("post_url", "")}
 
 
 @router.post("/drafts/{draft_id}/graphics", dependencies=[Depends(_check_auth)])
@@ -688,6 +711,28 @@ async def google_sync():
         state_registry.update_photo_filename(photo_id, new_filename)
         synced += 1
     return {"ok": True, "synced": synced, "total_in_folder": len(files)}
+
+
+# --- Platforms ---
+
+class PlatformsRequest(BaseModel):
+    platforms: list[str]
+
+
+@router.get("/platforms/available", dependencies=[Depends(_check_auth)])
+async def get_available_platforms():
+    platforms = social_publisher.get_available_platforms()
+    return {"platforms": platforms}
+
+
+@router.put("/drafts/{draft_id}/platforms", dependencies=[Depends(_check_auth)])
+async def update_draft_platforms(draft_id: int, req: PlatformsRequest):
+    valid = {"instagram", "facebook"}
+    filtered = [p for p in req.platforms if p in valid]
+    ok = state_registry.update_draft_platforms(draft_id, filtered)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"ok": True, "platforms": filtered}
 
 
 # --- Brand Training ---

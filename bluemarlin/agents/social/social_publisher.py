@@ -37,6 +37,42 @@ def get_instagram_account_id() -> str:
         return ""
 
 
+def get_facebook_account_id() -> str:
+    """Discover the connected Facebook page ID from Late. Returns ID or empty string."""
+    client = _get_client()
+    if not client:
+        return ""
+    try:
+        resp = client.accounts.list()
+        for acc in resp.accounts:
+            if acc.platform == "facebook" and acc.isActive:
+                bm_logger.log("late_fb_account_found",
+                              account_id=acc.field_id,
+                              username=acc.username or "")
+                return acc.field_id
+        bm_logger.log("late_no_facebook_account")
+        return ""
+    except Exception as e:
+        bm_logger.log("late_fb_accounts_error", error=str(e)[:200])
+        return ""
+
+
+def get_available_platforms() -> list:
+    """Return list of connected platform names."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        resp = client.accounts.list()
+        platforms = []
+        for acc in resp.accounts:
+            if acc.isActive and acc.platform not in platforms:
+                platforms.append(acc.platform)
+        return platforms
+    except Exception:
+        return []
+
+
 def upload_media(image_path: str) -> str:
     """Upload an image to Late media storage. Returns public URL or empty string."""
     if not os.path.exists(image_path):
@@ -90,6 +126,41 @@ def publish_to_instagram(caption: str, media_url: str, account_id: str,
         return {"post_id": post_id, "post_url": post_url}
     except Exception as e:
         bm_logger.log("late_publish_failed", error=str(e)[:200])
+        return None
+
+
+def publish_to_facebook(caption: str, media_url: str, account_id: str,
+                        hashtags: list = None) -> dict | None:
+    """Publish a post to Facebook via Late. Returns {post_id, post_url} or None."""
+    if not account_id:
+        bm_logger.log("late_fb_publish_no_account")
+        return None
+    client = _get_client()
+    if not client:
+        return None
+
+    full_caption = caption
+    if hashtags:
+        full_caption = f"{caption}\n\n{' '.join(hashtags)}"
+
+    try:
+        result = client.posts.create(
+            content=full_caption,
+            platforms=[{"platform": "facebook", "accountId": account_id}],
+            media_items=[{"url": media_url, "type": "image"}],
+            publish_now=True,
+        )
+        post = result.post
+        post_id = post.field_id if post else ""
+        post_url = ""
+        if post and post.platforms:
+            for p in post.platforms:
+                if hasattr(p, "platformPostUrl") and p.platformPostUrl:
+                    post_url = str(p.platformPostUrl)
+        bm_logger.log("late_fb_published", post_id=post_id, post_url=post_url)
+        return {"post_id": post_id, "post_url": post_url}
+    except Exception as e:
+        bm_logger.log("late_fb_publish_failed", error=str(e)[:200])
         return None
 
 
