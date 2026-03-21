@@ -595,3 +595,88 @@ def analyze_training_examples() -> dict:
     except Exception as exc:
         bm_logger.log("analyze_api_error", error=str(exc)[:200])
         return {}
+
+
+def analyze_visual_style() -> list:
+    """Analyze photos from the library using Claude Vision to extract visual style rules.
+    Returns list of visual rule strings."""
+    import base64
+
+    photos = state_registry.get_photos(limit=50)
+    if not photos:
+        bm_logger.log("visual_analyze_no_photos")
+        return []
+
+    business = config_loader.get_business()
+    business_name = business.get("name", "the business")
+
+    # Pick up to 10 photos (most recent)
+    selected = photos[:10]
+
+    # Build image content blocks
+    image_blocks = []
+    photos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'photos')
+    for photo in selected:
+        path = os.path.join(photos_dir, photo["filename"])
+        if not os.path.exists(path):
+            continue
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        image_blocks.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}
+        })
+
+    if not image_blocks:
+        bm_logger.log("visual_analyze_no_readable_photos")
+        return []
+
+    image_blocks.append({
+        "type": "text",
+        "text": (
+            f"These are {len(image_blocks)} photos from {business_name}'s brand. "
+            f"Analyze the visual patterns across ALL of them. "
+            f"What colors dominate? What's the lighting like? What subjects appear? "
+            f"What mood/atmosphere? What camera angles? What composition style? "
+            f"Extract specific, actionable visual rules that an AI image generator should follow "
+            f"to create new images that match this brand's look.\n\n"
+            f"Return ONLY a JSON object. No explanation. No markdown. No code fences.\n"
+            f'{{"visual_rules": ["rule1", "rule2", "rule3"]}}'
+        )
+    })
+
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        client = anthropic.Anthropic(api_key=api_key)
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": image_blocks}],
+        )
+        raw = response.content[0].text.strip()
+
+        _usage = getattr(response, "usage", None)
+        if _usage:
+            bm_logger.log("api_usage",
+                          input_tokens=_usage.input_tokens,
+                          output_tokens=_usage.output_tokens,
+                          model="claude-sonnet-4-6",
+                          channel="visual_analyze")
+
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
+
+        result = json.loads(raw)
+        rules = result.get("visual_rules", [])
+        if not isinstance(rules, list) or not rules:
+            bm_logger.log("visual_analyze_no_rules")
+            return []
+
+        state_registry.replace_brand_rules("visual_rules", rules, source="analysis")
+        bm_logger.log("visual_analyze_complete", rules_count=len(rules))
+        return rules
+
+    except Exception as exc:
+        bm_logger.log("visual_analyze_error", error=str(exc)[:200])
+        return []

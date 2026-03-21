@@ -255,6 +255,12 @@ def _generate_ai_image(prompt: str, draft_id: int) -> str:
         bm_logger.log("ai_image_no_api_key")
         return ""
     try:
+        # Inject visual style rules into the prompt
+        visual_rules = state_registry.get_brand_rules(category="visual_rules")
+        if visual_rules:
+            style_desc = ". ".join(r["rule"] for r in visual_rules)
+            prompt = f"Visual style: {style_desc}. Scene: {prompt}"
+
         resp = http_requests.post(
             "https://api.openai.com/v1/images/generations",
             headers={
@@ -805,6 +811,16 @@ async def analyze_training():
     for r in all_rules:
         grouped.setdefault(r["category"], []).append(r)
     return {"ok": True, "rules": grouped, "categories_analyzed": len(result)}
+
+
+@router.post("/training/analyze-visual", dependencies=[Depends(_check_auth)])
+async def analyze_visual():
+    """Analyze Drive photos with Claude Vision to extract visual style rules."""
+    from agents.social.content_agent import analyze_visual_style
+    rules = analyze_visual_style()
+    if not rules:
+        raise HTTPException(status_code=400, detail="No photos to analyze or analysis failed")
+    return {"ok": True, "visual_rules": rules, "count": len(rules)}
 
 
 # --- Brand Profile ---
