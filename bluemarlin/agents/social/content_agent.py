@@ -635,11 +635,13 @@ def analyze_visual_style() -> list:
         "type": "text",
         "text": (
             f"These are {len(image_blocks)} photos from {business_name}'s brand. "
-            f"Analyze the visual patterns across ALL of them. "
-            f"What colors dominate? What's the lighting like? What subjects appear? "
-            f"What mood/atmosphere? What camera angles? What composition style? "
-            f"Extract specific, actionable visual rules that an AI image generator should follow "
-            f"to create new images that match this brand's look.\n\n"
+            f"Look across ALL photos and identify the broad visual PATTERNS — the overall vibe, "
+            f"not a description of individual scenes.\n\n"
+            f"Extract 5-8 high-level style patterns. Each rule should be short (under 15 words) "
+            f"and describe a recurring visual theme, not a specific scene.\n\n"
+            f"Good examples: 'Warm tropical palette — turquoise water, bright whites, golden sunlight' "
+            f"or 'Candid lifestyle moments — groups laughing, casual luxury, never posed'\n\n"
+            f"Bad examples: anything with hex codes, percentages, specific props, or shot-by-shot descriptions.\n\n"
             f"Return ONLY a JSON object. No explanation. No markdown. No code fences.\n"
             f'{{"visual_rules": ["rule1", "rule2", "rule3"]}}'
         )
