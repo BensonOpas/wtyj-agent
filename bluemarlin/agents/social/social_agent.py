@@ -229,6 +229,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     # Stale conversation reset — 24h inactivity gap means new conversation
     if _maybe_reset_stale_conversation(last_activity, fields, flags, completed_bookings):
         bm_logger.log("whatsapp_stale_reset", phone=phone)
+        state_registry.wa_store_message(phone, "system", "Conversation reset after 24h inactivity")
 
     # Anti-loop guard — rate limit per phone
     _reply_times = flags.get("reply_times", [])
@@ -369,6 +370,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 flags.pop(_fk, None)
             bm_logger.log("whatsapp_multi_trip_reset", phone=phone,
                           booking_number=len(completed_bookings))
+            state_registry.wa_store_message(phone, "system",
+                f"Previous booking archived ({archived.get('trip_key', '')} {archived.get('date', '')}). Starting new booking.")
 
     # Clear one-shot flags after Claude has seen them
     flags.pop("unknown_ref", None)
@@ -533,6 +536,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         })
         bm_logger.log("whatsapp_semi_escalation", phone=phone,
                       relay_question=relay_question, relay_token=relay_token)
+        state_registry.wa_store_message(phone, "system", f"Relay question sent to team: {relay_question}")
         _skip_booking = True
 
     # Step 7.5: Awaiting escalation email — email provided, now fire escalation
@@ -577,6 +581,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         })
         bm_logger.log("whatsapp_full_escalation", phone=phone,
                       intents=result.get("intents", []))
+        _esc_intent = (result.get("intents") or ["unknown"])[0]
+        state_registry.wa_store_message(phone, "system", f"Escalated to human: {_esc_intent}")
         # Build escalation alert for operator
         _esc_ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
         _esc_intents = ", ".join(result.get("intents") or ["unknown"])
@@ -664,6 +670,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
                 bm_logger.log("whatsapp_booking_confirmed", phone=phone,
                               booking_ref=booking_ref, trip_key=trip_key)
+                state_registry.wa_store_message(phone, "system",
+                    f"Booking confirmed: {fields.get('experience', trip_key)}, {fields.get('date', '')}, {fields.get('guests', '')} guests (Ref: {booking_ref})")
                 sheets_writer.log_hold_created({
                     "booking_ref": booking_ref,
                     "email": phone, "subject": "WhatsApp",
