@@ -913,6 +913,7 @@ class ManualDraftRequest(BaseModel):
     hashtags: list = []
     content_class: str = "D"
     visual_suggestion: str = ""
+    platforms: list = []
 
 @router.post("/drafts/manual", dependencies=[Depends(_check_auth)])
 async def create_manual_draft(req: ManualDraftRequest):
@@ -928,6 +929,9 @@ async def create_manual_draft(req: ManualDraftRequest):
     )
     # Set status to approved
     state_registry.update_draft_status(draft_id, "approved")
+    # Set platforms (from request or config default)
+    plats = req.platforms or config_loader.get_raw().get("social_content", {}).get("platforms", ["instagram"])
+    state_registry.update_draft_platforms(draft_id, plats)
     # Auto-generate image (same as approve flow)
     try:
         prompt = req.visual_suggestion or req.instagram_caption[:200]
