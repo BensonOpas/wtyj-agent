@@ -974,6 +974,11 @@ def main():
                     })
                     bm_logger.log("semi_escalation", email=from_email, subject=subj,
                                   relay_question=relay_question)
+                    state_registry.create_pending_notification(
+                        'relay', 'email', from_email,
+                        _cname or "Unknown",
+                        f"[RELAY-{relay_token}] {_ref} - {_cname}",
+                        _relay_alert, relay_token=relay_token)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
@@ -1035,6 +1040,11 @@ def main():
                         "internal_note": result.get("internal_note", ""),
                         "messages_json": json.dumps(th.get("messages", []), ensure_ascii=False),
                     })
+                    state_registry.create_pending_notification(
+                        'escalation', 'email', from_email,
+                        customer_name_esc or "Unknown",
+                        f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {intents_str}",
+                        escalation_alert)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash

@@ -702,6 +702,21 @@ def create_pending_notification(notification_type: str, channel: str,
     return row_id
 
 
+def get_all_escalations() -> list:
+    """Return all escalation notifications, newest first."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, notification_type, relay_token, channel, customer_id, "
+        "customer_name, subject, body, status, created_at "
+        "FROM pending_notifications ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
+             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
+             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9]}
+            for r in rows]
+
+
 def get_pending_notifications(status: str = "pending") -> list:
     """Return all notifications with the given status."""
     conn = _get_conn()

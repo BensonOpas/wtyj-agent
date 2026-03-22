@@ -876,3 +876,67 @@ async def get_conversation(phone: str):
         "messages": messages,
         "booking_state": booking_state,
     }
+
+
+# ── Escalations ──────────────────────────────────────────────────────────────
+
+@router.get("/escalations", dependencies=[Depends(_check_auth)])
+async def list_escalations():
+    """List all escalation notifications."""
+    return state_registry.get_all_escalations()
+
+
+@router.get("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
+async def get_escalation(escalation_id: int):
+    """Get a single escalation by ID."""
+    all_esc = state_registry.get_all_escalations()
+    esc = next((e for e in all_esc if e["id"] == escalation_id), None)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    return esc
+
+
+@router.post("/escalations/{escalation_id}/resolve", dependencies=[Depends(_check_auth)])
+async def resolve_escalation(escalation_id: int):
+    """Mark an escalation as resolved."""
+    ok = state_registry.update_notification_status(escalation_id, "resolved")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    return {"ok": True}
+
+
+# ── Manual Draft Creation ────────────────────────────────────────────────────
+
+class ManualDraftRequest(BaseModel):
+    instagram_caption: str
+    facebook_caption: str = ""
+    hashtags: list = []
+    content_class: str = "D"
+    visual_suggestion: str = ""
+
+@router.post("/drafts/manual", dependencies=[Depends(_check_auth)])
+async def create_manual_draft(req: ManualDraftRequest):
+    """Create a manually-written draft. Status = approved (human authored)."""
+    fb_caption = req.facebook_caption or req.instagram_caption
+    draft_id = state_registry.save_content_draft(
+        content_class=req.content_class,
+        instagram_caption=req.instagram_caption,
+        facebook_caption=fb_caption,
+        hashtags=req.hashtags,
+        visual_suggestion=req.visual_suggestion,
+        reasoning="Manually created by operator",
+    )
+    # Set status to approved
+    state_registry.update_draft_status(draft_id, "approved")
+    # Auto-generate image (same as approve flow)
+    try:
+        prompt = req.visual_suggestion or req.instagram_caption[:200]
+        ai_path = _generate_ai_image(prompt, draft_id)
+        if ai_path:
+            from agents.social import graphics_engine
+            image_path = graphics_engine.generate_composite(draft_id, photo_path=ai_path, mode="photo_only")
+            if image_path:
+                state_registry.update_draft_image(draft_id, image_path)
+    except Exception:
+        pass  # Image gen failure shouldn't block draft creation
+    return {"ok": True, "id": draft_id}
