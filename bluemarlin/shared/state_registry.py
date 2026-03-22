@@ -609,6 +609,62 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     conn.close()
 
 
+def wa_list_conversations() -> list:
+    """List all WhatsApp conversations with latest message and booking state.
+    Returns list of dicts sorted by most recent activity."""
+    conn = _get_conn()
+    # Get unique phones with latest message
+    rows = conn.execute(
+        "SELECT t.phone, t.text, t.created_at, t.role "
+        "FROM whatsapp_threads t "
+        "INNER JOIN ("
+        "  SELECT phone, MAX(created_at) as max_ts "
+        "  FROM whatsapp_threads GROUP BY phone"
+        ") latest ON t.phone = latest.phone AND t.created_at = latest.max_ts "
+        "ORDER BY t.created_at DESC"
+    ).fetchall()
+
+    conversations = []
+    for r in rows:
+        phone = r[0]
+        # Get booking state for name + status
+        state_row = conn.execute(
+            "SELECT fields_json, flags_json, last_activity "
+            "FROM whatsapp_booking_state WHERE phone = ?", (phone,)
+        ).fetchone()
+        fields = json.loads(state_row[0] or "{}") if state_row else {}
+        flags = json.loads(state_row[1] or "{}") if state_row else {}
+        name = fields.get("customer_name") or fields.get("name") or phone
+        status = "escalated" if flags.get("fully_escalated") else "active"
+        # Count messages
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ?", (phone,)
+        ).fetchone()
+        conversations.append({
+            "phone": phone,
+            "customer_name": name,
+            "last_message": r[1],
+            "last_message_role": r[3],
+            "last_message_at": r[2],
+            "status": status,
+            "message_count": count_row[0] if count_row else 0,
+        })
+    conn.close()
+    return conversations
+
+
+def wa_get_full_history(phone: str, limit: int = 100) -> list:
+    """Get full conversation history for a phone number (no 24h cutoff). Oldest first."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT role, text, created_at FROM whatsapp_threads "
+        "WHERE phone = ? ORDER BY created_at ASC LIMIT ?",
+        (phone, limit)
+    ).fetchall()
+    conn.close()
+    return [{"role": r[0], "text": r[1], "created_at": r[2]} for r in rows]
+
+
 def wa_cleanup_stale_data() -> dict:
     """Clean up old WhatsApp data. Returns counts of cleaned rows."""
     conn = _get_conn()

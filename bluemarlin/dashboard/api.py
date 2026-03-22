@@ -856,3 +856,23 @@ async def delete_brand_rule_endpoint(rule_id: int):
     if not ok:
         raise HTTPException(status_code=404, detail="Rule not found or already inactive")
     return {"ok": True}
+
+
+# ── Messages (WhatsApp conversations) ────────────────────────────────────────
+
+@router.get("/messages/conversations", dependencies=[Depends(_check_auth)])
+async def list_conversations():
+    """List all WhatsApp conversations with latest message and status."""
+    return state_registry.wa_list_conversations()
+
+
+@router.get("/messages/conversations/{phone}", dependencies=[Depends(_check_auth)])
+async def get_conversation(phone: str):
+    """Get full conversation thread + booking state for a phone number."""
+    messages = state_registry.wa_get_full_history(phone, limit=200)
+    booking_state = state_registry.wa_get_booking_state(phone)
+    return {
+        "phone": phone,
+        "messages": messages,
+        "booking_state": booking_state,
+    }
