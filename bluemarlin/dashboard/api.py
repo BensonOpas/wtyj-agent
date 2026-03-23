@@ -4,9 +4,12 @@
 # Purpose: REST API endpoints for the operator dashboard.
 
 import io
+import json
 import os
+import re
 import secrets
 import urllib.parse
+import anthropic
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query
 from fastapi.responses import FileResponse, RedirectResponse
@@ -944,3 +947,109 @@ async def create_manual_draft(req: ManualDraftRequest):
     except Exception:
         pass  # Image gen failure shouldn't block draft creation
     return {"ok": True, "id": draft_id}
+
+
+# ── Suggest Reply ────────────────────────────────────────────────────────────
+
+class SuggestReplyRequest(BaseModel):
+    phone: str
+
+@router.post("/messages/suggest-reply", dependencies=[Depends(_check_auth)])
+async def suggest_reply(req: SuggestReplyRequest):
+    """Generate an AI-suggested email reply based on WhatsApp conversation."""
+    if not req.phone:
+        raise HTTPException(status_code=400, detail="Phone number required")
+
+    messages = state_registry.wa_get_full_history(req.phone, limit=30)
+    if not messages:
+        raise HTTPException(status_code=404, detail="No conversation found")
+
+    booking_state = state_registry.wa_get_booking_state(req.phone)
+    business = config_loader.get_business()
+    csk = config_loader.get_common_sense_knowledge()
+    trips = config_loader.get_trips()
+    signature = config_loader.get_agent_signature()
+
+    # Format conversation
+    thread_lines = []
+    for msg in messages:
+        label = "Customer" if msg["role"] == "user" else "Marina"
+        thread_lines.append(f"{label}: {msg['text']}")
+    thread_text = "\n\n".join(thread_lines)
+
+    # Format booking context
+    fields = booking_state.get("fields", {})
+    completed = booking_state.get("completed_bookings", [])
+    booking_parts = []
+    if fields:
+        booking_parts.append("Current booking fields: " + json.dumps(fields, default=str))
+    if completed:
+        booking_parts.append("Completed bookings: " + json.dumps(completed, default=str))
+    booking_context = "\n".join(booking_parts)
+
+    # Format trips
+    trip_lines = []
+    for key, data in trips.items():
+        name = data.get("display_name", key)
+        price = data.get("price_pp", "")
+        trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
+
+    agent_name = business.get("agent_name", "Marina")
+    company_name = business.get("name", "BlueFinn Charters Curaçao")
+    persona = csk.get("marina_persona", "")
+
+    system_prompt = f"""You are {agent_name}, the booking agent for {company_name}.
+
+PERSONA: {persona}
+
+WRITING STYLE FOR EMAIL:
+Write as a real member of the {company_name} team. Warm, practical, human.
+Mirror the customer's tone. Use contractions. Plain language.
+No em dashes, no forced enthusiasm, no "I'd be happy to" or "Great choice".
+Emails are slightly longer and more structured than WhatsApp but still conversational.
+
+AVAILABLE TRIPS:
+{chr(10).join(trip_lines)}
+
+AGENT SIGNATURE:
+{signature}
+
+Return a JSON object with exactly two keys:
+- "subject": a short email subject line (no "Re:" prefix)
+- "body": the full email body including signature at the end
+
+Return ONLY the JSON object. No markdown fences, no extra text."""
+
+    user_prompt = f"""WHATSAPP CONVERSATION:
+{thread_text}
+
+{booking_context}
+
+Write an email reply from {agent_name} to this customer. Address open questions, confirm bookings, or provide next steps as appropriate."""
+
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Strip markdown fences if present
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
+        result = json.loads(raw)
+        return {
+            "subject": result.get("subject", ""),
+            "body": result.get("body", ""),
+        }
+    except json.JSONDecodeError:
+        return {
+            "subject": f"{company_name} — Follow-up",
+            "body": raw if raw else "Could not generate suggestion.",
+        }
+    except Exception as exc:
+        bm_logger.log("suggest_reply_error", error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail="Failed to generate suggestion")
