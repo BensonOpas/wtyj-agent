@@ -28,8 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://bluemarlindashboard.replit.app"],
-    allow_origin_regex=r"https://.*\.replit\.dev$",
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://bluemarlindashboard.replit.app", "https://wtyj-dashboard.replit.app"],
+    allow_origin_regex=r"https://.*\.replit\.(dev|app)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
