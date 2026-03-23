@@ -1,61 +1,80 @@
-#!/usr/bin/env python3
 """Tests for Brief 047 — Treat reschedule intent as booking-active."""
-import sys, os
+from agents.marina.email_poller import _BOOKING_INTENTS, _post_validate
 
-passed = 0
-failed = 0
 
-def check(name, condition):
-    global passed, failed
-    if condition:
-        print(f"  {name} PASS")
-        passed += 1
-    else:
-        print(f"  {name} FAIL")
-        failed += 1
+_trip_snorkel = {
+    "display_name": "3-in-1 Snorkeling Trip",
+    "departures": [{"time": "10:00", "vessel": "TopCat", "departure_point": "Mood Beach pier"}],
+    "days_available": "Fridays only",
+    "price_adult_usd": 110,
+    "included": ["lunch", "3 snorkel sites"],
+}
+_th_resched = {
+    "fields": {"experience": "3-in-1 Snorkeling", "date": "2026-04-03", "guests": "2", "trip_key": "snorkeling_3in1"},
+    "flags": {},
+}
 
-print("Running Brief 047 tests...")
 
-# T1-T3: _BOOKING_INTENTS constant
-from agents.marina.email_poller import _BOOKING_INTENTS
-check("T1: booking in _BOOKING_INTENTS", "booking" in _BOOKING_INTENTS)
-check("T2: reschedule in _BOOKING_INTENTS", "reschedule" in _BOOKING_INTENTS)
-check("T3: inquiry NOT in _BOOKING_INTENTS", "inquiry" not in _BOOKING_INTENTS)
+def test_booking_in_booking_intents():
+    """T1: booking in _BOOKING_INTENTS."""
+    assert "booking" in _BOOKING_INTENTS
 
-# T4-T5: _post_validate triggers on reschedule intent
-from agents.marina.email_poller import _post_validate
-th_resched = {"fields": {"experience": "3-in-1 Snorkeling", "date": "2026-03-13", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}
-trip_snorkel = {"display_name": "3-in-1 Snorkeling Trip", "departures": [{"time": "10:00", "vessel": "TopCat", "departure_point": "Mood Beach pier"}], "days_available": "Fridays only", "price_adult_usd": 110, "included": ["lunch", "3 snorkel sites"]}
-result_resched = {"intents": ["reschedule"], "fields": {"date": "2026-03-13"}, "flags": {}}
-override_r, awaiting_r = _post_validate(th_resched, result_resched, trip_snorkel)
-check("T4: reschedule triggers summary", override_r is not None and "Want me to go ahead and book this" in override_r)
-check("T5: reschedule sets awaiting", awaiting_r == True)
 
-# T6: _post_validate does NOT trigger on inquiry intent
-result_inquiry = {"intents": ["inquiry"], "fields": {}, "flags": {}}
-override_i, awaiting_i = _post_validate(th_resched, result_inquiry, trip_snorkel)
-check("T6: inquiry skips validation", override_i is None and awaiting_i == False)
+def test_reschedule_in_booking_intents():
+    """T2: reschedule in _BOOKING_INTENTS."""
+    assert "reschedule" in _BOOKING_INTENTS
 
-# T7: _post_validate still triggers on booking intent (regression)
-result_booking = {"intents": ["booking"], "fields": {}, "flags": {}}
-override_b, awaiting_b = _post_validate(th_resched, result_booking, trip_snorkel)
-check("T7: booking still triggers summary", override_b is not None and "Want me to go ahead and book this" in override_b)
 
-# T8: wrong day + reschedule returns day-of-week error
-th_bad = {"fields": {"experience": "3-in-1 Snorkeling", "date": "2026-03-09", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}
-result_resched_bad = {"intents": ["reschedule"], "fields": {"date": "2026-03-09"}, "flags": {}}
-override_bad, awaiting_bad = _post_validate(th_bad, result_resched_bad, trip_snorkel)
-check("T8: wrong day caught on reschedule", override_bad is not None and "Friday" in override_bad)
+def test_inquiry_not_in_booking_intents():
+    """T3: inquiry NOT in _BOOKING_INTENTS."""
+    assert "inquiry" not in _BOOKING_INTENTS
 
-# T9: summary contains correct price for snorkeling ($110 x 2 = $220)
-check("T9: summary has correct total", "$220" in override_r)
 
-# T10: summary contains trip name
-check("T10: summary has trip name", "3-in-1 Snorkeling Trip" in override_r)
+def test_reschedule_triggers_summary():
+    """T4: reschedule triggers summary."""
+    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
+    assert override is not None and "Want me to go ahead and book this" in override
 
-print(f"\n{passed}/{passed+failed} tests passed.")
-if failed:
-    print("SOME TESTS FAILED")
-    sys.exit(1)
-else:
-    print("All tests passed.")
+
+def test_reschedule_sets_awaiting():
+    """T5: reschedule sets awaiting."""
+    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
+    assert awaiting is True
+
+
+def test_inquiry_skips_validation():
+    """T6: inquiry skips validation."""
+    result = {"intents": ["inquiry"], "fields": {}, "flags": {}}
+    override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
+    assert override is None and awaiting is False
+
+
+def test_booking_still_triggers_summary():
+    """T7: booking still triggers summary (regression)."""
+    result = {"intents": ["booking"], "fields": {}, "flags": {}}
+    override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
+    assert override is not None and "Want me to go ahead and book this" in override
+
+
+def test_wrong_day_reschedule():
+    """T8: wrong day + reschedule returns day-of-week error."""
+    th_bad = {"fields": {"experience": "3-in-1 Snorkeling", "date": "2026-03-09", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}
+    result = {"intents": ["reschedule"], "fields": {"date": "2026-03-09"}, "flags": {}}
+    override, awaiting = _post_validate(th_bad, result, _trip_snorkel)
+    assert override is not None and "Friday" in override
+
+
+def test_reschedule_summary_correct_price():
+    """T9: summary contains correct price for snorkeling ($110 x 2 = $220)."""
+    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    override, _ = _post_validate(_th_resched, result, _trip_snorkel)
+    assert "$220" in override
+
+
+def test_reschedule_summary_trip_name():
+    """T10: summary contains trip name."""
+    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    override, _ = _post_validate(_th_resched, result, _trip_snorkel)
+    assert "3-in-1 Snorkeling Trip" in override
