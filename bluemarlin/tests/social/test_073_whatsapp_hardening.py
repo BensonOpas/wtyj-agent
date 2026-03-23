@@ -19,6 +19,17 @@ from agents.social.social_agent import handle_incoming_whatsapp_message
 from shared import state_registry
 
 
+def _next_weekday(weekday: int, days_ahead: int = 0) -> str:
+    today = datetime.now(timezone.utc).date()
+    d = today + timedelta(days=max(days_ahead, 1))
+    while d.weekday() != weekday:
+        d += timedelta(days=1)
+    return d.isoformat()
+
+_NEXT_WED = _next_weekday(2)
+_FUTURE_DATE = (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
+
+
 # --- Helpers ---
 
 def _cleanup_phone(phone):
@@ -54,7 +65,7 @@ def test_stale_conversation_resets_fields(mock_process):
     phone = "TEST_073_STALE_001"
     _cleanup_phone(phone)
     # Pre-set state with last_activity = 48 hours ago
-    fields = {"trip_key": "west_coast_beach", "date": "2026-03-18",
+    fields = {"trip_key": "west_coast_beach", "date": _NEXT_WED,
               "guests": "2", "customer_name": "Test User"}
     flags = {}
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -89,7 +100,7 @@ def test_stale_conversation_archives_booking(mock_process):
     phone = "TEST_073_STALE_002"
     _cleanup_phone(phone)
     fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": "2026-03-18", "guests": "2", "customer_name": "Test User"}
+              "date": _NEXT_WED, "guests": "2", "customer_name": "Test User"}
     flags = {"hold_created": True, "booking_ref": "BF-2026-55001",
              "payment_link": "https://demo.pay/test"}
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -153,7 +164,7 @@ def test_fresh_conversation_no_reset(mock_process):
     """Fields are preserved when last_activity is < 24h ago."""
     phone = "TEST_073_FRESH_001"
     _cleanup_phone(phone)
-    fields = {"trip_key": "sunset_cruise", "date": "2026-03-20",
+    fields = {"trip_key": "sunset_cruise", "date": _FUTURE_DATE,
               "guests": "4", "customer_name": "Test"}
     flags = {}
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -166,7 +177,7 @@ def test_fresh_conversation_no_reset(mock_process):
     handle_incoming_whatsapp_message(msg)
     state = state_registry.wa_get_booking_state(phone)
     assert state["fields"].get("trip_key") == "sunset_cruise"
-    assert state["fields"].get("date") == "2026-03-20"
+    assert state["fields"].get("date") == _FUTURE_DATE
     assert state["fields"].get("guests") == "4"
     _cleanup_phone(phone)
 
@@ -242,15 +253,15 @@ def test_change_detection_cancels_hold(mock_process, mock_avail, mock_remove):
     phone = "TEST_073_CHANGE_001"
     _cleanup_phone(phone)
     # Create real soft hold
-    hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
+    hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
     assert hold_id is not None
     fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": "2026-03-18", "guests": "2", "departure_time": "09:00",
+              "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
               "customer_name": "Test"}
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
              "hold_departure_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
@@ -271,7 +282,7 @@ def test_change_detection_cancels_hold(mock_process, mock_avail, mock_remove):
     assert "hold_id" not in state["flags"]
     assert "hold_trip_key" not in state["flags"]
     # remove_from_manifest called with correct args (from change detection)
-    mock_remove.assert_called_once_with("west_coast_beach", "2026-03-18", "09:00")
+    mock_remove.assert_called_once_with("west_coast_beach", _NEXT_WED, "09:00")
     _cleanup_phone(phone)
 
 
@@ -286,14 +297,14 @@ def test_manifest_failure_cancels_hold(mock_process, mock_cal, mock_pay, mock_sh
     phone = "TEST_073_MANIFEST_001"
     _cleanup_phone(phone)
     # Pre-set: booking confirmed + hold created
-    hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
+    hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
     fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": "2026-03-18", "guests": "2", "departure_time": "09:00",
+              "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
               "customer_name": "Test"}
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
              "hold_departure_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
@@ -331,7 +342,7 @@ def test_hold_race_condition(mock_process, mock_cal, mock_sheets):
     mock_process.return_value = _base_result(
         intents=["booking"],
         fields={"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-                "date": "2026-03-18", "guests": "2", "departure_time": "09:00",
+                "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
                 "customer_name": "Test"},
         reply="Sounds good!",
     )

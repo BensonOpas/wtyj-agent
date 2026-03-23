@@ -26,6 +26,20 @@ from shared import config_loader
 from shared import state_registry
 
 
+def _next_weekday(weekday: int, days_ahead: int = 0) -> str:
+    """Return the next occurrence of a weekday (0=Mon, 2=Wed, 6=Sun) as YYYY-MM-DD."""
+    today = datetime.now(timezone.utc).date()
+    d = today + timedelta(days=max(days_ahead, 1))
+    while d.weekday() != weekday:
+        d += timedelta(days=1)
+    return d.isoformat()
+
+# Dynamic future dates for booking tests
+_NEXT_WED = _next_weekday(2)      # Next Wednesday (West Coast Beach runs Wed/Sun)
+_NEXT_MON = _next_weekday(0)      # Next Monday (invalid for West Coast Beach)
+_FUTURE_DATE = (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
+
+
 # --- Helpers ---
 
 def _cleanup_phone(phone):
@@ -55,7 +69,7 @@ def test_day_matches_specific_days():
 
 def test_suggest_dates_west_coast():
     """West Coast Beach runs Wed/Sun — Monday 2026-03-16 suggests nearby valid dates."""
-    suggestions = _suggest_dates("2026-03-16", "Wednesdays and Sundays")
+    suggestions = _suggest_dates(_NEXT_MON, "Wednesdays and Sundays")
     assert "Wednesday" in suggestions  # 2026-03-18
     assert "Sunday" in suggestions  # 2026-03-22
 
@@ -66,7 +80,7 @@ def test_build_booking_summary_west_coast():
     fields = {
         "trip_key": "west_coast_beach",
         "experience": "West Coast Beach Trip",
-        "date": "2026-03-18",  # Wednesday
+        "date": _NEXT_WED,  # Wednesday
         "guests": "3",
         "departure_time": "09:00",
     }
@@ -85,7 +99,7 @@ def test_build_booking_summary_single_departure_auto():
     fields = {
         "trip_key": "west_coast_beach",
         "experience": "West Coast Beach Trip",
-        "date": "2026-03-18",  # Wednesday
+        "date": _NEXT_WED,  # Wednesday
         "guests": "2",
     }
     summary = _build_booking_summary(fields, trip)
@@ -109,7 +123,7 @@ def test_build_action_context_not_awaiting():
 def test_post_validate_day_of_week_rejection():
     """Monday booking for West Coast Beach (Wed/Sun only) is rejected."""
     trip = config_loader.get_trip("west_coast_beach")
-    fields = {"experience": "West Coast Beach Trip", "date": "2026-03-16",
+    fields = {"experience": "West Coast Beach Trip", "date": _NEXT_MON,
               "guests": "2", "trip_key": "west_coast_beach"}  # Monday
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, trip)
@@ -133,7 +147,7 @@ def test_post_validate_past_date_rejection():
 def test_post_validate_multi_departure_asks():
     """Multi-departure trip (klein_curacao: 08:00, 08:30) without departure_time asks for selection."""
     trip = config_loader.get_trip("klein_curacao")
-    fields = {"experience": "Klein Curacao", "date": "2026-03-20",
+    fields = {"experience": "Klein Curacao", "date": _FUTURE_DATE,
               "guests": "2", "trip_key": "klein_curacao"}
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, trip)
@@ -147,7 +161,7 @@ def test_post_validate_multi_departure_asks():
 def test_post_validate_all_pass_builds_summary():
     """All fields valid — summary built, should_set_awaiting is True."""
     trip = config_loader.get_trip("west_coast_beach")
-    fields = {"experience": "West Coast Beach Trip", "date": "2026-03-18",
+    fields = {"experience": "West Coast Beach Trip", "date": _NEXT_WED,
               "guests": "2", "trip_key": "west_coast_beach",
               "departure_time": "09:00"}  # Wednesday, single departure
     result = {"intents": ["booking"], "flags": {}}
@@ -160,7 +174,7 @@ def test_post_validate_all_pass_builds_summary():
 def test_post_validate_skips_non_booking_intent():
     """Non-booking intent skips validation entirely."""
     trip = config_loader.get_trip("klein_curacao")
-    fields = {"experience": "Klein Curacao", "date": "2026-03-20",
+    fields = {"experience": "Klein Curacao", "date": _FUTURE_DATE,
               "guests": "2", "trip_key": "klein_curacao"}
     result = {"intents": ["inquiry"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, trip)
@@ -178,7 +192,7 @@ def test_orchestrator_post_validate_day_override(mock_process):
     mock_process.return_value = {
         "intents": ["booking"],
         "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-                    "date": "2026-03-16", "guests": "2"},  # Monday — Wed/Sun only
+                    "date": _NEXT_MON, "guests": "2"},  # Monday — Wed/Sun only
         "confidence": "high",
         "reply": "I'll book West Coast Beach for you!",
         "clarifications_needed": [], "requires_human": False,
@@ -202,7 +216,7 @@ def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, moc
     mock_process.return_value = {
         "intents": ["booking"],
         "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-                    "date": "2026-03-18", "guests": "2",
+                    "date": _NEXT_WED, "guests": "2",
                     "customer_name": "John"},  # Wednesday — single departure, auto-selects 09:00
         "confidence": "high",
         "reply": "Sounds good!",
@@ -232,13 +246,13 @@ def test_orchestrator_booking_confirmed(mock_process, mock_cal, mock_pay, mock_s
     _cleanup_phone(phone)
     # Pre-set state: awaiting confirmation with soft hold
     fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": "2026-03-18", "guests": "2",
+              "date": _NEXT_WED, "guests": "2",
               "departure_time": "09:00", "customer_name": "John"}
-    hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
+    hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="John", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
              "hold_departure_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
@@ -279,7 +293,7 @@ def test_orchestrator_slot_unavailable(mock_process, mock_cal):
     mock_process.return_value = {
         "intents": ["booking"],
         "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-                    "date": "2026-03-18", "guests": "2",
+                    "date": _NEXT_WED, "guests": "2",
                     "departure_time": "09:00", "customer_name": "Jane"},
         "confidence": "high",
         "reply": "Sounds good!",
