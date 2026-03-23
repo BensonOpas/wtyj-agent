@@ -14,7 +14,7 @@ os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "test_token_067")
 os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_access_token")
 os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "990622044139349")
 os.environ.setdefault("LATE_API_KEY", "sk_test_key_for_testing")
-os.environ.setdefault("DASHBOARD_PASSWORD", "test_password_099")
+os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
 
 from fastapi.testclient import TestClient
 from agents.social.webhook_server import app
@@ -35,7 +35,7 @@ def _cleanup_all():
 
 
 def _login():
-    resp = client.post("/dashboard/api/login", json={"password": "test_password_099"})
+    resp = client.post("/dashboard/api/login", json={"password": "testpass"})
     return resp.json()["token"]
 
 
@@ -46,7 +46,7 @@ def _auth(token):
 # --- Tests ---
 
 def test_login_success():
-    resp = client.post("/dashboard/api/login", json={"password": "test_password_099"})
+    resp = client.post("/dashboard/api/login", json={"password": "testpass"})
     assert resp.status_code == 200
     assert "token" in resp.json()
 

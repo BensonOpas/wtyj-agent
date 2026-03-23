@@ -4,7 +4,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
-os.environ.setdefault("DASHBOARD_PASSWORD", "test_pw_119")
+os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
 os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "test")
 os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "test")
 os.environ.setdefault("META_ACCESS_TOKEN", "test")
@@ -17,7 +17,7 @@ from agents.social.webhook_server import app
 client = TestClient(app)
 
 def _login():
-    r = client.post("/dashboard/api/login", json={"password": "test_pw_119"})
+    r = client.post("/dashboard/api/login", json={"password": "testpass"})
     return r.json()["token"]
 
 def _auth(token):
