@@ -18,6 +18,8 @@ from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
 from agents.social import content_agent, social_publisher, graphics_engine
+from agents.social.whatsapp_client import send_text_message as wa_send_text_message
+from agents.marina import marina_agent
 from agents.social.content_agent import _build_seasonal_context
 
 _GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
@@ -953,6 +955,7 @@ async def create_manual_draft(req: ManualDraftRequest):
 
 class SuggestReplyRequest(BaseModel):
     phone: str
+    draft_text: str = ""
 
 @router.post("/messages/suggest-reply", dependencies=[Depends(_check_auth)])
 async def suggest_reply(req: SuggestReplyRequest):
@@ -1020,7 +1023,20 @@ Return a JSON object with exactly two keys:
 
 Return ONLY the JSON object. No markdown fences, no extra text."""
 
-    user_prompt = f"""WHATSAPP CONVERSATION:
+    if req.draft_text:
+        user_prompt = f"""WHATSAPP CONVERSATION:
+{thread_text}
+
+{booking_context}
+
+The operator wrote this draft reply:
+---
+{req.draft_text}
+---
+
+Rewrite this draft as a polished, professional email from {agent_name}. Keep the operator's intent and key points. Improve tone, clarity, and structure. Include the agent signature."""
+    else:
+        user_prompt = f"""WHATSAPP CONVERSATION:
 {thread_text}
 
 {booking_context}
@@ -1053,3 +1069,60 @@ Write an email reply from {agent_name} to this customer. Address open questions,
     except Exception as exc:
         bm_logger.log("suggest_reply_error", error=str(exc)[:200])
         raise HTTPException(status_code=500, detail="Failed to generate suggestion")
+
+
+# ── Escalation Reply ─────────────────────────────────────────────────────────
+
+class EscalationReplyRequest(BaseModel):
+    answer: str
+
+@router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
+async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
+    """Reply to a semi escalation. Marina reformulates and sends to customer."""
+    if not req.answer.strip():
+        raise HTTPException(status_code=400, detail="Answer text required")
+
+    all_esc = state_registry.get_all_escalations()
+    esc = next((e for e in all_esc if e["id"] == escalation_id), None)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+
+    channel = esc.get("channel", "whatsapp")
+    customer_id = esc.get("customer_id", "")
+
+    if channel == "whatsapp" and customer_id:
+        wa_state = state_registry.wa_get_booking_state(customer_id)
+        wa_fields = wa_state.get("fields", {})
+        wa_flags = wa_state.get("flags", {})
+        wa_history = state_registry.wa_get_history(customer_id, limit=10)
+
+        agent_flags = dict(wa_flags)
+        for rk in ("relay_token", "reply_times", "awaiting_relay", "relay_question"):
+            agent_flags.pop(rk, None)
+
+        relay_result = marina_agent.process_message(
+            customer_id, "", req.answer.strip(),
+            wa_fields, agent_flags,
+            channel="whatsapp", messages=wa_history,
+        )
+        relay_reply = relay_result.get("reply", "")
+
+        if relay_reply:
+            wa_send_text_message(to=customer_id, text=relay_reply)
+            state_registry.wa_store_message(customer_id, "assistant", relay_reply)
+            bm_logger.log("dashboard_relay_sent", phone=customer_id, escalation_id=escalation_id)
+        else:
+            raise HTTPException(status_code=500, detail="Marina returned empty reply")
+
+        wa_flags.pop("awaiting_relay", None)
+        wa_flags.pop("relay_token", None)
+        wa_flags.pop("relay_question", None)
+        state_registry.wa_save_booking_state(
+            customer_id, wa_fields, wa_flags,
+            wa_state.get("completed_bookings", []))
+
+        state_registry.update_notification_status(escalation_id, "replied")
+
+        return {"ok": True, "reply": relay_reply}
+    else:
+        raise HTTPException(status_code=400, detail=f"Channel '{channel}' reply not supported from dashboard")
