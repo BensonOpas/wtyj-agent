@@ -594,9 +594,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _esc_chat_lines.append(_em.get("text", ""))
             _esc_chat_lines.append("---")
         _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
+        _esc_note = result.get("internal_note", "").strip()
+        _esc_summary = _esc_note if _esc_note else _esc_intents
         _esc_subject = (
             f"[ESCALATION] {_esc_ref} - {_cname} "
-            f"(WhatsApp: {phone}) - {_esc_intents}")
+            f"(WhatsApp: {phone}) - {_esc_summary}")
         _customer_email = fields.get("email", "")
         _esc_body = (
             f"=== CUSTOMER ===\n"
