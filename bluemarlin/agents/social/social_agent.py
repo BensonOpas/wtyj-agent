@@ -716,6 +716,30 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     customer_email=fields.get("email") or phone,
                 )
 
+                # Large group notification — operator review after auto-confirm
+                _lg_threshold = config_loader.get_booking_rules().get("group_threshold_requires_human", 15)
+                _lg_guests = int(fields.get("guests", 0) or 0)
+                if _lg_guests >= _lg_threshold:
+                    _lg_ref = flags.get("booking_ref", "NO-REF")
+                    _lg_name = fields.get("customer_name", "Unknown")
+                    _lg_note = (f"Large group booking: {_lg_guests} guests for "
+                                f"{fields.get('experience', '?')} on {fields.get('date', '?')}. "
+                                f"Ref: {_lg_ref}. Auto-confirmed — operator review recommended.")
+                    state_registry.create_pending_notification(
+                        'escalation', 'whatsapp', phone, _lg_name,
+                        f"[LARGE GROUP] {_lg_ref} - {_lg_name} (WhatsApp: {phone}) - {_lg_note}",
+                        (f"=== LARGE GROUP BOOKING ===\n"
+                         f"Ref: {_lg_ref}\nGuests: {_lg_guests}\n"
+                         f"Trip: {fields.get('experience', '?')}\n"
+                         f"Date: {fields.get('date', '?')}\n"
+                         f"Customer: {_lg_name}\nPhone: {phone}\n"
+                         f"Email: {fields.get('email', 'not provided')}\n\n"
+                         f"This booking was auto-confirmed. Review and adjust if needed."))
+                    state_registry.wa_store_message(phone, "system",
+                        f"Large group booking ({_lg_guests} guests) — operator notified for review")
+                    bm_logger.log("large_group_booking", phone=phone,
+                                  guests=str(_lg_guests), booking_ref=_lg_ref)
+
     # Step 9: Strip remaining placeholders (safety net)
     reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
 
