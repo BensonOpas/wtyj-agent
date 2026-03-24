@@ -1010,6 +1010,8 @@ def main():
                     booking_ref_esc = _resolve_booking_ref(th)
                     customer_name_esc = th["fields"].get("customer_name", "Unknown")
                     intents_str = ", ".join(result.get("intents") or ["unknown"])
+                    _esc_note = result.get("internal_note", "").strip()
+                    _esc_summary = _esc_note if _esc_note else intents_str
                     _phone_esc = th["fields"].get("phone", "")
                     escalation_alert = (
                         f"=== CUSTOMER ===\n"
@@ -1025,7 +1027,7 @@ def main():
                     try:
                         smtp_send(
                             demo_support_email,
-                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {intents_str}",
+                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {_esc_summary}",
                             escalation_alert,
                         )
                         log(f"Escalation alert sent to {demo_support_email} for {from_email}")
@@ -1043,7 +1045,7 @@ def main():
                     state_registry.create_pending_notification(
                         'escalation', 'email', from_email,
                         customer_name_esc or "Unknown",
-                        f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {intents_str}",
+                        f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {_esc_summary}",
                         escalation_alert)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
