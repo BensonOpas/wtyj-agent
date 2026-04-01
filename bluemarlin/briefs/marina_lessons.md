@@ -208,3 +208,7 @@ The research agent's API endpoints were partially fabricated — the presigned U
 ## Brief 130 — Zernio DM Webhook + Storage Layer
 Date: 2026-04-01
 `bm_logger.log(event, **fields)` has `event` as its first positional parameter. Passing `event=value` as a kwarg alongside a positional first arg causes `TypeError: log() got multiple values for argument 'event'`. This bit us twice in one brief — fixed in zernio_dm_client.py during tests, but the output reviewer caught the identical bug in webhook_server.py. Lesson: when you fix a pattern bug in one file, grep for the same pattern in all modified files. Also: ALTER TABLE ADD COLUMN with try/except for idempotency is the right SQLite migration pattern for adding columns to existing tables — avoids creating a separate migration system.
+
+## Brief 131 — DM Agent + Reply Path
+Date: 2026-04-01
+Brief reviewer caught wrong config path — `contact_for_booking` is under `private_charters`, not `business`. Used `business.email` instead (same address, correct path). Lesson: always verify config field paths by reading client.json before writing code that accesses them. Also: when extending an if/elif/else chain for channel handling, combine channels with identical behavior (e.g., WhatsApp + DM history format is identical — use `if channel in ("whatsapp", "instagram_dm", "facebook_dm"):` instead of duplicating the block).

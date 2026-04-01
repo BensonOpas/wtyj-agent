@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 130
+# Last modified: Brief 131
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import json as _json
@@ -14,7 +14,8 @@ from shared.bm_logger import log
 from shared import state_registry
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
-from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature
+from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
+from agents.social.dm_agent import handle_incoming_dm
 
 from contextlib import asynccontextmanager
 
@@ -224,7 +225,22 @@ def _process_zernio_event(payload: dict):
             text=text,
             sender_name=msg["sender_name"],
         )
-        # Brief 131 will add: dm_agent.handle_incoming_dm(msg) + send reply
+        # Send typing indicator (best-effort)
+        send_typing_indicator(msg["conversation_id"], msg["account_id"])
+
+        # Process through Marina
+        reply_text = handle_incoming_dm(msg)
+
+        if reply_text:
+            # Send reply via Zernio
+            send_dm_reply(msg["conversation_id"], msg["account_id"], reply_text)
+            # Store assistant reply
+            state_registry.dm_store_message(
+                conversation_id=msg["conversation_id"],
+                channel=msg["channel"],
+                role="assistant",
+                text=reply_text,
+            )
     except Exception as e:
         log("webhook_process_error", source="zernio", error=str(e))
 
