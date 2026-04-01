@@ -86,6 +86,19 @@ def _get_conn():
         "CREATE INDEX IF NOT EXISTS idx_whatsapp_threads_phone "
         "ON whatsapp_threads(phone, created_at)"
     )
+    # Schema migration: add channel + sender_name columns to whatsapp_threads
+    try:
+        conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN channel TEXT DEFAULT 'whatsapp'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN sender_name TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_whatsapp_threads_channel "
+        "ON whatsapp_threads(channel, phone, created_at)"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS whatsapp_booking_state ("
         "phone TEXT PRIMARY KEY, "
@@ -680,6 +693,34 @@ def wa_cleanup_stale_data() -> dict:
     conn.commit()
     conn.close()
     return {"threads_cleaned": threads_cleaned, "processed_cleaned": processed_cleaned}
+
+
+def dm_store_message(conversation_id: str, channel: str, role: str, text: str,
+                     sender_name: str = ""):
+    """Store a DM message (IG/FB) in conversation history."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO whatsapp_threads (phone, role, text, created_at, channel, sender_name) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (conversation_id, role, text, datetime.now(timezone.utc).isoformat(),
+         channel, sender_name)
+    )
+    conn.commit()
+    conn.close()
+
+
+def dm_get_history(conversation_id: str, channel: str, limit: int = 10) -> list:
+    """Get recent DM conversation history (last 24h, oldest first)."""
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    rows = conn.execute(
+        "SELECT role, text, created_at FROM whatsapp_threads "
+        "WHERE phone = ? AND channel = ? AND created_at > ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (conversation_id, channel, cutoff, limit)
+    ).fetchall()
+    conn.close()
+    return [{"role": r[0], "text": r[1], "created_at": r[2]} for r in reversed(rows)]
 
 
 def create_pending_notification(notification_type: str, channel: str,

@@ -1,8 +1,9 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 099
+# Last modified: Brief 130
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
+import json as _json
 import os
 import time
 import threading
@@ -13,6 +14,7 @@ from shared.bm_logger import log
 from shared import state_registry
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
+from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature
 
 from contextlib import asynccontextmanager
 
@@ -168,6 +170,63 @@ def _flush_buffer(phone):
     except Exception as e:
         log("webhook_process_error", source="meta_whatsapp", error=str(e),
             phone=phone)
+
+
+@app.post("/webhooks/zernio")
+async def receive_zernio_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Receive Zernio webhook events (DMs from IG/FB). Return 200 immediately."""
+    body = await request.body()
+    signature = request.headers.get("X-Zernio-Signature", "")
+
+    if not verify_webhook_signature(body, signature):
+        log("zernio_webhook_signature_invalid")
+        return PlainTextResponse(content="Forbidden", status_code=403)
+
+    try:
+        payload = _json.loads(body)
+    except Exception:
+        payload = {"raw": body.decode("utf-8", errors="replace")}
+    log("webhook_received", source="zernio", webhook_event=payload.get("event", "unknown"))
+    background_tasks.add_task(_process_zernio_event, payload)
+    return PlainTextResponse(content="OK", status_code=200)
+
+
+def _process_zernio_event(payload: dict):
+    """Background task: parse Zernio webhook, dedup, store DM message."""
+    try:
+        msg = parse_zernio_webhook(payload)
+        if not msg:
+            return  # Not a message event or unparseable
+
+        message_id = msg["message_id"]
+        # Reuse whatsapp_processed table for dedup
+        if state_registry.wa_has_been_processed(message_id):
+            log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
+            return
+        state_registry.wa_mark_as_processed(message_id)
+
+        text = msg.get("text", "")
+        if not text:
+            log("zernio_dm_non_text_skipped", message_id=message_id,
+                platform=msg.get("platform"))
+            return
+
+        log("zernio_dm_received",
+            conversation_id=msg["conversation_id"][:20],
+            platform=msg["platform"],
+            sender=msg["sender_name"][:30])
+
+        # Store the incoming message
+        state_registry.dm_store_message(
+            conversation_id=msg["conversation_id"],
+            channel=msg["channel"],
+            role="user",
+            text=text,
+            sender_name=msg["sender_name"],
+        )
+        # Brief 131 will add: dm_agent.handle_incoming_dm(msg) + send reply
+    except Exception as e:
+        log("webhook_process_error", source="zernio", error=str(e))
 
 
 @app.get("/health")

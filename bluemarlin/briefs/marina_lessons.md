@@ -204,3 +204,7 @@ Brief reviewer caught a critical font fallback bug: `ImageFont.load_default()` (
 ## Brief 096 — Late Publishing Integration
 Date: 2026-03-16
 The research agent's API endpoints were partially fabricated — the presigned URL path was wrong (404). Always verify external API endpoints against the real API before writing a brief. The Late SDK (`late-sdk` on PyPI) was the right choice: it abstracts the presigned URL flow entirely via `client.media.upload()`. Key gotcha: the SDK uses `field_id` (not `id` or `_id`) for account IDs due to Pydantic field name mapping. The brief reviewer correctly caught that replacing `cmd_publish()` would break existing test_094 assertions — always check which tests call functions you're replacing.
+
+## Brief 130 — Zernio DM Webhook + Storage Layer
+Date: 2026-04-01
+`bm_logger.log(event, **fields)` has `event` as its first positional parameter. Passing `event=value` as a kwarg alongside a positional first arg causes `TypeError: log() got multiple values for argument 'event'`. This bit us twice in one brief — fixed in zernio_dm_client.py during tests, but the output reviewer caught the identical bug in webhook_server.py. Lesson: when you fix a pattern bug in one file, grep for the same pattern in all modified files. Also: ALTER TABLE ADD COLUMN with try/except for idempotency is the right SQLite migration pattern for adding columns to existing tables — avoids creating a separate migration system.
