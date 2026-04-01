@@ -216,3 +216,7 @@ Brief reviewer caught wrong config path — `contact_for_booking` is under `priv
 ## Brief 131b — Separate DM Q&A Agent
 Date: 2026-04-01
 Using a booking agent (Marina) for Q&A-only channels doesn't work. Marina's core identity is "booking agent" — 200+ lines of booking schema, field extraction, and confirmation logic overrode a single paragraph saying "redirect bookings." Live test proved it: Marina collected booking details, confirmed with `[BOOKING_REF]` placeholder, and sent it raw. Lesson: when the job is fundamentally different (Q&A vs booking), use a different prompt — don't try to suppress the existing one. Two prompts sharing one data source (client.json) is cleaner than one prompt with channel-conditional spaghetti.
+
+## Brief 133 — Payment Timing + Hardcoded Cleanup
+Date: 2026-04-01
+When wrapping code in a conditional (payment timing), check ALL downstream references to variables defined inside that block. `price_usd` and `pay` were used in sheets logging outside the conditional — moving them inside caused NameError. Fix: compute shared variables before the conditional, only wrap the payment-specific code. Also: config_loader caches the raw dict — mutating it in tests (`raw["payment"]["timing"] = "none"`) leaks between tests. Always restore original values in a try/finally.

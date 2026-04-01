@@ -295,7 +295,8 @@ def _maybe_reset_stale_thread(msg, thread_key: str, th: dict, threads: dict, now
 
 def _detect_booking_ref(body: str) -> "str | None":
     """Extract a BF-YYYY-XXXXX booking reference from message body. Returns ref or None."""
-    match = re.search(r'BF-\d{4}-\d{5}', body)
+    _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
+    match = re.search(rf'{re.escape(_ref_prefix)}-\d{{4}}-\d{{5}}', body)
     return match.group() if match else None
 
 
@@ -1077,7 +1078,8 @@ def main():
                             "date": fields_now.get("date"),
                         })
                         # Generate booking_ref + set on soft hold BEFORE manifest creation
-                        booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+                        _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
+                        booking_ref = f"{_ref_prefix}-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
                         th["flags"]["booking_ref"] = booking_ref
                         if th["flags"].get("hold_id"):
                             state_registry.set_booking_ref(th["flags"]["hold_id"], booking_ref)
@@ -1125,15 +1127,20 @@ def main():
                             th["flags"]["event_id"] = res.get("eventId")
                             th["flags"]["event_link"] = res.get("htmlLink")
                             trip_key = fields_now.get("trip_key", "")
-                            price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
-                                         if trip_key else 0)
-                            pay = payment_stub.generate_payment_link(booking_ref, price_usd)
-                            pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
-                            th["flags"]["payment_id"] = pay.get("payment_id")
-                            th["flags"]["payment_link"] = pay_link
-                            th["flags"]["payment_status"] = pay.get("status")
-                            reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
                             reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
+
+                            _payment_timing = config_loader.get_raw().get("payment", {}).get("timing", "upfront")
+                            if _payment_timing in ("upfront", "deposit"):
+                                price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
+                                             if trip_key else 0)
+                                pay = payment_stub.generate_payment_link(booking_ref, price_usd)
+                                pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                                th["flags"]["payment_id"] = pay.get("payment_id")
+                                th["flags"]["payment_link"] = pay_link
+                                th["flags"]["payment_status"] = pay.get("status")
+                                reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
+                            else:
+                                reply_text = reply_text.replace("[PAYMENT_LINK]", "")
                             bm_logger.log(
                                 "hold_created",
                                 email=from_email, subject=subj,

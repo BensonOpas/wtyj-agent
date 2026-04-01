@@ -800,4 +800,10 @@ Outcome: complete — 10/10 tests pass, 296/298 social regression pass (2 pre-ex
 
 Brief 131b — Separate DM Q&A Agent
 Decision: Live testing showed Marina enters full booking flow in DMs despite redirect instructions (collected dates, guests, sent [BOOKING_REF] placeholder). Root cause: Marina's 300-line booking prompt overrides a small redirect paragraph. Fix: separate Claude call in dm_agent.py with Q&A-only system prompt. Reads same client.json data (trips, FAQ, business info) via config_loader but has zero booking logic — no fields, no flags, no JSON schema, no placeholders. Plain text response. Booking redirect to WhatsApp + email (the "booking trilogy" — website form coming later). Reverted all Brief 131 DM additions from marina_agent.py — Marina only handles email + WhatsApp. Safety net strips [BOOKING_REF] and [PAYMENT_LINK] from replies.
-Outcome: complete — 10/10 tests pass, regression pending
+Outcome: complete — 10/10 tests pass, 297/299 social regression pass
+
+---
+
+Brief 133 — Payment Timing + Hardcoded Cleanup
+Decision: Four generalization fixes for Phase 2 multi-tenant. (1) `payment.timing` flag in client.json — "upfront"/"deposit" generates payment link, "none"/"at_service" strips [PAYMENT_LINK] from confirmation. (2) Hardcoded `info@bluefinncharters.com` in marina_agent.py prompt → reads from `business.email` config. (3) Charter-specific prompt examples ("boat trips", "BBQ", "Klein Curacao", "BlueFinn team") → generic tone examples. (4) Booking ref prefix "BF-" → configurable via `booking_rules.booking_ref_prefix`. Returning customer regex now dynamic. All changes are config-driven — zero new logic.
+Outcome: complete — 9/9 tests pass, regression pending

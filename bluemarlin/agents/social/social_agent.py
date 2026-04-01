@@ -283,7 +283,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
     # Returning customer — booking ref detection
     _detected_ref = None
-    _ref_match = re.search(r'BF-\d{4}-\d{5}', text)
+    _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
+    _ref_match = re.search(rf'{re.escape(_ref_prefix)}-\d{{4}}-\d{{5}}', text)
     if _ref_match:
         _detected_ref = _ref_match.group()
         if not flags.get("booking_ref"):
@@ -627,7 +628,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                           date=fields.get("date"), guests=fields.get("guests"))
 
             # Generate booking_ref + set on soft hold BEFORE manifest creation
-            booking_ref = f"BF-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+            _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
+            booking_ref = f"{_ref_prefix}-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
             flags["booking_ref"] = booking_ref
             if flags.get("hold_id"):
                 state_registry.set_booking_ref(flags["hold_id"], booking_ref)
@@ -663,13 +665,20 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 trip_key = fields.get("trip_key", "")
                 price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
                              if trip_key else 0)
-                pay = payment_stub.generate_payment_link(booking_ref, price_usd)
-                pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
-                flags["payment_id"] = pay.get("payment_id")
-                flags["payment_link"] = pay_link
-                flags["payment_status"] = pay.get("status")
-                reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
                 reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
+
+                # Payment timing: only generate link for upfront/deposit
+                _payment_timing = config_loader.get_raw().get("payment", {}).get("timing", "upfront")
+                if _payment_timing in ("upfront", "deposit"):
+                    pay = payment_stub.generate_payment_link(booking_ref, price_usd)
+                    pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                    flags["payment_id"] = pay.get("payment_id")
+                    flags["payment_link"] = pay_link
+                    flags["payment_status"] = pay.get("status")
+                    reply_text = reply_text.replace("[PAYMENT_LINK]", pay_link)
+                else:
+                    reply_text = reply_text.replace("[PAYMENT_LINK]", "")
+                    flags["payment_status"] = "not_required"
                 bm_logger.log("whatsapp_booking_confirmed", phone=phone,
                               booking_ref=booking_ref, trip_key=trip_key)
                 state_registry.wa_store_message(phone, "system",
@@ -688,7 +697,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     "total_price": int(fields.get("guests") or 0) * price_usd,
                     "html_link": flags.get("event_link"),
                     "payment_link": flags.get("payment_link"),
-                    "payment_status": pay.get("status"),
+                    "payment_status": flags.get("payment_status", ""),
                 })
                 # Log manifest summary to Sheets
                 _m_passengers = state_registry.get_slot_passengers(
