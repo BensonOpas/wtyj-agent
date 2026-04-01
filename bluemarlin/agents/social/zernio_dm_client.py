@@ -54,7 +54,12 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
 
     conversation_id = data.get("conversationId", "") or data.get("conversation_id", "")
     message_id = data.get("id", "") or data.get("messageId", "")
+    # account_id may be in message object or top-level account object
     account_id = data.get("accountId", "") or data.get("account_id", "")
+    if not account_id:
+        account_obj = payload.get("account", {})
+        if isinstance(account_obj, dict):
+            account_id = account_obj.get("id", "")
 
     sender = data.get("sender", {})
     if isinstance(sender, dict):

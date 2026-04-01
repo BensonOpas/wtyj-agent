@@ -231,6 +231,41 @@ def test_existing_wa_functions_still_work():
     conn.close()
 
 
+# --- Test 12b: Real Zernio payload structure (account at top level, not in message) ---
+def test_parse_real_zernio_payload():
+    """Test with actual Zernio webhook payload structure discovered in production."""
+    payload = {
+        "id": "1d28c779-c1f4-40bf-932e-a0906521a272",
+        "event": "message.received",
+        "message": {
+            "id": "69cd4ef83e56aceadd9ffcd6",
+            "conversationId": "69cd4ef86ff501fad9ed38a6",
+            "platform": "instagram",
+            "text": "hello",
+            "sender": {
+                "id": "883716081391205",
+                "name": "calvin",
+                "username": "calvinsousy",
+            },
+            "sentAt": "2026-04-01T16:59:34.071Z",
+        },
+        "account": {
+            "id": "69b8689d6cb7b8cf4c7846ff",
+            "platform": "instagram",
+            "username": "bluemarlincharters",
+        },
+        "timestamp": "2026-04-01T16:59:36.461Z",
+    }
+    result = parse_zernio_webhook(payload)
+    assert result is not None
+    assert result["conversation_id"] == "69cd4ef86ff501fad9ed38a6"
+    assert result["text"] == "hello"
+    assert result["sender_name"] == "calvin"
+    assert result["account_id"] == "69b8689d6cb7b8cf4c7846ff"
+    assert result["channel"] == "instagram_dm"
+    assert result["platform"] == "instagram"
+
+
 # --- Test 12: Dedup with Zernio message ID ---
 def test_dedup_zernio_message():
     msg_id = "zernio_dedup_test_130"
