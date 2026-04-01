@@ -212,3 +212,7 @@ Date: 2026-04-01
 ## Brief 131 — DM Agent + Reply Path
 Date: 2026-04-01
 Brief reviewer caught wrong config path — `contact_for_booking` is under `private_charters`, not `business`. Used `business.email` instead (same address, correct path). Lesson: always verify config field paths by reading client.json before writing code that accesses them. Also: when extending an if/elif/else chain for channel handling, combine channels with identical behavior (e.g., WhatsApp + DM history format is identical — use `if channel in ("whatsapp", "instagram_dm", "facebook_dm"):` instead of duplicating the block).
+
+## Brief 131b — Separate DM Q&A Agent
+Date: 2026-04-01
+Using a booking agent (Marina) for Q&A-only channels doesn't work. Marina's core identity is "booking agent" — 200+ lines of booking schema, field extraction, and confirmation logic overrode a single paragraph saying "redirect bookings." Live test proved it: Marina collected booking details, confirmed with `[BOOKING_REF]` placeholder, and sent it raw. Lesson: when the job is fundamentally different (Q&A vs booking), use a different prompt — don't try to suppress the existing one. Two prompts sharing one data source (client.json) is cleaner than one prompt with channel-conditional spaghetti.

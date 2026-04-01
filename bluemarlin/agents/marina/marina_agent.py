@@ -1,5 +1,5 @@
 # bluemarlin/agents/marina/marina_agent.py
-# Last modified: Brief 131
+# Last modified: Brief 131b
 # Purpose: Single Claude call per message. Returns structured JSON.
 
 import json
@@ -176,54 +176,6 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             "reasoning out loud (\"that means...\", \"so that would be...\").\n"
             "\n"
             "Emojis: only in booking confirmations. Otherwise skip them."
-        )
-    elif channel in ("instagram_dm", "facebook_dm"):
-        platform_name = "Instagram" if channel == "instagram_dm" else "Facebook"
-        wa_number = business.get("whatsapp", "")
-        booking_email = business.get("email", "")
-        wa_link = wa_number.replace("+", "").replace(" ", "")
-        writing_style_block = (
-            f"WRITING STYLE — {platform_name.upper()} DM:\n"
-            "You are replying to a direct message. Sound like a real person.\n"
-            "\n"
-            "LENGTH:\n"
-            "- Normal reply: under 60 words\n"
-            "- Detailed answer: under 100 words\n"
-            "\n"
-            "FORMATTING:\n"
-            "- Use line breaks between distinct thoughts\n"
-            "- Short, natural paragraphs\n"
-            "- No bullet points unless listing trip options\n"
-            "\n"
-            "GREETINGS:\n"
-            "- Greet ONLY on the first message of a new conversation\n"
-            "- Check CONVERSATION HISTORY — if you already replied, skip the greeting\n"
-            "\n"
-            "PRICING:\n"
-            "- List trip names and short descriptions first\n"
-            "- Only include prices when explicitly asked\n"
-            "\n"
-            "BOOKING REQUESTS:\n"
-            f"When the customer wants to book a trip, do NOT collect booking fields.\n"
-            f"Instead, redirect them warmly:\n"
-            f"- WhatsApp: wa.me/{wa_link}\n"
-            f"- Email: {booking_email}\n"
-            f"Example: \"For bookings, message us on WhatsApp at wa.me/{wa_link} "
-            f"or email {booking_email} — we'll get you sorted!\"\n"
-            "\n"
-            "RULES:\n"
-            "- Answer first, then suggest next steps\n"
-            "- No sign-offs, no signatures\n"
-            "- Use contractions naturally\n"
-            "- Match the sender's energy and length\n"
-            "- NEVER return an empty reply\n"
-            "- Do NOT set any booking flags (booking_confirmed, awaiting_booking_confirmation, etc.)\n"
-            "- Do NOT set requires_human — DM escalations are not supported yet\n"
-            "\n"
-            "AVOID: em dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\",\n"
-            "\"Amazing\", \"Absolutely\", forced enthusiasm.\n"
-            "\n"
-            "Emojis: sparingly, only if the sender used them first."
         )
     else:
         writing_style_block = (
@@ -445,9 +397,9 @@ def _build_user_prompt(
             "to book additional trips. Do not start a new booking intake.\n"
         )
 
-    # Build conversation history section for WhatsApp and DMs
+    # Build conversation history section for WhatsApp
     history_section = ""
-    if channel in ("whatsapp", "instagram_dm", "facebook_dm"):
+    if channel == "whatsapp":
         if messages:
             history_lines = []
             for m in messages:
@@ -461,7 +413,7 @@ def _build_user_prompt(
             history_section = "CONVERSATION HISTORY (recent messages):\n  (new conversation)\n\n"
 
     # Build inbound message section
-    if channel in ("whatsapp", "instagram_dm", "facebook_dm"):
+    if channel == "whatsapp":
         inbound_section = (
             f"INBOUND MESSAGE:\n"
             f"  From: {from_email}\n"
@@ -542,9 +494,6 @@ def process_message(
         # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
         # If agent name changes from "Marina", update this message.
         # See also: email fallback above (lines 459-473) — same exception.
-        fallback["reply"] = "Hey, give me a moment, I'll get right back to you."
-    elif channel in ("instagram_dm", "facebook_dm"):
-        # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
         fallback["reply"] = "Hey, give me a moment, I'll get right back to you."
 
     try:
