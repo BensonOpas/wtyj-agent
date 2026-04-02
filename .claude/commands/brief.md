@@ -1,10 +1,13 @@
 ---
+description: Write a brief, review it, and execute end-to-end
+---
+
 Brief mode. Write the brief, review it, and if approved execute it end-to-end.
 
 ## Writing the brief
 
-1. Read CLAUDE.md and briefs/system_state.md
-2. Read every file you will reference or modify
+1. Read CLAUDE.md, briefs/system_state.md, briefs/infra.md, briefs/roadmap.md
+2. Read every file you will reference or modify — ACTUALLY read them, don't trust memory
 3. Determine the next brief number from existing files in briefs/
 4. Write to briefs/marina_brief_XXX_name.md using the template in CLAUDE.md
 
@@ -32,9 +35,13 @@ based on complexity. Tests should catch bugs, not just confirm types.
 14. Invoke the output-reviewer agent automatically
 15. If flagged: patch source + OUTPUT, re-invoke (one retry max)
 16. If approved:
-    a. Update system_state.md Decision Log (outcome: complete)
-    b. Append to briefs/marina_lessons.md
-    c. git add -A && git commit && git push
+    a. Update system_state.md (add brief entry at the end)
+    b. Write detailed lessons entry in briefs/marina_lessons.md:
+       - Problem briefs: full story (what happened, why it failed, what we did, the principle, what to watch for) — 10+ lines
+       - Smooth briefs: decision + outcome + any non-obvious technique — 3-5 lines
+       - NEVER skip this step. NEVER write less than 3 lines.
+    c. If new credentials, env vars, services, or URLs were added: update briefs/infra.md
+    d. git add -A && git commit && git push
 17. End with a TLDR: what changed, what file, what it does now. Plain English.
 
 ## Quick fix path
@@ -42,4 +49,3 @@ based on complexity. Tests should catch bugs, not just confirm types.
 If the user says "just fix it" or the change is a one-liner / config tweak
 with no architectural significance: skip the brief. Just make the change,
 test it, commit with a descriptive message, and TLDR.
----
