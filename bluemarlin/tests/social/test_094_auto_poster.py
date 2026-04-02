@@ -42,8 +42,8 @@ MOCK_CLAUDE_RESPONSE_2 = json.dumps({
         },
         {
             "content_class": "C",
-            "instagram_caption": "Saturday's Klein Curaçao trip is fully booked.",
-            "facebook_caption": "This Saturday's Klein Curaçao trip is at full capacity.",
+            "instagram_caption": "Saturday's Klein Curaçao service is fully booked.",
+            "facebook_caption": "This Saturday's Klein Curaçao service is at full capacity.",
             "hashtags": ["#KleinCuracao"],
             "visual_suggestion": "photo of guests snorkeling",
             "reasoning": "Class C operational"

@@ -50,8 +50,8 @@ s12 = marina_agent.process_message(
     subject="Re: Booking sunset cruise",
     body="Actually, can we change it to May 10 instead? The 5th doesn't work.",
     thread_fields={
-        "experience": "Sunset Cruise",
-        "trip_key": "sunset_cruise",
+        "service_name": "Sunset Cruise",
+        "service_key": "sunset_cruise",
         "date": "2026-05-05",
         "guests": 2,
         "customer_name": "Alice Brown",
@@ -74,7 +74,7 @@ print("\nT7: Running S21 re-run (2 adults 3 kids, ages unknown)...")
 s21 = marina_agent.process_message(
     from_email="marco@example.com",
     subject="Klein Curacao booking",
-    body="Hi, I'd like to book the Klein Curacao trip on May 20 2026. We are 2 adults and 3 kids. Name is Marco Rossi.",
+    body="Hi, I'd like to book the Klein Curacao service on May 20 2026. We are 2 adults and 3 kids. Name is Marco Rossi.",
     thread_fields={},
     thread_flags={},
 )

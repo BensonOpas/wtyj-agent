@@ -55,7 +55,7 @@ def test_stale_48h_thread_resets():
     old_ts = int(time.time()) - (48 * 3600)
     thread_key = "subj:test@example.com:booking"
     th = _make_thread(
-        fields={"customer_name": "Jan", "phone": "+5999 123 4567", "trip_key": "klein_curacao"},
+        fields={"customer_name": "Jan", "phone": "+5999 123 4567", "service_key": "klein_curacao"},
         flags={"booking_confirmed": True},
         last_activity=old_ts,
         reply_times=[old_ts],
@@ -76,7 +76,7 @@ def test_fresh_2h_thread_not_reset():
     recent_ts = int(time.time()) - (2 * 3600)
     thread_key = "subj:test@example.com:booking"
     th = _make_thread(
-        fields={"customer_name": "Alice", "trip_key": "snorkeling_3in1"},
+        fields={"customer_name": "Alice", "service_key": "snorkeling_3in1"},
         last_activity=recent_ts,
         reply_times=[recent_ts],
     )
@@ -86,7 +86,7 @@ def test_fresh_2h_thread_not_reset():
 
     result = email_poller._maybe_reset_stale_thread(msg, thread_key, th, threads, now)
     assert result["fields"]["customer_name"] == "Alice", f"FAIL: fresh thread should keep fields"
-    assert result["fields"]["trip_key"] == "snorkeling_3in1", "FAIL: fresh thread should keep trip_key"
+    assert result["fields"]["service_key"] == "snorkeling_3in1", "FAIL: fresh thread should keep service_key"
     print("PASS: test_fresh_2h_thread_not_reset")
 
 def test_reply_to_old_thread_not_reset():
@@ -94,7 +94,7 @@ def test_reply_to_old_thread_not_reset():
     old_ts = int(time.time()) - (48 * 3600)
     thread_key = "subj:test@example.com:booking"
     th = _make_thread(
-        fields={"customer_name": "Jan", "trip_key": "klein_curacao"},
+        fields={"customer_name": "Jan", "service_key": "klein_curacao"},
         last_activity=old_ts,
         reply_times=[old_ts],
     )
@@ -104,7 +104,7 @@ def test_reply_to_old_thread_not_reset():
 
     result = email_poller._maybe_reset_stale_thread(msg, thread_key, th, threads, now)
     assert result["fields"]["customer_name"] == "Jan", "FAIL: reply should not reset thread"
-    assert result["fields"]["trip_key"] == "klein_curacao", "FAIL: reply should keep trip_key"
+    assert result["fields"]["service_key"] == "klein_curacao", "FAIL: reply should keep service_key"
     print("PASS: test_reply_to_old_thread_not_reset")
 
 def test_legacy_thread_no_last_activity():

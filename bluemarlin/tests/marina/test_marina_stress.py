@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # bluemarlin/test_marina_stress.py
-# Stress test — 14 scenarios covering language adaptation, trip key mapping,
+# Stress test — 14 scenarios covering language adaptation, service key mapping,
 # booking flow, edge cases, and escalation.
 # Run: cd bluemarlin && source ~/.zshrc && python3 test_marina_stress.py
 
@@ -46,13 +46,13 @@ def run(label, from_email, subject, body, thread_fields=None, thread_flags=None)
 
 # -----------------------------------------------------------------------
 # S1 — Dutch inquiry
-# Expected: reply in Dutch, trip_key extracted or clarification asked in Dutch
+# Expected: reply in Dutch, service_key extracted or clarification asked in Dutch
 # -----------------------------------------------------------------------
 s1 = run(
     label="S1 — Dutch inquiry (language adaptation)",
     from_email="pieter@example.nl",
     subject="Vraag over Klein Curaçao",
-    body="Hallo, ik wil graag meer informatie over de Klein Curaçao trip. "
+    body="Hallo, ik wil graag meer informatie over de Klein Curaçao service. "
          "We zijn met 3 personen en willen graag gaan op 20 april 2026. "
          "Kunt u ons helpen?",
     thread_fields={},
@@ -67,7 +67,7 @@ s2 = run(
     label="S2 — Full booking, Klein Curaçao by name",
     from_email="alice@example.com",
     subject="Booking Klein Curacao",
-    body="Hi, I'd like to book the Klein Curacao trip for May 3 2026, "
+    body="Hi, I'd like to book the Klein Curacao service for May 3 2026, "
          "for 6 adults. My name is Alice Brown.",
     thread_fields={},
     thread_flags={},
@@ -83,8 +83,8 @@ s3 = run(
     subject="Re: Booking Klein Curacao",
     body="Perfect, yes please go ahead!",
     thread_fields={
-        "experience": "Klein Curaçao",
-        "trip_key": "klein_curacao",
+        "service_name": "Klein Curaçao",
+        "service_key": "klein_curacao",
         "date": "2026-05-03",
         "guests": 6,
         "customer_name": "Alice Brown",
@@ -95,8 +95,8 @@ s3 = run(
 )
 
 # -----------------------------------------------------------------------
-# S4 — Vague trip name: "snorkeling"
-# Expected: trip_key=snorkeling_3in1 extracted
+# S4 — Vague service name: "snorkeling"
+# Expected: service_key=snorkeling_3in1 extracted
 # -----------------------------------------------------------------------
 s4 = run(
     label="S4 — Trip key mapping: 'snorkeling'",
@@ -108,8 +108,8 @@ s4 = run(
 )
 
 # -----------------------------------------------------------------------
-# S5 — Vague trip name: "evening cruise"
-# Expected: trip_key=sunset_cruise extracted
+# S5 — Vague service name: "evening cruise"
+# Expected: service_key=sunset_cruise extracted
 # -----------------------------------------------------------------------
 s5 = run(
     label="S5 — Trip key mapping: 'evening cruise'",
@@ -122,8 +122,8 @@ s5 = run(
 )
 
 # -----------------------------------------------------------------------
-# S6 — Vague trip name: "jet ski"
-# Expected: trip_key=jet_ski extracted
+# S6 — Vague service name: "jet ski"
+# Expected: service_key=jet_ski extracted
 # -----------------------------------------------------------------------
 s6 = run(
     label="S6 — Trip key mapping: 'jet ski'",
@@ -135,14 +135,14 @@ s6 = run(
 )
 
 # -----------------------------------------------------------------------
-# S7 — Vague trip name: "west coast beach"
-# Expected: trip_key=west_coast_beach extracted
+# S7 — Vague service name: "west coast beach"
+# Expected: service_key=west_coast_beach extracted
 # -----------------------------------------------------------------------
 s7 = run(
     label="S7 — Trip key mapping: 'west coast beach'",
     from_email="eva@example.com",
-    subject="West coast beach trip",
-    body="Hi! Interested in the west coast beach trip for April 30 2026, "
+    subject="West coast beach service",
+    body="Hi! Interested in the west coast beach service for April 30 2026, "
          "group of 5.",
     thread_fields={},
     thread_flags={},
@@ -157,7 +157,7 @@ s8 = run(
     from_email="events@company.com",
     subject="Group booking",
     body="Hello, we are a company of 20 people looking to book the Klein "
-         "Curaçao trip on May 15 2026 for a team outing.",
+         "Curaçao service on May 15 2026 for a team outing.",
     thread_fields={},
     thread_flags={},
 )
@@ -191,15 +191,15 @@ s10 = run(
 )
 
 # -----------------------------------------------------------------------
-# S11 — Multi-departure trip with explicit departure time
+# S11 — Multi-departure service with explicit departure time
 # Klein Curaçao has 08:00 and 08:30 options
-# Expected: departure_time=08:00 captured
+# Expected: slot_time=08:00 captured
 # -----------------------------------------------------------------------
 s11 = run(
-    label="S11 — Multi-departure trip with chosen time (08:00)",
+    label="S11 — Multi-departure service with chosen time (08:00)",
     from_email="hans@example.com",
     subject="Klein Curacao 8am departure",
-    body="Hello, I'd like to book the Klein Curacao trip on May 10 2026 "
+    body="Hello, I'd like to book the Klein Curacao service on May 10 2026 "
          "for 4 people. We prefer the 8:00 AM departure. Name: Hans Müller.",
     thread_fields={},
     thread_flags={},
@@ -216,8 +216,8 @@ s12 = run(
     subject="Re: Booking sunset cruise",
     body="Actually, can we change it to May 10 instead? The 5th doesn't work.",
     thread_fields={
-        "experience": "Sunset Cruise",
-        "trip_key": "sunset_cruise",
+        "service_name": "Sunset Cruise",
+        "service_key": "sunset_cruise",
         "date": "2026-05-05",
         "guests": 2,
         "customer_name": "Alice Brown",
@@ -235,7 +235,7 @@ s13 = run(
     label="S13 — Special requests: vegetarian + elderly guest",
     from_email="james@example.com",
     subject="Klein Curacao booking with special needs",
-    body="Hi, I want to book the Klein Curacao trip on April 18 2026 for 3 people. "
+    body="Hi, I want to book the Klein Curacao service on April 18 2026 for 3 people. "
          "Name is James Lee. One of us is vegetarian and my mother uses a walking "
          "stick — any accommodations available?",
     thread_fields={},
@@ -276,8 +276,8 @@ s15 = run(
 s16 = run(
     label="S16 — Guest count inference: '2 couples'",
     from_email="test16@example.com",
-    subject="West coast beach trip",
-    body="Hello! We're 2 couples interested in the west coast beach trip on May 8 2026.",
+    subject="West coast beach service",
+    body="Hello! We're 2 couples interested in the west coast beach service on May 8 2026.",
     thread_fields={},
     thread_flags={},
 )
@@ -293,8 +293,8 @@ s17 = run(
     subject="Re: Klein Curacao booking",
     body="Sounds good, what's next?",
     thread_fields={
-        "experience": "Klein Curaçao",
-        "trip_key": "klein_curacao",
+        "service_name": "Klein Curaçao",
+        "service_key": "klein_curacao",
         "date": "2026-05-03",
         "guests": 4,
         "customer_name": "Tom",
@@ -305,11 +305,11 @@ s17 = run(
 )
 
 # -----------------------------------------------------------------------
-# S18 — No trip named
-# Expected: trip_key absent, clarification asking which trip
+# S18 — No service named
+# Expected: service_key absent, clarification asking which service
 # -----------------------------------------------------------------------
 s18 = run(
-    label="S18 — No trip named — should ask which trip",
+    label="S18 — No service named — should ask which service",
     from_email="test18@example.com",
     subject="Booking inquiry",
     body="Hi, I want to book for April 22 2026 for 3 people. Name is Sara.",
@@ -319,7 +319,7 @@ s18 = run(
 
 # -----------------------------------------------------------------------
 # S19 — Relative date: "next Saturday"
-# Expected: date is a YYYY-MM-DD string (not "next Saturday"), guests=1, trip_key=jet_ski
+# Expected: date is a YYYY-MM-DD string (not "next Saturday"), guests=1, service_key=jet_ski
 # -----------------------------------------------------------------------
 s19 = run(
     label="S19 — Relative date: 'next Saturday'",
@@ -338,7 +338,7 @@ s20 = run(
     label="S20 — Unresolvable date: 'Easter'",
     from_email="test20@example.com",
     subject="Klein Curacao at Easter",
-    body="We want to go on the Klein Curacao trip at Easter with 4 people.",
+    body="We want to go on the Klein Curacao service at Easter with 4 people.",
     thread_fields={},
     thread_flags={},
 )
@@ -352,7 +352,7 @@ s21 = run(
     label="S21 — Child pricing gap: '2 adults and 3 kids'",
     from_email="test21@example.com",
     subject="Klein Curacao family booking",
-    body="Hi, I'd like to book the Klein Curacao trip on May 20 2026. "
+    body="Hi, I'd like to book the Klein Curacao service on May 20 2026. "
          "We are 2 adults and 3 kids. Name is Marco Rossi.",
     thread_fields={},
     thread_flags={},
@@ -360,13 +360,13 @@ s21 = run(
 
 # -----------------------------------------------------------------------
 # S22 — Relative date arithmetic: "in 3 weeks"
-# Expected: date is a YYYY-MM-DD string (not "in 3 weeks"), trip_key=snorkeling_3in1
+# Expected: date is a YYYY-MM-DD string (not "in 3 weeks"), service_key=snorkeling_3in1
 # -----------------------------------------------------------------------
 s22 = run(
     label="S22 — Relative date arithmetic: 'in 3 weeks'",
     from_email="test22@example.com",
-    subject="Snorkeling trip",
-    body="Hello! I want to book the snorkeling trip in 3 weeks for 2 people.",
+    subject="Snorkeling service",
+    body="Hello! I want to book the snorkeling service in 3 weeks for 2 people.",
     thread_fields={},
     thread_flags={},
 )
@@ -377,23 +377,23 @@ print(f"Key checks:")
 print(f"  S1  — reply is in Dutch")
 print(f"  S2  — awaiting_booking_confirmation=true, booking summary present")
 print(f"  S3  — booking_confirmed=true, [PAYMENT_LINK] in reply")
-print(f"  S4  — trip_key=snorkeling_3in1")
-print(f"  S5  — trip_key=sunset_cruise")
-print(f"  S6  — trip_key=jet_ski")
-print(f"  S7  — trip_key=west_coast_beach")
+print(f"  S4  — service_key=snorkeling_3in1")
+print(f"  S5  — service_key=sunset_cruise")
+print(f"  S6  — service_key=jet_ski")
+print(f"  S7  — service_key=west_coast_beach")
 print(f"  S8  — requires_human=true")
 print(f"  S9  — date not in fields, clarification asked")
 print(f"  S10 — date=2026-04-15")
-print(f"  S11 — departure_time=08:00")
+print(f"  S11 — slot_time=08:00")
 print(f"  S12 — awaiting_booking_confirmation reset, new date captured")
 print(f"  S13 — special_requests captured")
 print(f"  S14 — requires_human=true, no info requests")
 print(f"  S15 — guests=4 (me + 3 friends)")
 print(f"  S16 — guests=4 (2 couples), day mismatch noted")
 print(f"  S17 — booking_confirmed=true (implicit yes)")
-print(f"  S18 — trip_key absent, clarification asked for trip")
-print(f"  S19 — date is YYYY-MM-DD (not 'next Saturday'), guests=1, trip_key=jet_ski")
+print(f"  S18 — service_key absent, clarification asked for service")
+print(f"  S19 — date is YYYY-MM-DD (not 'next Saturday'), guests=1, service_key=jet_ski")
 print(f"  S20 — date absent, clarification asked (Easter unresolvable)")
 print(f"  S21 — observe: guests count and whether ages asked")
-print(f"  S22 — date is YYYY-MM-DD (not 'in 3 weeks'), trip_key=snorkeling_3in1")
+print(f"  S22 — date is YYYY-MM-DD (not 'in 3 weeks'), service_key=snorkeling_3in1")
 print(DIVIDER)

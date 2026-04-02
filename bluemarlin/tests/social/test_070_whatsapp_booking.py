@@ -46,7 +46,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 
@@ -75,16 +75,16 @@ def test_suggest_dates_west_coast():
 
 
 def test_build_booking_summary_west_coast():
-    """Summary contains correct price, date, guests from real trip config."""
-    trip = config_loader.get_trip("west_coast_beach")
+    """Summary contains correct price, date, guests from real service config."""
+    service = config_loader.get_service("west_coast_beach")
     fields = {
-        "trip_key": "west_coast_beach",
-        "experience": "West Coast Beach Trip",
+        "service_key": "west_coast_beach",
+        "service_name": "West Coast Beach Trip",
         "date": _NEXT_WED,  # Wednesday
         "guests": "3",
-        "departure_time": "09:00",
+        "slot_time": "09:00",
     }
-    summary = _build_booking_summary(fields, trip)
+    summary = _build_booking_summary(fields, service)
     assert "$360" in summary  # 3 * $120
     assert "$120" in summary  # per person
     assert "Wednesday" in summary
@@ -94,15 +94,15 @@ def test_build_booking_summary_west_coast():
 
 
 def test_build_booking_summary_single_departure_auto():
-    """Single-departure trip auto-selects departure when not specified."""
-    trip = config_loader.get_trip("west_coast_beach")
+    """Single-departure service auto-selects departure when not specified."""
+    service = config_loader.get_service("west_coast_beach")
     fields = {
-        "trip_key": "west_coast_beach",
-        "experience": "West Coast Beach Trip",
+        "service_key": "west_coast_beach",
+        "service_name": "West Coast Beach Trip",
         "date": _NEXT_WED,  # Wednesday
         "guests": "2",
     }
-    summary = _build_booking_summary(fields, trip)
+    summary = _build_booking_summary(fields, service)
     assert "09:00" in summary  # auto-selected from single departure
 
 
@@ -122,11 +122,11 @@ def test_build_action_context_not_awaiting():
 
 def test_post_validate_day_of_week_rejection():
     """Monday booking for West Coast Beach (Wed/Sun only) is rejected."""
-    trip = config_loader.get_trip("west_coast_beach")
-    fields = {"experience": "West Coast Beach Trip", "date": _NEXT_MON,
-              "guests": "2", "trip_key": "west_coast_beach"}  # Monday
+    service = config_loader.get_service("west_coast_beach")
+    fields = {"service_name": "West Coast Beach Trip", "date": _NEXT_MON,
+              "guests": "2", "service_key": "west_coast_beach"}  # Monday
     result = {"intents": ["booking"], "flags": {}}
-    override, should_set = _post_validate(fields, {}, result, trip)
+    override, should_set = _post_validate(fields, {}, result, service)
     assert override is not None
     assert "doesn't run on Monday" in override
     assert should_set is False
@@ -134,23 +134,23 @@ def test_post_validate_day_of_week_rejection():
 
 def test_post_validate_past_date_rejection():
     """Past date is rejected (klein_curacao is daily, so day-of-week check passes first)."""
-    trip = config_loader.get_trip("klein_curacao")
-    fields = {"experience": "Klein Curacao", "date": "2025-01-15",
-              "guests": "2", "trip_key": "klein_curacao"}
+    service = config_loader.get_service("klein_curacao")
+    fields = {"service_name": "Klein Curacao", "date": "2025-01-15",
+              "guests": "2", "service_key": "klein_curacao"}
     result = {"intents": ["booking"], "flags": {}}
-    override, should_set = _post_validate(fields, {}, result, trip)
+    override, should_set = _post_validate(fields, {}, result, service)
     assert override is not None
     assert "already passed" in override
     assert should_set is False
 
 
 def test_post_validate_multi_departure_asks():
-    """Multi-departure trip (klein_curacao: 08:00, 08:30) without departure_time asks for selection."""
-    trip = config_loader.get_trip("klein_curacao")
-    fields = {"experience": "Klein Curacao", "date": _FUTURE_DATE,
-              "guests": "2", "trip_key": "klein_curacao"}
+    """Multi-departure service (klein_curacao: 08:00, 08:30) without slot_time asks for selection."""
+    service = config_loader.get_service("klein_curacao")
+    fields = {"service_name": "Klein Curacao", "date": _FUTURE_DATE,
+              "guests": "2", "service_key": "klein_curacao"}
     result = {"intents": ["booking"], "flags": {}}
-    override, should_set = _post_validate(fields, {}, result, trip)
+    override, should_set = _post_validate(fields, {}, result, service)
     assert override is not None
     assert "departure time" in override.lower()
     assert "08:00" in override
@@ -160,12 +160,12 @@ def test_post_validate_multi_departure_asks():
 
 def test_post_validate_all_pass_builds_summary():
     """All fields valid — summary built, should_set_awaiting is True."""
-    trip = config_loader.get_trip("west_coast_beach")
-    fields = {"experience": "West Coast Beach Trip", "date": _NEXT_WED,
-              "guests": "2", "trip_key": "west_coast_beach",
-              "departure_time": "09:00"}  # Wednesday, single departure
+    service = config_loader.get_service("west_coast_beach")
+    fields = {"service_name": "West Coast Beach Trip", "date": _NEXT_WED,
+              "guests": "2", "service_key": "west_coast_beach",
+              "slot_time": "09:00"}  # Wednesday, single departure
     result = {"intents": ["booking"], "flags": {}}
-    override, should_set = _post_validate(fields, {}, result, trip)
+    override, should_set = _post_validate(fields, {}, result, service)
     assert override is not None
     assert "$240" in override  # 2 * $120
     assert should_set is True
@@ -173,11 +173,11 @@ def test_post_validate_all_pass_builds_summary():
 
 def test_post_validate_skips_non_booking_intent():
     """Non-booking intent skips validation entirely."""
-    trip = config_loader.get_trip("klein_curacao")
-    fields = {"experience": "Klein Curacao", "date": _FUTURE_DATE,
-              "guests": "2", "trip_key": "klein_curacao"}
+    service = config_loader.get_service("klein_curacao")
+    fields = {"service_name": "Klein Curacao", "date": _FUTURE_DATE,
+              "guests": "2", "service_key": "klein_curacao"}
     result = {"intents": ["inquiry"], "flags": {}}
-    override, should_set = _post_validate(fields, {}, result, trip)
+    override, should_set = _post_validate(fields, {}, result, service)
     assert override is None
     assert should_set is False
 
@@ -191,7 +191,7 @@ def test_orchestrator_post_validate_day_override(mock_process):
     _cleanup_phone(phone)
     mock_process.return_value = {
         "intents": ["booking"],
-        "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
+        "fields": {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
                     "date": _NEXT_MON, "guests": "2"},  # Monday — Wed/Sun only
         "confidence": "high",
         "reply": "I'll book West Coast Beach for you!",
@@ -215,7 +215,7 @@ def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, moc
     _cleanup_phone(phone)
     mock_process.return_value = {
         "intents": ["booking"],
-        "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
+        "fields": {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
                     "date": _NEXT_WED, "guests": "2",
                     "customer_name": "John"},  # Wednesday — single departure, auto-selects 09:00
         "confidence": "high",
@@ -245,15 +245,15 @@ def test_orchestrator_booking_confirmed(mock_process, mock_cal, mock_pay, mock_s
     phone = "TEST_070_CONFIRM_001"
     _cleanup_phone(phone)
     # Pre-set state: awaiting confirmation with soft hold
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
               "date": _NEXT_WED, "guests": "2",
-              "departure_time": "09:00", "customer_name": "John"}
+              "slot_time": "09:00", "customer_name": "John"}
     hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="John", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": _NEXT_WED,
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
     mock_process.return_value = {
@@ -292,9 +292,9 @@ def test_orchestrator_slot_unavailable(mock_process, mock_cal):
     _cleanup_phone(phone)
     mock_process.return_value = {
         "intents": ["booking"],
-        "fields": {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
+        "fields": {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
                     "date": _NEXT_WED, "guests": "2",
-                    "departure_time": "09:00", "customer_name": "Jane"},
+                    "slot_time": "09:00", "customer_name": "Jane"},
         "confidence": "high",
         "reply": "Sounds good!",
         "clarifications_needed": [], "requires_human": False,

@@ -26,7 +26,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
@@ -102,7 +102,7 @@ def send_message(phone, text, from_name="Live Test", mocks=None):
 # --- Conversation A: Trip Inquiry (1 turn) ---
 
 def test_trip_inquiry():
-    """Conversation A: Simple trip inquiry — Claude should list available trips."""
+    """Conversation A: Simple service inquiry — Claude should list available trips."""
     phone = f"{_PHONE_PREFIX}INQ_001"
     _cleanup_phone(phone)
     print("\n=== Conversation A: Trip Inquiry ===")
@@ -111,8 +111,8 @@ def test_trip_inquiry():
     print(f"  Reply: {reply[:300]}...")
 
     check("got a reply", len(reply) > 20, f"reply length={len(reply)}")
-    check_contains_any(reply, ["Klein", "Sunset", "Snorkeling", "cruise", "trip", "beach"],
-                       "mentions at least one trip")
+    check_contains_any(reply, ["Klein", "Sunset", "Snorkeling", "cruise", "service", "beach"],
+                       "mentions at least one service")
     check_not_contains(reply, "I'd be happy to", "no AI-ism: I'd be happy to")
     check_not_contains(reply, "\u2014", "no em dash")
 
@@ -140,8 +140,8 @@ def test_booking_happy_path():
 
     # Check state — should have fields extracted
     state = state_registry.wa_get_booking_state(phone)
-    check("T1: trip_key extracted", state["fields"].get("trip_key") == "sunset_cruise",
-          f"trip_key={state['fields'].get('trip_key')}")
+    check("T1: service_key extracted", state["fields"].get("service_key") == "sunset_cruise",
+          f"service_key={state['fields'].get('service_key')}")
     check("T1: guests extracted", str(state["fields"].get("guests")) == "2",
           f"guests={state['fields'].get('guests')}")
 
@@ -171,7 +171,7 @@ def test_wrong_day_rejection():
 
     # April 7 2027 is a Wednesday, snorkeling is Fridays only
     reply = send_message(phone,
-        "Book the snorkeling trip for April 7 2027 for 2 people. Name is Day Test.")
+        "Book the snorkeling service for April 7 2027 for 2 people. Name is Day Test.")
     print(f"  Reply: {reply[:300]}...")
 
     check("got reply", len(reply) > 20, f"reply length={len(reply)}")
@@ -223,7 +223,7 @@ def test_spanish_inquiry():
     print(f"  Reply: {reply[:300]}...")
 
     check("got reply", len(reply) > 20, f"reply length={len(reply)}")
-    # Should mention at least one trip or price
+    # Should mention at least one service or price
     check_contains_any(reply, ["Klein", "Sunset", "Snorkeling", "$", "USD", "excursi"],
                        "mentions trips or pricing")
 

@@ -51,7 +51,7 @@ s1 = run(
     label="1 — First contact, all fields provided",
     from_email="john@example.com",
     subject="Booking Klein Curacao",
-    body="Hi, I'd like to book the Klein Curacao trip for April 10 2026, for 4 people. My name is John Smith.",
+    body="Hi, I'd like to book the Klein Curacao service for April 10 2026, for 4 people. My name is John Smith.",
     thread_fields={},
     thread_flags={},
 )
@@ -80,8 +80,8 @@ s3 = run(
     subject="Re: Booking Klein Curacao",
     body="Yes, let's do it!",
     thread_fields={
-        "experience": "Klein Curacao",
-        "trip_key": "klein_curacao",
+        "service_name": "Klein Curacao",
+        "service_key": "klein_curacao",
         "date": "2026-04-10",
         "guests": 4,
         "customer_name": "John Smith",

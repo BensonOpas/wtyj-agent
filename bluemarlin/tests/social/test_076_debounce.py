@@ -43,7 +43,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 

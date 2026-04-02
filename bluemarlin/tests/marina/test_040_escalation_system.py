@@ -17,7 +17,7 @@ def test_semi_escalation_flag():
         "Accessibility question",
         "Hi! My father uses a wheelchair. Is the boat accessible for wheelchair users, "
         "and is there a ramp or lift for boarding?",
-        {"trip_key": "klein_curacao", "experience": "Klein Curaçao",
+        {"service_key": "klein_curacao", "service_name": "Klein Curaçao",
          "date": "2026-04-15", "guests": 3},
         {}
     )
@@ -39,10 +39,10 @@ def test_relay_mode_reformulation():
     """T2: Relay mode — Marina reformulates human's answer in her own voice."""
     result = marina_agent.process_message(
         "john@example.com",
-        "Re: Klein Curacao trip",
+        "Re: Klein Curacao service",
         "Yes, cameras and underwater housings are welcome on board. "
         "We even have a freshwater rinse station on the back deck.",
-        {"trip_key": "klein_curacao", "experience": "Klein Curaçao",
+        {"service_key": "klein_curacao", "service_name": "Klein Curaçao",
          "date": "2026-04-15", "guests": 2},
         {"awaiting_relay": True, "relay_question": "Can I bring my DSLR camera?"}
     )
@@ -67,7 +67,7 @@ def test_full_escalation_requires_human():
         "john@example.com",
         "Refund request",
         "I want a full refund for my booking. The crew was rude and the boat was dirty.",
-        {"trip_key": "klein_curacao", "date": "2026-04-15", "guests": 2},
+        {"service_key": "klein_curacao", "date": "2026-04-15", "guests": 2},
         {}
     )
     assert result.get("requires_human") is True, (
@@ -112,7 +112,7 @@ def test_log_escalation_has_messages_json_column():
             "customer_name": "John Test",
             "email": "john@example.com",
             "intent": "complaint",
-            "fields_collected": {"trip_key": "klein_curacao"},
+            "fields_collected": {"service_key": "klein_curacao"},
             "internal_note": "Customer complained about service",
             "messages_json": json.dumps([
                 {"role": "customer", "ts": "2026-03-08T10:00:00Z",

@@ -175,11 +175,11 @@ def test_wa_booking_state_round_trip():
     """Save and retrieve booking state."""
     phone = "TEST_069_STATE_001"
     _cleanup_phone(phone)
-    fields = {"trip_key": "klein_curacao", "guests": "4", "date": "2026-03-15"}
+    fields = {"service_key": "klein_curacao", "guests": "4", "date": "2026-03-15"}
     flags = {"slot_checked": True}
     state_registry.wa_save_booking_state(phone, fields, flags)
     state = state_registry.wa_get_booking_state(phone)
-    assert state["fields"]["trip_key"] == "klein_curacao"
+    assert state["fields"]["service_key"] == "klein_curacao"
     assert state["fields"]["guests"] == "4"
     assert state["flags"]["slot_checked"] is True
     assert state["completed_bookings"] == []
@@ -211,7 +211,7 @@ def test_social_agent_persists_state(mock_process):
     _cleanup_phone(phone)
     mock_process.return_value = {
         "intents": ["booking"],
-        "fields": {"trip_key": "sunset_cruise", "guests": "2"},
+        "fields": {"service_key": "sunset_cruise", "guests": "2"},
         "confidence": "high",
         "reply": "Sunset cruise for 2, got it!",
         "clarifications_needed": [], "requires_human": False,
@@ -221,7 +221,7 @@ def test_social_agent_persists_state(mock_process):
     reply = handle_incoming_whatsapp_message(msg)
     assert reply == "Sunset cruise for 2, got it!"
     state = state_registry.wa_get_booking_state(phone)
-    assert state["fields"]["trip_key"] == "sunset_cruise"
+    assert state["fields"]["service_key"] == "sunset_cruise"
     assert state["fields"]["guests"] == "2"
     _cleanup_phone(phone)
 

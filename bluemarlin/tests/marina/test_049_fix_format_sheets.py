@@ -42,12 +42,12 @@ def test_header_col1_booking_ref():
     assert format_sheets.BOOKINGS_HEADERS[1] == "Booking Ref"
 
 
-def test_header_col5_trip_key():
+def test_header_col5_service_key():
     """T8: col 5 is Trip Key."""
     assert format_sheets.BOOKINGS_HEADERS[5] == "Trip Key"
 
 
-def test_header_col8_departure_time():
+def test_header_col8_slot_time():
     """T9: col 8 is Departure Time."""
     assert format_sheets.BOOKINGS_HEADERS[8] == "Departure Time"
 

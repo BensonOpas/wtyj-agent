@@ -16,7 +16,7 @@ _CURACAO_TZ = timezone(timedelta(hours=-4))
 _INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature",
                   "calendar_id"}
 
-_SKIP_TOP_LEVEL = {"trip_aliases"}
+_SKIP_TOP_LEVEL = {"service_aliases"}
 
 _DRAFT_DEFAULTS = {
     "content_class": "A",
@@ -54,12 +54,12 @@ def _build_client_context() -> str:
             for k, v in value.items():
                 if k in _INTERNAL_KEYS:
                     continue
-                # Strip calendar_id from trip departures
-                if isinstance(v, dict) and "departures" in v:
+                # Strip calendar_id from service departures
+                if isinstance(v, dict) and "slots" in v:
                     v = dict(v)
-                    v["departures"] = [
+                    v["slots"] = [
                         {dk: dv for dk, dv in dep.items() if dk not in _INTERNAL_KEYS}
-                        for dep in v.get("departures", [])
+                        for dep in v.get("slots", [])
                     ]
                 clean[k] = v
             clean = _strip_verify(clean)
@@ -263,12 +263,12 @@ def _build_user_prompt(count: int, days_ahead: int = 7) -> str:
     # Availability
     availability = state_registry.get_availability_summary(days_ahead)
     if availability:
-        trips = config_loader.get_trips()
+        trips = config_loader.get_services()
         avail_lines = []
         for slot in availability:
-            display = trips.get(slot["trip_key"], {}).get("display_name", slot["trip_key"])
+            display = trips.get(slot["service_key"], {}).get("display_name", slot["service_key"])
             avail_lines.append(
-                f"  {display} | {slot['date']} {slot['departure_time']} | "
+                f"  {display} | {slot['date']} {slot['slot_time']} | "
                 f"{slot['spots_remaining']}/{slot['capacity']} spots"
             )
         avail_section = "\n".join(avail_lines)

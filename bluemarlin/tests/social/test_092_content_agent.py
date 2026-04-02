@@ -46,8 +46,8 @@ MOCK_CLAUDE_RESPONSE_2 = json.dumps({
         },
         {
             "content_class": "C",
-            "instagram_caption": "Saturday's Klein Curaçao trip is fully booked. Sunday still has spots — same water, same turtles, same open bar.",
-            "facebook_caption": "This Saturday's Klein Curaçao trip is at full capacity — but don't worry. Sunday's departure still has spots available. Same crystal-clear water, same white sand, same sea turtles, and the same premium open bar from lunch. Book your spot before Sunday fills up too.",
+            "instagram_caption": "Saturday's Klein Curaçao service is fully booked. Sunday still has spots — same water, same turtles, same open bar.",
+            "facebook_caption": "This Saturday's Klein Curaçao service is at full capacity — but don't worry. Sunday's departure still has spots available. Same crystal-clear water, same white sand, same sea turtles, and the same premium open bar from lunch. Book your spot before Sunday fills up too.",
             "hashtags": ["#KleinCuracao", "#BlueFinnCharters", "#SundayVibes"],
             "visual_suggestion": "photo of guests snorkeling near Klein Curaçao",
             "reasoning": "Class C operational — Saturday sold out, redirects demand to Sunday"
@@ -133,7 +133,7 @@ def test_system_prompt_reads_config_values():
 
 def test_user_prompt_includes_client_data():
     prompt = _build_user_prompt(3, days_ahead=7)
-    assert "Klein" in prompt  # Klein Curaçao trip
+    assert "Klein" in prompt  # Klein Curaçao service
     assert "Sunset" in prompt  # Sunset Cruise
     assert "CLIENT DATA" in prompt
 
@@ -141,9 +141,9 @@ def test_user_prompt_includes_client_data():
 def test_user_prompt_includes_availability():
     mock_avail = [
         {
-            "trip_key": "klein_curacao",
+            "service_key": "klein_curacao",
             "date": "2026-03-20",
-            "departure_time": "08:00",
+            "slot_time": "08:00",
             "booked_guests": 25,
             "capacity": 30,
             "spots_remaining": 5,
@@ -267,9 +267,9 @@ def test_availability_summary_returns_correct_structure():
     assert isinstance(results, list)
     if results:
         for item in results:
-            assert "trip_key" in item
+            assert "service_key" in item
             assert "date" in item
-            assert "departure_time" in item
+            assert "slot_time" in item
             assert "booked_guests" in item
             assert "capacity" in item
             assert "spots_remaining" in item

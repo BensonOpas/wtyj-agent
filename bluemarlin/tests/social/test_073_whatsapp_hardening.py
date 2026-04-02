@@ -36,7 +36,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 
@@ -65,7 +65,7 @@ def test_stale_conversation_resets_fields(mock_process):
     phone = "TEST_073_STALE_001"
     _cleanup_phone(phone)
     # Pre-set state with last_activity = 48 hours ago
-    fields = {"trip_key": "west_coast_beach", "date": _NEXT_WED,
+    fields = {"service_key": "west_coast_beach", "date": _NEXT_WED,
               "guests": "2", "customer_name": "Test User"}
     flags = {}
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -86,7 +86,7 @@ def test_stale_conversation_resets_fields(mock_process):
     # Check persisted state — only persistent fields survive
     state = state_registry.wa_get_booking_state(phone)
     assert state["fields"].get("customer_name") == "Test User"
-    assert state["fields"].get("trip_key") is None
+    assert state["fields"].get("service_key") is None
     assert state["fields"].get("date") is None
     assert state["fields"].get("guests") is None
     _cleanup_phone(phone)
@@ -99,7 +99,7 @@ def test_stale_conversation_archives_booking(mock_process):
     """Active booking is archived to completed_bookings on stale reset."""
     phone = "TEST_073_STALE_002"
     _cleanup_phone(phone)
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
               "date": _NEXT_WED, "guests": "2", "customer_name": "Test User"}
     flags = {"hold_created": True, "booking_ref": "BF-2026-55001",
              "payment_link": "https://demo.pay/test"}
@@ -121,7 +121,7 @@ def test_stale_conversation_archives_booking(mock_process):
     cb = state["completed_bookings"]
     assert len(cb) == 1
     assert cb[0]["booking_ref"] == "BF-2026-55001"
-    assert cb[0]["trip_key"] == "west_coast_beach"
+    assert cb[0]["service_key"] == "west_coast_beach"
     # Flags reset
     assert "hold_created" not in state["flags"]
     assert "booking_ref" not in state["flags"]
@@ -164,7 +164,7 @@ def test_fresh_conversation_no_reset(mock_process):
     """Fields are preserved when last_activity is < 24h ago."""
     phone = "TEST_073_FRESH_001"
     _cleanup_phone(phone)
-    fields = {"trip_key": "sunset_cruise", "date": _FUTURE_DATE,
+    fields = {"service_key": "sunset_cruise", "date": _FUTURE_DATE,
               "guests": "4", "customer_name": "Test"}
     flags = {}
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -176,7 +176,7 @@ def test_fresh_conversation_no_reset(mock_process):
     msg = {"from": phone, "text": "Hi again", "from_name": "Test"}
     handle_incoming_whatsapp_message(msg)
     state = state_registry.wa_get_booking_state(phone)
-    assert state["fields"].get("trip_key") == "sunset_cruise"
+    assert state["fields"].get("service_key") == "sunset_cruise"
     assert state["fields"].get("date") == _FUTURE_DATE
     assert state["fields"].get("guests") == "4"
     _cleanup_phone(phone)
@@ -256,13 +256,13 @@ def test_change_detection_cancels_hold(mock_process, mock_avail, mock_remove):
     hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
     assert hold_id is not None
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
+              "date": _NEXT_WED, "guests": "2", "slot_time": "09:00",
               "customer_name": "Test"}
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": _NEXT_WED,
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
     # Customer changes details — Python pops awaiting_booking_confirmation, _was_awaiting triggers change detection
@@ -280,7 +280,7 @@ def test_change_detection_cancels_hold(mock_process, mock_avail, mock_remove):
     assert state["flags"].get("slot_checked") is False
     assert state["flags"].get("slot_available") is False
     assert "hold_id" not in state["flags"]
-    assert "hold_trip_key" not in state["flags"]
+    assert "hold_service_key" not in state["flags"]
     # remove_from_manifest called with correct args (from change detection)
     mock_remove.assert_called_once_with("west_coast_beach", _NEXT_WED, "09:00")
     _cleanup_phone(phone)
@@ -299,13 +299,13 @@ def test_manifest_failure_cancels_hold(mock_process, mock_cal, mock_pay, mock_sh
     # Pre-set: booking confirmed + hold created
     hold_id = state_registry.create_soft_hold("west_coast_beach", _NEXT_WED, "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
+              "date": _NEXT_WED, "guests": "2", "slot_time": "09:00",
               "customer_name": "Test"}
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": _NEXT_WED,
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": _NEXT_WED,
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
     mock_process.return_value = _base_result(
@@ -341,8 +341,8 @@ def test_hold_race_condition(mock_process, mock_cal, mock_sheets):
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
         intents=["booking"],
-        fields={"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-                "date": _NEXT_WED, "guests": "2", "departure_time": "09:00",
+        fields={"service_key": "west_coast_beach", "service_name": "West Coast Beach",
+                "date": _NEXT_WED, "guests": "2", "slot_time": "09:00",
                 "customer_name": "Test"},
         reply="Sounds good!",
     )
@@ -366,7 +366,7 @@ def test_empty_reply_returns_empty(mock_process):
     phone = "TEST_073_EMPTY_001"
     _cleanup_phone(phone)
     # Pre-set fields
-    fields = {"trip_key": "sunset_cruise", "customer_name": "Test"}
+    fields = {"service_key": "sunset_cruise", "customer_name": "Test"}
     flags = {}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
@@ -378,6 +378,6 @@ def test_empty_reply_returns_empty(mock_process):
     assert reply == ""
     # Persisted state unchanged — early return at line 335 skips wa_save_booking_state
     state = state_registry.wa_get_booking_state(phone)
-    assert state["fields"].get("trip_key") == "sunset_cruise"
+    assert state["fields"].get("service_key") == "sunset_cruise"
     assert state["fields"].get("customer_name") == "Test"
     _cleanup_phone(phone)

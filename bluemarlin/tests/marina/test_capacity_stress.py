@@ -22,9 +22,9 @@ state_registry._get_conn().close()
 
 
 def _reset_db():
-    """Wipe trip_bookings between tests."""
+    """Wipe service_bookings between tests."""
     conn = state_registry._get_conn()
-    conn.execute("DELETE FROM trip_bookings")
+    conn.execute("DELETE FROM service_bookings")
     conn.commit()
     conn.close()
 
@@ -144,7 +144,7 @@ def test_expired_hold_not_counted():
     hold_id = state_registry.create_soft_hold("klein_curacao", "2026-04-01", "08:00", 10, 30)
     conn = state_registry._get_conn()
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    conn.execute("UPDATE trip_bookings SET expires_at=? WHERE id=?", (past, hold_id))
+    conn.execute("UPDATE service_bookings SET expires_at=? WHERE id=?", (past, hold_id))
     conn.commit()
     conn.close()
     spots = state_registry.get_spots_remaining("klein_curacao", "2026-04-01", "08:00", 30)
@@ -157,13 +157,13 @@ def test_expire_stale_holds():
     hold_id = state_registry.create_soft_hold("klein_curacao", "2026-04-01", "08:00", 10, 30)
     conn = state_registry._get_conn()
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    conn.execute("UPDATE trip_bookings SET expires_at=? WHERE id=?", (past, hold_id))
+    conn.execute("UPDATE service_bookings SET expires_at=? WHERE id=?", (past, hold_id))
     conn.commit()
     conn.close()
     count = state_registry.expire_stale_holds()
     assert count == 1
     conn = state_registry._get_conn()
-    row = conn.execute("SELECT status FROM trip_bookings WHERE id=?", (hold_id,)).fetchone()
+    row = conn.execute("SELECT status FROM service_bookings WHERE id=?", (hold_id,)).fetchone()
     conn.close()
     assert row[0] == 'expired'
 
@@ -186,7 +186,7 @@ def test_create_hold_expires_stale_first():
     assert h1 is not None
     conn = state_registry._get_conn()
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    conn.execute("UPDATE trip_bookings SET expires_at=? WHERE id=?", (past, h1))
+    conn.execute("UPDATE service_bookings SET expires_at=? WHERE id=?", (past, h1))
     conn.commit()
     conn.close()
     h2 = state_registry.create_soft_hold("klein_curacao", "2026-04-01", "08:00", 4, 30)
@@ -216,7 +216,7 @@ def test_different_departures_isolated():
 
 
 def test_different_trips_isolated():
-    """S18: Different trip_keys don't interfere."""
+    """S18: Different service_keys don't interfere."""
     _reset_db()
     state_registry.create_soft_hold("klein_curacao", "2026-04-01", "08:00", 28, 30)
     state_registry.create_soft_hold("jet_ski", "2026-04-01", "08:00", 3, 4)
@@ -269,7 +269,7 @@ def test_check_availability_with_hold():
 
 
 def test_check_availability_all_trips():
-    """S23: check_availability returns correct capacity for each trip type."""
+    """S23: check_availability returns correct capacity for each service type."""
     _reset_db()
     expected = {
         "klein_curacao": 30,
@@ -278,12 +278,12 @@ def test_check_availability_all_trips():
         "sunset_cruise": 20,
         "jet_ski": 4,
     }
-    for trip_key, cap in expected.items():
-        trip = config_loader.get_trip(trip_key)
-        deps = trip.get("departures", [])
+    for service_key, cap in expected.items():
+        service = config_loader.get_service(service_key)
+        deps = service.get("slots", [])
         start = deps[0]["time"] if deps else "09:00"
-        avail = gws_calendar.check_availability(trip_key, "2026-04-01", start)
-        assert avail["capacity"] == cap, f"{trip_key}: expected capacity={cap}, got {avail['capacity']}"
+        avail = gws_calendar.check_availability(service_key, "2026-04-01", start)
+        assert avail["capacity"] == cap, f"{service_key}: expected capacity={cap}, got {avail['capacity']}"
 
 
 # ── COMPLEX LIFECYCLE ──
@@ -326,7 +326,7 @@ def test_mixed_statuses():
     state_registry.cancel_hold(h2)
     conn = state_registry._get_conn()
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    conn.execute("UPDATE trip_bookings SET expires_at=? WHERE id=?", (past, h3))
+    conn.execute("UPDATE service_bookings SET expires_at=? WHERE id=?", (past, h3))
     conn.commit()
     conn.close()
     spots = state_registry.get_spots_remaining("snorkeling_3in1", "2026-04-07", "10:00", 20)

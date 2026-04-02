@@ -122,10 +122,10 @@ def test_customer_email_in_create_soft_hold():
     assert "customer_email=from_email" in ep_src
 
 
-def test_hold_trip_key_stored():
-    """T16: hold_trip_key stored in flags."""
+def test_hold_service_key_stored():
+    """T16: hold_service_key stored in flags."""
     ep_src = _read_email_poller()
-    assert 'th["flags"]["hold_trip_key"]' in ep_src
+    assert 'th["flags"]["hold_service_key"]' in ep_src
 
 
 def test_hold_date_stored():
@@ -134,10 +134,10 @@ def test_hold_date_stored():
     assert 'th["flags"]["hold_date"]' in ep_src
 
 
-def test_hold_departure_time_stored():
-    """T18: hold_departure_time stored in flags."""
+def test_hold_slot_time_stored():
+    """T18: hold_slot_time stored in flags."""
     ep_src = _read_email_poller()
-    assert 'th["flags"]["hold_departure_time"]' in ep_src
+    assert 'th["flags"]["hold_slot_time"]' in ep_src
 
 
 def test_remove_from_manifest_count():

@@ -19,7 +19,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     """Build a Q&A-focused system prompt for DM channels. No booking logic."""
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
-    trips = config_loader.get_trips()
+    trips = config_loader.get_services()
     faq = config_loader.get_faq()
 
     agent_name = business.get("agent_name", "Marina")
@@ -31,7 +31,7 @@ def _build_dm_system_prompt(channel: str) -> str:
 
     platform_name = "Instagram" if channel == "instagram_dm" else "Facebook"
 
-    # Build trip list
+    # Build service list
     trip_lines = []
     for key, data in trips.items():
         name = data.get("display_name", key)
@@ -76,7 +76,7 @@ You CANNOT process bookings in DMs. When someone wants to book, asks about avail
 - Do NOT ask for their date, number of guests, time, name, or any booking details
 - Do NOT confirm any booking or mention booking references
 - Redirect them: "For bookings, message us on WhatsApp at wa.me/{wa_link} or email {booking_email} — we handle all bookings there!"
-- You may answer a general question about the trip first, then redirect
+- You may answer a general question about the service first, then redirect
 - If they insist on booking here, repeat the redirect once more. Do not cave.
 
 LANGUAGE: Reply in the same language the customer writes in. Supported: {languages}. Default to English if unclear.

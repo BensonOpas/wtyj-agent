@@ -1,4 +1,4 @@
-"""Tests for Brief 035 — Marina prompt polish: language + trip key mapping."""
+"""Tests for Brief 035 — Marina prompt polish: language + service key mapping."""
 import os
 
 from agents.marina import marina_agent
@@ -29,13 +29,13 @@ def test_supported_languages_listed():
     assert "Dutch" in _prompt and "German" in _prompt and "Spanish" in _prompt
 
 
-def test_all_trip_keys_present():
-    """T4: All 5 trip keys appear in the prompt."""
+def test_all_service_keys_present():
+    """T4: All 5 service keys appear in the prompt."""
     for key in ["klein_curacao", "snorkeling_3in1", "west_coast_beach", "sunset_cruise", "jet_ski"]:
-        assert key in _prompt, f"trip key '{key}' missing from prompt"
+        assert key in _prompt, f"service key '{key}' missing from prompt"
 
 
-def test_trip_aliases_present():
+def test_service_aliases_present():
     """T5: Mapping aliases are in the prompt."""
     for alias in ["snorkeling", "west coast", "sunset", "jet ski", "Klein Curaçao"]:
         assert alias in _prompt, f"alias '{alias}' missing from prompt"

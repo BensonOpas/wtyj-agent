@@ -64,7 +64,7 @@ def test_imports_from_shared():
     from shared import config_loader
     from shared import bm_logger
     from shared import state_registry
-    assert hasattr(config_loader, 'get_trips')
+    assert hasattr(config_loader, 'get_services')
     assert hasattr(bm_logger, 'log')
     assert hasattr(state_registry, 'DB_PATH')
 

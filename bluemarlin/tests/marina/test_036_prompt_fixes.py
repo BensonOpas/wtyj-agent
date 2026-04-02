@@ -29,8 +29,8 @@ def test_days_available_in_prompt():
 
 
 def test_day_of_week_check():
-    """T4: Day-of-week data present in prompt via trip definitions."""
-    # The prompt contains days_available for each trip (e.g. "Fridays only")
+    """T4: Day-of-week data present in prompt via service definitions."""
+    # The prompt contains days_available for each service (e.g. "Fridays only")
     assert "days_available" in _prompt
 
 

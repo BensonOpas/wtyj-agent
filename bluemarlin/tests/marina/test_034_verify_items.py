@@ -24,23 +24,23 @@ assert "48" in c["cancellation_policy"]["summary"], \
 print("T3 pass — cancellation summary contains '48'")
 
 # T4: snorkeling_3in1 duration is integer 4
-assert c["trips"]["snorkeling_3in1"]["duration_hours"] == 4, \
+assert c["services"]["snorkeling_3in1"]["duration_hours"] == 4, \
     f"T4 fail: {c['trips']['snorkeling_3in1']['duration_hours']}"
 print("T4 pass — snorkeling_3in1 duration_hours == 4")
 
 # T5: snorkeling_3in1 vessel is TopCat
-assert c["trips"]["snorkeling_3in1"]["departures"][0]["vessel"] == "TopCat", \
-    f"T5 fail: {c['trips']['snorkeling_3in1']['departures'][0]['vessel']}"
+assert c["services"]["snorkeling_3in1"]["slots"][0]["resource"] == "TopCat", \
+    f"T5 fail: {c['trips']['snorkeling_3in1']['slots'][0]['resource']}"
 print("T5 pass — snorkeling_3in1 vessel == TopCat")
 
 # T6: west_coast_beach vessel is Red Dragon
-assert c["trips"]["west_coast_beach"]["departures"][0]["vessel"] == "Red Dragon", \
-    f"T6 fail: {c['trips']['west_coast_beach']['departures'][0]['vessel']}"
+assert c["services"]["west_coast_beach"]["slots"][0]["resource"] == "Red Dragon", \
+    f"T6 fail: {c['trips']['west_coast_beach']['slots'][0]['resource']}"
 print("T6 pass — west_coast_beach vessel == Red Dragon")
 
 # T7: sunset_cruise vessel is Kailani
-assert c["trips"]["sunset_cruise"]["departures"][0]["vessel"] == "Kailani", \
-    f"T7 fail: {c['trips']['sunset_cruise']['departures'][0]['vessel']}"
+assert c["services"]["sunset_cruise"]["slots"][0]["resource"] == "Kailani", \
+    f"T7 fail: {c['trips']['sunset_cruise']['slots'][0]['resource']}"
 print("T7 pass — sunset_cruise vessel == Kailani")
 
 # T8: is_there_shade is the exact expected string

@@ -30,7 +30,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM bookings WHERE customer_email = ?", (phone.strip().lower(),))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.commit()
@@ -266,7 +266,7 @@ def test_past_date_rejection():
     print("\n=== Scenario Y: Past Date Rejection ===")
 
     reply = send_message(phone,
-        "Book the Klein Curacao trip for March 1 2026 for 2 people. "
+        "Book the Klein Curacao service for March 1 2026 for 2 people. "
         "Name is Past Date Test.")
     print(f"  Reply: {reply[:300]}...")
 
@@ -317,7 +317,7 @@ def test_stale_conversation_reset():
     check("Z-T2: not awaiting_booking_confirmation",
           not state2["flags"].get("awaiting_booking_confirmation"),
           f"awaiting={state2['flags'].get('awaiting_booking_confirmation')}")
-    check_contains_any(reply2, ["trip", "Klein", "Sunset", "Snorkel", "cruise", "beach",
+    check_contains_any(reply2, ["service", "Klein", "Sunset", "Snorkel", "cruise", "beach",
                                  "jet ski", "$"],
                        "Z-T2: mentions trips (fresh conversation)")
 
@@ -357,13 +357,13 @@ def test_phone_returning_customer():
 
     # Setup: seed a past booking with customer_email=phone
     _ref = "BF-2026-99902"
-    _fields = {"trip_key": "klein_curacao", "experience": "Klein Curacao Trip",
+    _fields = {"service_key": "klein_curacao", "service_name": "Klein Curacao Trip",
                "date": "2026-03-01", "guests": "4", "customer_name": "Return Phone Test",
-               "departure_time": "08:00"}
+               "slot_time": "08:00"}
     _flags = {"booking_ref": _ref, "hold_created": True}
     state_registry.save_booking(_ref, _fields, _flags, customer_email=phone)
 
-    reply = send_message(phone, "Hi, I'd like to book another trip please!",
+    reply = send_message(phone, "Hi, I'd like to book another service please!",
                          from_name="Return Phone Test")
     print(f"  Reply: {reply[:300]}...")
 
@@ -372,13 +372,13 @@ def test_phone_returning_customer():
     past = state_registry.get_bookings_by_email(phone)
     check("BB: past booking accessible", len(past) >= 1,
           f"past_bookings={len(past)}")
-    # Check if reply acknowledges returning customer or mentions past trip details
+    # Check if reply acknowledges returning customer or mentions past service details
     _is_returning_ack = any(w in reply.lower() for w in
         ["welcome back", "again", "before", "previous", "klein", "4 guest",
          "returning", "booked with us"])
     _is_coherent = any(w in reply.lower() for w in
-        ["trip", "book", "which", "what", "$", "help", "offer"])
-    check("BB: coherent reply (returning ack or trip engagement)",
+        ["service", "book", "which", "what", "$", "help", "offer"])
+    check("BB: coherent reply (returning ack or service engagement)",
           _is_returning_ack or _is_coherent,
           f"returning_ack={_is_returning_ack}, coherent={_is_coherent}")
 
@@ -388,7 +388,7 @@ def test_phone_returning_customer():
 # --- Scenario CC: German Language (1 turn) ---
 
 def test_german_language():
-    """Scenario CC: German language inquiry — should reply with trip info."""
+    """Scenario CC: German language inquiry — should reply with service info."""
     phone = f"{_PHONE_PREFIX}GERMAN_001"
     _cleanup_phone(phone)
     print("\n=== Scenario CC: German Language ===")
@@ -399,7 +399,7 @@ def test_german_language():
     print(f"  Reply: {reply[:300]}...")
 
     check("CC: got reply", len(reply) > 20, f"len={len(reply)}")
-    check_contains_any(reply, ["$", "Klein", "Sunset", "Ausflug", "Boot", "trip",
+    check_contains_any(reply, ["$", "Klein", "Sunset", "Ausflug", "Boot", "service",
                                 "cruise", "Schnorchel", "USD", "Tour", "Fahrt"],
                        "CC: mentions trips or pricing")
 
@@ -453,25 +453,25 @@ def test_max_bookings_cap():
     print("\n=== Scenario EE: Max Bookings Cap ===")
 
     # Seed: 2 archived bookings + 1 active (hold_created) = 3 bookings done
-    fields = {"trip_key": "sunset_cruise", "experience": "Sunset Cruise",
+    fields = {"service_key": "sunset_cruise", "service_name": "Sunset Cruise",
               "date": "2027-04-10", "guests": "2", "customer_name": "Max Test",
-              "departure_time": "17:30"}
+              "slot_time": "17:30"}
     flags = {"hold_created": True, "booking_ref": "BF-2026-99903",
              "booking_confirmed": True, "event_id": "test-evt-ee",
              "payment_link": "https://demo.pay/test", "payment_status": "pending"}
     completed_bookings = [
-        {"booking_ref": "BF-2026-99901", "trip_key": "klein_curacao",
-         "experience": "Klein Curacao Trip", "date": "2027-04-08",
-         "guests": "2", "departure_time": "08:00", "payment_link": "https://demo.pay/test1"},
-        {"booking_ref": "BF-2026-99902", "trip_key": "jet_ski",
-         "experience": "Jet Ski Excursion", "date": "2027-04-09",
-         "guests": "2", "departure_time": "10:00", "payment_link": "https://demo.pay/test2"},
+        {"booking_ref": "BF-2026-99901", "service_key": "klein_curacao",
+         "service_name": "Klein Curacao Trip", "date": "2027-04-08",
+         "guests": "2", "slot_time": "08:00", "payment_link": "https://demo.pay/test1"},
+        {"booking_ref": "BF-2026-99902", "service_key": "jet_ski",
+         "service_name": "Jet Ski Excursion", "date": "2027-04-09",
+         "guests": "2", "slot_time": "10:00", "payment_link": "https://demo.pay/test2"},
     ]
     state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
 
-    # Turn 1: Booking #4 — multi-trip reset fires (completed=2 < 3), archives current
+    # Turn 1: Booking #4 — multi-service reset fires (completed=2 < 3), archives current
     reply1 = send_message(phone,
-        "I also want the snorkeling trip for April 16 2027 for 2 people",
+        "I also want the snorkeling service for April 16 2027 for 2 people",
         from_name="Max Test")
     print(f"  T1: {reply1[:300]}...")
     check("EE-T1: got reply", len(reply1) > 20, f"len={len(reply1)}")

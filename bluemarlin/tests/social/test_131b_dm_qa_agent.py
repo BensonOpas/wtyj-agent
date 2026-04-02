@@ -64,11 +64,11 @@ def test_dm_reply_is_plain_text(mock_anthropic_cls):
     conv = "conv_131b_t2"
     _cleanup(conv)
     mock_client = MagicMock()
-    mock_client.messages.create.return_value = _mock_anthropic_response("Sure, the sunset trip is on Fridays!")
+    mock_client.messages.create.return_value = _mock_anthropic_response("Sure, the sunset service is on Fridays!")
     mock_anthropic_cls.return_value = mock_client
 
     from agents.social.dm_agent import handle_incoming_dm
-    reply = handle_incoming_dm(_make_dm_msg(conv_id=conv, text="when is the sunset trip?"))
+    reply = handle_incoming_dm(_make_dm_msg(conv_id=conv, text="when is the sunset service?"))
     assert isinstance(reply, str)
     assert "{" not in reply
     assert "intents" not in reply
@@ -94,7 +94,7 @@ def test_dm_strips_booking_placeholders(mock_anthropic_cls):
     _cleanup(conv)
 
 
-# --- Test 4: Prompt has trip data from client.json ---
+# --- Test 4: Prompt has service data from client.json ---
 @patch("agents.social.dm_agent.anthropic.Anthropic")
 def test_dm_prompt_has_trip_data(mock_anthropic_cls):
     conv = "conv_131b_t4"
@@ -109,7 +109,7 @@ def test_dm_prompt_has_trip_data(mock_anthropic_cls):
     # Check the system prompt passed to Claude
     call_args = mock_client.messages.create.call_args
     system_prompt = call_args[1]["system"]
-    # Should contain trip names from client.json
+    # Should contain service names from client.json
     assert "Klein" in system_prompt or "Snorkel" in system_prompt or "Jet Ski" in system_prompt
     _cleanup(conv)
 

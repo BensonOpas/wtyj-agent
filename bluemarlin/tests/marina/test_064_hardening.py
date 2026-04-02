@@ -9,20 +9,20 @@ from shared import config_loader, state_registry
 
 def test_past_date_returns_already_passed():
     """T1: Past date returns 'already passed'."""
-    _trip = config_loader.get_trip("sunset_cruise")
+    _service = config_loader.get_service("sunset_cruise")
     th = {
-        "fields": {"trip_key": "sunset_cruise", "experience": "Sunset Cruise", "date": "2025-01-02", "guests": "2"},
+        "fields": {"service_key": "sunset_cruise", "service_name": "Sunset Cruise", "date": "2025-01-02", "guests": "2"},
         "flags": {},
         "messages": [],
     }
-    result = {"intents": ["booking"], "fields": {"trip_key": "sunset_cruise", "date": "2025-01-02", "guests": "2"}}
+    result = {"intents": ["booking"], "fields": {"service_key": "sunset_cruise", "date": "2025-01-02", "guests": "2"}}
     reply, _ = _post_validate(th, result, _trip)
     assert reply is not None and "already passed" in reply
 
 
 def test_future_date_no_already_passed():
     """T2: Future date does not say 'already passed'."""
-    _trip = config_loader.get_trip("sunset_cruise")
+    _service = config_loader.get_service("sunset_cruise")
     _days_avail = _trip.get("days_available", "daily")
     _test_date = None
     for d in range(60, 120):
@@ -32,12 +32,12 @@ def test_future_date_no_already_passed():
             _test_date = _candidate
             break
     th = {
-        "fields": {"trip_key": "sunset_cruise", "date": _test_date, "guests": "2",
+        "fields": {"service_key": "sunset_cruise", "date": _test_date, "guests": "2",
                    "customer_name": "Test User", "phone": "+5999-1234567"},
         "flags": {},
         "messages": [],
     }
-    result = {"fields": {"trip_key": "sunset_cruise", "date": _test_date, "guests": "2",
+    result = {"fields": {"service_key": "sunset_cruise", "date": _test_date, "guests": "2",
                           "customer_name": "Test User", "phone": "+5999-1234567"}}
     reply, _ = _post_validate(th, result, _trip)
     assert reply is None or "already passed" not in reply
@@ -101,8 +101,8 @@ def test_get_bookings_by_email():
     _test_ref = "BF-2026-T064A"
     _test_email = "Test064@Example.COM"
     _test_fields = {
-        "trip_key": "sunset_cruise", "date": "2027-06-15",
-        "departure_time": "16:30", "guests": 4,
+        "service_key": "sunset_cruise", "date": "2027-06-15",
+        "slot_time": "16:30", "guests": 4,
         "customer_name": "Test User 064", "special_requests": "",
     }
     _test_flags = {"payment_link": "https://demo.pay/test", "event_link": ""}

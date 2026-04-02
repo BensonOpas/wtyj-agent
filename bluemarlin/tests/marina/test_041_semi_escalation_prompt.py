@@ -12,7 +12,7 @@ def test_weight_limit_triggers_semi_escalation():
         "john@example.com",
         "Jet ski question",
         "What is the maximum weight limit per person for the jet ski?",
-        {"trip_key": "jet_ski", "experience": "jet ski"},
+        {"service_key": "jet_ski", "service_name": "jet ski"},
         {}
     )
     assert result.get("semi_escalation") is True, (
@@ -70,7 +70,7 @@ def test_complaint_still_uses_requires_human():
     result = marina_agent.process_message(
         "angry@example.com",
         "Terrible experience",
-        "I want a refund. The trip was cancelled last minute and ruined our holiday.",
+        "I want a refund. The service was cancelled last minute and ruined our holiday.",
         {},
         {}
     )
@@ -90,7 +90,7 @@ def test_normal_inquiry_no_semi_escalation():
     result = marina_agent.process_message(
         "curious@example.com",
         "Trip question",
-        "How long is the Klein Curacao trip and what time does it depart?",
+        "How long is the Klein Curacao service and what time does it depart?",
         {},
         {}
     )

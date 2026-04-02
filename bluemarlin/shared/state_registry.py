@@ -16,6 +16,39 @@ DB_PATH = os.path.join(
 def _get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
+    # Schema migration: rename trip_bookings → service_bookings + columns
+    try:
+        conn.execute("ALTER TABLE trip_bookings RENAME TO service_bookings")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE service_bookings RENAME COLUMN trip_key TO service_key")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE service_bookings RENAME COLUMN departure_time TO slot_time")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE manifest_events RENAME COLUMN trip_key TO service_key")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE manifest_events RENAME COLUMN departure_time TO slot_time")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE bookings RENAME COLUMN trip_key TO service_key")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE bookings RENAME COLUMN departure_time TO slot_time")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE photo_library RENAME COLUMN trip_key TO service_key")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         "CREATE TABLE IF NOT EXISTS processed_hashes ("
         "hash TEXT PRIMARY KEY, "
@@ -23,11 +56,11 @@ def _get_conn():
         ")"
     )
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS trip_bookings ("
+        "CREATE TABLE IF NOT EXISTS service_bookings ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "trip_key TEXT NOT NULL, "
+        "service_key TEXT NOT NULL, "
         "date TEXT NOT NULL, "
-        "departure_time TEXT NOT NULL, "
+        "slot_time TEXT NOT NULL, "
         "guests INTEGER NOT NULL, "
         "booking_ref TEXT, "
         "status TEXT DEFAULT 'soft_hold', "
@@ -36,29 +69,29 @@ def _get_conn():
         ")"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_trip_bookings_lookup "
-        "ON trip_bookings(trip_key, date, departure_time, status)"
+        "CREATE INDEX IF NOT EXISTS idx_service_bookings_lookup "
+        "ON service_bookings(service_key, date, slot_time, status)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS manifest_events ("
-        "trip_key TEXT NOT NULL, "
+        "service_key TEXT NOT NULL, "
         "date TEXT NOT NULL, "
-        "departure_time TEXT NOT NULL, "
+        "slot_time TEXT NOT NULL, "
         "calendar_id TEXT NOT NULL, "
         "event_id TEXT NOT NULL, "
         "html_link TEXT DEFAULT '', "
         "created_at TEXT NOT NULL, "
-        "PRIMARY KEY (trip_key, date, departure_time)"
+        "PRIMARY KEY (service_key, date, slot_time)"
         ")"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS bookings ("
         "booking_ref TEXT PRIMARY KEY, "
-        "trip_key TEXT, "
+        "service_key TEXT, "
         "customer_name TEXT, "
         "customer_email TEXT, "
         "date TEXT, "
-        "departure_time TEXT, "
+        "slot_time TEXT, "
         "guests INTEGER, "
         "special_requests TEXT, "
         "payment_link TEXT, "
@@ -109,6 +142,30 @@ def _get_conn():
         "created_at TEXT NOT NULL"
         ")"
     )
+    # Schema migration: rename field names in whatsapp_booking_state JSON blobs
+    try:
+        _rows = conn.execute("SELECT phone, fields_json, flags_json FROM whatsapp_booking_state").fetchall()
+        _renames = {"trip_key": "service_key", "experience": "service_name", "departure_time": "slot_time"}
+        _flag_renames = {"hold_trip_key": "hold_service_key", "hold_departure_time": "hold_slot_time"}
+        for _phone, _fj, _flj in _rows:
+            _fields = json.loads(_fj or "{}")
+            _flags = json.loads(_flj or "{}")
+            _changed = False
+            for _old, _new in _renames.items():
+                if _old in _fields:
+                    _fields[_new] = _fields.pop(_old)
+                    _changed = True
+            for _old, _new in _flag_renames.items():
+                if _old in _flags:
+                    _flags[_new] = _flags.pop(_old)
+                    _changed = True
+            if _changed:
+                conn.execute("UPDATE whatsapp_booking_state SET fields_json = ?, flags_json = ? WHERE phone = ?",
+                             (json.dumps(_fields), json.dumps(_flags), _phone))
+        if _rows:
+            conn.commit()
+    except Exception:
+        pass  # Table might not exist yet on fresh DB
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pending_notifications ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -154,7 +211,7 @@ def _get_conn():
         "filename TEXT NOT NULL, "
         "original_filename TEXT NOT NULL, "
         "tags_json TEXT DEFAULT '[]', "
-        "trip_key TEXT DEFAULT '', "
+        "service_key TEXT DEFAULT '', "
         "source TEXT DEFAULT 'upload', "
         "source_id TEXT DEFAULT '', "
         "width INTEGER DEFAULT 0, "
@@ -241,11 +298,11 @@ def _get_conn():
     except sqlite3.OperationalError:
         pass
     try:
-        conn.execute("ALTER TABLE trip_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE service_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     try:
-        conn.execute("ALTER TABLE trip_bookings ADD COLUMN customer_email TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE service_bookings ADD COLUMN customer_email TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     return conn
@@ -282,7 +339,7 @@ def expire_stale_holds() -> int:
     conn = _get_conn()
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "UPDATE trip_bookings SET status='expired' "
+        "UPDATE service_bookings SET status='expired' "
         "WHERE status='soft_hold' AND expires_at < ?",
         (now,)
     )
@@ -292,16 +349,16 @@ def expire_stale_holds() -> int:
     return count
 
 
-def get_spots_remaining(trip_key: str, date: str, departure_time: str, capacity: int) -> int:
+def get_spots_remaining(service_key: str, date: str, slot_time: str, capacity: int) -> int:
     """Return capacity minus guests already in soft_hold (non-expired) or confirmed for this slot."""
     conn = _get_conn()
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
-        "SELECT COALESCE(SUM(guests), 0) FROM trip_bookings "
-        "WHERE trip_key=? AND date=? AND departure_time=? "
+        "SELECT COALESCE(SUM(guests), 0) FROM service_bookings "
+        "WHERE service_key=? AND date=? AND slot_time=? "
         "AND status IN ('soft_hold', 'confirmed') "
         "AND (status='confirmed' OR expires_at > ?)",
-        (trip_key, date, departure_time, now)
+        (service_key, date, slot_time, now)
     ).fetchone()
     conn.close()
     used = row[0] if row else 0
@@ -309,7 +366,7 @@ def get_spots_remaining(trip_key: str, date: str, departure_time: str, capacity:
 
 
 def create_soft_hold(
-    trip_key: str, date: str, departure_time: str, guests: int, capacity: int,
+    service_key: str, date: str, slot_time: str, guests: int, capacity: int,
     customer_name: str = "", customer_email: str = ""
 ) -> "int | None":
     """
@@ -324,16 +381,16 @@ def create_soft_hold(
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "UPDATE trip_bookings SET status='expired' "
+            "UPDATE service_bookings SET status='expired' "
             "WHERE status='soft_hold' AND expires_at < ?",
             (now,)
         )
         row = conn.execute(
-            "SELECT COALESCE(SUM(guests), 0) FROM trip_bookings "
-            "WHERE trip_key=? AND date=? AND departure_time=? "
+            "SELECT COALESCE(SUM(guests), 0) FROM service_bookings "
+            "WHERE service_key=? AND date=? AND slot_time=? "
             "AND status IN ('soft_hold', 'confirmed') "
             "AND (status='confirmed' OR expires_at > ?)",
-            (trip_key, date, departure_time, now)
+            (service_key, date, slot_time, now)
         ).fetchone()
         used = row[0] if row else 0
         if used + guests > capacity:
@@ -341,11 +398,11 @@ def create_soft_hold(
             conn.close()
             return None
         cur = conn.execute(
-            "INSERT INTO trip_bookings "
-            "(trip_key, date, departure_time, guests, status, expires_at, created_at, "
+            "INSERT INTO service_bookings "
+            "(service_key, date, slot_time, guests, status, expires_at, created_at, "
             "customer_name, customer_email) "
             "VALUES (?, ?, ?, ?, 'soft_hold', ?, ?, ?, ?)",
-            (trip_key, date, departure_time, guests, expires_at, now,
+            (service_key, date, slot_time, guests, expires_at, now,
              customer_name, customer_email)
         )
         hold_id = cur.lastrowid
@@ -365,7 +422,7 @@ def confirm_hold(hold_id: int) -> bool:
     """Upgrade a soft_hold to confirmed. Clears expires_at. Returns True if row was updated."""
     conn = _get_conn()
     cur = conn.execute(
-        "UPDATE trip_bookings SET status='confirmed', expires_at=NULL "
+        "UPDATE service_bookings SET status='confirmed', expires_at=NULL "
         "WHERE id=? AND status='soft_hold'",
         (hold_id,)
     )
@@ -379,7 +436,7 @@ def cancel_hold(hold_id: int) -> bool:
     """Mark a hold as cancelled. Returns True if row was updated."""
     conn = _get_conn()
     cur = conn.execute(
-        "UPDATE trip_bookings SET status='cancelled' WHERE id=?",
+        "UPDATE service_bookings SET status='cancelled' WHERE id=?",
         (hold_id,)
     )
     changed = cur.rowcount > 0
@@ -389,10 +446,10 @@ def cancel_hold(hold_id: int) -> bool:
 
 
 def set_booking_ref(hold_id: int, booking_ref: str) -> bool:
-    """Set booking_ref on a trip_bookings row. Returns True if row was updated."""
+    """Set booking_ref on a service_bookings row. Returns True if row was updated."""
     conn = _get_conn()
     cur = conn.execute(
-        "UPDATE trip_bookings SET booking_ref=? WHERE id=?",
+        "UPDATE service_bookings SET booking_ref=? WHERE id=?",
         (booking_ref, hold_id)
     )
     changed = cur.rowcount > 0
@@ -401,44 +458,44 @@ def set_booking_ref(hold_id: int, booking_ref: str) -> bool:
     return changed
 
 
-def get_manifest_event(trip_key: str, date: str, departure_time: str):
-    """Returns dict {trip_key, date, departure_time, calendar_id, event_id, html_link} or None."""
+def get_manifest_event(service_key: str, date: str, slot_time: str):
+    """Returns dict {service_key, date, slot_time, calendar_id, event_id, html_link} or None."""
     conn = _get_conn()
     row = conn.execute(
-        "SELECT trip_key, date, departure_time, calendar_id, event_id, html_link "
-        "FROM manifest_events WHERE trip_key=? AND date=? AND departure_time=?",
-        (trip_key, date, departure_time)
+        "SELECT service_key, date, slot_time, calendar_id, event_id, html_link "
+        "FROM manifest_events WHERE service_key=? AND date=? AND slot_time=?",
+        (service_key, date, slot_time)
     ).fetchone()
     conn.close()
     if not row:
         return None
     return {
-        "trip_key": row[0], "date": row[1], "departure_time": row[2],
+        "service_key": row[0], "date": row[1], "slot_time": row[2],
         "calendar_id": row[3], "event_id": row[4], "html_link": row[5],
     }
 
 
-def save_manifest_event(trip_key: str, date: str, departure_time: str,
+def save_manifest_event(service_key: str, date: str, slot_time: str,
                         calendar_id: str, event_id: str, html_link: str) -> None:
     """INSERT OR REPLACE into manifest_events."""
     conn = _get_conn()
     conn.execute(
         "INSERT OR REPLACE INTO manifest_events "
-        "(trip_key, date, departure_time, calendar_id, event_id, html_link, created_at) "
+        "(service_key, date, slot_time, calendar_id, event_id, html_link, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (trip_key, date, departure_time, calendar_id, event_id, html_link,
+        (service_key, date, slot_time, calendar_id, event_id, html_link,
          datetime.now(timezone.utc).isoformat())
     )
     conn.commit()
     conn.close()
 
 
-def delete_manifest_event(trip_key: str, date: str, departure_time: str) -> bool:
+def delete_manifest_event(service_key: str, date: str, slot_time: str) -> bool:
     """Delete manifest_events row for this slot. Returns True if row existed."""
     conn = _get_conn()
     cur = conn.execute(
-        "DELETE FROM manifest_events WHERE trip_key=? AND date=? AND departure_time=?",
-        (trip_key, date, departure_time)
+        "DELETE FROM manifest_events WHERE service_key=? AND date=? AND slot_time=?",
+        (service_key, date, slot_time)
     )
     changed = cur.rowcount > 0
     conn.commit()
@@ -446,19 +503,19 @@ def delete_manifest_event(trip_key: str, date: str, departure_time: str) -> bool
     return changed
 
 
-def get_slot_passengers(trip_key: str, date: str, departure_time: str) -> list:
+def get_slot_passengers(service_key: str, date: str, slot_time: str) -> list:
     """Return all active bookings for this slot (soft_hold non-expired + confirmed).
     Each item: {id, guests, booking_ref, status, customer_name, customer_email, created_at}."""
     conn = _get_conn()
     now = datetime.now(timezone.utc).isoformat()
     rows = conn.execute(
         "SELECT id, guests, booking_ref, status, customer_name, customer_email, created_at "
-        "FROM trip_bookings "
-        "WHERE trip_key=? AND date=? AND departure_time=? "
+        "FROM service_bookings "
+        "WHERE service_key=? AND date=? AND slot_time=? "
         "AND status IN ('soft_hold', 'confirmed') "
         "AND (status='confirmed' OR expires_at > ?) "
         "ORDER BY created_at ASC",
-        (trip_key, date, departure_time, now)
+        (service_key, date, slot_time, now)
     ).fetchall()
     conn.close()
     return [
@@ -477,17 +534,17 @@ def save_booking(booking_ref: str, fields: dict, flags: dict,
     conn = _get_conn()
     conn.execute(
         "INSERT OR REPLACE INTO bookings "
-        "(booking_ref, trip_key, customer_name, customer_email, date, "
-        "departure_time, guests, special_requests, payment_link, event_link, "
+        "(booking_ref, service_key, customer_name, customer_email, date, "
+        "slot_time, guests, special_requests, payment_link, event_link, "
         "status, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             booking_ref,
-            fields.get("trip_key", ""),
+            fields.get("service_key", ""),
             fields.get("customer_name", ""),
             customer_email.strip().lower() if customer_email else "",
             fields.get("date", ""),
-            fields.get("departure_time", ""),
+            fields.get("slot_time", ""),
             int(fields.get("guests") or 0),
             fields.get("special_requests", ""),
             flags.get("payment_link", ""),
@@ -504,15 +561,15 @@ def get_bookings_by_email(customer_email: str) -> list:
     """Return all bookings for a customer email, newest first."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT booking_ref, trip_key, customer_name, customer_email, date, "
-        "departure_time, guests, special_requests, payment_link, event_link, "
+        "SELECT booking_ref, service_key, customer_name, customer_email, date, "
+        "slot_time, guests, special_requests, payment_link, event_link, "
         "status, created_at "
         "FROM bookings WHERE customer_email = ? ORDER BY created_at DESC",
         (customer_email.strip().lower(),)
     ).fetchall()
     conn.close()
-    return [{"booking_ref": r[0], "trip_key": r[1], "customer_name": r[2],
-             "customer_email": r[3], "date": r[4], "departure_time": r[5],
+    return [{"booking_ref": r[0], "service_key": r[1], "customer_name": r[2],
+             "customer_email": r[3], "date": r[4], "slot_time": r[5],
              "guests": r[6], "special_requests": r[7], "payment_link": r[8],
              "event_link": r[9], "status": r[10], "created_at": r[11]} for r in rows]
 
@@ -521,8 +578,8 @@ def get_booking(booking_ref: str) -> "dict | None":
     """Return full booking dict by ref, or None if not found."""
     conn = _get_conn()
     row = conn.execute(
-        "SELECT booking_ref, trip_key, customer_name, customer_email, date, "
-        "departure_time, guests, special_requests, payment_link, event_link, "
+        "SELECT booking_ref, service_key, customer_name, customer_email, date, "
+        "slot_time, guests, special_requests, payment_link, event_link, "
         "status, created_at "
         "FROM bookings WHERE booking_ref = ?",
         (booking_ref,)
@@ -531,8 +588,8 @@ def get_booking(booking_ref: str) -> "dict | None":
     if not row:
         return None
     return {
-        "booking_ref": row[0], "trip_key": row[1], "customer_name": row[2],
-        "customer_email": row[3], "date": row[4], "departure_time": row[5],
+        "booking_ref": row[0], "service_key": row[1], "customer_name": row[2],
+        "customer_email": row[3], "date": row[4], "slot_time": row[5],
         "guests": row[6], "special_requests": row[7], "payment_link": row[8],
         "event_link": row[9], "status": row[10], "created_at": row[11],
     }
@@ -931,18 +988,18 @@ def update_draft_content(draft_id: int, instagram_caption: str = None,
 
 
 def save_photo(filename: str, original_filename: str, tags: list,
-               trip_key: str = "", source: str = "upload",
+               service_key: str = "", source: str = "upload",
                source_id: str = "", width: int = 0, height: int = 0,
                file_size: int = 0) -> int:
     """Save a photo record. Returns row id."""
     conn = _get_conn()
     cur = conn.execute(
         "INSERT INTO photo_library "
-        "(filename, original_filename, tags_json, trip_key, source, source_id, "
+        "(filename, original_filename, tags_json, service_key, source, source_id, "
         "width, height, file_size, uploaded_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (filename, original_filename, json.dumps(tags, ensure_ascii=False),
-         trip_key, source, source_id, width, height, file_size,
+         service_key, source, source_id, width, height, file_size,
          datetime.now(timezone.utc).isoformat())
     )
     photo_id = cur.lastrowid
@@ -951,19 +1008,19 @@ def save_photo(filename: str, original_filename: str, tags: list,
     return photo_id
 
 
-def get_photos(trip_key: str = None, limit: int = 50) -> list:
-    """Get photos, optionally filtered by trip_key. Newest first."""
+def get_photos(service_key: str = None, limit: int = 50) -> list:
+    """Get photos, optionally filtered by service_key. Newest first."""
     conn = _get_conn()
-    if trip_key:
+    if service_key:
         rows = conn.execute(
-            "SELECT id, filename, original_filename, tags_json, trip_key, "
+            "SELECT id, filename, original_filename, tags_json, service_key, "
             "source, source_id, width, height, file_size, used_count, uploaded_at "
-            "FROM photo_library WHERE trip_key = ? ORDER BY uploaded_at DESC LIMIT ?",
-            (trip_key, limit)
+            "FROM photo_library WHERE service_key = ? ORDER BY uploaded_at DESC LIMIT ?",
+            (service_key, limit)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, filename, original_filename, tags_json, trip_key, "
+            "SELECT id, filename, original_filename, tags_json, service_key, "
             "source, source_id, width, height, file_size, used_count, uploaded_at "
             "FROM photo_library ORDER BY uploaded_at DESC LIMIT ?",
             (limit,)
@@ -972,7 +1029,7 @@ def get_photos(trip_key: str = None, limit: int = 50) -> list:
     return [
         {
             "id": r[0], "filename": r[1], "original_filename": r[2],
-            "tags": json.loads(r[3] or "[]"), "trip_key": r[4],
+            "tags": json.loads(r[3] or "[]"), "service_key": r[4],
             "source": r[5], "source_id": r[6], "width": r[7],
             "height": r[8], "file_size": r[9], "used_count": r[10],
             "uploaded_at": r[11],
@@ -985,7 +1042,7 @@ def get_photo_by_id(photo_id: int) -> dict | None:
     """Get a single photo by ID."""
     conn = _get_conn()
     row = conn.execute(
-        "SELECT id, filename, original_filename, tags_json, trip_key, "
+        "SELECT id, filename, original_filename, tags_json, service_key, "
         "source, source_id, width, height, file_size, used_count, uploaded_at "
         "FROM photo_library WHERE id = ?",
         (photo_id,)
@@ -995,7 +1052,7 @@ def get_photo_by_id(photo_id: int) -> dict | None:
         return None
     return {
         "id": row[0], "filename": row[1], "original_filename": row[2],
-        "tags": json.loads(row[3] or "[]"), "trip_key": row[4],
+        "tags": json.loads(row[3] or "[]"), "service_key": row[4],
         "source": row[5], "source_id": row[6], "width": row[7],
         "height": row[8], "file_size": row[9], "used_count": row[10],
         "uploaded_at": row[11],
@@ -1008,7 +1065,7 @@ def get_photo_by_source_id(source_id: str) -> dict | None:
         return None
     conn = _get_conn()
     row = conn.execute(
-        "SELECT id, filename, original_filename, tags_json, trip_key, "
+        "SELECT id, filename, original_filename, tags_json, service_key, "
         "source, source_id, width, height, file_size, used_count, uploaded_at "
         "FROM photo_library WHERE source_id = ?",
         (source_id,)
@@ -1018,23 +1075,23 @@ def get_photo_by_source_id(source_id: str) -> dict | None:
         return None
     return {
         "id": row[0], "filename": row[1], "original_filename": row[2],
-        "tags": json.loads(row[3] or "[]"), "trip_key": row[4],
+        "tags": json.loads(row[3] or "[]"), "service_key": row[4],
         "source": row[5], "source_id": row[6], "width": row[7],
         "height": row[8], "file_size": row[9], "used_count": row[10],
         "uploaded_at": row[11],
     }
 
 
-def update_photo(photo_id: int, tags: list = None, trip_key: str = None) -> bool:
-    """Update photo tags and/or trip_key. Returns True if row updated."""
+def update_photo(photo_id: int, tags: list = None, service_key: str = None) -> bool:
+    """Update photo tags and/or service_key. Returns True if row updated."""
     sets = []
     params = []
     if tags is not None:
         sets.append("tags_json = ?")
         params.append(json.dumps(tags, ensure_ascii=False))
-    if trip_key is not None:
-        sets.append("trip_key = ?")
-        params.append(trip_key)
+    if service_key is not None:
+        sets.append("service_key = ?")
+        params.append(service_key)
     if not sets:
         return False
     params.append(photo_id)
@@ -1076,12 +1133,12 @@ def delete_photo(photo_id: int) -> str | None:
 
 
 def get_photo_stats() -> dict:
-    """Get photo count total and grouped by trip_key."""
+    """Get photo count total and grouped by service_key."""
     conn = _get_conn()
     total = conn.execute("SELECT COUNT(*) FROM photo_library").fetchone()[0]
     rows = conn.execute(
-        "SELECT COALESCE(NULLIF(trip_key, ''), 'untagged'), COUNT(*) "
-        "FROM photo_library GROUP BY COALESCE(NULLIF(trip_key, ''), 'untagged')"
+        "SELECT COALESCE(NULLIF(service_key, ''), 'untagged'), COUNT(*) "
+        "FROM photo_library GROUP BY COALESCE(NULLIF(service_key, ''), 'untagged')"
     ).fetchall()
     conn.close()
     return {"total": total, "by_trip": {r[0]: r[1] for r in rows}}
@@ -1489,13 +1546,13 @@ def delete_oauth_tokens(provider: str) -> bool:
 
 
 def get_availability_summary(days_ahead: int = 7) -> list:
-    """Get booking counts for all trip slots in the next N days.
-    Returns list of {trip_key, date, departure_time, booked_guests, capacity, spots_remaining}.
+    """Get booking counts for all service slots in the next N days.
+    Returns list of {service_key, date, slot_time, booked_guests, capacity, spots_remaining}.
     Used by content_agent to generate operationally-aware posts."""
     from shared import config_loader
 
     expire_stale_holds()
-    trips = config_loader.get_trips()
+    trips = config_loader.get_services()
     now_curacao = datetime.now(timezone(timedelta(hours=-4)))
     today = now_curacao.date()
 
@@ -1507,12 +1564,12 @@ def get_availability_summary(days_ahead: int = 7) -> list:
     results = []
     conn = _get_conn()
 
-    for trip_key, trip_data in trips.items():
+    for service_key, trip_data in trips.items():
         capacity = trip_data.get("capacity", 0)
         days_available = trip_data.get("days_available", "daily")
-        departures = trip_data.get("departures", [])
+        slots = trip_data.get("slots", [])
 
-        # Parse which days this trip operates
+        # Parse which days this service operates
         if days_available.lower() == "daily":
             valid_days = set(range(7))
         else:
@@ -1532,21 +1589,21 @@ def get_availability_summary(days_ahead: int = 7) -> list:
                 continue
             date_str = check_date.isoformat()
 
-            for dep in departures:
+            for dep in slots:
                 dep_time = dep.get("time", "")
                 now_utc = datetime.now(timezone.utc).isoformat()
                 row = conn.execute(
-                    "SELECT COALESCE(SUM(guests), 0) FROM trip_bookings "
-                    "WHERE trip_key=? AND date=? AND departure_time=? "
+                    "SELECT COALESCE(SUM(guests), 0) FROM service_bookings "
+                    "WHERE service_key=? AND date=? AND slot_time=? "
                     "AND status IN ('soft_hold', 'confirmed') "
                     "AND (status='confirmed' OR expires_at > ?)",
-                    (trip_key, date_str, dep_time, now_utc)
+                    (service_key, date_str, dep_time, now_utc)
                 ).fetchone()
                 booked = row[0] if row else 0
                 results.append({
-                    "trip_key": trip_key,
+                    "service_key": service_key,
                     "date": date_str,
-                    "departure_time": dep_time,
+                    "slot_time": dep_time,
                     "booked_guests": booked,
                     "capacity": capacity,
                     "spots_remaining": max(0, capacity - booked),

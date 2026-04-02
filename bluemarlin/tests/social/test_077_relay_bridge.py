@@ -24,7 +24,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.commit()
     conn.close()
@@ -53,7 +53,7 @@ def _base_result(**overrides):
     return base
 
 
-# --- Test 1: create_pending_notification round-trip ---
+# --- Test 1: create_pending_notification round-service ---
 
 def test_create_pending_notification_round_trip():
     """Create a pending notification and retrieve it."""
@@ -133,8 +133,8 @@ def test_booking_decline_no_loop(mock_process, mock_sheets):
     _cleanup_phone(phone)
     # Set up state: awaiting booking confirmation with all fields
     fields = {
-        "trip_key": "sunset_cruise", "experience": "Sunset Cruise",
-        "date": "2026-03-21", "guests": "4", "departure_time": "17:30",
+        "service_key": "sunset_cruise", "service_name": "Sunset Cruise",
+        "date": "2026-03-21", "guests": "4", "slot_time": "17:30",
         "customer_name": "Test Decline",
     }
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
@@ -164,8 +164,8 @@ def test_booking_decline_with_booking_intent_no_loop(mock_process, mock_sheets):
     phone = "TEST_081_DECLINE_002"
     _cleanup_phone(phone)
     fields = {
-        "trip_key": "sunset_cruise", "experience": "Sunset Cruise",
-        "date": "2026-03-21", "guests": "4", "departure_time": "17:30",
+        "service_key": "sunset_cruise", "service_name": "Sunset Cruise",
+        "date": "2026-03-21", "guests": "4", "slot_time": "17:30",
         "customer_name": "Test Decline2",
     }
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
@@ -387,12 +387,12 @@ def test_semi_cancels_soft_hold(mock_process, mock_sheets, mock_remove):
     _cleanup_phone(phone)
     hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
-              "date": "2026-03-18", "guests": "2", "departure_time": "09:00"}
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
+              "date": "2026-03-18", "guests": "2", "slot_time": "09:00"}
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
     mock_process.return_value = _base_result(
         intents=["inquiry"],

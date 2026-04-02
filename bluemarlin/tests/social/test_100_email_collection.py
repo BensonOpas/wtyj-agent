@@ -26,7 +26,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.commit()
     conn.close()
@@ -168,8 +168,8 @@ def test_email_used_in_soft_hold_when_present():
     _cleanup_phone(_TEST_PHONE)
     try:
         # Pre-set fields with email
-        fields = {"trip_key": "sunset_cruise", "date": "2026-04-10",
-                  "departure_time": "17:30", "guests": 2,
+        fields = {"service_key": "sunset_cruise", "date": "2026-04-10",
+                  "slot_time": "17:30", "guests": 2,
                   "customer_name": "Jane", "email": "jane@test.com"}
 
         # The expression `fields.get("email") or phone` should resolve to email
@@ -186,14 +186,14 @@ def test_email_used_in_soft_hold_when_present():
         # Verify it was stored with email
         conn = state_registry._get_conn()
         rows = conn.execute(
-            "SELECT customer_email FROM trip_bookings WHERE id = ?", (hold_id,)
+            "SELECT customer_email FROM service_bookings WHERE id = ?", (hold_id,)
         ).fetchall()
         conn.close()
         assert rows[0][0] == "jane@test.com"
     finally:
         _cleanup_phone(_TEST_PHONE)
         conn = state_registry._get_conn()
-        conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", ("jane@test.com",))
+        conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", ("jane@test.com",))
         conn.commit()
         conn.close()
 
@@ -202,8 +202,8 @@ def test_phone_used_in_soft_hold_when_no_email():
     """Verify create_soft_hold falls back to phone when no email in fields."""
     _cleanup_phone(_TEST_PHONE)
     try:
-        fields = {"trip_key": "sunset_cruise", "date": "2026-04-11",
-                  "departure_time": "17:30", "guests": 2, "customer_name": "Bob"}
+        fields = {"service_key": "sunset_cruise", "date": "2026-04-11",
+                  "slot_time": "17:30", "guests": 2, "customer_name": "Bob"}
 
         customer_email = fields.get("email") or _TEST_PHONE
         assert customer_email == _TEST_PHONE
@@ -216,13 +216,13 @@ def test_phone_used_in_soft_hold_when_no_email():
 
         conn = state_registry._get_conn()
         rows = conn.execute(
-            "SELECT customer_email FROM trip_bookings WHERE id = ?", (hold_id,)
+            "SELECT customer_email FROM service_bookings WHERE id = ?", (hold_id,)
         ).fetchall()
         conn.close()
         assert rows[0][0] == _TEST_PHONE
     finally:
         _cleanup_phone(_TEST_PHONE)
         conn = state_registry._get_conn()
-        conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (_TEST_PHONE,))
+        conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (_TEST_PHONE,))
         conn.commit()
         conn.close()

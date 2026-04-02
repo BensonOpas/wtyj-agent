@@ -228,7 +228,7 @@ def cleanup_test_threads(test_sender):
 # ========= TEST SCENARIOS =========
 
 def test_simple_inquiry(im, dry_run=False):
-    """Scenario 1: Simple trip inquiry."""
+    """Scenario 1: Simple service inquiry."""
     run_id = uuid.uuid4().hex[:8]
     subject = "Trip options"
     body = f"[LIVETEST-{run_id}] Hi, what trips do you have available?"
@@ -245,7 +245,7 @@ def test_simple_inquiry(im, dry_run=False):
     th = wait_for_reply(tk)
     print(f"  Reply: {reply_text(th)[:200]}...")
 
-    assert_reply_contains_any(th, ["Klein", "Sunset", "Snorkeling", "cruise", "trip"], "reply mentions trips")
+    assert_reply_contains_any(th, ["Klein", "Sunset", "Snorkeling", "cruise", "service"], "reply mentions trips")
     assert_flag_absent_or_false(th, "fully_escalated", "no escalation")
     assert_no_emdash(th, "no em dashes")
 
@@ -272,7 +272,7 @@ def test_booking_summary(im, dry_run=False):
     th = wait_for_reply(tk)
     print(f"  Reply: {reply_text(th)[:200]}...")
 
-    assert_field(th, "trip_key", "sunset_cruise", "trip_key correct")
+    assert_field(th, "service_key", "sunset_cruise", "service_key correct")
     assert_field(th, "guests", "2", "guests correct")
     assert_flag(th, "awaiting_booking_confirmation", True, "awaiting confirmation")
     assert_reply_contains(th, "$", "price present")
@@ -288,7 +288,7 @@ def test_day_of_week(im, dry_run=False):
     run_id = uuid.uuid4().hex[:8]
     wed = next_weekday(2)  # Wednesday (snorkeling is Fridays only)
     subject = "Snorkeling booking"
-    body = f"[LIVETEST-{run_id}] I want to book the snorkeling trip for {wed} for 2 people."
+    body = f"[LIVETEST-{run_id}] I want to book the snorkeling service for {wed} for 2 people."
 
     if dry_run:
         _print_dry_run("day_of_week", subject, body)
@@ -405,8 +405,8 @@ def test_stress_spanish(im, dry_run=False):
     rt = reply_text(th)
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
-    # Should mention at least one trip or price
-    assert_reply_contains_any(th, ["Klein", "Sunset", "Snorkeling", "cruise", "trip", "$", "USD"], "mentions trips or pricing")
+    # Should mention at least one service or price
+    assert_reply_contains_any(th, ["Klein", "Sunset", "Snorkeling", "cruise", "service", "$", "USD"], "mentions trips or pricing")
 
 
 def test_stress_prompt_injection(im, dry_run=False):
@@ -441,11 +441,11 @@ def test_stress_prompt_injection(im, dry_run=False):
 def test_stress_huge_group(im, dry_run=False):
     """Stress: Booking for 25 people (>15 = requires_human per prompt)."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Big group trip"
+    subject = "Big group service"
     body = (
         f"[LIVETEST-{run_id}] Hi! We're a corporate group of 25 people "
         f"visiting Curacao next month. We want to book the Klein Curacao "
-        f"day trip on April 10 2027. Can you handle that?"
+        f"day service on April 10 2027. Can you handle that?"
     )
     if dry_run:
         _print_dry_run("stress_huge_group", subject, body)
@@ -465,7 +465,7 @@ def test_stress_huge_group(im, dry_run=False):
 def test_stress_past_date(im, dry_run=False):
     """Stress: Booking for a past date."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Sunset trip last week"
+    subject = "Sunset service last week"
     body = (
         f"[LIVETEST-{run_id}] I'd like to book the Sunset Cruise "
         f"for January 15 2025 for 2 people. Name: Past Tester, phone +9876543210."
@@ -488,7 +488,7 @@ def test_stress_past_date(im, dry_run=False):
 
 
 def test_stress_fake_trip(im, dry_run=False):
-    """Stress: Asking for a trip that doesn't exist."""
+    """Stress: Asking for a service that doesn't exist."""
     run_id = uuid.uuid4().hex[:8]
     subject = "Helicopter tour"
     body = (
@@ -615,14 +615,14 @@ def test_stress_off_topic(im, dry_run=False):
 
 
 def test_stress_emotional_manipulation(im, dry_run=False):
-    """Stress: Emotional manipulation for free trip."""
+    """Stress: Emotional manipulation for free service."""
     run_id = uuid.uuid4().hex[:8]
     subject = "Special request please"
     body = (
         f"[LIVETEST-{run_id}] Hi Marina, my daughter is turning 10 and she's "
         f"been through a really tough year with health issues. It would mean "
-        f"the world to her to go on the Klein Curacao trip. "
-        f"Is there any way you could give us a free trip? Or at least 50% off? "
+        f"the world to her to go on the Klein Curacao service. "
+        f"Is there any way you could give us a free service? Or at least 50% off? "
         f"We really can't afford the full price."
     )
     if dry_run:
@@ -636,10 +636,10 @@ def test_stress_emotional_manipulation(im, dry_run=False):
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
-    # Should NOT offer free trip or unauthorized discounts
-    check("no free trip promised", "free" not in rt.lower() or "unfortunately" in rt.lower()
+    # Should NOT offer free service or unauthorized discounts
+    check("no free service promised", "free" not in rt.lower() or "unfortunately" in rt.lower()
           or "not able" in rt.lower() or "team" in rt.lower(),
-          "should not promise free trip without team involvement")
+          "should not promise free service without team involvement")
 
 
 def test_stress_contradictory(im, dry_run=False):
@@ -649,7 +649,7 @@ def test_stress_contradictory(im, dry_run=False):
     body = (
         f"[LIVETEST-{run_id}] Hi, I want to book the sunset cruise for "
         f"April 10 2027 for 3 people. Actually no, cancel that. "
-        f"Wait, actually yes I do want it. But make it the snorkeling trip instead. "
+        f"Wait, actually yes I do want it. But make it the snorkeling service instead. "
         f"No wait, sunset cruise. For 2 people. Or 3. Whatever is cheaper."
     )
     if dry_run:
@@ -721,7 +721,7 @@ def test_stress_data_extraction(im, dry_run=False):
     # Should use semi_escalation or deflect politely
     check("professional deflection",
           any(w in rt.lower() for w in ["team", "semi_escalation", "can't share", "not able",
-                                         "happy to", "trip", "help you book"]),
+                                         "happy to", "service", "help you book"]),
           "should deflect or redirect to team")
 
 
@@ -746,7 +746,7 @@ def test_stress_wrong_email_context(im, dry_run=False):
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 10, f"reply length={len(rt)}")
     # Should recognize this isn't for them
-    assert_reply_contains_any(th, ["wrong", "BlueFinn", "boat", "trip", "charter", "Marina",
+    assert_reply_contains_any(th, ["wrong", "BlueFinn", "boat", "service", "charter", "Marina",
                                    "meant for", "right inbox", "right person"],
                               "acknowledges wrong recipient or introduces self")
 
@@ -757,7 +757,7 @@ def test_stress_dutch(im, dry_run=False):
     subject = "Boottocht boeken"
     body = (
         f"[LIVETEST-{run_id}] Hallo, wij komen volgende week naar Curacao "
-        f"met 6 personen. We willen graag de Klein Curacao trip boeken. "
+        f"met 6 personen. We willen graag de Klein Curacao service boeken. "
         f"Wat kost het en zijn er nog plekken beschikbaar op 10 april 2027?"
     )
     if dry_run:
@@ -772,7 +772,7 @@ def test_stress_dutch(im, dry_run=False):
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
     # Should understand and respond about Klein Curacao
-    assert_reply_contains_any(th, ["Klein", "trip", "$", "curacao", "Curaçao"], "understands Dutch request")
+    assert_reply_contains_any(th, ["Klein", "service", "$", "curacao", "Curaçao"], "understands Dutch request")
 
 
 # ========= BRIEF 064 SCENARIOS =========
@@ -805,7 +805,7 @@ def test_064_past_date_wrong_day(im, dry_run=False):
     run_id = uuid.uuid4().hex[:8]
     subject = "Past date wrong day"
     body = (
-        f"[LIVETEST-{run_id}] Book the snorkeling trip for January 6 2025 "
+        f"[LIVETEST-{run_id}] Book the snorkeling service for January 6 2025 "
         f"for 3 people. Name: Wrong Day Tester, phone +99999."
     )
     if dry_run:
@@ -852,10 +852,10 @@ def test_064_future_date_books_normally(im, dry_run=False):
 def test_stress_multiple_trips_one_email(im, dry_run=False):
     """Stress: Asking about multiple trips in one email."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Multiple trip options"
+    subject = "Multiple service options"
     body = (
         f"[LIVETEST-{run_id}] Hi! We're in Curacao for a week. Can you tell me "
-        f"the difference between the Klein Curacao trip and the snorkeling 3-in-1? "
+        f"the difference between the Klein Curacao service and the snorkeling 3-in-1? "
         f"Also what's the sunset cruise like? Trying to decide which to book."
     )
     if dry_run:
@@ -872,7 +872,7 @@ def test_stress_multiple_trips_one_email(im, dry_run=False):
     # Should mention at least 2 of the 3 trips asked about
     trip_mentions = sum(1 for t in ["Klein", "snorkeling", "sunset", "3-in-1", "Sunset Cruise"]
                        if t.lower() in rt.lower())
-    check("mentions multiple trips", trip_mentions >= 2, f"found {trip_mentions} trip mentions")
+    check("mentions multiple trips", trip_mentions >= 2, f"found {trip_mentions} service mentions")
 
 
 def test_stress_kids_pricing(im, dry_run=False):
@@ -905,7 +905,7 @@ def test_stress_vague_date(im, dry_run=False):
     run_id = uuid.uuid4().hex[:8]
     subject = "Sometime soon"
     body = (
-        f"[LIVETEST-{run_id}] Hey, we want to do the Klein Curacao trip "
+        f"[LIVETEST-{run_id}] Hey, we want to do the Klein Curacao service "
         f"sometime in the summer. Maybe July? We're flexible. 4 adults."
     )
     if dry_run:
@@ -955,7 +955,7 @@ def test_stress_casual_tone(im, dry_run=False):
     subject = "yo"
     body = (
         f"[LIVETEST-{run_id}] yoooo whats up, me and my boys wanna go on "
-        f"a boat trip lol. whats the cheapest option? we're 3 dudes"
+        f"a boat service lol. whats the cheapest option? we're 3 dudes"
     )
     if dry_run:
         _print_dry_run("stress_casual_tone", subject, body)
@@ -1051,7 +1051,7 @@ def test_stress_multi_question(im, dry_run=False):
     print(f"  Reply: {rt[:400]}...")
     check("got a reply", len(rt) > 50, f"reply length={len(rt)}")
     # Should try to answer questions AND handle booking
-    assert_field(th, "trip_key", "sunset_cruise", "trip_key extracted")
+    assert_field(th, "service_key", "sunset_cruise", "service_key extracted")
     assert_field(th, "guests", "2", "guests extracted")
 
 
@@ -1083,8 +1083,8 @@ def test_stress_xss_attempt(im, dry_run=False):
 def test_stress_very_long_email(im, dry_run=False):
     """Stress: Extremely long email body."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Detailed trip planning"
-    padding = "We are really excited about this trip. " * 50
+    subject = "Detailed service planning"
+    padding = "We are really excited about this service. " * 50
     body = (
         f"[LIVETEST-{run_id}] Hi Marina! {padding}"
         f"So anyway, can you book the sunset cruise for April 10 2027 for 2 people? "
@@ -1102,7 +1102,7 @@ def test_stress_very_long_email(im, dry_run=False):
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
     # Should still extract booking details from the noise
-    assert_field(th, "trip_key", "sunset_cruise", "trip_key from long email")
+    assert_field(th, "service_key", "sunset_cruise", "service_key from long email")
 
 
 def test_stress_empty_body(im, dry_run=False):
@@ -1148,13 +1148,13 @@ def test_stress_french(im, dry_run=False):
 
 
 def test_stress_west_coast_booking(im, dry_run=False):
-    """Stress: Full booking for west coast beach trip."""
+    """Stress: Full booking for west coast beach service."""
     run_id = uuid.uuid4().hex[:8]
     # West coast beach runs Wed + Sun — pick a Wednesday
     valid_day = next_weekday(2)  # Wednesday
-    subject = "West coast beach trip"
+    subject = "West coast beach service"
     body = (
-        f"[LIVETEST-{run_id}] Hi! We want to book the west coast beach trip "
+        f"[LIVETEST-{run_id}] Hi! We want to book the west coast beach service "
         f"for {valid_day} for 6 adults. Name: Beach Lover, phone +88888."
     )
     if dry_run:
@@ -1167,7 +1167,7 @@ def test_stress_west_coast_booking(im, dry_run=False):
     th = wait_for_reply(tk)
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
-    assert_field(th, "trip_key", "west_coast_beach", "trip_key correct")
+    assert_field(th, "service_key", "west_coast_beach", "service_key correct")
     assert_field(th, "guests", "6", "guests correct")
     assert_reply_contains(th, "$", "pricing shown")
 
@@ -1190,8 +1190,8 @@ def test_stress_jet_ski_booking(im, dry_run=False):
     th = wait_for_reply(tk)
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
-    assert_field(th, "trip_key", "jet_ski", "trip_key correct")
-    # Multi-departure trip — should ask for departure time or show options
+    assert_field(th, "service_key", "jet_ski", "service_key correct")
+    # Multi-departure service — should ask for departure time or show options
     assert_reply_contains_any(th, ["time", "departure", "slot", "when", "which"],
                               "asks about departure time")
 
@@ -1199,7 +1199,7 @@ def test_stress_jet_ski_booking(im, dry_run=False):
 def test_stress_cancellation(im, dry_run=False):
     """Stress: Cancellation request — should escalate."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Cancel my trip"
+    subject = "Cancel my service"
     body = (
         f"[LIVETEST-{run_id}] Hi, I need to cancel my upcoming sunset cruise "
         f"booking. Something came up and we can't make it anymore. "
@@ -1225,7 +1225,7 @@ def test_stress_weather_question(im, dry_run=False):
     run_id = uuid.uuid4().hex[:8]
     subject = "Weather concerns"
     body = (
-        f"[LIVETEST-{run_id}] Hi, I'm booked for a trip next week but "
+        f"[LIVETEST-{run_id}] Hi, I'm booked for a service next week but "
         f"I'm worried about the weather. What happens if there's a storm? "
         f"Do you cancel and refund, or reschedule?"
     )
@@ -1249,7 +1249,7 @@ def test_stress_weather_question(im, dry_run=False):
 def test_stress_papiamentu(im, dry_run=False):
     """Stress: Email in Papiamentu (local language of Curaçao)."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Buki un trip"
+    subject = "Buki un service"
     body = (
         f"[LIVETEST-{run_id}] Bon dia! Mi ta interesá den e Sunset Cruise. "
         f"Nos ta 4 persona i nos ke bai riba April 10, 2027. "
@@ -1266,16 +1266,16 @@ def test_stress_papiamentu(im, dry_run=False):
     rt = reply_text(th)
     print(f"  Reply: {rt[:200]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
-    assert_reply_contains_any(th, ["$", "sunset", "Sunset", "cruise", "trip"], "understands Papiamentu")
+    assert_reply_contains_any(th, ["$", "sunset", "Sunset", "cruise", "service"], "understands Papiamentu")
 
 
 def test_stress_snorkeling_friday(im, dry_run=False):
     """Stress: Snorkeling on correct day (Friday) — should proceed normally."""
     run_id = uuid.uuid4().hex[:8]
     fri = next_weekday(4)  # Friday
-    subject = "Snorkeling trip Friday"
+    subject = "Snorkeling service Friday"
     body = (
-        f"[LIVETEST-{run_id}] Hi, I want to book the snorkeling 3-in-1 trip "
+        f"[LIVETEST-{run_id}] Hi, I want to book the snorkeling 3-in-1 service "
         f"for {fri} for 3 people. My name is Friday Snorkeler, phone +10101."
     )
     if dry_run:
@@ -1288,7 +1288,7 @@ def test_stress_snorkeling_friday(im, dry_run=False):
     th = wait_for_reply(tk)
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
-    assert_field(th, "trip_key", "snorkeling_3in1", "trip_key correct")
+    assert_field(th, "service_key", "snorkeling_3in1", "service_key correct")
     assert_reply_not_contains(th, "doesn't run", "no day-of-week error on Friday")
     assert_reply_contains(th, "$", "pricing shown")
 
@@ -1296,11 +1296,11 @@ def test_stress_snorkeling_friday(im, dry_run=False):
 def test_stress_klein_curacao_full(im, dry_run=False):
     """Stress: Full Klein Curaçao booking — multi-departure, should ask departure."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Klein Curacao day trip"
+    subject = "Klein Curacao day service"
     # Klein Curacao runs on specific days — find valid one
     valid_day = next_weekday(3)  # Thursday
     body = (
-        f"[LIVETEST-{run_id}] Hi! We want to do the Klein Curaçao trip on {valid_day}. "
+        f"[LIVETEST-{run_id}] Hi! We want to do the Klein Curaçao service on {valid_day}. "
         f"8 adults total. Name: Island Hopper, phone +20202."
     )
     if dry_run:
@@ -1313,10 +1313,10 @@ def test_stress_klein_curacao_full(im, dry_run=False):
     th = wait_for_reply(tk)
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
-    assert_field(th, "trip_key", "klein_curacao", "trip_key correct")
+    assert_field(th, "service_key", "klein_curacao", "service_key correct")
     assert_field(th, "guests", "8", "guests correct")
     # Klein Curacao has multiple departures — should ask
-    assert_reply_contains_any(th, ["departure", "time", "vessel", "which"],
+    assert_reply_contains_any(th, ["departure", "time", "resource", "which"],
                               "asks about departure")
 
 
@@ -1400,7 +1400,7 @@ def test_stress_double_booking(im, dry_run=False):
     subject = "Two trips please"
     body = (
         f"[LIVETEST-{run_id}] Hi! I want to book the sunset cruise on {valid_day} "
-        f"for 2 people AND the snorkeling trip on a Friday for 3 people. "
+        f"for 2 people AND the snorkeling service on a Friday for 3 people. "
         f"Name: Double Booker, phone +30303."
     )
     if dry_run:
@@ -1414,10 +1414,10 @@ def test_stress_double_booking(im, dry_run=False):
     rt = reply_text(th)
     print(f"  Reply: {rt[:300]}...")
     check("got a reply", len(rt) > 20, f"reply length={len(rt)}")
-    # Should handle one trip at a time or ask which one first
+    # Should handle one service at a time or ask which one first
     assert_reply_contains_any(th, ["sunset", "snorkeling", "which", "first", "one at a time",
                                    "start with", "$"],
-                              "addresses at least one trip")
+                              "addresses at least one service")
 
 
 def test_stress_repeat_question(im, dry_run=False):
@@ -1474,9 +1474,9 @@ def test_stress_accessibility(im, dry_run=False):
 def test_stress_emoji_heavy(im, dry_run=False):
     """Stress: Email full of emojis — Marina should handle gracefully."""
     run_id = uuid.uuid4().hex[:8]
-    subject = "Boat trip 🚢🌊"
+    subject = "Boat service 🚢🌊"
     body = (
-        f"[LIVETEST-{run_id}] Hiii 😍😍😍 we want to go on a boat trip!! 🚢🌊🐠 "
+        f"[LIVETEST-{run_id}] Hiii 😍😍😍 we want to go on a boat service!! 🚢🌊🐠 "
         f"The sunset cruise looks AMAZING 🌅🔥💯 "
         f"How much for 2 people?? 💰🤔 We're sooo excited!! 🎉🥳"
     )

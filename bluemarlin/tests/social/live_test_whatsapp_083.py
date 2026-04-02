@@ -18,7 +18,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.commit()
     conn.close()
@@ -68,13 +68,13 @@ def test_A_emoji_only():
 # SCENARIO B — Trip that doesn't exist
 # ============================================================
 def test_B_nonexistent_trip():
-    """Ask about a trip we don't offer. Should not hallucinate."""
+    """Ask about a service we don't offer. Should not hallucinate."""
     phone = "EDGE_083_B"
     _cleanup_phone(phone)
     reply = send_message(phone, "Do you have a helicopter tour for 4 people next Friday?")
-    print(f"[B] nonexistent trip: {reply[:200]}")
+    print(f"[B] nonexistent service: {reply[:200]}")
     assert reply != ""
-    # Should NOT extract a trip_key or build a summary
+    # Should NOT extract a service_key or build a summary
     assert "Just to confirm" not in reply
     # Should mention what we DO offer or say we don't have it
     _cleanup_phone(phone)

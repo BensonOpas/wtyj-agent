@@ -59,7 +59,7 @@ class UpdateDraftRequest(BaseModel):
 
 class PhotoUpdateRequest(BaseModel):
     tags: list[str] = None
-    trip_key: str = None
+    service_key: str = None
 
 
 class ComposeRequest(BaseModel):
@@ -311,21 +311,21 @@ def _generate_ai_image(prompt: str, draft_id: int) -> str:
 def _match_photo_to_draft(draft: dict):
     """Find the best matching photo from the library for a draft. Returns photo dict or None."""
     caption = (draft.get("instagram_caption") or "").lower()
-    trips = config_loader.get_trips()
-    # Try to match by trip name in caption
-    for trip_key, trip_data in trips.items():
+    trips = config_loader.get_services()
+    # Try to match by service name in caption
+    for service_key, trip_data in trips.items():
         display = trip_data.get("display_name", "").lower()
         if display and display in caption:
-            photos = state_registry.get_photos(trip_key=trip_key, limit=50)
+            photos = state_registry.get_photos(service_key=service_key, limit=50)
             if photos:
                 photos.sort(key=lambda p: p["used_count"])
                 return photos[0]
-        if trip_key.replace("_", " ") in caption:
-            photos = state_registry.get_photos(trip_key=trip_key, limit=50)
+        if service_key.replace("_", " ") in caption:
+            photos = state_registry.get_photos(service_key=service_key, limit=50)
             if photos:
                 photos.sort(key=lambda p: p["used_count"])
                 return photos[0]
-    # No trip match — pick any photo, least used
+    # No service match — pick any photo, least used
     all_photos = state_registry.get_photos(limit=50)
     if all_photos:
         all_photos.sort(key=lambda p: p["used_count"])
@@ -398,7 +398,7 @@ async def get_config():
 # --- Photos ---
 
 @router.post("/photos/upload", dependencies=[Depends(_check_auth)])
-async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), trip_key: str = Form("")):
+async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), service_key: str = Form("")):
     file_bytes = await file.read()
     try:
         Image.open(io.BytesIO(file_bytes))
@@ -410,7 +410,7 @@ async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), trip_
     # Save record
     photo_id = state_registry.save_photo(
         filename=filename, original_filename=file.filename or "unknown.jpg",
-        tags=parsed_tags, trip_key=trip_key, source="upload",
+        tags=parsed_tags, service_key=service_key, source="upload",
         width=width, height=height, file_size=file_size,
     )
     # Rename file with real id
@@ -425,8 +425,8 @@ async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), trip_
 
 
 @router.get("/photos", dependencies=[Depends(_check_auth)])
-async def list_photos(trip_key: str = None, limit: int = 50):
-    return state_registry.get_photos(trip_key=trip_key, limit=limit)
+async def list_photos(service_key: str = None, limit: int = 50):
+    return state_registry.get_photos(service_key=service_key, limit=limit)
 
 
 @router.get("/photos/stats", dependencies=[Depends(_check_auth)])
@@ -447,7 +447,7 @@ async def get_photo_image(photo_id: int):
 
 @router.put("/photos/{photo_id}", dependencies=[Depends(_check_auth)])
 async def update_photo_endpoint(photo_id: int, req: PhotoUpdateRequest):
-    ok = state_registry.update_photo(photo_id, tags=req.tags, trip_key=req.trip_key)
+    ok = state_registry.update_photo(photo_id, tags=req.tags, service_key=req.service_key)
     if not ok:
         raise HTTPException(status_code=404, detail="Photo not found")
     return {"ok": True}
@@ -653,7 +653,7 @@ async def google_sync():
         filename, width, height, file_size = _process_upload(file_bytes, 0)
         photo_id = state_registry.save_photo(
             filename=filename, original_filename=f.get("name", "drive_photo.jpg"),
-            tags=[], trip_key="", source="google_drive", source_id=drive_id,
+            tags=[], service_key="", source="google_drive", source_id=drive_id,
             width=width, height=height, file_size=file_size,
         )
         new_filename = f"photo_{photo_id}_{secrets.token_hex(4)}.jpg"
@@ -970,7 +970,7 @@ async def suggest_reply(req: SuggestReplyRequest):
     booking_state = state_registry.wa_get_booking_state(req.phone)
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
-    trips = config_loader.get_trips()
+    trips = config_loader.get_services()
     signature = config_loader.get_agent_signature()
 
     # Format conversation

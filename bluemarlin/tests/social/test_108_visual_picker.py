@@ -35,7 +35,7 @@ def _make_draft(**overrides):
 def _make_photo(**overrides):
     defaults = dict(
         filename="test.jpg", original_filename="test.jpg",
-        tags=["sunset"], trip_key="sunset_cruise",
+        tags=["sunset"], service_key="sunset_cruise",
         width=1080, height=810, file_size=50000,
     )
     defaults.update(overrides)

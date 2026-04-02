@@ -1,0 +1,21 @@
+=== DATABASE SUMMARY ===
+bookings: 7 rows
+trip_bookings: 18 rows
+manifest_events: 7 rows
+processed_hashes: 220 rows
+
+=== BOOKINGS ===
+  BF-2026-70215 | sunset_cruise | Test Runner | ops.bluemarlindemo@gmail.com | 2027-04-01 | confirmed
+  BF-2026-65592 | sunset_cruise | Test Runner | ops.bluemarlindemo@gmail.com | 2027-04-01 | confirmed
+  BF-2026-64869 | sunset_cruise | Test Runner | ops.bluemarlindemo@gmail.com | 2027-04-01 | confirmed
+  BF-2026-14617 | sunset_cruise | Carlos Gomez | calvin@adamus.com | 2026-03-28 | confirmed
+  BF-2026-14295 | sunset_cruise | Carlos Gomez | calvin@adamus.com | 2026-03-28 | confirmed
+  BF-2026-11425 | klein_curacao | Josecristo delgado 4th de la santa maria | benson_agent@icloud.com | 2026-03-10 | confirmed
+  BF-2026-10141 | klein_curacao | Carlos Gomez | benson_agent@icloud.com | 2026-03-25 | confirmed
+
+=== ACTIVE HOLDS ===
+  sunset_cruise | 2026-03-28 | 17:30 | 2 | soft_hold | Josecristo delgado 4th de la santa maria
+  sunset_cruise | 2027-04-01 | 17:30 | 2 | soft_hold | Future Tester
+  sunset_cruise | 2027-04-01 | 17:30 | 2 | soft_hold | Question Asker
+  sunset_cruise | 2027-04-10 | 17:30 | 2 | soft_hold | Long Email Writer
+  snorkeling_3in1 | 2027-04-02 | 10:00 | 3 | soft_hold | Friday Snorkeler

@@ -9,14 +9,14 @@ from shared import state_registry
 from agents.marina import gws_calendar
 from shared import config_loader
 
-# ── Setup: clear trip_bookings for a clean run ──────────────────────────────
+# ── Setup: clear service_bookings for a clean run ──────────────────────────────
 conn = sqlite3.connect(state_registry.DB_PATH)
-conn.execute("DELETE FROM trip_bookings WHERE trip_key='klein_curacao' AND date='2026-04-01'")
-conn.execute("DELETE FROM trip_bookings WHERE trip_key='klein_curacao' AND date='2026-04-02'")
-conn.execute("DELETE FROM trip_bookings WHERE trip_key='jet_ski' AND date='2026-04-01'")
+conn.execute("DELETE FROM service_bookings WHERE service_key='klein_curacao' AND date='2026-04-01'")
+conn.execute("DELETE FROM service_bookings WHERE service_key='klein_curacao' AND date='2026-04-02'")
+conn.execute("DELETE FROM service_bookings WHERE service_key='jet_ski' AND date='2026-04-01'")
 conn.commit()
 conn.close()
-print("Setup: cleared test rows from trip_bookings\n")
+print("Setup: cleared test rows from service_bookings\n")
 
 # T1: Book 20 guests Klein Curaçao 2026-04-01 08:00 → succeeds, spots_remaining = 10
 print("T1: Book 20 guests klein_curacao 2026-04-01 08:00...")
@@ -46,7 +46,7 @@ hold4 = state_registry.create_soft_hold("klein_curacao", "2026-04-01", "08:00", 
 assert hold4 is None, f"T4 fail: expected None (slot full), got hold_id={hold4}"
 print(f"T4 pass — correctly rejected when full")
 
-# T5: Same trip 08:30 → independent slot, 30 available
+# T5: Same service 08:30 → independent slot, 30 available
 print("\nT5: Klein Curaçao 08:30 — independent slot...")
 avail5 = gws_calendar.check_availability("klein_curacao", "2026-04-01", "08:30", 1)
 assert avail5["available"], f"T5 fail: 08:30 slot should be independent, got {avail5}"
@@ -54,7 +54,7 @@ assert avail5["spots_remaining"] == 30, \
     f"T5 fail: expected 30 spots for 08:30, got {avail5['spots_remaining']}"
 print(f"T5 pass — 08:30 independent: spots_remaining={avail5['spots_remaining']}")
 
-# T6: Same trip April 2 → fresh slot, 30 available
+# T6: Same service April 2 → fresh slot, 30 available
 print("\nT6: Klein Curaçao April 2 — fresh date...")
 avail6 = gws_calendar.check_availability("klein_curacao", "2026-04-02", "08:00", 1)
 assert avail6["available"], f"T6 fail: April 2 should be fresh, got {avail6}"
@@ -72,12 +72,12 @@ print(f"T6 pass — April 2 fresh: spots_remaining={avail6['spots_remaining']}")
 # 5. Verify spots are released (spots_after == 4)
 print("\nT7: Simulate expired hold...")
 conn = sqlite3.connect(state_registry.DB_PATH)
-conn.execute("DELETE FROM trip_bookings WHERE trip_key='jet_ski' AND date='2026-04-01'")
+conn.execute("DELETE FROM service_bookings WHERE service_key='jet_ski' AND date='2026-04-01'")
 future_exp = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
 now_str = datetime.now(timezone.utc).isoformat()
 conn.execute(
-    "INSERT INTO trip_bookings "
-    "(trip_key, date, departure_time, guests, status, expires_at, created_at) "
+    "INSERT INTO service_bookings "
+    "(service_key, date, slot_time, guests, status, expires_at, created_at) "
     "VALUES ('jet_ski', '2026-04-01', '10:00', 4, 'soft_hold', ?, ?)",
     (future_exp, now_str)
 )
@@ -88,8 +88,8 @@ assert spots_before == 0, f"T7 fail: expected 0 spots with active hold, got {spo
 # Force expiry by backdating expires_at
 conn = sqlite3.connect(state_registry.DB_PATH)
 conn.execute(
-    "UPDATE trip_bookings SET expires_at='2020-01-01T00:00:00+00:00' "
-    "WHERE trip_key='jet_ski' AND date='2026-04-01' AND departure_time='10:00'"
+    "UPDATE service_bookings SET expires_at='2020-01-01T00:00:00+00:00' "
+    "WHERE service_key='jet_ski' AND date='2026-04-01' AND slot_time='10:00'"
 )
 conn.commit()
 conn.close()
@@ -102,7 +102,7 @@ print(f"T7 pass — expired_count={expired_count}, spots_after={spots_after}")
 # T8: Concurrent race — two threads both check available, only one gets the last spot
 print("\nT8: Concurrent race for last spot...")
 conn = sqlite3.connect(state_registry.DB_PATH)
-conn.execute("DELETE FROM trip_bookings WHERE trip_key='klein_curacao' AND date='2026-04-01'")
+conn.execute("DELETE FROM service_bookings WHERE service_key='klein_curacao' AND date='2026-04-01'")
 conn.commit()
 conn.close()
 # Pre-fill 29 guests so only 1 spot remains
@@ -129,10 +129,10 @@ print(f"T8 pass — race handled correctly: 1 success (hold_id={successful[0]}),
 
 # ── Schema checks ────────────────────────────────────────────────────────────
 print("\nSchema check: client.json departure-level calendar_ids...")
-kc = config_loader.get_trip("klein_curacao")
+kc = config_loader.get_service("klein_curacao")
 assert kc.get("capacity") == 30, f"Schema fail: klein_curacao capacity={kc.get('capacity')}"
-assert "calendar_id" not in kc, "Schema fail: trip-level calendar_id still present on klein_curacao"
-kc_deps = kc.get("departures", [])
+assert "calendar_id" not in kc, "Schema fail: service-level calendar_id still present on klein_curacao"
+kc_deps = kc.get("slots", [])
 assert len(kc_deps) == 2, f"Schema fail: expected 2 klein_curacao departures, got {len(kc_deps)}"
 assert kc_deps[0].get("time") == "08:00", f"Schema fail: first departure not 08:00"
 assert kc_deps[0].get("calendar_id", "").endswith("@group.calendar.google.com"), \
@@ -143,11 +143,11 @@ assert kc_deps[1].get("calendar_id") == \
     f"Schema fail: 08:30 calendar_id wrong"
 print("Schema pass — klein_curacao: capacity=30, 2 departure-level calendar_ids")
 
-jk = config_loader.get_trip("jet_ski")
+jk = config_loader.get_service("jet_ski")
 assert jk.get("capacity") == 4, f"Schema fail: jet_ski capacity={jk.get('capacity')}"
 assert jk.get("duration_hours") == 1, f"Schema fail: jet_ski duration_hours={jk.get('duration_hours')}"
-assert "calendar_id" not in jk, "Schema fail: trip-level calendar_id still present on jet_ski"
-jk_deps = jk.get("departures", [])
+assert "calendar_id" not in jk, "Schema fail: service-level calendar_id still present on jet_ski"
+jk_deps = jk.get("slots", [])
 assert len(jk_deps) == 12, f"Schema fail: jet_ski should have 12 departures, got {len(jk_deps)}"
 assert jk_deps[0].get("time") == "08:00", f"Schema fail: first jet_ski departure not 08:00"
 assert jk_deps[-1].get("time") == "19:00", f"Schema fail: last jet_ski departure not 19:00"

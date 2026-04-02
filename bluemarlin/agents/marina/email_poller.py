@@ -49,12 +49,12 @@ MAX_REPLIES_PER_THREAD = 10
 REPLY_WINDOW_SECONDS = 60 * 60
 
 # Per-sender rate limit (cross-thread)
-# 20/hr is generous: a real customer doing multi-trip + questions tops out at ~10.
+# 20/hr is generous: a real customer doing multi-service + questions tops out at ~10.
 # Matches the per-thread limit (10) doubled to allow multi-thread legitimate use.
 SENDER_RATE_LIMIT = 20
 SENDER_RATE_WINDOW = 3600  # 1 hour, same window as per-thread anti-loop
 
-# Thread cleanup — 30 days covers the longest booking-to-trip cycle.
+# Thread cleanup — 30 days covers the longest booking-to-service cycle.
 # Booking data survives in SQLite bookings table; this only prunes conversation state.
 THREAD_RETENTION_DAYS = 30
 ARCHIVE_PATH = os.path.join(_CONFIG_DIR, "archived_threads.jsonl")
@@ -314,7 +314,7 @@ _BOOKING_FLAGS_TO_RESET = {
     "event_id", "event_link",
     "slot_checked", "slot_available", "spots_remaining", "trip_capacity",
     "awaiting_booking_confirmation",
-    "hold_trip_key", "hold_date", "hold_departure_time",
+    "hold_service_key", "hold_date", "hold_slot_time",
 }
 
 # Fields to preserve across bookings (customer identity)
@@ -337,11 +337,11 @@ def _maybe_reset_for_new_booking(th: dict) -> bool:
     flags = th.get("flags", {})
     archived = {
         "booking_ref": flags.get("booking_ref", ""),
-        "trip_key": fields.get("trip_key", ""),
-        "experience": fields.get("experience", ""),
+        "service_key": fields.get("service_key", ""),
+        "service_name": fields.get("service_name", ""),
         "date": fields.get("date", ""),
         "guests": fields.get("guests", ""),
-        "departure_time": fields.get("departure_time", ""),
+        "slot_time": fields.get("slot_time", ""),
         "payment_link": flags.get("payment_link", ""),
     }
     completed.append(archived)
@@ -360,7 +360,7 @@ def _maybe_reset_for_new_booking(th: dict) -> bool:
 
 # ========= BOOKING VALIDATION HELPERS =========
 def _day_matches(day_name, days_available):
-    """Check if day_name matches the trip's days_available string."""
+    """Check if day_name matches the service's days_available string."""
     if days_available.lower() == "daily":
         return True
     return day_name.lower() in days_available.lower()
@@ -380,30 +380,30 @@ def _suggest_dates(date_str, days_available):
     return "\n".join(suggestions) if suggestions else "Please suggest another date!"
 
 
-def _build_booking_summary(fields, trip):
-    """Build a data-driven booking summary from fields and trip config."""
-    trip_name = trip.get("display_name", fields.get("trip_key", ""))
+def _build_booking_summary(fields, service):
+    """Build a data-driven booking summary from fields and service config."""
+    svc_name = service.get("display_name", fields.get("service_key", ""))
     date_str = fields.get("date", "")
     guests = int(fields.get("guests") or 1)
-    departure_time = fields.get("departure_time", "")
-    departures = trip.get("departures", [])
-    dep_info = next((d for d in departures if d.get("time") == departure_time), None)
-    if not dep_info and departures:
-        dep_info = departures[0]
-        departure_time = dep_info.get("time", "")
-    vessel = dep_info.get("vessel", "") if dep_info else ""
-    dep_point = dep_info.get("departure_point", "") if dep_info else ""
-    price_adult = trip.get("price_adult_usd", 0)
-    total = price_adult * guests
-    included = ", ".join(trip.get("included", [])) or "see trip details"
+    slot_time = fields.get("slot_time", "")
+    slots = service.get("slots", [])
+    slot_info = next((d for d in slots if d.get("time") == slot_time), None)
+    if not slot_info and slots:
+        slot_info = slots[0]
+        slot_time = slot_info.get("time", "")
+    resource = slot_info.get("resource", "") if slot_info else ""
+    location = slot_info.get("location", "") if slot_info else ""
+    price_base = service.get("price", 0)
+    total = price_base * guests
+    included = ", ".join(service.get("included", [])) or "see details"
     try:
         date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
     except ValueError:
         date_fmt = date_str
     return (
-        f"Just to confirm the details: {trip_name} on {date_fmt}, "
-        f"{departure_time} departure from {dep_point} on {vessel}. "
-        f"{guests} guests, ${total} total (${price_adult} each). "
+        f"Just to confirm the details: {svc_name} on {date_fmt}, "
+        f"{slot_time} from {location} on {resource}. "
+        f"{guests} guests, ${total} total (${price_base} each). "
         f"Includes {included}.\n\n"
         f"Want me to go ahead and book this?"
     )
@@ -431,7 +431,7 @@ def _build_action_context(th):
     return ""
 
 
-def _post_validate(th, result, trip):
+def _post_validate(th, result, service):
     """
     Validate extracted fields after Claude call.
     Returns (reply_override, should_set_awaiting).
@@ -441,21 +441,21 @@ def _post_validate(th, result, trip):
 
     if not any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
         return None, False
-    if not all(fields.get(k) for k in ("experience", "date", "guests", "trip_key")):
+    if not all(fields.get(k) for k in ("service_name", "date", "guests", "service_key")):
         return None, False
     if flags.get("awaiting_booking_confirmation") or flags.get("booking_confirmed"):
         return None, False
 
     date = fields["date"]
-    departures = trip.get("departures", [])
+    slots = service.get("slots", [])
 
     # 1. Day-of-week check
     try:
         day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A")
-        days_avail = trip.get("days_available", "daily")
+        days_avail = service.get("days_available", "daily")
         if not _day_matches(day_name, days_avail):
             return (
-                f"The {trip.get('display_name', fields['trip_key'])} "
+                f"The {service.get('display_name', fields['service_key'])} "
                 f"doesn't run on {day_name}s, only {days_avail}. "
                 f"Would any of these work instead?\n\n"
                 f"{_suggest_dates(date, days_avail)}"
@@ -476,13 +476,13 @@ def _post_validate(th, result, trip):
         pass
 
     # 2. Departure time check (multi-departure trips only)
-    if len(departures) > 1 and not fields.get("departure_time"):
+    if len(slots) > 1 and not fields.get("slot_time"):
         dep_lines = "\n".join(
-            f"- {d['time']} aboard {d.get('vessel', '?')} from {d.get('departure_point', '?')}"
-            for d in departures
+            f"- {d['time']} aboard {d.get('resource', '?')} from {d.get('location', '?')}"
+            for d in slots
         )
         return (
-            f"The {trip.get('display_name', fields['trip_key'])} has "
+            f"The {service.get('display_name', fields['service_key'])} has "
             f"a couple of departure times:\n\n{dep_lines}\n\n"
             f"Which one works for you?"
         ), False
@@ -492,7 +492,7 @@ def _post_validate(th, result, trip):
         return None, False
 
     # 4. All checks pass — build data-driven summary
-    summary = _build_booking_summary(fields, trip)
+    summary = _build_booking_summary(fields, service)
     return summary, True
 
 
@@ -744,8 +744,8 @@ def main():
                     if _past_booking:
                         th["flags"]["returning_booking"] = _detected_ref
                         # Pre-populate fields from past booking if thread has no data yet
-                        for _rbk in ("trip_key", "date", "guests", "customer_name",
-                                     "departure_time"):
+                        for _rbk in ("service_key", "date", "guests", "customer_name",
+                                     "slot_time"):
                             _rbv = _past_booking.get(_rbk)
                             if _rbv and not th["fields"].get(_rbk):
                                 th["fields"][_rbk] = _rbv if not isinstance(_rbv, int) else str(_rbv)
@@ -761,7 +761,7 @@ def main():
                         _eb_lines = []
                         for eb in _email_bookings[:3]:
                             _eb_lines.append(
-                                f"  - {eb['trip_key']} on {eb['date']} for {eb['guests']} guests "
+                                f"  - {eb['service_key']} on {eb['date']} for {eb['guests']} guests "
                                 f"(ref: {eb['booking_ref']})"
                             )
                         th["flags"]["_past_customer_bookings"] = "\n".join(_eb_lines)
@@ -772,13 +772,13 @@ def main():
                 for _rk in ("awaiting_relay", "relay_token", "relay_question",
                             "relay_customer_email", "relay_reply_subject"):
                     agent_flags.pop(_rk, None)
-                # Inject completed bookings summary for multi-trip context
+                # Inject completed bookings summary for multi-service context
                 _completed = th.get("completed_bookings", [])
                 if _completed:
                     _cb_lines = []
                     for _cb in _completed:
                         _cb_lines.append(
-                            f"  - {_cb.get('experience', _cb.get('trip_key', '?'))} on "
+                            f"  - {_cb.get('service_name', _cb.get('service_key', '?'))} on "
                             f"{_cb.get('date', '?')} for {_cb.get('guests', '?')} guests "
                             f"(ref: {_cb.get('booking_ref', 'N/A')})"
                         )
@@ -797,12 +797,12 @@ def main():
                 if th["flags"].get("unknown_ref"):
                     del th["flags"]["unknown_ref"]
 
-                # Multi-trip: if booking intent + previous booking completed, archive and reset
+                # Multi-service: if booking intent + previous booking completed, archive and reset
                 if (any(i in _BOOKING_INTENTS for i in result.get("intents", []))
                         and th["flags"].get("hold_created")):
                     _did_reset = _maybe_reset_for_new_booking(th)
                     if _did_reset:
-                        log(f"Multi-trip reset for {from_email}: booking #{len(th.get('completed_bookings', []))} archived")
+                        log(f"Multi-service reset for {from_email}: booking #{len(th.get('completed_bookings', []))} archived")
 
                 # Step 2: Merge fields — always overwrite when Claude returns non-empty values
                 th.setdefault("fields", {})
@@ -827,12 +827,12 @@ def main():
                         and not th["flags"].get("booking_confirmed"):
                     if th["flags"].get("hold_id"):
                         state_registry.cancel_hold(th["flags"]["hold_id"])
-                        _h_trip = th["flags"].pop("hold_trip_key", "")
+                        _h_svc = th["flags"].pop("hold_service_key", "")
                         _h_date = th["flags"].pop("hold_date", "")
-                        _h_dep = th["flags"].pop("hold_departure_time", "")
+                        _h_dep = th["flags"].pop("hold_slot_time", "")
                         th["flags"].pop("hold_id", None)
-                        if _h_trip and _h_date and _h_dep:
-                            gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+                        if _h_svc and _h_date and _h_dep:
+                            gws_calendar.remove_from_manifest(_h_svc, _h_date, _h_dep)
                     th["flags"]["slot_checked"] = False
                     th["flags"]["slot_available"] = False
                     log(f"Soft hold cancelled for {from_email}: customer changed booking details")
@@ -841,17 +841,17 @@ def main():
 
                 # Step 3a: Post-validation — Python validates fields and may override reply
                 reply_text = result["reply"]
-                _pv_trip_key = th["fields"].get("trip_key", "")
-                _pv_trip = config_loader.get_trip(_pv_trip_key) if _pv_trip_key else {}
+                _pv_service_key = th["fields"].get("service_key", "")
+                _pv_service = config_loader.get_service(_pv_service_key) if _pv_service_key else {}
                 _run_pv = any(i in _BOOKING_INTENTS for i in result.get("intents", []))
                 # Guard: if customer was responding to a booking summary and didn't change
                 # any booking fields, skip post-validate to prevent decline loop
                 if _run_pv and _was_awaiting and not th["flags"].get("booking_confirmed"):
                     _new_f = result.get("fields", {}) or {}
-                    if not any(_new_f.get(k) for k in ("experience", "date", "guests", "trip_key", "departure_time")):
+                    if not any(_new_f.get(k) for k in ("service_name", "date", "guests", "service_key", "slot_time")):
                         _run_pv = False
                 if _run_pv:
-                    _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_trip)
+                    _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_service)
                     if _pv_override:
                         _intents = result.get("intents", [])
                         _has_side_topics = any(i not in _BOOKING_INTENTS for i in _intents)
@@ -869,20 +869,20 @@ def main():
                 if (th["flags"].get("awaiting_booking_confirmation")
                         and not th["flags"].get("slot_checked")):
                     fields_for_check = th["fields"]
-                    _ck_trip = fields_for_check.get("trip_key", "")
-                    _ck_deps = config_loader.get_trip(_ck_trip).get("departures", []) if _ck_trip else []
-                    _ck_start = (fields_for_check.get("departure_time")
+                    _ck_svc = fields_for_check.get("service_key", "")
+                    _ck_deps = config_loader.get_service(_ck_svc).get("slots", []) if _ck_svc else []
+                    _ck_start = (fields_for_check.get("slot_time")
                                  or (_ck_deps[0].get("time", "09:00") if _ck_deps else "09:00"))
                     _ck_guests = int(fields_for_check.get("guests") or 1)
                     avail = gws_calendar.check_availability(
-                        _ck_trip, fields_for_check.get("date", ""), _ck_start, _ck_guests)
+                        _ck_svc, fields_for_check.get("date", ""), _ck_start, _ck_guests)
                     th["flags"]["slot_checked"] = True
                     th["flags"]["slot_available"] = avail.get("available", False)
                     th["flags"]["spots_remaining"] = avail.get("spots_remaining", 0)
                     th["flags"]["trip_capacity"] = avail.get("capacity", 0)
                     if avail.get("available"):
                         hold_id = state_registry.create_soft_hold(
-                            _ck_trip,
+                            _ck_svc,
                             fields_for_check.get("date", ""),
                             _ck_start,
                             _ck_guests,
@@ -892,9 +892,9 @@ def main():
                         )
                         if hold_id is not None:
                             th["flags"]["hold_id"] = hold_id
-                            th["flags"]["hold_trip_key"] = _ck_trip
+                            th["flags"]["hold_service_key"] = _ck_svc
                             th["flags"]["hold_date"] = fields_for_check.get("date", "")
-                            th["flags"]["hold_departure_time"] = _ck_start
+                            th["flags"]["hold_slot_time"] = _ck_start
                             log(f"Soft hold created for {from_email}: hold_id={hold_id}, "
                                 f"spots_remaining={avail.get('spots_remaining')}")
                         else:
@@ -902,7 +902,7 @@ def main():
                             th["flags"]["slot_available"] = False
                             th["flags"]["awaiting_booking_confirmation"] = False
                             th["flags"]["slot_checked"] = False
-                            _unavail_name = _pv_trip.get("display_name", _ck_trip)
+                            _unavail_name = _pv_service.get("display_name", _ck_svc)
                             _unavail_sig = config_loader.get_agent_signature()
                             reply_text = (
                                 f"Unfortunately the {_unavail_name} is fully booked on that date. "
@@ -913,7 +913,7 @@ def main():
                     else:
                         th["flags"]["awaiting_booking_confirmation"] = False
                         th["flags"]["slot_checked"] = False
-                        _unavail_name = _pv_trip.get("display_name", _ck_trip)
+                        _unavail_name = _pv_service.get("display_name", _ck_svc)
                         _unavail_sig = config_loader.get_agent_signature()
                         reply_text = (
                             f"Unfortunately the {_unavail_name} is fully booked on that date. "
@@ -929,12 +929,12 @@ def main():
                     # Cancel any soft hold created during Step 3b — booking is not confirmed
                     if th["flags"].get("hold_id"):
                         state_registry.cancel_hold(th["flags"]["hold_id"])
-                        _h_trip = th["flags"].pop("hold_trip_key", "")
+                        _h_svc = th["flags"].pop("hold_service_key", "")
                         _h_date = th["flags"].pop("hold_date", "")
-                        _h_dep = th["flags"].pop("hold_departure_time", "")
+                        _h_dep = th["flags"].pop("hold_slot_time", "")
                         th["flags"].pop("hold_id", None)
-                        if _h_trip and _h_date and _h_dep:
-                            gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+                        if _h_svc and _h_date and _h_dep:
+                            gws_calendar.remove_from_manifest(_h_svc, _h_date, _h_dep)
                     th["flags"]["slot_checked"] = False
                     th["flags"]["slot_available"] = False
                     relay_token = uuid.uuid4().hex[:12]
@@ -949,7 +949,7 @@ def main():
                         f"Customer: {_cname} <{from_email}>\n"
                         f"Their question: {relay_question}\n\n"
                         f"Booking context:\n"
-                        f"  Trip: {th['fields'].get('trip_key', '')} | "
+                        f"  Trip: {th['fields'].get('service_key', '')} | "
                         f"Date: {th['fields'].get('date', '')} | "
                         f"Guests: {th['fields'].get('guests', '')}\n"
                         f"  Ref: {_ref}\n\n"
@@ -1058,14 +1058,14 @@ def main():
                 # Step 5: Booking flow
                 if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
                     fields_now = th["fields"]
-                    if (fields_now.get("experience") and fields_now.get("date")
-                            and fields_now.get("guests") and fields_now.get("trip_key")
+                    if (fields_now.get("service_name") and fields_now.get("date")
+                            and fields_now.get("guests") and fields_now.get("service_key")
                             and th["flags"].get("booking_confirmed")
                             and not th["flags"].get("hold_created")):
                         bm_logger.log(
                             "booking_attempted",
                             email=from_email, subject=subj,
-                            experience=fields_now.get("experience"),
+                            experience=fields_now.get("service_name"),
                             date=fields_now.get("date"),
                             guests=fields_now.get("guests"),
                             customer_name=fields_now.get("customer_name"),
@@ -1074,7 +1074,7 @@ def main():
                         )
                         sheets_writer.log_event("booking_attempted", {
                             "email": from_email, "subject": subj,
-                            "experience": fields_now.get("experience"),
+                            "service_name": fields_now.get("service_name"),
                             "date": fields_now.get("date"),
                         })
                         # Generate booking_ref + set on soft hold BEFORE manifest creation
@@ -1089,23 +1089,23 @@ def main():
                                 "hold_failed",
                                 email=from_email, subject=subj,
                                 error=res.get("error"),
-                                experience=fields_now.get("experience"),
+                                experience=fields_now.get("service_name"),
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
                             )
                             if th["flags"].get("hold_id"):
                                 state_registry.cancel_hold(th["flags"]["hold_id"])
-                                _h_trip = th["flags"].pop("hold_trip_key", "")
+                                _h_svc = th["flags"].pop("hold_service_key", "")
                                 _h_date = th["flags"].pop("hold_date", "")
-                                _h_dep = th["flags"].pop("hold_departure_time", "")
+                                _h_dep = th["flags"].pop("hold_slot_time", "")
                                 th["flags"].pop("hold_id", None)
-                                if _h_trip and _h_date and _h_dep:
-                                    gws_calendar.remove_from_manifest(_h_trip, _h_date, _h_dep)
+                                if _h_svc and _h_date and _h_dep:
+                                    gws_calendar.remove_from_manifest(_h_svc, _h_date, _h_dep)
                             th["flags"]["slot_checked"] = False
                             th["flags"]["slot_available"] = False
                             sheets_writer.log_hold_failed({
                                 "email": from_email, "subject": subj,
-                                "experience": fields_now.get("experience"),
+                                "service_name": fields_now.get("service_name"),
                                 "date": fields_now.get("date"),
                                 "guests": fields_now.get("guests"),
                                 "error": res.get("error"),
@@ -1126,13 +1126,13 @@ def main():
                                 state_registry.confirm_hold(th["flags"]["hold_id"])
                             th["flags"]["event_id"] = res.get("eventId")
                             th["flags"]["event_link"] = res.get("htmlLink")
-                            trip_key = fields_now.get("trip_key", "")
+                            service_key = fields_now.get("service_key", "")
                             reply_text = reply_text.replace("[BOOKING_REF]", booking_ref)
 
                             _payment_timing = config_loader.get_raw().get("payment", {}).get("timing", "upfront")
                             if _payment_timing in ("upfront", "deposit"):
-                                price_usd = (config_loader.get_trip(trip_key).get("price_adult_usd", 0)
-                                             if trip_key else 0)
+                                price_usd = (config_loader.get_service(service_key).get("price", 0)
+                                             if service_key else 0)
                                 pay = payment_stub.generate_payment_link(booking_ref, price_usd)
                                 pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
                                 th["flags"]["payment_id"] = pay.get("payment_id")
@@ -1148,7 +1148,7 @@ def main():
                                 html_link=th["flags"].get("event_link"),
                                 payment_id=th["flags"].get("payment_id"),
                                 payment_link=th["flags"].get("payment_link"),
-                                experience=fields_now.get("experience"),
+                                experience=fields_now.get("service_name"),
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
                                 customer_name=fields_now.get("customer_name"),
@@ -1160,11 +1160,11 @@ def main():
                                 "email": from_email,
                                 "subject": subj,
                                 "customer_name": fields_now.get("customer_name"),
-                                "experience": fields_now.get("experience"),
-                                "trip_key": fields_now.get("trip_key"),
+                                "service_name": fields_now.get("service_name"),
+                                "service_key": fields_now.get("service_key"),
                                 "date": fields_now.get("date"),
                                 "guests": fields_now.get("guests"),
-                                "departure_time": fields_now.get("departure_time"),
+                                "slot_time": fields_now.get("slot_time"),
                                 "phone": fields_now.get("phone"),
                                 "special_requests": fields_now.get("special_requests"),
                                 "total_price": int(fields_now.get("guests") or 0) * price_usd,
@@ -1173,21 +1173,21 @@ def main():
                                 "payment_status": pay.get("status"),
                             })
                             # Log manifest summary to Sheets
-                            _manifest_trip_key = fields_now.get("trip_key", "")
+                            _manifest_service_key = fields_now.get("service_key", "")
                             _manifest_passengers = state_registry.get_slot_passengers(
-                                _manifest_trip_key,
+                                _manifest_service_key,
                                 fields_now.get("date", ""),
-                                fields_now.get("departure_time", ""),
+                                fields_now.get("slot_time", ""),
                             )
                             _manifest_confirmed = sum(1 for p in _manifest_passengers if p["status"] == "confirmed")
                             _manifest_pending = sum(1 for p in _manifest_passengers if p["status"] == "soft_hold")
                             _manifest_total_guests = sum(p["guests"] for p in _manifest_passengers)
                             _manifest_total_revenue = _manifest_total_guests * price_usd
-                            _manifest_capacity = config_loader.get_trip(_manifest_trip_key).get("capacity", 20)
+                            _manifest_capacity = config_loader.get_service(_manifest_service_key).get("capacity", 20)
                             sheets_writer.log_manifest_update({
-                                "trip_key": _manifest_trip_key,
+                                "service_key": _manifest_service_key,
                                 "date": fields_now.get("date", ""),
-                                "departure_time": fields_now.get("departure_time", ""),
+                                "slot_time": fields_now.get("slot_time", ""),
                                 "total_guests": _manifest_total_guests,
                                 "capacity": _manifest_capacity,
                                 "confirmed_count": _manifest_confirmed,

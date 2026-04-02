@@ -1,4 +1,7 @@
 ---
+description: Planning mode — discuss and evaluate before building
+---
+
 Planning mode. Do not write code. Do not write briefs. Do not edit source files.
 
 1. Read CLAUDE.md and briefs/system_state.md
@@ -17,4 +20,3 @@ Your job is to evaluate that thought:
 
 Do not just agree. Do not just plan how to do what the user said.
 First ask: should we even do this, and is this the right way?
----

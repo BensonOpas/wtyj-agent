@@ -60,15 +60,15 @@ def test_large_group_creates_notification(mock_process, mock_cal, mock_pay, mock
     _cleanup(phone)
     date = _next_wed()
 
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": date, "guests": "20", "departure_time": "09:00",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
+              "date": date, "guests": "20", "slot_time": "09:00",
               "customer_name": "Big Group"}
     hold_id = state_registry.create_soft_hold("west_coast_beach", date, "09:00", 20, 25,
                                                customer_name="Big Group", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": date,
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": date,
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
     mock_process.return_value = {
@@ -109,15 +109,15 @@ def test_normal_booking_no_notification(mock_process, mock_cal, mock_pay, mock_s
     _cleanup(phone)
     date = _next_wed()
 
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach",
-              "date": date, "guests": "4", "departure_time": "09:00",
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
+              "date": date, "guests": "4", "slot_time": "09:00",
               "customer_name": "Small Group"}
     hold_id = state_registry.create_soft_hold("west_coast_beach", date, "09:00", 4, 25,
                                                customer_name="Small Group", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": date,
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": date,
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
 
     mock_process.return_value = {

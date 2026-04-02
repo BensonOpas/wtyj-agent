@@ -55,5 +55,5 @@ def test_detect_valid_ref():
 
 def test_detect_no_ref():
     """T8: _detect_booking_ref returns None for no ref."""
-    ref = _detect_booking_ref("I want to book a trip")
+    ref = _detect_booking_ref("I want to book a service")
     assert ref is None

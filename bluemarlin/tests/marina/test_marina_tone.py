@@ -37,7 +37,7 @@ def test_user_prompt_contains_inbound_message():
 def test_user_prompt_contains_trips_and_faq():
     """T5: _build_user_prompt contains TRIPS and FAQ sections."""
     up = marina_agent._build_user_prompt("a@b.com", "test", "hi", {}, {})
-    assert "TRIPS" in up
+    assert "SERVICES" in up or "services" in up.lower()
     assert "FAQ" in up
 
 
@@ -50,45 +50,45 @@ def test_build_prompt_wrapper_combines_both():
 
 def test_booking_summary_no_old_header():
     """T7: Booking summary does NOT contain old bullet-point header."""
-    trip = {
+    service = {
         "display_name": "Sunset Cruise",
-        "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}],
-        "price_adult_usd": 79,
+        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
+        "price": 79,
         "included": ["open bar", "snacks"],
     }
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
-        trip,
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        service,
     )
     assert "Here's a quick summary" not in summary
 
 
 def test_booking_summary_no_old_lock_phrase():
     """T8: Booking summary does NOT contain old lock-in phrase."""
-    trip = {
+    service = {
         "display_name": "Sunset Cruise",
-        "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}],
-        "price_adult_usd": 79,
+        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
+        "price": 79,
         "included": ["open bar", "snacks"],
     }
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
-        trip,
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        service,
     )
     assert "Shall I lock this in" not in summary
 
 
 def test_booking_summary_has_price():
     """T9: Booking summary contains exact prices."""
-    trip = {
+    service = {
         "display_name": "Sunset Cruise",
-        "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}],
-        "price_adult_usd": 79,
+        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
+        "price": 79,
         "included": ["open bar", "snacks"],
     }
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
-        trip,
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        service,
     )
     assert "$158" in summary
     assert "$79" in summary
@@ -96,15 +96,15 @@ def test_booking_summary_has_price():
 
 def test_booking_summary_new_closer():
     """T10: Booking summary contains the new closer phrase."""
-    trip = {
+    service = {
         "display_name": "Sunset Cruise",
-        "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}],
-        "price_adult_usd": 79,
+        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
+        "price": 79,
         "included": ["open bar", "snacks"],
     }
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
-        trip,
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        service,
     )
     assert "Want me to go ahead and book this?" in summary
 
@@ -112,10 +112,10 @@ def test_booking_summary_new_closer():
 def test_post_validate_day_of_week_no_em_dashes():
     """T11: Day-of-week override has no em dashes or old phrasing."""
     from agents.marina.email_poller import _post_validate
-    th = {"fields": {"experience": "Snorkeling", "date": "2026-03-09", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}
-    trip = {"display_name": "3-in-1 Snorkeling Trip", "departures": [{"time": "10:00"}], "days_available": "Fridays only"}
+    th = {"fields": {"service_name": "Snorkeling", "date": "2026-03-09", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}}
+    service = {"display_name": "3-in-1 Snorkeling Trip", "slots": [{"time": "10:00"}], "days_available": "Fridays only"}
     result = {"intents": ["booking"], "fields": {}, "flags": {}}
-    override, _ = _post_validate(th, result, trip)
+    override, _ = _post_validate(th, result, service)
     assert override is not None
     assert "—" not in override
     assert "Great choice" not in override
@@ -166,7 +166,7 @@ def test_response_empty_reply_returns_fallback():
         mock_client.return_value.messages.create.return_value = mock_response
         result = marina_agent.process_message("test", "", "hello", {}, {})
     # Email fallback should fire — non-empty reply
-    assert "trip" in result["reply"].lower() or "guests" in result["reply"].lower()
+    assert "service" in result["reply"].lower() or "guests" in result["reply"].lower()
 
 
 def test_client_context_includes_all_sections():
@@ -175,7 +175,7 @@ def test_client_context_includes_all_sections():
     raw = config_loader.get_raw()
     prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
     # Every top-level key (except skipped ones) should have a section
-    skip = {"trip_aliases"}  # Already in system prompt
+    skip = {"service_aliases"}  # Already in system prompt
     for key in raw:
         if key in skip:
             continue
@@ -192,7 +192,7 @@ def test_client_context_excludes_internal_keys():
 
 
 def test_client_context_no_duplicate_aliases():
-    """T18: trip_aliases not duplicated in user prompt (already in system prompt)."""
+    """T18: service_aliases not duplicated in user prompt (already in system prompt)."""
     prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
     assert "TRIP ALIASES" not in prompt
 

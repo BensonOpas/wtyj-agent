@@ -23,13 +23,13 @@ def _cleanup_db():
 
 
 def test_save_and_get_booking():
-    """Round-trip: save a booking, retrieve it, verify all fields."""
+    """Round-service: save a booking, retrieve it, verify all fields."""
     _cleanup_db()
     fields = {
-        "trip_key": "klein_curacao",
+        "service_key": "klein_curacao",
         "customer_name": "Callou",
         "date": "2026-04-15",
-        "departure_time": "08:30",
+        "slot_time": "08:30",
         "guests": 4,
         "special_requests": "window seat",
     }
@@ -43,11 +43,11 @@ def test_save_and_get_booking():
 
     assert result is not None, "FAIL: booking should exist"
     assert result["booking_ref"] == "BF-2026-00001", f"FAIL: ref={result['booking_ref']}"
-    assert result["trip_key"] == "klein_curacao", f"FAIL: trip_key={result['trip_key']}"
+    assert result["service_key"] == "klein_curacao", f"FAIL: service_key={result['service_key']}"
     assert result["customer_name"] == "Callou", f"FAIL: name={result['customer_name']}"
     assert result["customer_email"] == "callou@example.com", f"FAIL: email={result['customer_email']}"
     assert result["date"] == "2026-04-15", f"FAIL: date={result['date']}"
-    assert result["departure_time"] == "08:30", f"FAIL: dep={result['departure_time']}"
+    assert result["slot_time"] == "08:30", f"FAIL: dep={result['slot_time']}"
     assert result["guests"] == 4, f"FAIL: guests={result['guests']}"
     assert result["special_requests"] == "window seat", f"FAIL: sr={result['special_requests']}"
     assert result["payment_link"] == "https://demo.pay/bluemarlin/pay123"
@@ -69,18 +69,18 @@ def test_get_booking_not_found():
 def test_save_booking_upsert():
     """Saving with same ref overwrites — upsert behavior."""
     _cleanup_db()
-    fields1 = {"trip_key": "klein_curacao", "customer_name": "Alice", "guests": 2}
+    fields1 = {"service_key": "klein_curacao", "customer_name": "Alice", "guests": 2}
     flags1 = {}
     state_registry.save_booking("BF-2026-00002", fields1, flags1,
                                 customer_email="alice@example.com")
 
-    fields2 = {"trip_key": "sunset_cruise", "customer_name": "Alice Updated", "guests": 3}
+    fields2 = {"service_key": "sunset_cruise", "customer_name": "Alice Updated", "guests": 3}
     flags2 = {}
     state_registry.save_booking("BF-2026-00002", fields2, flags2,
                                 customer_email="alice@example.com")
 
     result = state_registry.get_booking("BF-2026-00002")
-    assert result["trip_key"] == "sunset_cruise", f"FAIL: trip_key not updated"
+    assert result["service_key"] == "sunset_cruise", f"FAIL: service_key not updated"
     assert result["customer_name"] == "Alice Updated", f"FAIL: name not updated"
     assert result["guests"] == 3, f"FAIL: guests not updated"
     _cleanup_db()
@@ -97,7 +97,7 @@ def test_detect_booking_ref_found():
 
 def test_detect_booking_ref_not_found():
     """No pattern in body returns None."""
-    body = "Hi, I want to book a trip to Klein Curaçao!"
+    body = "Hi, I want to book a service to Klein Curaçao!"
     ref = email_poller._detect_booking_ref(body)
     assert ref is None, f"FAIL: expected None, got {ref}"
     print("PASS: test_detect_booking_ref_not_found")
@@ -115,10 +115,10 @@ def test_returning_customer_field_population():
     """When a booking is found, fields are populated on empty thread."""
     _cleanup_db()
     fields = {
-        "trip_key": "snorkeling_3in1",
+        "service_key": "snorkeling_3in1",
         "customer_name": "Calvin",
         "date": "2026-05-01",
-        "departure_time": "09:00",
+        "slot_time": "09:00",
         "guests": 6,
     }
     flags = {}
@@ -134,13 +134,13 @@ def test_returning_customer_field_population():
     past = state_registry.get_booking(ref)
     assert past is not None
     # Simulate the field population logic from the brief
-    for k in ("trip_key", "date", "guests", "customer_name", "departure_time"):
+    for k in ("service_key", "date", "guests", "customer_name", "slot_time"):
         v = past.get(k)
         if v and not th["fields"].get(k):
             th["fields"][k] = v if not isinstance(v, int) else str(v)
     th["flags"]["returning_booking"] = ref
 
-    assert th["fields"]["trip_key"] == "snorkeling_3in1"
+    assert th["fields"]["service_key"] == "snorkeling_3in1"
     assert th["fields"]["customer_name"] == "Calvin"
     assert th["fields"]["date"] == "2026-05-01"
     assert th["fields"]["guests"] == "6"  # converted to string
@@ -153,7 +153,7 @@ def test_returning_customer_no_overwrite():
     """Returning customer lookup does NOT overwrite existing thread fields."""
     _cleanup_db()
     fields = {
-        "trip_key": "klein_curacao",
+        "service_key": "klein_curacao",
         "customer_name": "Calvin",
         "date": "2026-05-01",
         "guests": 6,
@@ -163,16 +163,16 @@ def test_returning_customer_no_overwrite():
                                 customer_email="calvin@example.com")
 
     # Thread already has some fields from current conversation
-    th = {"fields": {"customer_name": "Calvin Updated", "trip_key": "sunset_cruise"}, "flags": {}}
+    th = {"fields": {"customer_name": "Calvin Updated", "service_key": "sunset_cruise"}, "flags": {}}
     past = state_registry.get_booking("BF-2026-00004")
-    for k in ("trip_key", "date", "guests", "customer_name", "departure_time"):
+    for k in ("service_key", "date", "guests", "customer_name", "slot_time"):
         v = past.get(k)
         if v and not th["fields"].get(k):
             th["fields"][k] = v if not isinstance(v, int) else str(v)
 
     # Existing fields should NOT be overwritten
     assert th["fields"]["customer_name"] == "Calvin Updated", "FAIL: existing name was overwritten"
-    assert th["fields"]["trip_key"] == "sunset_cruise", "FAIL: existing trip_key was overwritten"
+    assert th["fields"]["service_key"] == "sunset_cruise", "FAIL: existing service_key was overwritten"
     # But missing fields should be populated
     assert th["fields"]["date"] == "2026-05-01", "FAIL: date not populated"
     assert th["fields"]["guests"] == "6", "FAIL: guests not populated"
@@ -184,7 +184,7 @@ def test_prompt_contains_booking_ref_instruction():
     """Marina's prompt instructs use of [BOOKING_REF] placeholder (Brief 058 fix)."""
     prompt = marina_agent._build_prompt(
         "test@example.com", "booking", "test body",
-        {"trip_key": "klein_curacao"}, {"booking_ref": "BF-2026-99999"},
+        {"service_key": "klein_curacao"}, {"booking_ref": "BF-2026-99999"},
     )
     assert "BOOKING REFERENCE:" in prompt, "FAIL: prompt missing BOOKING REFERENCE section"
     booking_ref_section_start = prompt.index("BOOKING REFERENCE:")
@@ -199,7 +199,7 @@ def test_prompt_contains_returning_customer_section():
     """When returning_booking is in flags, prompt includes RETURNING CUSTOMER section."""
     prompt = marina_agent._build_prompt(
         "test@example.com", "booking", "my ref is BF-2026-00001",
-        {"trip_key": "klein_curacao", "customer_name": "Calvin"},
+        {"service_key": "klein_curacao", "customer_name": "Calvin"},
         {"returning_booking": "BF-2026-00001"},
     )
     assert "RETURNING CUSTOMER:" in prompt, "FAIL: prompt missing RETURNING CUSTOMER section"

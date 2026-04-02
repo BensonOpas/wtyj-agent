@@ -11,12 +11,12 @@ def test_prompt_contains_third_check():
     print("  T1 PASS: Prompt contains THIRD check about departures array")
 
 def test_old_instruction_removed():
-    """T2: Old 'departure_time is NOT a required field' instruction is gone."""
+    """T2: Old 'slot_time is NOT a required field' instruction is gone."""
     from agents.marina import marina_agent
     prompt = marina_agent._build_prompt("a@b.com", "test", "test", {}, {})
-    assert "departure_time is NOT a required field" not in prompt, \
-        "Old departure_time instruction must be removed"
-    print("  T2 PASS: Old departure_time instruction removed")
+    assert "slot_time is NOT a required field" not in prompt, \
+        "Old slot_time instruction must be removed"
+    print("  T2 PASS: Old slot_time instruction removed")
 
 def test_auto_select_single_departure():
     """T3: Prompt instructs auto-select for single-departure trips."""
@@ -34,23 +34,23 @@ def test_ask_before_summary_multi_departure():
         "Prompt must mention multi-departure condition"
     assert "BEFORE sending the booking summary" in prompt, \
         "Must instruct asking BEFORE the summary"
-    assert "Do NOT set" in prompt and "awaiting_booking_confirmation until departure_time" in prompt, \
-        "Must prohibit awaiting_booking_confirmation without departure_time"
+    assert "Do NOT set" in prompt and "awaiting_booking_confirmation until slot_time" in prompt, \
+        "Must prohibit awaiting_booking_confirmation without slot_time"
     print("  T4 PASS: Prompt requires departure time before summary for multi-departure trips")
 
 def test_klein_curacao_has_multiple_departures():
     """T5: client.json klein_curacao has 2 departures (confirms test premise)."""
     from shared import config_loader
-    trip = config_loader.get_trip("klein_curacao")
-    deps = trip.get("departures", [])
+    service = config_loader.get_service("klein_curacao")
+    deps = service.get("slots", [])
     assert len(deps) == 2, f"klein_curacao must have 2 departures, got {len(deps)}"
     print("  T5 PASS: klein_curacao has 2 departures")
 
 def test_sunset_cruise_has_single_departure():
     """T6: client.json sunset_cruise has 1 departure (confirms test premise)."""
     from shared import config_loader
-    trip = config_loader.get_trip("sunset_cruise")
-    deps = trip.get("departures", [])
+    service = config_loader.get_service("sunset_cruise")
+    deps = service.get("slots", [])
     assert len(deps) == 1, f"sunset_cruise must have 1 departure, got {len(deps)}"
     print("  T6 PASS: sunset_cruise has 1 departure")
 

@@ -1,6 +1,6 @@
 # bluemarlin/tests/social/test_072_whatsapp_multi_trip.py
 # Created: Brief 072
-# Purpose: Tests for WhatsApp multi-trip reset, returning customer, anti-loop
+# Purpose: Tests for WhatsApp multi-service reset, returning customer, anti-loop
 
 import os
 import sys
@@ -24,7 +24,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 
@@ -52,7 +52,7 @@ def _base_result(**overrides):
     return base
 
 
-# --- Test 1: Multi-trip reset archives booking ---
+# --- Test 1: Multi-service reset archives booking ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")
 def test_multi_trip_reset_archives_booking(mock_process):
@@ -61,8 +61,8 @@ def test_multi_trip_reset_archives_booking(mock_process):
     _cleanup_phone(phone)
     # Pre-set completed booking state
     fields = {
-        "trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
-        "date": "2026-03-18", "guests": "2", "departure_time": "09:00",
+        "service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
+        "date": "2026-03-18", "guests": "2", "slot_time": "09:00",
         "customer_name": "Test User",
     }
     flags = {
@@ -72,7 +72,7 @@ def test_multi_trip_reset_archives_booking(mock_process):
     state_registry.wa_save_booking_state(phone, fields, flags)
     mock_process.return_value = _base_result(
         intents=["booking"],
-        fields={"trip_key": "klein_curacao"},
+        fields={"service_key": "klein_curacao"},
         reply="Sure, let me help with Klein Curaçao!",
     )
     msg = {"from": phone, "text": "I want to book Klein Curacao too", "from_name": "Test User"}
@@ -82,7 +82,7 @@ def test_multi_trip_reset_archives_booking(mock_process):
     cb = state["completed_bookings"]
     assert len(cb) == 1
     assert cb[0]["booking_ref"] == "BF-2026-99001"
-    assert cb[0]["trip_key"] == "west_coast_beach"
+    assert cb[0]["service_key"] == "west_coast_beach"
     assert cb[0]["date"] == "2026-03-18"
     # Fields reset — only persistent fields survive, plus new fields from merge
     assert state["fields"].get("customer_name") == "Test User"
@@ -95,7 +95,7 @@ def test_multi_trip_reset_archives_booking(mock_process):
     _cleanup_phone(phone)
 
 
-# --- Test 2: Multi-trip max bookings no reset ---
+# --- Test 2: Multi-service max bookings no reset ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")
 def test_multi_trip_max_bookings_no_reset(mock_process):
@@ -103,7 +103,7 @@ def test_multi_trip_max_bookings_no_reset(mock_process):
     phone = "TEST_072_MT_002"
     _cleanup_phone(phone)
     completed = [
-        {"booking_ref": f"BF-2026-0000{i}", "trip_key": "trip", "date": "2026-03-18",
+        {"booking_ref": f"BF-2026-0000{i}", "service_key": "service", "date": "2026-03-18",
          "guests": "2"} for i in range(3)
     ]
     fields = {"customer_name": "Test"}
@@ -114,7 +114,7 @@ def test_multi_trip_max_bookings_no_reset(mock_process):
         reply="Some reply",
         fields={},
     )
-    msg = {"from": phone, "text": "Book another trip", "from_name": "Test"}
+    msg = {"from": phone, "text": "Book another service", "from_name": "Test"}
     handle_incoming_whatsapp_message(msg)
     state = state_registry.wa_get_booking_state(phone)
     assert len(state["completed_bookings"]) == 3  # unchanged
@@ -133,8 +133,8 @@ def test_returning_customer_by_ref(mock_process):
     # Create a past booking in SQLite
     state_registry.save_booking(
         "BF-2026-88001",
-        {"trip_key": "sunset_cruise", "customer_name": "Jane", "date": "2026-03-10",
-         "guests": 2, "departure_time": "16:00"},
+        {"service_key": "sunset_cruise", "customer_name": "Jane", "date": "2026-03-10",
+         "guests": 2, "slot_time": "16:00"},
         {},
         customer_email=phone,
     )
@@ -147,7 +147,7 @@ def test_returning_customer_by_ref(mock_process):
     # Check persisted state
     state = state_registry.wa_get_booking_state(phone)
     assert state["flags"].get("returning_booking") == "BF-2026-88001"
-    assert state["fields"].get("trip_key") == "sunset_cruise"
+    assert state["fields"].get("service_key") == "sunset_cruise"
     assert state["fields"].get("customer_name") == "Jane"
     # Check marina_agent was called with returning_booking
     call_kwargs = mock_process.call_args
@@ -191,7 +191,7 @@ def test_returning_customer_by_phone(mock_process):
     # Create a past booking with this phone as customer_email
     state_registry.save_booking(
         "BF-2026-88005",
-        {"trip_key": "jet_ski", "customer_name": "Mike", "guests": 1},
+        {"service_key": "jet_ski", "customer_name": "Mike", "guests": 1},
         {},
         customer_email=phone,
     )
@@ -301,21 +301,21 @@ def test_completed_bookings_summary_in_agent_flags(mock_process):
     phone = "TEST_072_CB_001"
     _cleanup_phone(phone)
     completed = [{
-        "booking_ref": "BF-2026-77001", "trip_key": "klein_curacao",
-        "experience": "Klein Curaçao", "date": "2026-03-15", "guests": "4",
+        "booking_ref": "BF-2026-77001", "service_key": "klein_curacao",
+        "service_name": "Klein Curaçao", "date": "2026-03-15", "guests": "4",
     }]
     state_registry.wa_save_booking_state(phone, {}, {}, completed)
     mock_process.return_value = _base_result(
         intents=["inquiry"],
         reply="What can I help with?",
     )
-    msg = {"from": phone, "text": "I want another trip", "from_name": "Test"}
+    msg = {"from": phone, "text": "I want another service", "from_name": "Test"}
     handle_incoming_whatsapp_message(msg)
     call_kwargs = mock_process.call_args
     passed_flags = call_kwargs.kwargs.get("thread_flags", {})
     summary = passed_flags.get("_completed_bookings_summary", "")
     assert "BF-2026-77001" in summary
-    assert "Klein Cura" in summary  # experience takes priority over trip_key in summary
+    assert "Klein Cura" in summary  # experience takes priority over service_key in summary
     _cleanup_phone(phone)
 
 

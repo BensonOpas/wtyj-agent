@@ -1,5 +1,5 @@
 # bluemarlin/shared/config_loader.py
-# Last modified: Brief 090
+# Last modified: Brief 134
 # Purpose: Read-only client.json interface. Caches on first read. Never raises.
 
 import json
@@ -28,16 +28,16 @@ def get_business() -> dict:
         return {}
 
 
-def get_trips() -> dict:
+def get_services() -> dict:
     try:
-        return _load().get("trips", {})
+        return _load().get("services", {})
     except Exception:
         return {}
 
 
-def get_trip(trip_key: str) -> dict:
+def get_service(service_key: str) -> dict:
     try:
-        return _load().get("trips", {}).get(trip_key, {})
+        return _load().get("services", {}).get(service_key, {})
     except Exception:
         return {}
 
@@ -70,16 +70,16 @@ def get_payment() -> dict:
         return {}
 
 
-def get_trip_aliases() -> dict:
+def get_service_aliases() -> dict:
     try:
-        return _load().get("trip_aliases", {})
+        return _load().get("service_aliases", {})
     except Exception:
         return {}
 
 
-def get_fleet() -> dict:
+def get_resources() -> dict:
     try:
-        return _load().get("fleet", {})
+        return _load().get("resources", {})
     except Exception:
         return {}
 

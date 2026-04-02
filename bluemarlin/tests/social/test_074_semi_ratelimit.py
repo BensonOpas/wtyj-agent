@@ -24,7 +24,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 
@@ -79,14 +79,14 @@ def test_semi_with_hold_cancels_and_creates_relay(mock_process, mock_sheets, moc
     """Semi-escalation cancels soft hold and sets relay flags."""
     phone = "TEST_074_SEMI_002"
     _cleanup_phone(phone)
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
-              "date": "2026-03-18", "guests": "2", "departure_time": "09:00"}
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
+              "date": "2026-03-18", "guests": "2", "slot_time": "09:00"}
     hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
     mock_process.return_value = _base_result(
         intents=["inquiry"],

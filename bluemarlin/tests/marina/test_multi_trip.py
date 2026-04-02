@@ -1,4 +1,4 @@
-"""Tests for Brief 055 — Multi-trip booking in one thread."""
+"""Tests for Brief 055 — Multi-service booking in one thread."""
 import sys, os, json
 
 from agents.marina import email_poller
@@ -23,11 +23,11 @@ def test_reset_after_hold_created():
     """After hold_created=True, reset archives booking and clears fields/flags."""
     th = _make_thread(
         fields={
-            "trip_key": "klein_curacao",
-            "experience": "Klein Curaçao",
+            "service_key": "klein_curacao",
+            "service_name": "Klein Curaçao",
             "date": "2026-04-15",
             "guests": "4",
-            "departure_time": "08:30",
+            "slot_time": "08:30",
             "customer_name": "Callou",
             "phone": "+5999 123 4567",
         },
@@ -48,8 +48,8 @@ def test_reset_after_hold_created():
     # Fields: customer_name and phone preserved, everything else cleared
     assert th["fields"]["customer_name"] == "Callou", "FAIL: customer_name should persist"
     assert th["fields"]["phone"] == "+5999 123 4567", "FAIL: phone should persist"
-    assert "trip_key" not in th["fields"], "FAIL: trip_key should be cleared"
-    assert "experience" not in th["fields"], "FAIL: experience should be cleared"
+    assert "service_key" not in th["fields"], "FAIL: service_key should be cleared"
+    assert "service_name" not in th["fields"], "FAIL: experience should be cleared"
     assert "date" not in th["fields"], "FAIL: date should be cleared"
     assert "guests" not in th["fields"], "FAIL: guests should be cleared"
     # Flags: booking flags cleared
@@ -62,7 +62,7 @@ def test_reset_after_hold_created():
     assert len(th["completed_bookings"]) == 1
     archived = th["completed_bookings"][0]
     assert archived["booking_ref"] == "BF-2026-00001", f"FAIL: archived ref={archived['booking_ref']}"
-    assert archived["trip_key"] == "klein_curacao", f"FAIL: archived trip={archived['trip_key']}"
+    assert archived["service_key"] == "klein_curacao", f"FAIL: archived service={archived['service_key']}"
     assert archived["date"] == "2026-04-15", f"FAIL: archived date={archived['date']}"
     assert archived["guests"] == "4", f"FAIL: archived guests={archived['guests']}"
     print("PASS: test_reset_after_hold_created")
@@ -71,23 +71,23 @@ def test_reset_after_hold_created():
 def test_no_reset_without_hold_created():
     """Without hold_created, no reset happens."""
     th = _make_thread(
-        fields={"trip_key": "klein_curacao", "date": "2026-04-15"},
+        fields={"service_key": "klein_curacao", "date": "2026-04-15"},
         flags={"awaiting_booking_confirmation": True},
     )
     result = email_poller._maybe_reset_for_new_booking(th)
     assert result == False, "FAIL: should return False without hold_created"
-    assert th["fields"]["trip_key"] == "klein_curacao", "FAIL: fields should be unchanged"
+    assert th["fields"]["service_key"] == "klein_curacao", "FAIL: fields should be unchanged"
     print("PASS: test_no_reset_without_hold_created")
 
 
 def test_max_bookings_blocks_reset():
     """At max_bookings_per_thread (3), no reset happens."""
     completed = [
-        {"booking_ref": f"BF-2026-0000{i}", "trip_key": "klein_curacao",
+        {"booking_ref": f"BF-2026-0000{i}", "service_key": "klein_curacao",
          "date": "2026-04-15", "guests": "2"} for i in range(3)
     ]
     th = _make_thread(
-        fields={"trip_key": "sunset_cruise", "date": "2026-04-16", "customer_name": "Callou"},
+        fields={"service_key": "sunset_cruise", "date": "2026-04-16", "customer_name": "Callou"},
         flags={"hold_created": True, "booking_ref": "BF-2026-00004"},
         completed=completed,
     )
@@ -102,20 +102,20 @@ def test_second_booking_archives_correctly():
     """Second booking adds to completed_bookings list."""
     first_completed = [{
         "booking_ref": "BF-2026-00001",
-        "trip_key": "klein_curacao",
-        "experience": "Klein Curaçao",
+        "service_key": "klein_curacao",
+        "service_name": "Klein Curaçao",
         "date": "2026-04-15",
         "guests": "4",
-        "departure_time": "08:30",
+        "slot_time": "08:30",
         "payment_link": "https://demo.pay/1",
     }]
     th = _make_thread(
         fields={
-            "trip_key": "sunset_cruise",
-            "experience": "Sunset Cruise",
+            "service_key": "sunset_cruise",
+            "service_name": "Sunset Cruise",
             "date": "2026-04-16",
             "guests": "2",
-            "departure_time": "17:00",
+            "slot_time": "17:00",
             "customer_name": "Callou",
             "phone": "+5999 123 4567",
         },
@@ -131,18 +131,18 @@ def test_second_booking_archives_correctly():
     assert len(th["completed_bookings"]) == 2
     assert th["completed_bookings"][0]["booking_ref"] == "BF-2026-00001"
     assert th["completed_bookings"][1]["booking_ref"] == "BF-2026-00002"
-    assert th["completed_bookings"][1]["trip_key"] == "sunset_cruise"
+    assert th["completed_bookings"][1]["service_key"] == "sunset_cruise"
     assert th["completed_bookings"][1]["date"] == "2026-04-16"
     # Fields reset but identity preserved
     assert th["fields"]["customer_name"] == "Callou"
-    assert "trip_key" not in th["fields"]
+    assert "service_key" not in th["fields"]
     print("PASS: test_second_booking_archives_correctly")
 
 
 def test_non_booking_flags_preserved():
     """Flags not in _BOOKING_FLAGS_TO_RESET survive the reset."""
     th = _make_thread(
-        fields={"trip_key": "klein_curacao", "customer_name": "Test"},
+        fields={"service_key": "klein_curacao", "customer_name": "Test"},
         flags={
             "hold_created": True,
             "booking_ref": "BF-2026-00001",
@@ -178,7 +178,7 @@ def test_prompt_completed_bookings_section():
 def test_prompt_max_bookings_reached():
     """When _max_bookings_reached is True, prompt includes MAX BOOKINGS section."""
     prompt = marina_agent._build_prompt(
-        "test@example.com", "booking", "I want another trip",
+        "test@example.com", "booking", "I want another service",
         {"customer_name": "Callou"},
         {"_max_bookings_reached": True},
     )
@@ -203,15 +203,15 @@ def test_completed_bookings_summary_format():
     completed = [
         {
             "booking_ref": "BF-2026-00001",
-            "trip_key": "klein_curacao",
-            "experience": "Klein Curaçao",
+            "service_key": "klein_curacao",
+            "service_name": "Klein Curaçao",
             "date": "2026-04-15",
             "guests": "4",
         },
         {
             "booking_ref": "BF-2026-00002",
-            "trip_key": "sunset_cruise",
-            "experience": "Sunset Cruise",
+            "service_key": "sunset_cruise",
+            "service_name": "Sunset Cruise",
             "date": "2026-04-16",
             "guests": "2",
         },
@@ -219,7 +219,7 @@ def test_completed_bookings_summary_format():
     lines = []
     for cb in completed:
         lines.append(
-            f"  - {cb.get('experience', cb.get('trip_key', '?'))} on "
+            f"  - {cb.get('service_name', cb.get('service_key', '?'))} on "
             f"{cb.get('date', '?')} for {cb.get('guests', '?')} guests "
             f"(ref: {cb.get('booking_ref', 'N/A')})"
         )
@@ -236,7 +236,7 @@ def test_intent_gating_prevents_non_booking_reset():
     only checks hold_created and max_bookings — the intent gating is done by the
     caller in the main loop."""
     th = _make_thread(
-        fields={"trip_key": "klein_curacao", "customer_name": "Test",
+        fields={"service_key": "klein_curacao", "customer_name": "Test",
                 "date": "2026-04-15", "guests": "2"},
         flags={"hold_created": True, "booking_ref": "BF-2026-00001"},
     )

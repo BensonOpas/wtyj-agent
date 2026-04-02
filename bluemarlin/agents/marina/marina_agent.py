@@ -28,7 +28,7 @@ _RESPONSE_DEFAULTS = {
 # Keys to exclude from the client context (internal system config, not customer-facing)
 _INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature", "calendar_id"}
 # Top-level keys to skip (already injected elsewhere or handled separately)
-_SKIP_TOP_LEVEL = {"trip_aliases"}  # Already in system prompt via _build_trip_alias_text()
+_SKIP_TOP_LEVEL = {"service_aliases"}  # Already in system prompt via _build_service_alias_text()
 
 
 def _strip_verify(obj):
@@ -56,12 +56,12 @@ def _build_client_context() -> str:
             for k, v in value.items():
                 if k in _INTERNAL_KEYS:
                     continue
-                # Strip calendar_id from trip departures
-                if isinstance(v, dict) and "departures" in v:
+                # Strip calendar_id from service departures
+                if isinstance(v, dict) and "slots" in v:
                     v = dict(v)
-                    v["departures"] = [
+                    v["slots"] = [
                         {dk: dv for dk, dv in dep.items() if dk not in _INTERNAL_KEYS}
-                        for dep in v.get("departures", [])
+                        for dep in v.get("slots", [])
                     ]
                 clean[k] = v
             clean = _strip_verify(clean)
@@ -76,15 +76,15 @@ def _build_client_context() -> str:
     return "\n\n".join(sections)
 
 
-def _build_trip_alias_text() -> str:
-    aliases = config_loader.get_trip_aliases()
+def _build_service_alias_text() -> str:
+    aliases = config_loader.get_service_aliases()
     grouped: dict[str, list[str]] = {}
-    for alias, trip_key in aliases.items():
-        grouped.setdefault(trip_key, []).append(alias)
+    for alias, service_key in aliases.items():
+        grouped.setdefault(service_key, []).append(alias)
     lines = []
-    for trip_key, alias_list in grouped.items():
+    for service_key, alias_list in grouped.items():
         quoted = ", ".join(f'"{a}"' for a in alias_list)
-        lines.append(f'      {quoted} → {trip_key}')
+        lines.append(f'      {quoted} → {service_key}')
     return "\n".join(lines)
 
 
@@ -128,7 +128,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             "FORMATTING:\n"
             "- Use line breaks between distinct thoughts\n"
             "- Two to three short lines separated by blank lines, not one dense block\n"
-            "- No bullet points unless listing trip options or departures\n"
+            "- No bullet points unless listing service options or departures\n"
             "\n"
             "GREETINGS:\n"
             "- Greet ONLY on the first message of a new conversation\n"
@@ -225,7 +225,7 @@ LANGUAGE RULE: Identify the reply language by reading the body text of the inbou
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find (experience,
-date, guests, trip_key, departure_time, customer_name, phone, email, special_requests).
+date, guests, service_key, slot_time, customer_name, phone, email, special_requests).
 Python handles all booking validation, state management, and summary generation.
 If you receive an ACTION instruction below, follow it exactly.
 When no ACTION is given, reply naturally — ask for any missing required fields
@@ -236,7 +236,7 @@ When the customer asks non-booking questions alongside a booking request
 questions in your reply. Python may append booking-specific information
 (summaries, departure options, date corrections) after your reply.
 
-If the customer mentions children and the trip has age-based pricing (shown in
+If the customer mentions children and the service has age-based pricing (shown in
 TRIPS data above), ask for their ages in your reply and set needs_child_ages
 to true in your flags.
 
@@ -301,7 +301,7 @@ The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] 
 {{
   "intents": ["<one or more of: booking, inquiry, cancellation, reschedule, complaint, social, off_topic>"],
   "fields": {{"<extracted booking fields — only if present and certain:
-    experience: the trip name as the customer described it
+    service_name: the service name as the customer described it
     date: MUST be in YYYY-MM-DD format. You must convert any natural
       language date (e.g. "April 20", "next Saturday", "in two weeks")
       to YYYY-MM-DD using today's date as reference. If the customer
@@ -321,16 +321,16 @@ The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] 
     phone: customer's phone number
     email: customer's email address — only if explicitly provided
     special_requests: forward-looking preferences only
-    trip_key: exact key from the trips list. Match the customer's wording to one of these keys:
-{_build_trip_alias_text()}
-      Only include trip_key if certain. If the customer's description is ambiguous, omit it and ask.
-    departure_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
+    service_key: exact key from the trips list. Match the customer's wording to one of these keys:
+{_build_service_alias_text()}
+      Only include service_key if certain. If the customer's description is ambiguous, omit it and ask.
+    slot_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
   "confidence": "<high | medium | low>",
   "reply": "<your reply to the customer, written naturally as a real person would. Follow any ACTION instruction. When no ACTION is given, reply conversationally.>",
   "reply_hold_failed": "<optional — write ONLY when setting booking_confirmed to true. Apologetic message if the slot is unavailable, without [PAYMENT_LINK].>",
   "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
   "requires_human": <true if complaint with no booking context, or explicit request to speak to a human — otherwise false>,
-  "flags": {{"booking_confirmed": <true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the trip has age-based pricing — omit or false otherwise>, "needs_escalation_email": <true when a WhatsApp escalation needs the customer's email before proceeding — omit or false otherwise>, "large_group": <true when the guest count meets or exceeds the large group threshold — omit or false otherwise>}},
+  "flags": {{"booking_confirmed": <true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the service has age-based pricing — omit or false otherwise>, "needs_escalation_email": <true when a WhatsApp escalation needs the customer's email before proceeding — omit or false otherwise>, "large_group": <true when the guest count meets or exceeds the large group threshold — omit or false otherwise>}},
   "semi_escalation": <true only when the customer asks a specific unanswerable question — NOT for complaints or cancellations — omit or false otherwise>,
   "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
   "internal_note": "<one sentence for the operator log — never shown to the customer>"
@@ -479,12 +479,12 @@ def process_message(
         "fields": {},
         "confidence": "low",
         "reply": (
-            f"Hi! Could you let me know which trip you're looking at, "
+            f"Hi! Could you let me know which service you're looking at, "
             f"what date works, and how many guests? I'll get you sorted "
             f"from there.\n\n"
             f"Warm regards,\n{signature}"
         ),
-        "clarifications_needed": ["date", "guests", "experience"],
+        "clarifications_needed": ["date", "guests", "service_name"],
         "requires_human": False,
         "flags": {},
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",

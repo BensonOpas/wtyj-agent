@@ -166,9 +166,9 @@ def test_log_manifest_update_calls_append():
     sheets_writer._append = _mock_append
     try:
         sheets_writer.log_manifest_update({
-            "trip_key": "klein_curacao",
+            "service_key": "klein_curacao",
             "date": "2026-04-01",
-            "departure_time": "08:00",
+            "slot_time": "08:00",
             "total_guests": 12,
             "capacity": 30,
             "confirmed_count": 2,
@@ -194,7 +194,7 @@ def test_log_manifest_update_calls_append():
     # T26: booking_ref is last column
     assert _row[10] == "BF-2026-50123"
 
-    # T27: trip_key is second column
+    # T27: service_key is second column
     assert _row[1] == "klein_curacao"
 
     # T28: capacity as string '30' in column 5

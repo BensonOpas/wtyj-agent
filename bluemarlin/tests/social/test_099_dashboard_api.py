@@ -194,7 +194,7 @@ def test_availability():
     assert isinstance(data, list)
     assert len(data) > 0  # daily trips (Klein Curaçao, Jet Ski) guarantee results
     item = data[0]
-    assert "trip_key" in item
+    assert "service_key" in item
     assert "date" in item
     assert "spots_remaining" in item
     assert "capacity" in item

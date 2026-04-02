@@ -1,4 +1,7 @@
 ---
+description: Anti-tunnel-vision check — validate your approach
+---
+
 You are stepping back to check your own thinking. This is an anti-tunnel-vision check.
 STOP whatever you were about to do and answer these four questions honestly:
 
@@ -13,4 +16,3 @@ STOP whatever you were about to do and answer these four questions honestly:
 After answering, tell the user what you found. If your current approach is wrong or overcomplicated, say so directly and propose the simpler path.
 
 This skill can be invoked by the user (/scope) or by yourself when you notice you're deep in implementation without having validated the approach.
----

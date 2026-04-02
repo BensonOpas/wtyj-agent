@@ -25,7 +25,7 @@ def _make_photo(**overrides):
         filename="test_photo.jpg",
         original_filename="IMG_001.jpg",
         tags=["sunset"],
-        trip_key="klein_curacao",
+        service_key="klein_curacao",
         source="upload",
         source_id="",
         width=1080,
@@ -46,17 +46,17 @@ def test_save_and_get_photo():
     assert p["id"] == photo_id
     assert p["original_filename"] == "IMG_001.jpg"
     assert p["tags"] == ["sunset"]
-    assert p["trip_key"] == "klein_curacao"
+    assert p["service_key"] == "klein_curacao"
     assert p["source"] == "upload"
     assert p["width"] == 1080
 
 
 def test_get_photos_filter_by_trip():
-    _make_photo(trip_key="klein_curacao", filename="a.jpg")
-    _make_photo(trip_key="sunset_cruise", filename="b.jpg")
-    klein = state_registry.get_photos(trip_key="klein_curacao")
+    _make_photo(service_key="klein_curacao", filename="a.jpg")
+    _make_photo(service_key="sunset_cruise", filename="b.jpg")
+    klein = state_registry.get_photos(service_key="klein_curacao")
     assert len(klein) == 1
-    assert klein[0]["trip_key"] == "klein_curacao"
+    assert klein[0]["service_key"] == "klein_curacao"
 
 
 def test_get_photo_by_id():
@@ -88,12 +88,12 @@ def test_update_photo_tags():
     assert p["tags"] == ["boat", "ocean"]
 
 
-def test_update_photo_trip_key():
+def test_update_photo_service_key():
     photo_id = _make_photo()
-    ok = state_registry.update_photo(photo_id, trip_key="sunset_cruise")
+    ok = state_registry.update_photo(photo_id, service_key="sunset_cruise")
     assert ok is True
     p = state_registry.get_photo_by_id(photo_id)
-    assert p["trip_key"] == "sunset_cruise"
+    assert p["service_key"] == "sunset_cruise"
     assert p["tags"] == ["sunset"]  # unchanged
 
 
@@ -118,9 +118,9 @@ def test_delete_photo_nonexistent():
 
 
 def test_get_photo_stats():
-    _make_photo(trip_key="klein_curacao", filename="d.jpg")
-    _make_photo(trip_key="klein_curacao", filename="e.jpg")
-    _make_photo(trip_key="sunset_cruise", filename="f.jpg")
+    _make_photo(service_key="klein_curacao", filename="d.jpg")
+    _make_photo(service_key="klein_curacao", filename="e.jpg")
+    _make_photo(service_key="sunset_cruise", filename="f.jpg")
     stats = state_registry.get_photo_stats()
     assert stats["total"] == 3
     assert stats["by_trip"]["klein_curacao"] == 2
@@ -159,7 +159,7 @@ def test_api_upload_endpoint(tmp_path, monkeypatch):
         "/dashboard/api/photos/upload",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("test_photo.png", img_bytes, "image/png")},
-        data={"tags": "sunset, boat", "trip_key": "klein_curacao"},
+        data={"tags": "sunset, boat", "service_key": "klein_curacao"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -167,7 +167,7 @@ def test_api_upload_endpoint(tmp_path, monkeypatch):
     photo = data["photo"]
     assert photo["original_filename"] == "test_photo.png"
     assert photo["source"] == "upload"
-    assert photo["trip_key"] == "klein_curacao"
+    assert photo["service_key"] == "klein_curacao"
     assert photo["tags"] == ["sunset", "boat"]
     assert photo["width"] == 10
     assert photo["height"] == 10
@@ -184,13 +184,13 @@ def test_api_list_photos(tmp_path, monkeypatch):
         "/dashboard/api/photos/upload",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("a.png", img_bytes, "image/png")},
-        data={"tags": "", "trip_key": ""},
+        data={"tags": "", "service_key": ""},
     )
     _client.post(
         "/dashboard/api/photos/upload",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("b.png", img_bytes, "image/png")},
-        data={"tags": "", "trip_key": ""},
+        data={"tags": "", "service_key": ""},
     )
     resp = _client.get(
         "/dashboard/api/photos",
@@ -209,7 +209,7 @@ def test_api_delete_photo(tmp_path, monkeypatch):
         "/dashboard/api/photos/upload",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("del.png", img_bytes, "image/png")},
-        data={"tags": "", "trip_key": ""},
+        data={"tags": "", "service_key": ""},
     )
     photo_id = upload_resp.json()["photo"]["id"]
     del_resp = _client.delete(

@@ -18,7 +18,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.execute("DELETE FROM bookings WHERE customer_email = ?", (phone,))
     conn.commit()
@@ -63,20 +63,20 @@ def test_A_fisher_flow():
     phone = "FLOW_089_A"
     _cleanup_phone(phone)
 
-    r1 = send(phone, "hi, i wanna book a trip")
+    r1 = send(phone, "hi, i wanna book a service")
     print(f"[A1] {r1[:100]}")
     assert r1 != "", "A1: must reply to greeting+intent"
 
     r2 = send(phone, "i was thinking of fishing")
     print(f"[A2] {r2[:100]}")
     assert r2 != "", "A2: must reply to fishing question"
-    assert "fishing" in r2.lower() or "fish" in r2.lower() or "boat" in r2.lower() or "trip" in r2.lower()
+    assert "fishing" in r2.lower() or "fish" in r2.lower() or "boat" in r2.lower() or "service" in r2.lower()
 
     r3 = send(phone, "snorkeling sounds fun, where is that?")
     print(f"[A3] {r3[:100]}")
     assert r3 != "", "A3: must reply to snorkeling location"
 
-    r4 = send(phone, "nah doesnt sound fun, any trip where we can just chill?")
+    r4 = send(phone, "nah doesnt sound fun, any service where we can just chill?")
     print(f"[A4] {r4[:100]}")
     assert r4 != "", "A4: must reply to chill recommendation"
     # Should suggest Klein or Sunset — the relaxed ones
@@ -93,7 +93,7 @@ def test_B_mid_booking_faq():
     phone = "FLOW_089_B"
     _cleanup_phone(phone)
 
-    r1 = send(phone, "west coast beach trip next sunday for 3 people")
+    r1 = send(phone, "west coast beach service next sunday for 3 people")
     print(f"[B1] {r1[:100]}")
     assert r1 != "", "B1: must reply"
     assert "Just to confirm" in r1 or "sunday" in r1.lower() or "West Coast" in r1
@@ -101,7 +101,7 @@ def test_B_mid_booking_faq():
     r2 = send(phone, "where do you leave from?")
     print(f"[B2] {r2[:100]}")
     assert r2 != "", "B2: must answer departure point question"
-    # Should mention Mood/Tomatoes — it's in the trip data
+    # Should mention Mood/Tomatoes — it's in the service data
     assert "mood" in r2.lower() or "tomato" in r2.lower() or "depart" in r2.lower()
 
     r3 = send(phone, "ok yes book it")
@@ -127,7 +127,7 @@ def test_C_typos_and_slang():
     print(f"[C2] {r2[:100]}")
     assert r2 != "", "C2: must handle jet ski typo"
     # Should understand as jet ski
-    assert "jet" in r2.lower() or "ski" in r2.lower() or "trip" in r2.lower()
+    assert "jet" in r2.lower() or "ski" in r2.lower() or "service" in r2.lower()
 
     r3 = send(phone, "ya how much")
     print(f"[C3] {r3[:100]}")

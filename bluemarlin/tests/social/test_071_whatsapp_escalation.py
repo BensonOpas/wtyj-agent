@@ -24,7 +24,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.commit()
     conn.close()
 
@@ -130,14 +130,14 @@ def test_semi_escalation_cancels_soft_hold(mock_process, mock_sheets, mock_remov
     phone = "TEST_071_SEMI_002"
     _cleanup_phone(phone)
     # Pre-set state with active soft hold
-    fields = {"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
-              "date": "2026-03-18", "guests": "2", "departure_time": "09:00"}
+    fields = {"service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
+              "date": "2026-03-18", "guests": "2", "slot_time": "09:00"}
     hold_id = state_registry.create_soft_hold("west_coast_beach", "2026-03-18", "09:00", 2, 25,
                                                customer_name="Test", customer_email=phone)
     flags = {"awaiting_booking_confirmation": True, "slot_checked": True,
              "slot_available": True, "hold_id": hold_id,
-             "hold_trip_key": "west_coast_beach", "hold_date": "2026-03-18",
-             "hold_departure_time": "09:00"}
+             "hold_service_key": "west_coast_beach", "hold_date": "2026-03-18",
+             "hold_slot_time": "09:00"}
     state_registry.wa_save_booking_state(phone, fields, flags)
     mock_process.return_value = _base_result(
         intents=["inquiry"],
@@ -171,7 +171,7 @@ def test_semi_escalation_overrides_post_validate(mock_process, mock_sheets, mock
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
         intents=["booking"],
-        fields={"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
+        fields={"service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
                 "date": "2026-03-18", "guests": "2"},
         reply="Let me check with the team on that!",
         semi_escalation=True,
@@ -203,7 +203,7 @@ def test_full_escalation_sets_flag_and_logs(mock_process, mock_sheets):
         intents=["complaint"],
         reply="I'm sorry about that. I've passed this to our team.",
         requires_human=True,
-        internal_note="Complaint about cancelled trip",
+        internal_note="Complaint about cancelled service",
     )
     msg = {"from": phone, "text": "I want a refund!", "from_name": "Test"}
     reply = handle_incoming_whatsapp_message(msg)
@@ -230,7 +230,7 @@ def test_full_escalation_skips_booking_confirmation(mock_process, mock_avail, mo
     _cleanup_phone(phone)
     mock_process.return_value = _base_result(
         intents=["booking"],
-        fields={"trip_key": "west_coast_beach", "experience": "West Coast Beach Trip",
+        fields={"service_key": "west_coast_beach", "service_name": "West Coast Beach Trip",
                 "date": "2026-03-18", "guests": "2"},
         reply="I've passed this along to our team.",
         requires_human=True,

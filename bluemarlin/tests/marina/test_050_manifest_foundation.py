@@ -22,21 +22,21 @@ def test_manifest_events_columns():
     conn = state_registry._get_conn()
     cols = [r[1] for r in conn.execute("PRAGMA table_info(manifest_events)").fetchall()]
     conn.close()
-    assert cols == ["trip_key", "date", "departure_time", "calendar_id", "event_id", "html_link", "created_at"]
+    assert cols == ["service_key", "date", "slot_time", "calendar_id", "event_id", "html_link", "created_at"]
 
 
-def test_trip_bookings_has_customer_name():
-    """T3: trip_bookings has customer_name column."""
+def test_service_bookings_has_customer_name():
+    """T3: service_bookings has customer_name column."""
     conn = state_registry._get_conn()
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(trip_bookings)").fetchall()]
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(service_bookings)").fetchall()]
     conn.close()
     assert "customer_name" in cols
 
 
-def test_trip_bookings_has_customer_email():
-    """T4: trip_bookings has customer_email column."""
+def test_service_bookings_has_customer_email():
+    """T4: service_bookings has customer_email column."""
     conn = state_registry._get_conn()
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(trip_bookings)").fetchall()]
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(service_bookings)").fetchall()]
     conn.close()
     assert "customer_email" in cols
 
@@ -197,7 +197,7 @@ def test_manifest_summary_guest_count(manifest_body_passengers):
 
 
 def test_manifest_summary_trip_name(manifest_body_passengers):
-    """T22: manifest summary contains trip name."""
+    """T22: manifest summary contains service name."""
     body = _get_body(manifest_body_passengers)
     assert "KLEIN CURACAO" in body["summary"]
 

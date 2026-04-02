@@ -27,7 +27,7 @@ def _cleanup_phone(phone):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
-    conn.execute("DELETE FROM trip_bookings WHERE customer_email = ?", (phone,))
+    conn.execute("DELETE FROM service_bookings WHERE customer_email = ?", (phone,))
     conn.execute("DELETE FROM bookings WHERE customer_email = ?", (phone.strip().lower(),))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
     conn.commit()
@@ -120,8 +120,8 @@ def test_mid_booking_change():
     check_contains_any(reply1, ["$158", "$79", "confirm", "Sunset"],
                        "G-T1: booking summary or price")
     state1 = state_registry.wa_get_booking_state(phone)
-    check("G-T1: trip_key", state1["fields"].get("trip_key") == "sunset_cruise",
-          f"trip_key={state1['fields'].get('trip_key')}")
+    check("G-T1: service_key", state1["fields"].get("service_key") == "sunset_cruise",
+          f"service_key={state1['fields'].get('service_key')}")
     check("G-T1: guests=2", str(state1["fields"].get("guests")) == "2",
           f"guests={state1['fields'].get('guests')}")
 
@@ -164,8 +164,8 @@ def test_departure_disambiguation():
     check_contains_any(reply1, ["08:00", "08:30", "departure", "BlueFinn", "which", "time"],
                        "H-T1: asks which departure")
     state1 = state_registry.wa_get_booking_state(phone)
-    check("H-T1: trip_key", state1["fields"].get("trip_key") == "klein_curacao",
-          f"trip_key={state1['fields'].get('trip_key')}")
+    check("H-T1: service_key", state1["fields"].get("service_key") == "klein_curacao",
+          f"service_key={state1['fields'].get('service_key')}")
     check("H-T1: not awaiting confirmation yet",
           not state1["flags"].get("awaiting_booking_confirmation"),
           f"awaiting={state1['flags'].get('awaiting_booking_confirmation')}")
@@ -177,9 +177,9 @@ def test_departure_disambiguation():
     check_contains_any(reply2, ["$240", "$120", "confirm", "BlueFinn1", "08:30", "Klein"],
                        "H-T2: summary with departure")
     state2 = state_registry.wa_get_booking_state(phone)
-    check("H-T2: departure_time=08:30",
-          state2["fields"].get("departure_time") == "08:30",
-          f"departure_time={state2['fields'].get('departure_time')}")
+    check("H-T2: slot_time=08:30",
+          state2["fields"].get("slot_time") == "08:30",
+          f"slot_time={state2['fields'].get('slot_time')}")
     check("H-T2: awaiting_booking_confirmation",
           state2["flags"].get("awaiting_booking_confirmation") is True,
           f"awaiting={state2['flags'].get('awaiting_booking_confirmation')}")
@@ -220,8 +220,8 @@ def test_multi_trip_booking():
     check_contains_any(reply3, ["$270", "$135", "confirm", "Jet Ski", "jet ski"],
                        "I-T3: jet ski summary")
     state3 = state_registry.wa_get_booking_state(phone)
-    check("I-T3: trip_key=jet_ski", state3["fields"].get("trip_key") == "jet_ski",
-          f"trip_key={state3['fields'].get('trip_key')}")
+    check("I-T3: service_key=jet_ski", state3["fields"].get("service_key") == "jet_ski",
+          f"service_key={state3['fields'].get('service_key')}")
     check("I-T3: first booking archived",
           len(state3.get("completed_bookings", [])) >= 1,
           f"completed={len(state3.get('completed_bookings', []))}")
@@ -311,12 +311,12 @@ def test_ramble():
     reply = send_message(phone,
         "hey so me and my wife and my buddy and his girlfriend we're coming to "
         "curacao next week probably tuesday or wednesday and we really want to do "
-        "something fun on the water maybe snorkeling or a beach trip what do you "
+        "something fun on the water maybe snorkeling or a beach service what do you "
         "guys have and how much is it oh and is food included")
     print(f"  Reply: {reply[:300]}...")
 
     check("L: got reply", len(reply) > 30, f"len={len(reply)}")
-    check_contains_any(reply, ["trip", "snorkel", "$", "beach", "included", "Klein",
+    check_contains_any(reply, ["service", "snorkel", "$", "beach", "included", "Klein",
                                 "Sunset", "cruise"],
                        "L: engages with question")
     state = state_registry.wa_get_booking_state(phone)
@@ -342,7 +342,7 @@ def test_emoji_slang():
     print(f"  Reply: {reply[:300]}...")
 
     check("M: got reply", len(reply) > 20, f"len={len(reply)}")
-    check_contains_any(reply, ["trip", "Klein", "Sunset", "Snorkel", "$", "beach",
+    check_contains_any(reply, ["service", "Klein", "Sunset", "Snorkel", "$", "beach",
                                 "cruise", "jet ski"],
                        "M: mentions trips or pricing")
     # Count emojis in reply — prompt says sparingly
@@ -368,7 +368,7 @@ def test_dutch_inquiry():
     print(f"  Reply: {reply[:300]}...")
 
     check("N: got reply", len(reply) > 20, f"len={len(reply)}")
-    check_contains_any(reply, ["Klein", "$120", "$", "trip", "excurs",
+    check_contains_any(reply, ["Klein", "$120", "$", "service", "excurs",
                                 "120", "prijs", "lunch", "inbegrepen", "included"],
                        "N: engages with content")
     state = state_registry.wa_get_booking_state(phone)
@@ -392,16 +392,16 @@ def test_returning_customer():
 
     # Setup: create past booking in DB
     _ref = "BF-2026-99901"
-    _fields = {"trip_key": "sunset_cruise", "experience": "Sunset Cruise",
+    _fields = {"service_key": "sunset_cruise", "service_name": "Sunset Cruise",
                "date": "2026-03-05", "guests": "2", "customer_name": "Return Test",
-               "departure_time": "17:30"}
+               "slot_time": "17:30"}
     _flags = {"booking_ref": _ref, "hold_created": True}
     state_registry.save_booking(_ref, _fields, _flags, customer_email=phone)
 
     # Turn 1: Reference past booking
     reply1 = send_message(phone,
         "Hey, I booked with you before, ref BF-2026-99901. "
-        "Want to book the same trip again but for April 10 2027.", from_name="Return Test")
+        "Want to book the same service again but for April 10 2027.", from_name="Return Test")
     print(f"  T1: {reply1[:300]}...")
     check("O-T1: got reply", len(reply1) > 20, f"len={len(reply1)}")
     state1 = state_registry.wa_get_booking_state(phone)
@@ -417,9 +417,9 @@ def test_returning_customer():
     print(f"  T2: {reply2[:300]}...")
     check("O-T2: got reply", len(reply2) > 20, f"len={len(reply2)}")
     state2 = state_registry.wa_get_booking_state(phone)
-    check("O-T2: trip_key=sunset_cruise",
-          state2["fields"].get("trip_key") == "sunset_cruise",
-          f"trip_key={state2['fields'].get('trip_key')}")
+    check("O-T2: service_key=sunset_cruise",
+          state2["fields"].get("service_key") == "sunset_cruise",
+          f"service_key={state2['fields'].get('service_key')}")
 
     _cleanup_phone(phone)
 
@@ -438,9 +438,9 @@ def test_topic_switch():
     print(f"  T1: {reply1[:300]}...")
     check("Q-T1: got reply", len(reply1) > 20, f"len={len(reply1)}")
     state1 = state_registry.wa_get_booking_state(phone)
-    check("Q-T1: trip_key=klein_curacao",
-          state1["fields"].get("trip_key") == "klein_curacao",
-          f"trip_key={state1['fields'].get('trip_key')}")
+    check("Q-T1: service_key=klein_curacao",
+          state1["fields"].get("service_key") == "klein_curacao",
+          f"service_key={state1['fields'].get('service_key')}")
 
     # Turn 2: Ask about jet ski
     reply2 = send_message(phone, "Wait, do you have jet skis? How much are those?")
@@ -454,8 +454,8 @@ def test_topic_switch():
     print(f"  T3: {reply3[:300]}...")
     check("Q-T3: got reply", len(reply3) > 20, f"len={len(reply3)}")
     state3 = state_registry.wa_get_booking_state(phone)
-    check("Q-T3: trip_key=jet_ski", state3["fields"].get("trip_key") == "jet_ski",
-          f"trip_key={state3['fields'].get('trip_key')}")
+    check("Q-T3: service_key=jet_ski", state3["fields"].get("service_key") == "jet_ski",
+          f"service_key={state3['fields'].get('service_key')}")
     check_contains_any(reply3, ["$270", "$135", "Jet Ski", "confirm", "jet ski"],
                        "Q-T3: jet ski summary")
 
@@ -495,7 +495,7 @@ def test_code_injection():
     print("\n=== Scenario S: Code Injection Safety ===")
 
     reply = send_message(phone,
-        "<script>alert('xss')</script> I want to book a trip"
+        "<script>alert('xss')</script> I want to book a service"
         "'; DROP TABLE whatsapp_threads; -- for 2 people")
     print(f"  Reply: {reply[:300]}...")
 
@@ -529,9 +529,9 @@ def test_price_accuracy():
     check_contains(reply, "$237", "T: total=$237 (3x$79)")
     check_contains(reply, "$79", "T: per-person=$79")
     state = state_registry.wa_get_booking_state(phone)
-    check("T: trip_key=sunset_cruise",
-          state["fields"].get("trip_key") == "sunset_cruise",
-          f"trip_key={state['fields'].get('trip_key')}")
+    check("T: service_key=sunset_cruise",
+          state["fields"].get("service_key") == "sunset_cruise",
+          f"service_key={state['fields'].get('service_key')}")
     check("T: guests=3", str(state["fields"].get("guests")) == "3",
           f"guests={state['fields'].get('guests')}")
 

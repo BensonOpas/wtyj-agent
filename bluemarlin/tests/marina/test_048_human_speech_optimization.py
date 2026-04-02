@@ -3,20 +3,20 @@ from agents.marina.email_poller import _post_validate, _BOOKING_INTENTS, _build_
 from agents.marina import marina_agent
 
 
-_trip_fri = {"display_name": "3-in-1 Snorkeling Trip", "departures": [{"time": "10:00"}], "days_available": "Fridays only"}
+_trip_fri = {"display_name": "3-in-1 Snorkeling Trip", "slots": [{"time": "10:00"}], "days_available": "Fridays only"}
 _trip_kc = {
     "display_name": "Klein Curacao Trip",
-    "departures": [
-        {"time": "08:00", "vessel": "BlueFinn2", "departure_point": "Jan Thiel Beach"},
-        {"time": "08:30", "vessel": "BlueFinn1", "departure_point": "Jan Thiel Beach"},
+    "slots": [
+        {"time": "08:00", "resource": "BlueFinn2", "location": "Jan Thiel Beach"},
+        {"time": "08:30", "resource": "BlueFinn1", "location": "Jan Thiel Beach"},
     ],
     "days_available": "daily",
 }
 _trip_sc = {
     "display_name": "Sunset Cruise",
-    "departures": [{"time": "17:30", "vessel": "Kailani", "departure_point": "Village Marina"}],
+    "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
     "days_available": "Tuesday, Thursday, Friday, Saturday",
-    "price_adult_usd": 79,
+    "price": 79,
     "included": ["open bar", "snacks"],
 }
 _result_b = {"intents": ["booking"], "fields": {}, "flags": {}}
@@ -26,14 +26,14 @@ _result_b = {"intents": ["booking"], "fields": {}, "flags": {}}
 
 def test_day_of_week_override_no_signature():
     """T1: day-of-week override has no signature."""
-    th = {"fields": {"experience": "Snorkeling", "date": "2026-03-09", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}}
+    th = {"fields": {"service_name": "Snorkeling", "date": "2026-03-09", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}}
     override, _ = _post_validate(th, _result_b, _trip_fri)
     assert "Warm regards" not in override
 
 
 def test_departure_override_no_signature():
     """T2: departure override has no signature."""
-    th = {"fields": {"experience": "Klein Curacao", "date": "2026-03-25", "guests": "2", "trip_key": "klein_curacao"}, "flags": {}}
+    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-03-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
     override, _ = _post_validate(th, _result_b, _trip_kc)
     assert "Warm regards" not in override
 
@@ -41,7 +41,7 @@ def test_departure_override_no_signature():
 def test_booking_summary_no_signature():
     """T3: booking summary has no signature."""
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "Warm regards" not in summary
@@ -50,7 +50,7 @@ def test_booking_summary_no_signature():
 def test_summary_lock_in_question():
     """T4: summary still has lock-in question."""
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "Want me to go ahead and book this" in summary
@@ -59,7 +59,7 @@ def test_summary_lock_in_question():
 def test_summary_correct_price():
     """T5: summary still has correct price."""
     summary = _build_booking_summary(
-        {"trip_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "departure_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "$158" in summary
@@ -127,7 +127,7 @@ def test_prompt_multi_topic_guidance():
 def test_booking_still_builds_summary():
     """T14: booking still builds summary."""
     override, awaiting = _post_validate(
-        {"fields": {"experience": "Sunset", "date": "2026-03-26", "guests": "2", "trip_key": "sunset_cruise"}, "flags": {}},
+        {"fields": {"service_name": "Sunset", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
         {"intents": ["booking"], "fields": {}, "flags": {}},
         _trip_sc,
     )
@@ -137,7 +137,7 @@ def test_booking_still_builds_summary():
 def test_booking_still_sets_awaiting():
     """T15: booking still sets awaiting."""
     override, awaiting = _post_validate(
-        {"fields": {"experience": "Sunset", "date": "2026-03-26", "guests": "2", "trip_key": "sunset_cruise"}, "flags": {}},
+        {"fields": {"service_name": "Sunset", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
         {"intents": ["booking"], "fields": {}, "flags": {}},
         _trip_sc,
     )
@@ -147,7 +147,7 @@ def test_booking_still_sets_awaiting():
 def test_reschedule_still_triggers():
     """T16: reschedule still triggers validation (Brief 047 regression)."""
     override, _ = _post_validate(
-        {"fields": {"experience": "Snorkeling", "date": "2026-04-03", "guests": "2", "trip_key": "snorkeling_3in1"}, "flags": {}},
+        {"fields": {"service_name": "Snorkeling", "date": "2026-04-03", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}},
         {"intents": ["reschedule"], "fields": {}, "flags": {}},
         _trip_fri,
     )
@@ -158,7 +158,7 @@ def test_reschedule_still_triggers():
 
 def test_empty_string_clears_date():
     """T17: empty string clears existing date."""
-    th = {"fields": {"experience": "Klein", "date": "2026-03-28", "guests": "2", "trip_key": "klein_curacao"}}
+    th = {"fields": {"service_name": "Klein", "date": "2026-03-28", "guests": "2", "service_key": "klein_curacao"}}
     new_fields = {"date": ""}
     for k, v in new_fields.items():
         if v is not None and v != "":
@@ -170,7 +170,7 @@ def test_empty_string_clears_date():
 
 def test_empty_string_absent_field_safe():
     """T18: empty string for absent field is safe."""
-    th = {"fields": {"experience": "Klein"}}
+    th = {"fields": {"service_name": "Klein"}}
     new_fields = {"phone": ""}
     for k, v in new_fields.items():
         if v is not None and v != "":
@@ -182,7 +182,7 @@ def test_empty_string_absent_field_safe():
 
 def test_normal_merge_still_works():
     """T19: non-empty values still merge normally."""
-    th = {"fields": {"experience": "Klein"}}
+    th = {"fields": {"service_name": "Klein"}}
     new_fields = {"date": "2026-03-25", "guests": "2"}
     for k, v in new_fields.items():
         if v is not None and v != "":
