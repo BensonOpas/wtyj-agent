@@ -43,3 +43,4 @@ bluemarlin/config/email_thread_state.json
 _archive_old_system/
 bluemarlin/src/node_modules/
 bluemarlin/src/package-lock.json
+bluemarlin/backups/

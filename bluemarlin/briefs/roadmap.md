@@ -1,6 +1,8 @@
 # BlueMarlin — Development Roadmap
 
-**Source of truth for what to build next, in what order.**
+**Owns:** The WHEN — what to build next, in what order, milestones and priorities.
+**Related:** For the vision and product idea → `master_plan.md`. For infrastructure → `infra.md`. For brief history → `system_state.md`.
+
 **Referenced from CLAUDE.md. Read this before any planning session.**
 **Individual briefs get planned one at a time via /think → /brief.**
 
@@ -94,6 +96,7 @@ See `marina_status_90.md` for full details.
 - **One Google Workspace account (ours).** Each client gets sub-calendars and sheet tabs under our account, not their own Google account.
 - **One email sending provider (Mailgun or SendGrid, TBD)** replacing per-client Azure/Microsoft setups entirely. Client-specific sending domains (e.g. bookings@bluefinn.com) configured as aliases.
 - **One Meta Business Portfolio** for WhatsApp, multiple phone numbers underneath.
+- **Zernio (Late) as unified social API.** Publishing to 14 platforms (IG, FB, X, LinkedIn, TikTok, YouTube, Threads, Reddit, Pinterest, Bluesky, Telegram, Snapchat, Google Business) + DMs on 7 platforms (IG, FB, WhatsApp, Telegram, X, Bluesky, Reddit). $29/mo per client (Build $19 + Inbox $10). Replaces per-platform API integrations. Decision made April 2026.
 - **Docker container:** Same image for every client. client.json + .env mounted as volumes. Deploy = spin VPS, pull image, mount config, start container.
 - **client.json is the only file that changes between clients.** Every business-specific value lives there.
 - **gws CLI:** Prebuilt binary download for Docker image.
@@ -121,8 +124,9 @@ See `marina_status_90.md` for full details.
 - Email provider switch (Mailgun/SendGrid evaluation + migration)
 - Google Workspace consolidation (one service account, per-client calendars/sheets)
 - Meta Business Portfolio setup for multi-client WhatsApp
+- Zernio integration: migrate social_publisher.py from Late SDK to Zernio unified API (publishing + DMs). Connect all platform accounts per client via Zernio dashboard. Set up DM webhooks (`message.received`) routed to Marina.
 
-**Estimated briefs:** 3-4
+**Estimated briefs:** 5-7
 
 ---
 

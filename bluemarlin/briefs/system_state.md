@@ -1,4 +1,6 @@
 # SYSTEM_STATE.md
+# **Owns:** The HISTORY — what each brief did, its outcome, what callers must know.
+# **Related:** For what's next → `roadmap.md`. For infrastructure → `infra.md`. For the vision → `master_plan.md`.
 # Updated after each brief. Read this before writing any new brief.
 
 ---
@@ -566,8 +568,10 @@ All four functions wrapped in `try/except` — never raise, never crash `email_p
 
 ---
 
-## Decision Log
-One entry per brief. Format:
+## Decision Log (ARCHIVED — moved to marina_lessons.md)
+Entries below are historical (Briefs 033-044). All future decision + lesson entries go in `marina_lessons.md`.
+Format: full story for problem briefs, short summary for smooth ones.
+One entry per brief. Old format:
 Brief 0XX — [title]
 Decision: [what was decided and why]
 Outcome: [what happened]

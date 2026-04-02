@@ -1,5 +1,8 @@
 # LESSONS — BlueMarlin Agent Briefs
 
+**Owns:** The MISTAKES — what went wrong per brief, what to avoid, patterns to follow.
+**Related:** For brief outcomes → `system_state.md`. For infrastructure gotchas → `infra.md` ("Things Claude Code Keeps Getting Wrong").
+
 One entry per brief. What worked, what was tricky, what to watch for next time.
 
 ---
@@ -207,16 +210,92 @@ The research agent's API endpoints were partially fabricated — the presigned U
 
 ## Brief 130 — Zernio DM Webhook + Storage Layer
 Date: 2026-04-01
-`bm_logger.log(event, **fields)` has `event` as its first positional parameter. Passing `event=value` as a kwarg alongside a positional first arg causes `TypeError: log() got multiple values for argument 'event'`. This bit us twice in one brief — fixed in zernio_dm_client.py during tests, but the output reviewer caught the identical bug in webhook_server.py. Lesson: when you fix a pattern bug in one file, grep for the same pattern in all modified files. Also: ALTER TABLE ADD COLUMN with try/except for idempotency is the right SQLite migration pattern for adding columns to existing tables — avoids creating a separate migration system.
 
-## Brief 131 — DM Agent + Reply Path
+### What happened
+Built the Zernio webhook endpoint to receive Instagram/Facebook DMs. HMAC signature verification, payload parsing, dedup, storage in the existing `whatsapp_threads` table with a new `channel` column. All tests passed locally.
+
+Output reviewer caught a runtime bug: `bm_logger.log("webhook_received", source="zernio", event=payload.get("event"))` would crash because `log(event, **fields)` uses `event` as its first positional parameter. Passing `event=` as a kwarg creates a conflict — Python raises `TypeError: log() got multiple values for argument 'event'`.
+
+We fixed it in `zernio_dm_client.py` (renamed to `webhook_event=`), but the identical pattern existed in `webhook_server.py` — we missed it. The output reviewer caught the second instance.
+
+After deploying, a real DM test revealed another issue: the Zernio webhook payload puts `account.id` at the top level, not inside `message.accountId` like our parser expected. The send-reply call failed with "accountId is required." Fixed by checking both locations.
+
+### The principle
+When you fix a pattern bug in one file, grep for the same pattern across ALL modified files before committing. `bm_logger.log()` has a positional parameter named `event` — never pass `event=` as a kwarg anywhere.
+
+When building a webhook parser from documentation, the real payload WILL differ. Log the raw payload, write flexible parsers that check multiple field locations, and test with a real webhook before declaring victory.
+
+### What to watch for
+Any future `bm_logger.log()` call — never use `event=` as a kwarg. The `webhook_event=` rename pattern is the workaround.
+
+Schema migration with `ALTER TABLE ADD COLUMN` + `try/except sqlite3.OperationalError` is the right pattern for SQLite — idempotent, no migration system needed.
+
+---
+
+## Brief 131 — DM Agent + Reply Path (superseded by 131b)
 Date: 2026-04-01
-Brief reviewer caught wrong config path — `contact_for_booking` is under `private_charters`, not `business`. Used `business.email` instead (same address, correct path). Lesson: always verify config field paths by reading client.json before writing code that accesses them. Also: when extending an if/elif/else chain for channel handling, combine channels with identical behavior (e.g., WhatsApp + DM history format is identical — use `if channel in ("whatsapp", "instagram_dm", "facebook_dm"):` instead of duplicating the block).
+
+### What happened
+Wired up `dm_agent.py` to call `marina_agent.process_message()` with `channel="instagram_dm"`. Added DM-specific writing style block and booking redirect instructions to Marina's prompt. Brief reviewer caught that `contact_for_booking` is under `private_charters` in client.json, not under `business` — the field `business.email` has the same value and is the correct path.
+
+Deployed to VPS. Tested with a real Instagram DM. Marina responded but immediately entered the full booking flow — asked for date, guest count, time slot, confirmed the booking with `[BOOKING_REF]` as literal text. The redirect paragraph was completely ignored.
+
+### Why it failed
+Marina's system prompt is 300+ lines of booking logic. The JSON response schema requires booking fields (`experience`, `date`, `guests`, `trip_key`), confirmation flags (`booking_confirmed`, `awaiting_booking_confirmation`), and placeholders (`[BOOKING_REF]`, `[PAYMENT_LINK]`). A single paragraph saying "redirect bookings to WhatsApp/email" cannot override the agent's core identity.
+
+The problem isn't the paragraph — it's the architecture. Asking a booking agent to not book is a contradiction. The entire prompt trains Claude to extract booking fields and confirm bookings. Adding "but not on this channel" is fighting the prompt's own weight.
+
+### What we did
+See Brief 131b — complete rewrite with separate Claude call.
+
+### The principle
+Always verify config field paths by reading client.json before writing code that accesses them. Field names in nested JSON sections (`private_charters.contact_for_booking` vs `business.email`) are easy to confuse.
+
+---
 
 ## Brief 131b — Separate DM Q&A Agent
 Date: 2026-04-01
-Using a booking agent (Marina) for Q&A-only channels doesn't work. Marina's core identity is "booking agent" — 200+ lines of booking schema, field extraction, and confirmation logic overrode a single paragraph saying "redirect bookings." Live test proved it: Marina collected booking details, confirmed with `[BOOKING_REF]` placeholder, and sent it raw. Lesson: when the job is fundamentally different (Q&A vs booking), use a different prompt — don't try to suppress the existing one. Two prompts sharing one data source (client.json) is cleaner than one prompt with channel-conditional spaghetti.
+
+### What happened
+After Brief 131's live test failure (Marina entering booking flow in DMs), we considered two approaches: (1) strip the booking schema from Marina's prompt for DM channels, or (2) build a separate Claude call with a Q&A-only prompt. The user initially preferred option 1 (less code to maintain), but after discussing the maintenance burden of channel-conditional prompt spaghetti, chose option 2.
+
+Built `dm_agent.py` with its own Claude call. System prompt reads trips, FAQ, and business info from the same client.json via config_loader — same data, different personality. No booking fields, no flags, no JSON schema, no `[BOOKING_REF]` placeholder. Returns plain text. Marina's code was fully reverted to email + WhatsApp only.
+
+### Why this approach works
+The two agents share data (client.json) but not logic. When trip prices change, both agents pick it up automatically. When Marina's booking flow gets updated, DMs aren't affected — that's a feature. The DM prompt is ~60 lines vs Marina's ~300. Maintaining two focused prompts is easier than maintaining one swiss-army-knife prompt with channel exceptions.
+
+### The principle
+When the job is fundamentally different (Q&A vs booking), use a different prompt. Don't try to suppress an agent's core behavior with a paragraph of exceptions. Two prompts sharing one data source is the right pattern for multi-channel AI systems.
+
+This also established the "booking trilogy" concept: WhatsApp, Email, and Website (future) are the three channels that handle full bookings. Everything else (IG DM, FB DM, X DM) redirects to the trilogy.
+
+### What to watch for
+Any future channel that doesn't need booking flow should use the DM agent pattern, not Marina. The temptation will be to add `elif channel == "new_channel"` to Marina's prompt — resist it. If the channel is Q&A, use the Q&A agent.
+
+---
 
 ## Brief 133 — Payment Timing + Hardcoded Cleanup
 Date: 2026-04-01
-When wrapping code in a conditional (payment timing), check ALL downstream references to variables defined inside that block. `price_usd` and `pay` were used in sheets logging outside the conditional — moving them inside caused NameError. Fix: compute shared variables before the conditional, only wrap the payment-specific code. Also: config_loader caches the raw dict — mutating it in tests (`raw["payment"]["timing"] = "none"`) leaks between tests. Always restore original values in a try/finally.
+
+### What happened
+Four generalization fixes to make the codebase work for non-charter businesses: (1) `payment.timing` config flag, (2) hardcoded BlueFinn email → config, (3) generic prompt examples, (4) configurable booking ref prefix.
+
+Brief reviewer caught a critical scoping bug: the instructions said to move `trip_key` into the payment timing conditional. But `trip_key` is used by the sheets logging code that runs AFTER the conditional, regardless of payment timing. Moving it inside would cause `NameError` for any non-upfront booking.
+
+Same issue with `pay.get("status")` — referenced in sheets logging but `pay` only exists in the upfront/deposit branch. And `[BOOKING_REF]` replacement was ambiguously positioned — could be interpreted as inside or outside the conditional.
+
+### Why it failed
+When wrapping existing code in a new conditional, every variable defined inside the original block becomes scoped to the conditional branch. Any downstream code that references those variables outside the conditional will break. The reviewer caught this by tracing the variable usage beyond the modified lines.
+
+Also discovered: `config_loader.get_raw()` returns a mutable cached dict. Modifying it in tests (`raw["payment"]["timing"] = "none"`) permanently mutates the cached config, leaking between tests. Test 1 changed timing to "none" and test 2 (which expected "upfront") failed because the config was still mutated.
+
+### What we did
+Moved `trip_key` and `price_usd` computation outside the conditional (needed by logging regardless). Moved `[BOOKING_REF]` replacement outside (always needed). Only the payment link generation (`payment_stub.generate_payment_link` + `[PAYMENT_LINK]` replacement) is inside the conditional. Changed `pay.get("status")` to `flags.get("payment_status")`. Tests use try/finally to restore config values.
+
+### The principle
+When adding a conditional around existing code: trace EVERY variable defined in that block to ALL downstream references. If anything uses it after the conditional, it must be defined before or outside it.
+
+When patching cached data in tests: always restore the original value in a finally block. Mutable shared state is a test isolation trap.
+
+### What to watch for
+Any future conditional wrapping of the booking confirmation path — the sheets logging at lines 685-720 (social_agent.py) references `trip_key`, `price_usd`, `booking_ref`, and flag values. All must remain accessible regardless of which branch executes.
