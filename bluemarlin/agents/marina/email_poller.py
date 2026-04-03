@@ -797,6 +797,8 @@ def main():
                     th.get("fields", {}), agent_flags, action_context,
                 )
 
+                _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+
                 # Clear one-shot flags after Claude has seen them
                 if th["flags"].get("unknown_ref"):
                     del th["flags"]["unknown_ref"]
@@ -866,11 +868,12 @@ def main():
                             # Booking-only: use override with signature
                             _sig = config_loader.get_agent_signature()
                             reply_text = _pv_override + f"\n\nWarm regards,\n{_sig}"
-                        if _pv_set_awaiting:
+                        if _booking_flow_on and _pv_set_awaiting:
                             th["flags"]["awaiting_booking_confirmation"] = True
 
-                # Step 3b: Availability pre-check + soft hold when booking summary is being sent
-                if (th["flags"].get("awaiting_booking_confirmation")
+                # Step 3b: Availability pre-check + soft hold (SKIP when booking_flow is OFF)
+                if (_booking_flow_on
+                        and th["flags"].get("awaiting_booking_confirmation")
                         and not th["flags"].get("slot_checked")):
                     fields_for_check = th["fields"]
                     _ck_svc = fields_for_check.get("service_key", "")
@@ -1059,6 +1062,48 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
+                # Step 4.8: Booking flow toggle — if OFF, escalate booking intents
+                if not _booking_flow_on:
+                    if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+                        _fields_now = th["fields"]
+                        if _fields_now.get("service_name") or _fields_now.get("date"):
+                            _cname = _fields_now.get("customer_name", from_email)
+                            _esc_history = th.get("messages", [])[-20:]
+                            _esc_chat_lines = []
+                            for _em in _esc_history:
+                                _role = _em.get("role", "unknown").upper()
+                                _esc_chat_lines.append(f"[{_role}]")
+                                _esc_chat_lines.append(_em.get("text", _em.get("body", "")))
+                                _esc_chat_lines.append("---")
+                            _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
+                            _esc_note = result.get("internal_note", "")
+                            _esc_subject = (
+                                f"[BOOKING REQUEST] {_cname} "
+                                f"(Email: {from_email}) - {_esc_note or 'wants to book'}")
+                            _esc_body = (
+                                f"=== BOOKING REQUEST (booking_flow OFF) ===\n\n"
+                                f"=== CUSTOMER ===\n"
+                                f"Email: {from_email}\n"
+                                f"Name: {_cname}\n\n"
+                                f"=== COLLECTED FIELDS ===\n"
+                                f"{json.dumps(_fields_now, indent=2, ensure_ascii=False)}\n\n"
+                                f"=== EMAIL THREAD ===\n{_esc_chat_log}\n\n"
+                                f"=== MARINA'S NOTE ===\n{_esc_note}"
+                            )
+                            state_registry.create_pending_notification(
+                                'escalation', 'email', from_email, _cname,
+                                _esc_subject, _esc_body)
+                            bm_logger.log("booking_flow_off_escalated", email=from_email)
+                            # Send Marina's conversational reply, then skip to next email
+                            smtp_send(from_email, "Re: " + subj, reply_text,
+                                      in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
+                            im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                            th["reply_times"].append(now)
+                            th["last_customer_hash"] = customer_hash
+                            threads[thread_key] = th
+                            save_json(THREAD_STATE_PATH, state)
+                            continue
+
                 # Step 5: Booking flow
                 if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
                     fields_now = th["fields"]
@@ -1069,7 +1114,7 @@ def main():
                         bm_logger.log(
                             "booking_attempted",
                             email=from_email, subject=subj,
-                            experience=fields_now.get("service_name"),
+                            service_name=fields_now.get("service_name"),
                             date=fields_now.get("date"),
                             guests=fields_now.get("guests"),
                             customer_name=fields_now.get("customer_name"),
@@ -1093,7 +1138,7 @@ def main():
                                 "hold_failed",
                                 email=from_email, subject=subj,
                                 error=res.get("error"),
-                                experience=fields_now.get("service_name"),
+                                service_name=fields_now.get("service_name"),
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
                             )
@@ -1152,7 +1197,7 @@ def main():
                                 html_link=th["flags"].get("event_link"),
                                 payment_id=th["flags"].get("payment_id"),
                                 payment_link=th["flags"].get("payment_link"),
-                                experience=fields_now.get("service_name"),
+                                service_name=fields_now.get("service_name"),
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
                                 customer_name=fields_now.get("customer_name"),

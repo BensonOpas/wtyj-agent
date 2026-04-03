@@ -433,8 +433,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             if _pv_set_awaiting:
                 flags["awaiting_booking_confirmation"] = True
 
-    # Step 7: Availability pre-check + soft hold when booking summary is being sent
-    if (flags.get("awaiting_booking_confirmation")
+    _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+
+    # Step 7: Availability pre-check + soft hold (SKIP when booking_flow is OFF)
+    if (_booking_flow_on
+            and flags.get("awaiting_booking_confirmation")
             and not flags.get("slot_checked")):
         _ck_svc = fields.get("service_key", "")
         _ck_deps = config_loader.get_service(_ck_svc).get("slots", []) if _ck_svc else []
@@ -619,7 +622,6 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _skip_booking = True
 
     # Step 7.8: Booking flow toggle — if OFF, escalate booking intents instead
-    _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
     if not _skip_booking and not _booking_flow_on:
         if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
             if fields.get("service_name") or fields.get("date") or fields.get("guests"):
