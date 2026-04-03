@@ -273,7 +273,7 @@ def test_orchestrator_booking_confirmed(mock_process, mock_cal, mock_pay, mock_s
     reply = handle_incoming_whatsapp_message(msg)
     assert "[BOOKING_REF]" not in reply
     assert "[PAYMENT_LINK]" not in reply
-    assert "BF-" in reply  # real booking ref
+    assert re.search(r"[A-Z0-9]{6}", reply)  # real booking ref
     assert "demo.pay" in reply  # real payment link
     # Verify state
     state = state_registry.wa_get_booking_state(phone)

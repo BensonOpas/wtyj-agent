@@ -143,13 +143,13 @@ def test_payment_timing_upfront_unchanged(mock_process, mock_cal, mock_pay, mock
     conn.close()
 
 
-# --- Test 3: Booking ref uses config prefix ---
-def test_booking_ref_uses_config_prefix():
-    import time as _time
-    prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
-    booking_ref = f"{prefix}-{_time.strftime('%Y')}-{int(_time.time()) % 100000:05d}"
-    assert booking_ref.startswith("BF-")  # Current config has "BF"
-    assert re.match(r'BF-\d{4}-\d{5}', booking_ref)
+# --- Test 3: Booking ref is random alphanumeric ---
+def test_booking_ref_random():
+    import random as _random, string as _string
+    _chars = _string.ascii_uppercase + _string.digits
+    booking_ref = ''.join(_random.choices(_chars, k=6))
+    assert len(booking_ref) == 6
+    assert all(c in _string.ascii_uppercase + _string.digits for c in booking_ref)
 
 
 # --- Test 4: Returning customer regex matches config prefix ---
@@ -260,7 +260,7 @@ def test_payment_timing_none_keeps_booking_ref(mock_process, mock_cal, mock_pay,
 
         # Booking ref SHOULD be replaced (not a placeholder)
         assert "[BOOKING_REF]" not in reply
-        assert "BF-" in reply  # Actual ref present
+        assert re.search(r"[A-Z0-9]{6}", reply)  # Actual ref present
         # Payment link SHOULD be stripped
         assert "[PAYMENT_LINK]" not in reply
         assert "demo.pay" not in reply

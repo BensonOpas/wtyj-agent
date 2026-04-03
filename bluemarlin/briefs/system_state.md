@@ -811,3 +811,15 @@ Outcome: complete — 10/10 tests pass, 297/299 social regression pass
 Brief 133 — Payment Timing + Hardcoded Cleanup
 Decision: Four generalization fixes for Phase 2 multi-tenant. (1) `payment.timing` flag in client.json — "upfront"/"deposit" generates payment link, "none"/"at_service" strips [PAYMENT_LINK] from confirmation. (2) Hardcoded `info@bluefinncharters.com` in marina_agent.py prompt → reads from `business.email` config. (3) Charter-specific prompt examples ("boat trips", "BBQ", "Klein Curacao", "BlueFinn team") → generic tone examples. (4) Booking ref prefix "BF-" → configurable via `booking_rules.booking_ref_prefix`. Returning customer regex now dynamic. All changes are config-driven — zero new logic.
 Outcome: complete — 9/9 tests pass, regression pending
+
+---
+
+Brief 134 — Rename trips→services, generalize config
+Decision: Massive mechanical rename across the entire codebase. trips→services, trip_key→service_key, departures→slots, departure_time→slot_time, vessel→resource, departure_point→location, experience→service_name, price_adult_usd→price, fleet→resources. DB migration via ALTER TABLE RENAME in _get_conn(). JSON blob migration for whatsapp_booking_state. Dashboard frontend also renamed. Kept: guests (generic enough), booking_ref, capacity.
+Outcome: complete — 308 social pass, 304 marina pass (24 pre-existing failures unchanged). Zero new failures from rename. Deployed to VPS with DB auto-migration.
+
+---
+
+Brief 135 — Feature Toggles: Booking Flow + Terminology + Random Ref
+Decision: Three toggles for Tier 1 client support. (1) `features.booking_flow` — when false, booking intents create a detailed escalation (chat log, collected fields, Marina's note) instead of entering the booking state machine. Qualify first, then escalate. (2) `terminology` section in client.json — service_label, party_size_label, slot_label injected into Marina's prompt and DM agent. Changes per client. (3) Random 6-char alphanumeric booking ref (A-Z0-9, 2.2B combinations) replaces prefix-based BF-YYYY-XXXXX format. Returning customer regex updated with DB verification to avoid false positives.
+Outcome: complete — 7/7 tests pass, regression pending

@@ -299,3 +299,65 @@ When patching cached data in tests: always restore the original value in a final
 
 ### What to watch for
 Any future conditional wrapping of the booking confirmation path — the sheets logging at lines 685-720 (social_agent.py) references `trip_key`, `price_usd`, `booking_ref`, and flag values. All must remain accessible regardless of which branch executes.
+
+---
+
+## Brief 134 — Rename trips→services
+Date: 2026-04-01
+
+### What happened
+Massive mechanical rename: 150+ occurrences across 50+ files. Used a Python
+script for the first pass (dict key strings in .get() calls and SQL), then
+regex for Python variable names, then manual fixes for edge cases.
+
+### Why some things went wrong
+Regex replacing `trip` as a standalone word caught too many things — variable
+names inside function signatures (`def _build_booking_summary(fields, trip):`
+became `...fields, service):` but the body still used `trip`), prompt text
+that contained the word "trip" as natural language, and f-string variables
+inside the booking summary. Each fix uncovered more missed spots.
+
+Initially thought 24 marina tests broke from the rename. Spent time
+investigating before realizing they were all pre-existing failures — verified
+by running the same tests against the backup.
+
+### The principle
+For large mechanical renames: do the string replacements (dict keys, SQL)
+with a script first. Then handle function signatures manually by reading
+each function. Then run tests and fix what breaks. Don't use broad regex
+on variable names — too many false positives.
+
+Always check if test failures are pre-existing before fixing them. Run the
+backup code with the same tests first.
+
+### What to watch for
+The dashboard frontend is a separate repo and needs its own rename. Don't
+deploy backend renames without checking the frontend field names match.
+
+---
+
+## Brief 135 — Feature Toggles
+Date: 2026-04-02
+
+### What happened
+Added booking flow toggle, terminology system, and random booking refs.
+All clean — reviewer caught 4 issues in the brief (hex vs alphanumeric,
+thin escalation body, unused terminology keys, vague DM agent instructions),
+all fixed before execution.
+
+### The principle
+`config_loader.get_raw()` returns a shallow copy of the cached dict. In
+tests, modifying the returned dict doesn't affect the cache. To test
+config-driven behavior, modify `config_loader._cache` directly with
+try/finally cleanup. This is a recurring pattern — documented in infra.md
+under "Things Claude Code Keeps Getting Wrong."
+
+Terminology interpolation works because the prompt is an f-string — but
+only if the terminology variables are defined in the same function scope
+as the f-string. If they're in a different function, they won't interpolate.
+
+### What to watch for
+The booking ref regex `\b[A-Z0-9]{6}\b` can match random 6-char strings
+in URLs, color codes, or message content. The DB verification check
+(`state_registry.get_booking(ref)`) prevents false positives but adds a
+DB query per potential match. At current volume this is fine.

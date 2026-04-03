@@ -3,7 +3,9 @@
 # Last modified: Brief 100
 # Purpose: WhatsApp booking orchestrator with escalation — calls marina_agent, validates, holds, confirms, escalates
 
+import random
 import re
+import string
 import time
 import json
 import uuid
@@ -283,8 +285,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
     # Returning customer — booking ref detection
     _detected_ref = None
-    _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
-    _ref_match = re.search(rf'{re.escape(_ref_prefix)}-\d{{4}}-\d{{5}}', text)
+    _ref_match = re.search(r'\b[A-Z0-9]{6}\b', text)
     if _ref_match:
         _detected_ref = _ref_match.group()
         if not flags.get("booking_ref"):
@@ -617,6 +618,42 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _esc_subject, _esc_body)
         _skip_booking = True
 
+    # Step 7.8: Booking flow toggle — if OFF, escalate booking intents instead
+    _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+    if not _skip_booking and not _booking_flow_on:
+        if any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
+            if fields.get("service_name") or fields.get("date") or fields.get("guests"):
+                _cname = fields.get("customer_name", phone)
+                _customer_email = fields.get("email", "")
+                _esc_msgs = state_registry.wa_get_full_history(phone, limit=20)
+                _esc_chat_lines = []
+                for _em in _esc_msgs:
+                    _esc_chat_lines.append(
+                        f"[{_em['role'].upper()} | {_em.get('created_at', '')}]")
+                    _esc_chat_lines.append(_em.get("text", ""))
+                    _esc_chat_lines.append("---")
+                _esc_chat_log = "\n".join(_esc_chat_lines) or "(no messages logged)"
+                _esc_note = result.get("internal_note", "")
+                _esc_subject = (
+                    f"[BOOKING REQUEST] {_cname} "
+                    f"(WhatsApp: {phone}) - {_esc_note or 'wants to book'}")
+                _esc_body = (
+                    f"=== BOOKING REQUEST (booking_flow OFF) ===\n\n"
+                    f"=== CUSTOMER ===\n"
+                    f"WhatsApp: {phone}\n"
+                    f"Name: {_cname}\n"
+                    f"Email: {_customer_email or '(not provided)'}\n\n"
+                    f"=== COLLECTED FIELDS ===\n"
+                    f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n"
+                    f"=== CHAT LOG ===\n{_esc_chat_log}\n\n"
+                    f"=== MARINA'S NOTE ===\n{_esc_note}"
+                )
+                state_registry.create_pending_notification(
+                    'escalation', 'whatsapp', phone, _cname,
+                    _esc_subject, _esc_body)
+                bm_logger.log("booking_flow_off_escalated", phone=phone)
+                _skip_booking = True
+
     # Step 8: Booking confirmation flow (skip if escalated)
     if not _skip_booking and any(i in _BOOKING_INTENTS for i in result.get("intents", [])):
         if (fields.get("service_name") and fields.get("date")
@@ -628,8 +665,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                           date=fields.get("date"), guests=fields.get("guests"))
 
             # Generate booking_ref + set on soft hold BEFORE manifest creation
-            _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
-            booking_ref = f"{_ref_prefix}-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+            _chars = string.ascii_uppercase + string.digits
+            booking_ref = ''.join(random.choices(_chars, k=6))
             flags["booking_ref"] = booking_ref
             if flags.get("hold_id"):
                 state_registry.set_booking_ref(flags["hold_id"], booking_ref)

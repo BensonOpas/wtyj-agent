@@ -32,8 +32,15 @@
     "no_payment_at_boarding": true,
     "hold_duration_hours": 6
   },
+  "features": {
+    "booking_flow": true
+  },
+  "terminology": {
+    "service_label": "trip",
+    "party_size_label": "guests",
+    "slot_label": "departure"
+  },
   "booking_rules": {
-    "booking_ref_prefix": "BF",
     "advance_booking_typical_days": "4-7",
     "group_threshold_requires_human": 15,
     "required_fields": [

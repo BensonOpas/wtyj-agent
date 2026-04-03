@@ -1,5 +1,5 @@
 # test_129_large_group.py
-import sys, os
+import sys, os, re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
@@ -87,7 +87,7 @@ def test_large_group_creates_notification(mock_process, mock_cal, mock_pay, mock
     msg = {"from": phone, "text": "Yes book it!", "from_name": "Big Group"}
     reply = handle_incoming_whatsapp_message(msg)
 
-    assert "BF-" in reply
+    assert re.search(r"[A-Z0-9]{6}", reply)
     assert "demo.pay" in reply
 
     escs = state_registry.get_all_escalations()

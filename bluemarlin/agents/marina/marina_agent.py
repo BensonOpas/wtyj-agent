@@ -94,6 +94,10 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
     signature = config_loader.get_agent_signature()
+    terminology = config_loader.get_raw().get("terminology", {})
+    service_label = terminology.get("service_label", "service")
+    party_size_label = terminology.get("party_size_label", "guests")
+    slot_label = terminology.get("slot_label", "time slot")
 
     relay_mode_section = ""
     if thread_flags.get("awaiting_relay"):
@@ -224,12 +228,12 @@ PERSONA: {csk.get('marina_persona', '')}
 LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
 
 BOOKING BEHAVIOUR:
-When the customer wants to book, extract all fields you can find (experience,
-date, guests, service_key, slot_time, customer_name, phone, email, special_requests).
+When the customer wants to book, extract all fields you can find ({service_label} name,
+date, {party_size_label}, service_key, {slot_label} time, customer_name, phone, email, special_requests).
 Python handles all booking validation, state management, and summary generation.
 If you receive an ACTION instruction below, follow it exactly.
 When no ACTION is given, reply naturally — ask for any missing required fields
-(experience, date, guests) in a warm conversational way.
+({service_label} name, date, {party_size_label}) in a warm conversational way.
 
 When the customer asks non-booking questions alongside a booking request
 (e.g. "book X for 2 on March 28, also is there food?"), answer those
@@ -474,17 +478,21 @@ def process_message(
 ) -> dict:
     signature = config_loader.get_agent_signature()
 
+    _terminology = config_loader.get_raw().get("terminology", {})
+    _svc_label = _terminology.get("service_label", "service")
+    _party_label = _terminology.get("party_size_label", "guests")
+
     fallback = {
         "intents": ["inquiry"],
         "fields": {},
         "confidence": "low",
         "reply": (
-            f"Hi! Could you let me know which service you're looking at, "
-            f"what date works, and how many guests? I'll get you sorted "
+            f"Hi! Could you let me know which {_svc_label} you're looking at, "
+            f"what date works, and how many {_party_label}? I'll get you sorted "
             f"from there.\n\n"
             f"Warm regards,\n{signature}"
         ),
-        "clarifications_needed": ["date", "guests", "service_name"],
+        "clarifications_needed": ["date", _party_label, "service_name"],
         "requires_human": False,
         "flags": {},
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",

@@ -2,7 +2,7 @@
 # bluemarlin/agents/marina/email_poller.py
 # Last modified: Brief 077
 # Purpose: Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP
-import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid
+import imaplib, email, urllib.request, urllib.parse, json, time, os, re, hashlib, uuid, random, string
 from datetime import datetime, timezone, timedelta
 from email.utils import parseaddr
 from email.header import decode_header as _decode_header
@@ -294,10 +294,14 @@ def _maybe_reset_stale_thread(msg, thread_key: str, th: dict, threads: dict, now
 
 
 def _detect_booking_ref(body: str) -> "str | None":
-    """Extract a BF-YYYY-XXXXX booking reference from message body. Returns ref or None."""
-    _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
-    match = re.search(rf'{re.escape(_ref_prefix)}-\d{{4}}-\d{{5}}', body)
-    return match.group() if match else None
+    """Extract a 6-char alphanumeric booking reference from message body. Returns ref or None."""
+    match = re.search(r'\b[A-Z0-9]{6}\b', body)
+    if match:
+        # Verify it's a real booking ref, not a random 6-char string
+        candidate = match.group()
+        if state_registry.get_booking(candidate):
+            return candidate
+    return None
 
 
 def _resolve_booking_ref(th: dict) -> str:
@@ -1078,8 +1082,8 @@ def main():
                             "date": fields_now.get("date"),
                         })
                         # Generate booking_ref + set on soft hold BEFORE manifest creation
-                        _ref_prefix = config_loader.get_booking_rules().get("booking_ref_prefix", "BM")
-                        booking_ref = f"{_ref_prefix}-{time.strftime('%Y')}-{int(time.time()) % 100000:05d}"
+                        _chars = string.ascii_uppercase + string.digits
+                        booking_ref = ''.join(random.choices(_chars, k=6))
                         th["flags"]["booking_ref"] = booking_ref
                         if th["flags"].get("hold_id"):
                             state_registry.set_booking_ref(th["flags"]["hold_id"], booking_ref)

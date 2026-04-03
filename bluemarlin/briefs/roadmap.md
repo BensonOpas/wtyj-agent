@@ -263,6 +263,86 @@ See `marina_status_90.md` for full details.
 
 ---
 
+## The Payment and Booking Page Problem
+
+There is a core problem that affects both payment processing and the
+future booking website page. The problem is the same in both cases:
+if the customer leaves our system to do something (pay on the client's
+Stripe, book on the client's website), our dashboard never finds out
+what happened. The booking sits at "pending payment" forever. Data
+doesn't sync. The operator has to manually check and update things.
+
+This matters because the dashboard is the product. If the dashboard
+doesn't know the real status of a booking, it's useless. The operator
+has to go check Stripe themselves, check their calendar themselves,
+cross-reference manually. That's the manual work we're supposed to
+be eliminating.
+
+The same problem shows up in three places:
+
+1. Payment: we send the customer a payment link. If that link goes to
+the client's own payment page (their Stripe, their Mollie, their bank
+transfer page), we never get a callback saying they paid. Our system
+thinks the booking is still pending. The client knows they got paid
+because they check their Stripe. But our dashboard doesn't.
+
+2. Booking website: if the customer books on the client's existing
+website instead of through our system, we never see the booking at
+all. It doesn't show up in the dashboard, doesn't show up on the
+calendar we manage, doesn't count toward capacity. Now the system
+thinks there are more spots available than there really are.
+Overbooking risk.
+
+3. External changes: if the client manually adds a booking, cancels
+one, or changes something outside our system, our data is stale.
+
+The fix for all three is the same idea: we need to be the system of
+record. Everything flows through us. Not because we want control, but
+because the dashboard only works if it sees everything.
+
+For payment specifically, the solution is Stripe Connect or Mollie
+Connect. Here's how it works:
+
+The client connects their Stripe (or Mollie) account to our platform.
+This is a one-time OAuth setup — they click "connect," authorize us,
+done. When a booking is confirmed, we create a payment link through
+their connected account. The money goes directly to them — we never
+touch it. But because the payment happens through our integration, we
+get the webhook confirmation. Dashboard updates to "paid" automatically.
+The client gets their money in their own Stripe. We get the data.
+
+For the booking page, same principle: we host it. The customer goes to
+a BlueMarlin-hosted page (branded with the client's colors and info
+from their config). They fill in the form, it hits our API, our system
+checks availability, creates the hold, and if payment is needed, it
+goes through the Stripe Connect flow above. Everything stays in our
+system. Dashboard sees it all.
+
+This is not trivial to build. Stripe Connect requires: a Stripe
+platform account on our end, OAuth integration for client onboarding,
+webhook handlers for payment events (succeeded, failed, refunded),
+and the hosted payment page. Mollie Connect is similar. Estimated
+effort: 2-3 weeks for the first provider.
+
+When to build this: when we onboard a client that needs payment
+confirmation in the dashboard. BlueFinn currently uses demo payment
+links and checks their own Stripe manually. That works for a demo.
+It doesn't work for a real product. The moment we pitch a paying
+client who expects their dashboard to show real payment status, we
+need this.
+
+For Tier 1 clients where payment timing is "none" (restaurants, real
+estate), this isn't needed. For charters and tours where payment is
+upfront, this is a requirement before they trust the system.
+
+Current state: payment_stub.py generates fake demo.pay links. No real
+money moves. No payment confirmation. This is accepted for the demo
+phase. Real payment integration is Phase 3 (Milestone G in the
+roadmap above) but may need to be pulled forward depending on which
+client we sign first.
+
+---
+
 ## Risks with Lead Time
 
 | Risk | Lead Time | When to Act |
@@ -271,3 +351,62 @@ See `marina_status_90.md` for full details.
 | Meta App Review (publishing perms) | 3-5 days | During Milestone B |
 | Email provider evaluation | Decision cycle | Start of Phase 2 |
 | Domain DNS propagation | 1-24 hours | Start of Phase 1 |
+
+---
+
+## Client Tiers — Who we sell to and in what order
+
+See feature_toggles_spec.md for what each tier needs toggled on/off.
+
+### Tier 1 — Tourism (first clients, proven product)
+
+Boat charters, tour operators, water sports, restaurants, beach clubs,
+car and scooter rentals. 250+ potential clients in Curaçao alone.
+
+These businesses all have the same pain: customers message on WhatsApp,
+nobody answers because they're on the water or in the kitchen. They
+lose bookings to whoever replies first.
+
+What they need from us: full booking flow, payment, calendar, social
+media content, multi-channel communication. This is what we've built.
+
+Availability model: slot_capacity (already built). Car rentals will
+eventually need date_range.
+
+### Tier 2 — Local services (second wave, expand beyond tourism)
+
+Hair salons, barbershops, fitness studios, personal trainers, dental
+and medical clinics, photographers, spas. 200+ potential clients.
+
+Same pain as Tier 1 but the booking model is different — appointments
+with individual providers (stylists, doctors) instead of group slots.
+No-shows are the biggest complaint. Automated reminders alone sell this.
+
+What they need: full booking flow with open_window availability model,
+payment at service or deposit, calendar, maybe social media.
+
+Availability model: open_window (not built yet — build when first
+salon client signs up).
+
+### Tier 3 — Complex services (third wave, lead qualification product)
+
+Real estate agencies, event venues, consulting firms, legal offices.
+The AI can't replace the human here — the conversation IS the service.
+
+What they need: Q&A, lead qualification (collect requirements, ask
+qualifying questions, offer alternatives), then escalate to human with
+full context. No booking flow. No payment. No calendar.
+
+A real estate agent with 10 properties can manage 40 because the AI
+filters the repetitive work — "is this available?", "can I see more
+photos?", "do you have something with 3 bedrooms?" The agent only
+talks to qualified, serious leads.
+
+This is a different product from the booking system but uses the same
+infrastructure (channels, escalation, dashboard).
+
+### Tier 4 — Future expansion
+
+Vacation rental managers (compete with Guesty), auto repair shops,
+vet clinics, pet services, co-working spaces. Niche markets, longer
+sales cycles, but the system works for them with minimal changes.

@@ -28,11 +28,13 @@ def _build_dm_system_prompt(channel: str) -> str:
     wa_link = wa_number.replace("+", "").replace(" ", "")
     booking_email = business.get("email", "")
     languages = ", ".join(business.get("languages", ["English"]))
+    terminology = config_loader.get_raw().get("terminology", {})
+    service_label = terminology.get("service_label", "service")
 
     platform_name = "Instagram" if channel == "instagram_dm" else "Facebook"
 
     # Build service list
-    trip_lines = []
+    service_lines = []
     for key, data in trips.items():
         name = data.get("display_name", key)
         price = data.get("price_pp", "")
@@ -45,7 +47,7 @@ def _build_dm_system_prompt(channel: str) -> str:
             line += f" — {days}"
         if desc:
             line += f" — {desc}"
-        trip_lines.append(line)
+        service_lines.append(line)
 
     # Build FAQ
     faq_lines = []
@@ -54,10 +56,10 @@ def _build_dm_system_prompt(channel: str) -> str:
 
     return f"""You are {agent_name}, answering {platform_name} DMs for {company_name}.
 
-You are a Q&A helper. You answer questions about trips, pricing, availability, and general info. You are friendly, casual, and human.
+You are a Q&A helper. You answer questions about {service_label}s, pricing, availability, and general info. You are friendly, casual, and human.
 
-TRIPS:
-{chr(10).join(trip_lines)}
+{service_label.upper()}S:
+{chr(10).join(service_lines)}
 
 FAQ:
 {chr(10).join(faq_lines)}
@@ -69,10 +71,10 @@ WRITING STYLE:
 - No sign-offs, no signatures, no "Hope that helps!"
 - Use contractions. Match the sender's energy.
 - Greet ONLY on the very first message. If CONVERSATION HISTORY shows you already replied, skip the greeting entirely.
-- When listing trips, give names and brief descriptions. Only include prices if asked.
+- When listing {service_label}s, give names and brief descriptions. Only include prices if asked.
 
 BOOKING REDIRECT — CRITICAL:
-You CANNOT process bookings in DMs. When someone wants to book, asks about availability for a specific date, or provides booking details (date, guests, time):
+You CANNOT process {service_label} bookings in DMs. When someone wants to book, asks about availability for a specific date, or provides booking details (date, guests, time):
 - Do NOT ask for their date, number of guests, time, name, or any booking details
 - Do NOT confirm any booking or mention booking references
 - Redirect them: "For bookings, message us on WhatsApp at wa.me/{wa_link} or email {booking_email} — we handle all bookings there!"
