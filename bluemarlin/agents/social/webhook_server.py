@@ -1,6 +1,6 @@
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
-# Last modified: Brief 131
+# Last modified: Brief 138
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import json as _json
@@ -12,6 +12,7 @@ from fastapi.responses import PlainTextResponse
 
 from shared.bm_logger import log
 from shared import state_registry
+from shared import config_loader
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
 from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
@@ -193,7 +194,7 @@ async def receive_zernio_webhook(request: Request, background_tasks: BackgroundT
 
 
 def _process_zernio_event(payload: dict):
-    """Background task: parse Zernio webhook, dedup, store DM message."""
+    """Background task: parse Zernio webhook, dedup, route DM to booking or Q&A."""
     try:
         msg = parse_zernio_webhook(payload)
         if not msg:
@@ -217,27 +218,56 @@ def _process_zernio_event(payload: dict):
             platform=msg["platform"],
             sender=msg["sender_name"][:30])
 
-        # Store the incoming message
-        state_registry.dm_store_message(
-            conversation_id=msg["conversation_id"],
-            channel=msg["channel"],
-            role="user",
-            text=text,
-            sender_name=msg["sender_name"],
-        )
-        # Send typing indicator (best-effort)
-        send_typing_indicator(msg["conversation_id"], msg["account_id"])
+        conversation_id = msg["conversation_id"]
+        channel = msg["channel"]
+        account_id = msg["account_id"]
 
-        # Process through Marina
-        reply_text = handle_incoming_dm(msg)
+        # Send typing indicator (best-effort)
+        send_typing_indicator(conversation_id, account_id)
+
+        # Route based on booking_flow toggle
+        _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+
+        if _booking_flow_on:
+            # Full booking flow — route through orchestrator
+            # NOTE: store user message AFTER orchestrator call, not before.
+            # The orchestrator reads wa_get_history(conversation_id) internally.
+            # If we store before, Marina sees the message twice (once in history,
+            # once as the current inbound). This matches the WhatsApp _flush_buffer
+            # pattern which also stores after the call.
+            orchestrator_msg = {
+                "from": conversation_id,
+                "text": text,
+                "from_name": msg.get("sender_name", ""),
+            }
+            reply_text = handle_incoming_whatsapp_message(orchestrator_msg)
+            # Store user message after orchestrator (same as WhatsApp path)
+            state_registry.dm_store_message(
+                conversation_id=conversation_id,
+                channel=channel,
+                role="user",
+                text=text,
+                sender_name=msg["sender_name"],
+            )
+        else:
+            # Q&A only — use DM agent
+            # DM agent reads dm_get_history which is separate, so store before is fine
+            state_registry.dm_store_message(
+                conversation_id=conversation_id,
+                channel=channel,
+                role="user",
+                text=text,
+                sender_name=msg["sender_name"],
+            )
+            reply_text = handle_incoming_dm(msg)
 
         if reply_text:
             # Send reply via Zernio
-            send_dm_reply(msg["conversation_id"], msg["account_id"], reply_text)
+            send_dm_reply(conversation_id, account_id, reply_text)
             # Store assistant reply
             state_registry.dm_store_message(
-                conversation_id=msg["conversation_id"],
-                channel=msg["channel"],
+                conversation_id=conversation_id,
+                channel=channel,
                 role="assistant",
                 text=reply_text,
             )

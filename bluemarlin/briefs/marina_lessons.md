@@ -361,3 +361,41 @@ The booking ref regex `\b[A-Z0-9]{6}\b` can match random 6-char strings
 in URLs, color codes, or message content. The DB verification check
 (`state_registry.get_booking(ref)`) prevents false positives but adds a
 DB query per potential match. At current volume this is fine.
+
+---
+
+## Brief 138 — DM Booking: Route DMs Through Booking Orchestrator
+
+### Decision
+Route Instagram/Facebook DMs through the existing WhatsApp booking
+orchestrator when `booking_flow` is ON. One function rewrite in
+`webhook_server.py`, zero changes to the orchestrator, marina_agent,
+dm_agent, or state_registry.
+
+### Outcome
+Clean execution. The orchestrator already worked with any string as the
+"phone" key — conversation_id dropped in without friction. The booking
+flow toggle (`features.booking_flow`) now controls all three channels
+(WhatsApp, email, DMs) uniformly.
+
+### Key technique: message storage ordering
+The brief reviewer caught a critical bug before execution: the original
+code stored the user message BEFORE calling the agent, but the
+orchestrator reads `wa_get_history` internally. If we store before,
+Marina sees the message twice — once in CONVERSATION HISTORY and once
+as INBOUND MESSAGE. The WhatsApp path (`_flush_buffer`) stores AFTER
+the orchestrator call. The DM booking path must do the same.
+
+The DM Q&A path (booking_flow=false) stores BEFORE, matching its
+original behavior — the DM agent uses `dm_get_history` and has always
+worked with store-before ordering. Two different storage orders for two
+different paths, each matching their channel's pattern.
+
+### What to watch for
+The orchestrator's internal `wa_store_message` calls for system notes
+(booking confirmations, stale resets, escalations) store with
+`channel='whatsapp'` even for DM conversations. This is a minor data
+inconsistency — system notes are internal and not displayed to
+customers. If the dashboard ever shows system notes by channel, this
+will need fixing (pass channel through to the orchestrator or use
+`dm_store_message` for system notes).

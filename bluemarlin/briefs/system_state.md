@@ -823,3 +823,21 @@ Outcome: complete — 308 social pass, 304 marina pass (24 pre-existing failures
 Brief 135 — Feature Toggles: Booking Flow + Terminology + Random Ref
 Decision: Three toggles for Tier 1 client support. (1) `features.booking_flow` — when false, booking intents create a detailed escalation (chat log, collected fields, Marina's note) instead of entering the booking state machine. Qualify first, then escalate. (2) `terminology` section in client.json — service_label, party_size_label, slot_label injected into Marina's prompt and DM agent. Changes per client. (3) Random 6-char alphanumeric booking ref (A-Z0-9, 2.2B combinations) replaces prefix-based BF-YYYY-XXXXX format. Returning customer regex updated with DB verification to avoid false positives.
 Outcome: complete — 7/7 tests pass, regression pending
+
+---
+
+Brief 136 — Test Debt Cleanup
+Decision: Archived 5 stale test files, fixed 30 test failures across 11 files. All mechanical — missing imports, old booking ref format (BF- prefix → 6-char alphanumeric), stale dates, renamed variables from Brief 134. No source code changes.
+Outcome: complete — 614 tests, 0 failures
+
+---
+
+Brief 137 — Booking Flow Guard: Email + Soft Hold Fix
+Decision: Blind audit found two critical bugs. (1) Email poller had NO booking_flow check — emails ran the full booking flow regardless of toggle. Fixed: added `_booking_flow_on` guard before Step 3b and Step 5, added Step 4.8 escalation for booking intents when flow is off. (2) WhatsApp soft holds leaked before the booking_flow check — Step 7 ran before Step 7.8. Fixed: moved `_booking_flow_on` read before Step 7, added it to the condition. Also guarded `awaiting_booking_confirmation` flag in email poller, fixed 3 logger params (`experience=` → `service_name=`).
+Outcome: complete — 617 tests, 0 failures. Deployed.
+
+---
+
+Brief 138 — DM Booking: Route DMs Through Booking Orchestrator
+Decision: Route Instagram/Facebook DMs through the WhatsApp booking orchestrator (`handle_incoming_whatsapp_message`) when `booking_flow` is ON. Conversation_id serves as the "phone" key — all state functions accept any string. Reply delivered via Zernio DM API (`send_dm_reply`). When `booking_flow` is OFF, DMs continue using the Q&A agent (`dm_agent.py`). Critical detail: user message stored AFTER orchestrator call to prevent Marina seeing it twice. Only file changed: `webhook_server.py`.
+Outcome: complete — 7/7 new tests pass, 624 total tests pass, 0 failures
