@@ -80,28 +80,28 @@ _result_booking = {"intents": ["booking"], "fields": {}, "flags": {}}
 
 def test_multi_departure_asks_for_time():
     """T9: multi-departure asks for departure time."""
-    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-03-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
+    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-12-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
     override, awaiting = _post_validate(th, _result_booking, _trip_multi)
     assert override is not None and "departure" in override.lower()
 
 
 def test_multi_departure_no_awaiting():
     """T10: multi-departure does not set awaiting."""
-    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-03-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
+    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-12-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
     override, awaiting = _post_validate(th, _result_booking, _trip_multi)
     assert awaiting is False
 
 
 def test_single_departure_builds_summary():
     """T11: single-departure builds summary."""
-    th = {"fields": {"service_name": "Sunset Cruise", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}}
+    th = {"fields": {"service_name": "Sunset Cruise", "date": "2026-12-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}}
     override, awaiting = _post_validate(th, _result_booking, _trip_single)
     assert override is not None and "Want me to go ahead and book this" in override
 
 
 def test_single_departure_sets_awaiting():
     """T12: single-departure sets awaiting."""
-    th = {"fields": {"service_name": "Sunset Cruise", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}}
+    th = {"fields": {"service_name": "Sunset Cruise", "date": "2026-12-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}}
     override, awaiting = _post_validate(th, _result_booking, _trip_single)
     assert awaiting is True
 
@@ -124,14 +124,14 @@ def test_invalid_day_no_awaiting():
 
 def test_skips_when_already_awaiting():
     """T15: skips validation when already awaiting."""
-    th = {"fields": {"service_name": "X", "date": "2026-03-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {"awaiting_booking_confirmation": True}}
+    th = {"fields": {"service_name": "X", "date": "2026-12-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {"awaiting_booking_confirmation": True}}
     override, awaiting = _post_validate(th, _result_booking, _trip_multi)
     assert override is None and awaiting is False
 
 
 def test_skips_when_missing_fields():
     """T16: skips when missing required fields."""
-    th = {"fields": {"service_name": "X", "date": "2026-03-25"}, "flags": {}}
+    th = {"fields": {"service_name": "X", "date": "2026-12-25"}, "flags": {}}
     override, awaiting = _post_validate(th, _result_booking, _trip_multi)
     assert override is None and awaiting is False
 
@@ -141,7 +141,7 @@ def test_skips_when_missing_fields():
 def test_summary_contains_trip_name():
     """T17: summary contains service name."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_single,
     )
     assert "Sunset Cruise" in summary
@@ -150,7 +150,7 @@ def test_summary_contains_trip_name():
 def test_summary_contains_price():
     """T18: summary contains price."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_single,
     )
     assert "$158" in summary
@@ -159,7 +159,7 @@ def test_summary_contains_price():
 def test_summary_contains_departure():
     """T19: summary contains departure."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_single,
     )
     assert "17:30" in summary
@@ -168,7 +168,7 @@ def test_summary_contains_departure():
 def test_summary_ends_with_lock_in():
     """T20: summary ends with lock-in question."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_single,
     )
     assert "Want me to go ahead and book this" in summary
@@ -221,6 +221,6 @@ def test_no_availability_context():
 def test_needs_child_ages_skips_summary():
     """T28: needs_child_ages skips summary."""
     result_kids = {"intents": ["booking"], "fields": {}, "flags": {"needs_child_ages": True}}
-    th = {"fields": {"service_name": "Klein", "date": "2026-03-25", "guests": "4", "service_key": "klein_curacao", "slot_time": "08:00"}, "flags": {}}
+    th = {"fields": {"service_name": "Klein", "date": "2026-12-25", "guests": "4", "service_key": "klein_curacao", "slot_time": "08:00"}, "flags": {}}
     override, awaiting = _post_validate(th, result_kids, _trip_multi)
     assert override is None and awaiting is False

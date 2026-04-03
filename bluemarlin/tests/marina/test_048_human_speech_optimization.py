@@ -33,7 +33,7 @@ def test_day_of_week_override_no_signature():
 
 def test_departure_override_no_signature():
     """T2: departure override has no signature."""
-    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-03-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
+    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-12-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
     override, _ = _post_validate(th, _result_b, _trip_kc)
     assert "Warm regards" not in override
 
@@ -41,7 +41,7 @@ def test_departure_override_no_signature():
 def test_booking_summary_no_signature():
     """T3: booking summary has no signature."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "Warm regards" not in summary
@@ -50,7 +50,7 @@ def test_booking_summary_no_signature():
 def test_summary_lock_in_question():
     """T4: summary still has lock-in question."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "Want me to go ahead and book this" in summary
@@ -59,7 +59,7 @@ def test_summary_lock_in_question():
 def test_summary_correct_price():
     """T5: summary still has correct price."""
     summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
+        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
         _trip_sc,
     )
     assert "$158" in summary
@@ -127,7 +127,7 @@ def test_prompt_multi_topic_guidance():
 def test_booking_still_builds_summary():
     """T14: booking still builds summary."""
     override, awaiting = _post_validate(
-        {"fields": {"service_name": "Sunset", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
+        {"fields": {"service_name": "Sunset", "date": "2026-12-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
         {"intents": ["booking"], "fields": {}, "flags": {}},
         _trip_sc,
     )
@@ -137,7 +137,7 @@ def test_booking_still_builds_summary():
 def test_booking_still_sets_awaiting():
     """T15: booking still sets awaiting."""
     override, awaiting = _post_validate(
-        {"fields": {"service_name": "Sunset", "date": "2026-03-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
+        {"fields": {"service_name": "Sunset", "date": "2026-12-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
         {"intents": ["booking"], "fields": {}, "flags": {}},
         _trip_sc,
     )
@@ -183,10 +183,10 @@ def test_empty_string_absent_field_safe():
 def test_normal_merge_still_works():
     """T19: non-empty values still merge normally."""
     th = {"fields": {"service_name": "Klein"}}
-    new_fields = {"date": "2026-03-25", "guests": "2"}
+    new_fields = {"date": "2026-12-25", "guests": "2"}
     for k, v in new_fields.items():
         if v is not None and v != "":
             th["fields"][k] = v
         elif v == "" and k in th["fields"]:
             del th["fields"][k]
-    assert th["fields"]["date"] == "2026-03-25" and th["fields"]["guests"] == "2"
+    assert th["fields"]["date"] == "2026-12-25" and th["fields"]["guests"] == "2"

@@ -97,7 +97,7 @@ def test_payment_stub_uses_booking_ref():
 def test_booking_ref_before_manifest():
     """T12: booking_ref generated before manifest call."""
     ep_src = _read_email_poller()
-    pos_ref = ep_src.find('booking_ref = f"BF-{time.strftime')
+    pos_ref = ep_src.find("booking_ref = ''.join(random.choices")
     pos_manifest = ep_src.find("gws_calendar.create_or_update_manifest")
     assert 0 < pos_ref < pos_manifest
 

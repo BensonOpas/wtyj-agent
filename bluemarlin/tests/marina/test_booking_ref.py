@@ -37,12 +37,12 @@ def test_save_and_get_booking():
         "payment_link": "https://demo.pay/bluemarlin/pay123",
         "event_link": "https://calendar.google.com/event/abc",
     }
-    state_registry.save_booking("BF-2026-00001", fields, flags,
+    state_registry.save_booking("J4K4L4", fields, flags,
                                 customer_email="callou@example.com")
-    result = state_registry.get_booking("BF-2026-00001")
+    result = state_registry.get_booking("J4K4L4")
 
     assert result is not None, "FAIL: booking should exist"
-    assert result["booking_ref"] == "BF-2026-00001", f"FAIL: ref={result['booking_ref']}"
+    assert result["booking_ref"] == "J4K4L4", f"FAIL: ref={result['booking_ref']}"
     assert result["service_key"] == "klein_curacao", f"FAIL: service_key={result['service_key']}"
     assert result["customer_name"] == "Callou", f"FAIL: name={result['customer_name']}"
     assert result["customer_email"] == "callou@example.com", f"FAIL: email={result['customer_email']}"
@@ -60,7 +60,7 @@ def test_save_and_get_booking():
 def test_get_booking_not_found():
     """Non-existent ref returns None."""
     _cleanup_db()
-    result = state_registry.get_booking("BF-9999-99999")
+    result = state_registry.get_booking("Q6R6S6")
     assert result is None, f"FAIL: expected None, got {result}"
     _cleanup_db()
     print("PASS: test_get_booking_not_found")
@@ -71,15 +71,15 @@ def test_save_booking_upsert():
     _cleanup_db()
     fields1 = {"service_key": "klein_curacao", "customer_name": "Alice", "guests": 2}
     flags1 = {}
-    state_registry.save_booking("BF-2026-00002", fields1, flags1,
+    state_registry.save_booking("M5N5O5", fields1, flags1,
                                 customer_email="alice@example.com")
 
     fields2 = {"service_key": "sunset_cruise", "customer_name": "Alice Updated", "guests": 3}
     flags2 = {}
-    state_registry.save_booking("BF-2026-00002", fields2, flags2,
+    state_registry.save_booking("M5N5O5", fields2, flags2,
                                 customer_email="alice@example.com")
 
-    result = state_registry.get_booking("BF-2026-00002")
+    result = state_registry.get_booking("M5N5O5")
     assert result["service_key"] == "sunset_cruise", f"FAIL: service_key not updated"
     assert result["customer_name"] == "Alice Updated", f"FAIL: name not updated"
     assert result["guests"] == 3, f"FAIL: guests not updated"
@@ -88,10 +88,17 @@ def test_save_booking_upsert():
 
 
 def test_detect_booking_ref_found():
-    """Detects BF-YYYY-XXXXX pattern in message body."""
-    body = "Hi, my booking reference is BF-2026-12345, can I change the date?"
-    ref = email_poller._detect_booking_ref(body)
-    assert ref == "BF-2026-12345", f"FAIL: expected BF-2026-12345, got {ref}"
+    """Detects 6-char alphanumeric ref in message body (with DB verification)."""
+    state_registry.save_booking("X1Y2Z3", {"service_key": "test"}, {})
+    try:
+        body = "Hi, my booking reference is X1Y2Z3, can I change the date?"
+        ref = email_poller._detect_booking_ref(body)
+        assert ref == "X1Y2Z3", f"FAIL: expected X1Y2Z3, got {ref}"
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM bookings WHERE booking_ref = 'X1Y2Z3'")
+        conn.commit()
+        conn.close()
     print("PASS: test_detect_booking_ref_found")
 
 
@@ -104,10 +111,17 @@ def test_detect_booking_ref_not_found():
 
 
 def test_detect_booking_ref_multiple():
-    """Multiple refs in body — returns first one."""
-    body = "I have BF-2026-11111 and also BF-2026-22222"
-    ref = email_poller._detect_booking_ref(body)
-    assert ref == "BF-2026-11111", f"FAIL: expected first ref, got {ref}"
+    """Multiple refs in body — returns first real one."""
+    state_registry.save_booking("A1B1C1", {"service_key": "test"}, {})
+    try:
+        body = "I have A1B1C1 and also D2E2F2"
+        ref = email_poller._detect_booking_ref(body)
+        assert ref == "A1B1C1", f"FAIL: expected first ref, got {ref}"
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM bookings WHERE booking_ref = 'A1B1C1'")
+        conn.commit()
+        conn.close()
     print("PASS: test_detect_booking_ref_multiple")
 
 
@@ -122,14 +136,14 @@ def test_returning_customer_field_population():
         "guests": 6,
     }
     flags = {}
-    state_registry.save_booking("BF-2026-00003", fields, flags,
+    state_registry.save_booking("G3H3I3", fields, flags,
                                 customer_email="calvin@example.com")
 
     # Simulate empty thread
     th = {"fields": {}, "flags": {}}
-    body = "Hi, my ref is BF-2026-00003, can I change the date?"
+    body = "Hi, my ref is G3H3I3, can I change the date?"
     ref = email_poller._detect_booking_ref(body)
-    assert ref == "BF-2026-00003"
+    assert ref == "G3H3I3"
 
     past = state_registry.get_booking(ref)
     assert past is not None
@@ -144,7 +158,7 @@ def test_returning_customer_field_population():
     assert th["fields"]["customer_name"] == "Calvin"
     assert th["fields"]["date"] == "2026-05-01"
     assert th["fields"]["guests"] == "6"  # converted to string
-    assert th["flags"]["returning_booking"] == "BF-2026-00003"
+    assert th["flags"]["returning_booking"] == "G3H3I3"
     _cleanup_db()
     print("PASS: test_returning_customer_field_population")
 
@@ -159,12 +173,12 @@ def test_returning_customer_no_overwrite():
         "guests": 6,
     }
     flags = {}
-    state_registry.save_booking("BF-2026-00004", fields, flags,
+    state_registry.save_booking("Q6R6S6", fields, flags,
                                 customer_email="calvin@example.com")
 
     # Thread already has some fields from current conversation
     th = {"fields": {"customer_name": "Calvin Updated", "service_key": "sunset_cruise"}, "flags": {}}
-    past = state_registry.get_booking("BF-2026-00004")
+    past = state_registry.get_booking("Q6R6S6")
     for k in ("service_key", "date", "guests", "customer_name", "slot_time"):
         v = past.get(k)
         if v and not th["fields"].get(k):
@@ -184,7 +198,7 @@ def test_prompt_contains_booking_ref_instruction():
     """Marina's prompt instructs use of [BOOKING_REF] placeholder (Brief 058 fix)."""
     prompt = marina_agent._build_prompt(
         "test@example.com", "booking", "test body",
-        {"service_key": "klein_curacao"}, {"booking_ref": "BF-2026-99999"},
+        {"service_key": "klein_curacao"}, {"booking_ref": "Q6R6S6"},
     )
     assert "BOOKING REFERENCE:" in prompt, "FAIL: prompt missing BOOKING REFERENCE section"
     booking_ref_section_start = prompt.index("BOOKING REFERENCE:")
@@ -198,12 +212,12 @@ def test_prompt_contains_booking_ref_instruction():
 def test_prompt_contains_returning_customer_section():
     """When returning_booking is in flags, prompt includes RETURNING CUSTOMER section."""
     prompt = marina_agent._build_prompt(
-        "test@example.com", "booking", "my ref is BF-2026-00001",
+        "test@example.com", "booking", "my ref is J4K4L4",
         {"service_key": "klein_curacao", "customer_name": "Calvin"},
-        {"returning_booking": "BF-2026-00001"},
+        {"returning_booking": "J4K4L4"},
     )
     assert "RETURNING CUSTOMER:" in prompt, "FAIL: prompt missing RETURNING CUSTOMER section"
-    assert "BF-2026-00001" in prompt, "FAIL: prompt doesn't include the booking ref"
+    assert "J4K4L4" in prompt, "FAIL: prompt doesn't include the booking ref"
     print("PASS: test_prompt_contains_returning_customer_section")
 
 

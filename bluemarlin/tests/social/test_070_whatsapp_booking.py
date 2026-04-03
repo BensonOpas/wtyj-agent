@@ -3,6 +3,7 @@
 # Purpose: Tests for WhatsApp booking orchestrator
 
 import os
+import re
 import sys
 import json
 import time
@@ -15,6 +16,15 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 os.environ["WHATSAPP_VERIFY_TOKEN"] = "test_token_067"
 os.environ["WHATSAPP_ACCESS_TOKEN"] = "test_access_token"
 os.environ["WHATSAPP_PHONE_NUMBER_ID"] = "990622044139349"
+
+
+from datetime import datetime, timezone, timedelta
+def _next_wed():
+    today = datetime.now(timezone.utc).date()
+    d = today + timedelta(days=1)
+    while d.weekday() != 2:
+        d += timedelta(days=1)
+    return d.isoformat()
 
 from agents.social.social_agent import (
     _day_matches, _suggest_dates, _build_booking_summary,
@@ -278,7 +288,7 @@ def test_orchestrator_booking_confirmed(mock_process, mock_cal, mock_pay, mock_s
     # Verify state
     state = state_registry.wa_get_booking_state(phone)
     assert state["flags"].get("hold_created") is True
-    assert state["flags"].get("booking_ref", "").startswith("BF-")
+    assert len(state["flags"].get("booking_ref", "")) == 6  # random alphanumeric ref
     assert "demo.pay" in state["flags"].get("payment_link", "")
     # Cleanup
     _cleanup_phone(phone)

@@ -16,14 +16,14 @@ def test_past_date_returns_already_passed():
         "messages": [],
     }
     result = {"intents": ["booking"], "fields": {"service_key": "sunset_cruise", "date": "2025-01-02", "guests": "2"}}
-    reply, _ = _post_validate(th, result, _trip)
+    reply, _ = _post_validate(th, result, _service)
     assert reply is not None and "already passed" in reply
 
 
 def test_future_date_no_already_passed():
     """T2: Future date does not say 'already passed'."""
     _service = config_loader.get_service("sunset_cruise")
-    _days_avail = _trip.get("days_available", "daily")
+    _days_avail = _service.get("days_available", "daily")
     _test_date = None
     for d in range(60, 120):
         _candidate = (datetime.now(timezone(timedelta(hours=-4))) + timedelta(days=d)).strftime("%Y-%m-%d")
@@ -39,7 +39,7 @@ def test_future_date_no_already_passed():
     }
     result = {"fields": {"service_key": "sunset_cruise", "date": _test_date, "guests": "2",
                           "customer_name": "Test User", "phone": "+5999-1234567"}}
-    reply, _ = _post_validate(th, result, _trip)
+    reply, _ = _post_validate(th, result, _service)
     assert reply is None or "already passed" not in reply
 
 

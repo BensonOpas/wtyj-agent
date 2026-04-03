@@ -268,7 +268,7 @@ def test_change_detection_cancels_hold(mock_process, mock_avail, mock_remove):
     # Customer changes details — Python pops awaiting_booking_confirmation, _was_awaiting triggers change detection
     mock_process.return_value = _base_result(
         intents=["booking"],
-        fields={"date": "2026-03-25"},
+        fields={"date": "2026-12-25"},
         reply="Sure, let me check March 25.",
         flags={"awaiting_booking_confirmation": False},
     )

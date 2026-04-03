@@ -66,7 +66,7 @@ def test_multi_trip_reset_archives_booking(mock_process):
         "customer_name": "Test User",
     }
     flags = {
-        "hold_created": True, "booking_ref": "BF-2026-99001",
+        "hold_created": True, "booking_ref": "X7K9M1",
         "payment_link": "https://demo.pay/test",
     }
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -81,7 +81,7 @@ def test_multi_trip_reset_archives_booking(mock_process):
     state = state_registry.wa_get_booking_state(phone)
     cb = state["completed_bookings"]
     assert len(cb) == 1
-    assert cb[0]["booking_ref"] == "BF-2026-99001"
+    assert cb[0]["booking_ref"] == "X7K9M1"
     assert cb[0]["service_key"] == "west_coast_beach"
     assert cb[0]["date"] == "2026-03-18"
     # Fields reset — only persistent fields survive, plus new fields from merge
@@ -129,10 +129,10 @@ def test_returning_customer_by_ref(mock_process):
     """Booking ref in message text loads past booking data."""
     phone = "TEST_072_RET_001"
     _cleanup_phone(phone)
-    _cleanup_booking("BF-2026-88001")
+    _cleanup_booking("Y8L0N2")
     # Create a past booking in SQLite
     state_registry.save_booking(
-        "BF-2026-88001",
+        "Y8L0N2",
         {"service_key": "sunset_cruise", "customer_name": "Jane", "date": "2026-03-10",
          "guests": 2, "slot_time": "16:00"},
         {},
@@ -142,19 +142,19 @@ def test_returning_customer_by_ref(mock_process):
         intents=["inquiry"],
         reply="Happy to help with your booking!",
     )
-    msg = {"from": phone, "text": "Hi, about my booking BF-2026-88001", "from_name": "Jane"}
+    msg = {"from": phone, "text": "Hi, about my booking Y8L0N2", "from_name": "Jane"}
     handle_incoming_whatsapp_message(msg)
     # Check persisted state
     state = state_registry.wa_get_booking_state(phone)
-    assert state["flags"].get("returning_booking") == "BF-2026-88001"
+    assert state["flags"].get("returning_booking") == "Y8L0N2"
     assert state["fields"].get("service_key") == "sunset_cruise"
     assert state["fields"].get("customer_name") == "Jane"
     # Check marina_agent was called with returning_booking
     call_kwargs = mock_process.call_args
     passed_flags = call_kwargs.kwargs.get("thread_flags", {})
-    assert passed_flags.get("returning_booking") == "BF-2026-88001"
+    assert passed_flags.get("returning_booking") == "Y8L0N2"
     _cleanup_phone(phone)
-    _cleanup_booking("BF-2026-88001")
+    _cleanup_booking("Y8L0N2")
 
 
 # --- Test 4: Returning customer unknown ref ---
@@ -168,12 +168,12 @@ def test_returning_customer_unknown_ref(mock_process):
         intents=["inquiry"],
         reply="Let me check.",
     )
-    msg = {"from": phone, "text": "About booking BF-2026-00000", "from_name": "Test"}
+    msg = {"from": phone, "text": "About booking Z9M1P3", "from_name": "Test"}
     handle_incoming_whatsapp_message(msg)
     # marina_agent was called with unknown_ref
     call_kwargs = mock_process.call_args
     passed_flags = call_kwargs.kwargs.get("thread_flags", {})
-    assert passed_flags.get("unknown_ref") == "BF-2026-00000"
+    assert passed_flags.get("unknown_ref") == "Z9M1P3"
     # But it's cleared after the call (one-shot)
     state = state_registry.wa_get_booking_state(phone)
     assert "unknown_ref" not in state["flags"]

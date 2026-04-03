@@ -1,17 +1,18 @@
 """Tests for Brief 061 — Escalation Logic Bugs: NO-REF, Empty Name, Silent Ref Drop."""
 from agents.marina.email_poller import _resolve_booking_ref, _detect_booking_ref
 from agents.marina import marina_agent
+from shared import state_registry
 
 
 def test_returning_booking_fallthrough():
     """T1: _resolve_booking_ref falls through to returning_booking."""
-    th = {"fields": {}, "flags": {"returning_booking": "BF-2026-12345"}, "messages": []}
-    assert _resolve_booking_ref(th) == "BF-2026-12345"
+    th = {"fields": {}, "flags": {"returning_booking": "X1Y2Z3"}, "messages": []}
+    assert _resolve_booking_ref(th) == "X1Y2Z3"
 
 
 def test_booking_ref_takes_priority():
     """T2: _resolve_booking_ref uses booking_ref when present."""
-    th = {"fields": {}, "flags": {"booking_ref": "BF-2026-99999", "returning_booking": "BF-2026-12345"}, "messages": []}
+    th = {"fields": {}, "flags": {"booking_ref": "BF-2026-99999", "returning_booking": "X1Y2Z3"}, "messages": []}
     assert _resolve_booking_ref(th) == "BF-2026-99999"
 
 
@@ -49,8 +50,16 @@ def test_no_unknown_ref_when_absent():
 
 def test_detect_valid_ref():
     """T7: _detect_booking_ref extracts valid ref format."""
-    ref = _detect_booking_ref("My booking BF-2026-12345 needs to be cancelled")
-    assert ref == "BF-2026-12345"
+    # Create a real booking so DB check passes
+    state_registry.save_booking("X1Y2Z3", {"service_key": "test"}, {})
+    try:
+        ref = _detect_booking_ref("My booking X1Y2Z3 needs to be cancelled")
+        assert ref == "X1Y2Z3"
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM bookings WHERE booking_ref = 'X1Y2Z3'")
+        conn.commit()
+        conn.close()
 
 
 def test_detect_no_ref():
