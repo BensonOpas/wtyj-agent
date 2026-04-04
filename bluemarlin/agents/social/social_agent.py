@@ -444,32 +444,63 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _ck_start = (fields.get("slot_time")
                      or (_ck_deps[0].get("time", "09:00") if _ck_deps else "09:00"))
         _ck_guests = int(fields.get("guests") or 1)
-        avail = gws_calendar.check_availability(
-            _ck_svc, fields.get("date", ""), _ck_start, _ck_guests)
-        flags["slot_checked"] = True
-        flags["slot_available"] = avail.get("available", False)
-        flags["spots_remaining"] = avail.get("spots_remaining", 0)
-        flags["trip_capacity"] = avail.get("capacity", 0)
-        if avail.get("available"):
-            hold_id = state_registry.create_soft_hold(
-                _ck_svc,
-                fields.get("date", ""),
-                _ck_start,
-                _ck_guests,
-                avail.get("capacity", 20),
-                customer_name=fields.get("customer_name", ""),
-                customer_email=fields.get("email") or phone,
-            )
-            if hold_id is not None:
-                flags["hold_id"] = hold_id
-                flags["hold_service_key"] = _ck_svc
-                flags["hold_date"] = fields.get("date", "")
-                flags["hold_slot_time"] = _ck_start
-                bm_logger.log("whatsapp_soft_hold_created", phone=phone,
-                              hold_id=hold_id, service_key=_ck_svc)
+        _svc_capacity = config_loader.get_service(_ck_svc).get("capacity", 20) if _ck_svc else 20
+        if _ck_guests > _svc_capacity:
+            # Group exceeds capacity — escalate, don't check availability
+            flags["slot_checked"] = True
+            flags["slot_available"] = False
+            flags["awaiting_booking_confirmation"] = False
+            _cname = fields.get("customer_name") or from_name or "Unknown"
+            state_registry.create_pending_notification(
+                'escalation', 'whatsapp', phone, _cname,
+                f"[LARGE GROUP] {_cname} (WhatsApp: {phone}) — {_ck_guests} guests exceeds {_svc_capacity} capacity",
+                (f"=== LARGE GROUP — EXCEEDS CAPACITY ===\n"
+                 f"Customer: {_cname}\nPhone: {phone}\n"
+                 f"Service: {fields.get('service_name', _ck_svc)}\n"
+                 f"Date: {fields.get('date', '?')}\n"
+                 f"Guests: {_ck_guests} (capacity: {_svc_capacity})\n\n"
+                 f"Group exceeds standard capacity. Contact customer to discuss options."))
+            bm_logger.log("whatsapp_large_group_exceeds_capacity", phone=phone,
+                          guests=_ck_guests, capacity=_svc_capacity,
+                          service_key=_ck_svc)
+            # Use Marina's original conversational reply (not the booking summary)
+            reply_text = reply
+        else:
+            avail = gws_calendar.check_availability(
+                _ck_svc, fields.get("date", ""), _ck_start, _ck_guests)
+            flags["slot_checked"] = True
+            flags["slot_available"] = avail.get("available", False)
+            flags["spots_remaining"] = avail.get("spots_remaining", 0)
+            flags["trip_capacity"] = avail.get("capacity", 0)
+            if avail.get("available"):
+                hold_id = state_registry.create_soft_hold(
+                    _ck_svc,
+                    fields.get("date", ""),
+                    _ck_start,
+                    _ck_guests,
+                    avail.get("capacity", 20),
+                    customer_name=fields.get("customer_name", ""),
+                    customer_email=fields.get("email") or phone,
+                )
+                if hold_id is not None:
+                    flags["hold_id"] = hold_id
+                    flags["hold_service_key"] = _ck_svc
+                    flags["hold_date"] = fields.get("date", "")
+                    flags["hold_slot_time"] = _ck_start
+                    bm_logger.log("whatsapp_soft_hold_created", phone=phone,
+                                  hold_id=hold_id, service_key=_ck_svc)
+                else:
+                    # Race: capacity was grabbed between check and insert
+                    flags["slot_available"] = False
+                    flags["awaiting_booking_confirmation"] = False
+                    flags["slot_checked"] = False
+                    _unavail_name = _pv_service.get("display_name", _ck_svc)
+                    reply_text = (
+                        f"Unfortunately the {_unavail_name} is fully booked on that date. "
+                        f"Would you like to try a different date?"
+                    )
+                    bm_logger.log("whatsapp_soft_hold_race", phone=phone, service_key=_ck_svc)
             else:
-                # Race: capacity was grabbed between check and insert
-                flags["slot_available"] = False
                 flags["awaiting_booking_confirmation"] = False
                 flags["slot_checked"] = False
                 _unavail_name = _pv_service.get("display_name", _ck_svc)
@@ -477,17 +508,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     f"Unfortunately the {_unavail_name} is fully booked on that date. "
                     f"Would you like to try a different date?"
                 )
-                bm_logger.log("whatsapp_soft_hold_race", phone=phone, service_key=_ck_svc)
-        else:
-            flags["awaiting_booking_confirmation"] = False
-            flags["slot_checked"] = False
-            _unavail_name = _pv_service.get("display_name", _ck_svc)
-            reply_text = (
-                f"Unfortunately the {_unavail_name} is fully booked on that date. "
-                f"Would you like to try a different date?"
-            )
-            bm_logger.log("whatsapp_slot_unavailable", phone=phone, service_key=_ck_svc,
-                          spots=avail.get("spots_remaining", 0))
+                bm_logger.log("whatsapp_slot_unavailable", phone=phone, service_key=_ck_svc,
+                              spots=avail.get("spots_remaining", 0))
 
     _skip_booking = False
 

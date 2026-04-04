@@ -455,3 +455,27 @@ problem the customer shouldn't see. Distinguish them.
   Rule 3 exceptions. They can't use `reply_hold_failed` because it's
   empty at that point. Future fix: add `reply_hold_failed` to the
   non-confirmation action context too.
+
+---
+
+## Brief 140 — Large Group Pre-Check
+
+### Decision
+Groups exceeding service capacity get escalated instead of seeing
+"fully booked." Pre-check at the top of Step 7 before the availability
+call. Customer gets Marina's original conversational reply.
+
+### Key technique: `reply` vs `reply_text`
+The orchestrator has two reply variables. `reply` (line 344) is
+Marina's raw Claude response — never modified. `reply_text` (line 412)
+is the working copy that post-validate may overwrite with a booking
+summary. For the large group path, we use `reply` because `reply_text`
+would show a booking summary for an impossible booking, and
+`reply_hold_failed` isn't available (not in the action context on
+first requests).
+
+### What to watch for
+The pre-check uses `>` not `>=`. A group of exactly 20 on a 20-capacity
+boat goes through normal availability. This is intentional — if the
+slot is empty, 20 fits. If partially filled, `check_availability`
+handles it correctly.

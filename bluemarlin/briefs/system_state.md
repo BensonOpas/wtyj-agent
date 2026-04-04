@@ -847,3 +847,9 @@ Outcome: complete — 7/7 new tests pass, 624 total tests pass, 0 failures
 Brief 139 — Manifest API Error Handling
 Decision: Live DM test exposed that manifest creation failures (Google Calendar 404) tell the customer "slot filled up" when it's actually a config error. Now the code distinguishes API errors (404, 500, 403, 401, config) from business logic errors. API errors: reset booking state so customer can retry on next message, track retry count, escalate to operator after 2 consecutive failures. Business errors: unchanged behavior. Also changed fallback wording from "give me a moment, I'll get right back" to "could you send that again?" — prompts the customer to retry instead of waiting.
 Outcome: complete — 6/6 new tests pass, 624 total pass, 6 pre-existing failures
+
+---
+
+Brief 140 — Large Group Pre-Check
+Decision: Adversarial E2E test found that groups exceeding service capacity (e.g., 200 on a 20-person boat) get "fully booked" instead of being escalated. Added a capacity pre-check at the top of Step 7: if guests > capacity, skip availability check, create escalation, send Marina's original conversational reply (not the booking summary). Normal groups still go through the standard availability check.
+Outcome: complete — 5/5 new tests pass, 629 total pass, 6 pre-existing failures
