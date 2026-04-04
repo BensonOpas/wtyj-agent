@@ -168,7 +168,7 @@ def test_slot_checked_reset_count():
 def test_hold_id_popped_in_failure():
     """T23: hold_id popped in Step 5 failure."""
     ep_src = _read_email_poller()
-    _fail_section = ep_src[ep_src.find("Manifest create FAILED")-1200:ep_src.find("Manifest create FAILED")]
+    _fail_section = ep_src[ep_src.find("Manifest create FAILED")-3000:ep_src.find("Manifest create FAILED")]
     assert 'th["flags"].pop("hold_id"' in _fail_section
 
 

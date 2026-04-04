@@ -175,7 +175,7 @@ def test_dm_fallback_on_api_error():
     try:
         from agents.social.dm_agent import handle_incoming_dm
         reply = handle_incoming_dm(_make_dm_msg(conv_id=conv))
-        assert "give me a sec" in reply.lower() or "get back to you" in reply.lower()
+        assert "send that again" in reply.lower()
     finally:
         os.environ["ANTHROPIC_API_KEY"] = old_key
     _cleanup(conv)

@@ -1134,10 +1134,16 @@ def main():
                             state_registry.set_booking_ref(th["flags"]["hold_id"], booking_ref)
                         res = gws_calendar.create_or_update_manifest(fields_now)
                         if not res.get("ok"):
+                            _manifest_error = str(res.get("error", ""))
+                            _is_api_error = any(s in _manifest_error for s in (
+                                '"code": 404', '"code": 500', '"code": 403', '"code": 401',
+                                "'code': 404", "'code': 500", "'code': 403", "'code': 401",
+                                'Calendar ID not configured'))
                             bm_logger.log(
                                 "hold_failed",
                                 email=from_email, subject=subj,
-                                error=res.get("error"),
+                                error=_manifest_error[:200],
+                                error_type="api" if _is_api_error else "business",
                                 service_name=fields_now.get("service_name"),
                                 date=fields_now.get("date"),
                                 guests=fields_now.get("guests"),
@@ -1152,17 +1158,32 @@ def main():
                                     gws_calendar.remove_from_manifest(_h_svc, _h_date, _h_dep)
                             th["flags"]["slot_checked"] = False
                             th["flags"]["slot_available"] = False
+                            if _is_api_error:
+                                _retry_count = th["flags"].get("manifest_retry_count", 0) + 1
+                                th["flags"]["manifest_retry_count"] = _retry_count
+                                if _retry_count >= 2:
+                                    _cname = fields_now.get("customer_name", from_email)
+                                    state_registry.create_pending_notification(
+                                        'escalation', 'email', from_email, _cname,
+                                        f"[SYSTEM] Manifest failure for {_cname} (Email: {from_email})",
+                                        f"Booking failed {_retry_count} times due to API error.\n"
+                                        f"Error: {_manifest_error[:300]}\n"
+                                        f"Fields: {json.dumps(fields_now, indent=2, ensure_ascii=False)}")
+                                    bm_logger.log("email_manifest_escalated", email=from_email,
+                                                  retry_count=_retry_count)
+                                th["flags"]["booking_confirmed"] = False
+                                th["flags"]["awaiting_booking_confirmation"] = True
                             sheets_writer.log_hold_failed({
                                 "email": from_email, "subject": subj,
                                 "service_name": fields_now.get("service_name"),
                                 "date": fields_now.get("date"),
                                 "guests": fields_now.get("guests"),
-                                "error": res.get("error"),
+                                "error": _manifest_error[:200],
                             })
                             failure_reply = result.get("reply_hold_failed") or result["reply"]
                             smtp_send(from_email, "Re: " + subj, failure_reply,
                                       in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
-                            log(f"Manifest create FAILED for {from_email}: {res.get('error')}")
+                            log(f"Manifest create FAILED for {from_email}: {_manifest_error[:100]}")
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             th["reply_times"].append(now)
                             th["last_customer_hash"] = customer_hash
@@ -1170,6 +1191,7 @@ def main():
                             save_json(THREAD_STATE_PATH, state)
                             continue
                         else:
+                            th["flags"].pop("manifest_retry_count", None)
                             th["flags"]["hold_created"] = True
                             if th["flags"].get("hold_id"):
                                 state_registry.confirm_hold(th["flags"]["hold_id"])

@@ -286,36 +286,24 @@ The dashboard must feel premium, polished, intentional. It represents the produc
 
 ---
 
-## What's Coming Next (Future Dashboard Features)
+## Dashboard Feature Status
 
-The dashboard will grow beyond social media content. Plan for these sections in the navigation even if they're not built yet:
+### Built and live:
+- **Overview page** — status cards, season, recent posts
+- **Content pipeline** — generate, review, approve/reject, publish, delete
+- **Messages page** — WhatsApp + IG/FB DM conversations (all channels)
+- **Escalation center** — pending escalations, semi-escalation relay, operator reply, email compose
+- **Brand training** — rejection learnings, distill rules
+- **Capacity checker** — availability by service/date
+- **Photo library** — upload, browse, tag, Google Drive sync
+- **Settings** — dry run toggle, config view
+- **Suggest reply** — Claude-powered email drafting for escalations
 
-### Booking Management (future)
-- Today's bookings list
-- Upcoming manifests (who's on which boat, when)
-- Booking search by reference number or customer name
-- Payment status tracking
-
-### Escalation Center (future)
-- Pending escalations (complaints, refunds routed to human)
-- Semi-escalation relay (customer asked a question Marina couldn't answer, operator answers, Marina reformulates)
-- Escalation history
-
-### WhatsApp Conversations (future)
-- Live conversation viewer (recent WhatsApp threads)
-- Customer message history
-- Ability to intervene in a conversation
-
-### Analytics (future)
-- Post performance (likes, reach, saves — blocked by Late analytics add-on $29/mo)
-- Booking analytics (bookings per trip, revenue, occupancy rates)
-- System health (API call counts, error rates, response times)
-- Weekly report generation
-
-### Multi-Client View (future)
-- When there are multiple clients, the dashboard needs a client switcher
-- Each client has their own data, config, and pipeline
-- The sidebar or top bar should have a client selector
+### Not yet built:
+- **Booking management** — today's bookings list, search by ref/name, payment status
+- **Channel badges** — DMs show in messages but no IG/FB/WA icons (Brief 132)
+- **Analytics** — post performance (blocked by Late $29/mo), booking analytics, system health
+- **Multi-client view** — client switcher for when we have multiple clients
 
 ---
 
@@ -324,13 +312,9 @@ The dashboard will grow beyond social media content. Plan for these sections in 
 **Current infrastructure:**
 - VPS: Ubuntu at 108.61.192.52
 - Domain: api.wetakeyourjob.com (SSL via Let's Encrypt)
-- nginx reverse proxy
-- FastAPI runs on port 8000 (handles both WhatsApp webhooks and dashboard API)
-- The React dashboard will be built to static files and served by nginx
-
-**How the React app connects:**
-- During development: React dev server (localhost:5173) calls the VPS API (CORS is configured to allow this)
-- In production: nginx serves the React static files at one path and proxies API calls to FastAPI at another path. Same domain, no CORS issues.
+- nginx reverse proxy → FastAPI on port 8001
+- Dashboard frontend hosted on Replit: bluemarlindashboard.replit.app
+- Two systemd services: `bluemarlin` (email poller) + `bluemarlin-social` (webhook server + dashboard API)
 
 ---
 

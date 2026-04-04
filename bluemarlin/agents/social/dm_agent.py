@@ -192,7 +192,7 @@ def handle_incoming_dm(message: dict) -> str:
 
 # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
 # If agent name changes from Marina, update this message.
-_DM_FALLBACK = "Hey, give me a sec — I'll get back to you!"
+_DM_FALLBACK = "Sorry, could you send that again? I missed it."
 
 
 def _is_rate_limited(conversation_id: str, channel: str) -> bool:

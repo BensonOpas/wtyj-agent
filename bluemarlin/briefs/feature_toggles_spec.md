@@ -75,10 +75,9 @@ email plus WhatsApp plus Instagram DMs. A charter might use everything.
 Each channel is either on or off per client. If it's off, the system
 doesn't process messages from that channel for that client.
 
-This also connects to which channels can handle bookings vs which are
-Q&A only. Email and WhatsApp can run the full booking flow. DMs are
-Q&A plus escalation. The booking channels and Q&A channels might be
-different per client.
+When booking_flow is ON, all channels (email, WhatsApp, IG/FB DMs) run
+the full booking flow. When OFF, all channels do Q&A plus escalation.
+The booking_flow toggle controls this uniformly across all channels.
 
 ---
 
@@ -142,19 +141,20 @@ customer writes in, but only from the supported list.
 ## What's built vs what needs building
 
 Built:
-- Payment toggle
+- Payment toggle (Brief 133 — upfront/deposit/at_service/none)
 - Fixed time slot availability
-- Escalation system
-- Q&A without booking (DM agent)
+- Escalation system (semi + full)
+- Q&A without booking (DM agent as fallback for booking_flow=false)
 - Multi-language support
+- Booking flow toggle (Brief 135 — on/off, qualify-then-escalate when off, all channels)
+- Terminology system (Brief 135 — service_label, party_size_label, slot_label)
+- Random booking reference (Brief 135 — 6-char alphanumeric)
+- Generic booking summary (Brief 134 — config-driven field names)
+- DM booking through orchestrator (Brief 138 — IG/FB DMs handle full bookings)
 
 Needs building:
-- Booking flow toggle (on/off, with qualify-then-escalate when off)
-- Terminology system
 - Channel toggle (which channels active per client)
 - Content toggle (on/off per client)
 - Escalation routing (where notifications go)
-- Random booking reference (remove charter-specific prefix)
-- Generic booking summary
 - Open schedule availability model (when a salon client arrives)
 - Date range availability model (when a rental client arrives)

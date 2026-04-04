@@ -101,19 +101,22 @@ See `marina_status_90.md` for full details.
 - **client.json is the only file that changes between clients.** Every business-specific value lives there.
 - **gws CLI:** Prebuilt binary download for Docker image.
 
-### Milestone D: Multi-Tenant Config
+### Milestone D: Multi-Tenant Config — COMPLETE
 
-**Delivers:** Codebase is client-agnostic. client.json is the only thing that changes per client.
+**Status:** Done (Briefs 133-138). Codebase is fully client-agnostic.
 
-- Audit and parameterize all hardcoded client-specific values
-- Azure OAuth credentials → env vars
-- Prompt email addresses → config_loader
-- Anti-loop reply trip names → generated from config
+Completed:
+- All hardcoded values parameterized (email, prompt examples, booking ref prefix)
+- Renamed trips→services across entire codebase + DB + dashboard frontend
+- Feature toggles: booking_flow on/off, payment timing, terminology system
+- Booking flow guard on all channels (WhatsApp, email, DMs)
+- DM booking through orchestrator when booking_flow=true
+- Restaurant and real estate configs tested and working
+
+Still TODO (non-blocking):
 - Template `client.json.template` for new clients
 - JSON schema validation in config_loader
 - `requirements.txt` with pinned dependencies
-
-**Estimated briefs:** 4-6
 
 ---
 
@@ -121,12 +124,15 @@ See `marina_status_90.md` for full details.
 
 **Delivers:** Shared infrastructure owned by us, serving multiple clients.
 
+**Status:** Partially done. Zernio replaces per-platform API integrations. Rest deferred — not needed for Path A (one VPS per client with Docker).
+
+Done:
+- Zernio integration: publishing + DMs on IG/FB, webhook active
+
+Deferred (build when Path A hits limits):
 - Email provider switch (Mailgun/SendGrid evaluation + migration)
 - Google Workspace consolidation (one service account, per-client calendars/sheets)
 - Meta Business Portfolio setup for multi-client WhatsApp
-- Zernio integration: migrate social_publisher.py from Late SDK to Zernio unified API (publishing + DMs). Connect all platform accounts per client via Zernio dashboard. Set up DM webhooks (`message.received`) routed to Marina.
-
-**Estimated briefs:** 5-7
 
 ---
 
@@ -152,11 +158,14 @@ See `marina_status_90.md` for full details.
 
 ### Milestone G: Production Features
 
-- **Full audit/log trail** — append-only logging of every email, Claude call, state transition, booking lifecycle event. SQLite + JSONL, 6-month retention. Critical for dispute resolution once real money flows.
-- **Real payment integration** — Stripe or Mollie (Mollie popular in NL/Curaçao). Payment link → webhook confirmation → automatic booking status update.
-- **Operator dashboard (HTML)** — FastAPI web app on VPS subdomain. Status panels (today's bookings, upcoming manifests, pending escalations, system health). Live capacity checker (spots remaining per trip/date). Config editor (edit trips, prices, FAQ through web form). Password-protected.
-- **Sheets testing** — verify all Sheets tabs are logging correctly end-to-end (Bookings, Escalations, All Events, Manifests). Automated tests against real sheet data.
-- **Config automator** — tool/script that generates a valid client.json from a questionnaire or intake form. Validates required fields, sets up calendar IDs, generates template FAQ.
+Done:
+- **Operator dashboard** — React app live at bluemarlindashboard.replit.app. Overview, messages, escalations, content pipeline, brand training, capacity checker, settings, photo library.
+- **Structured logging** — bm_logger JSONL logging of all events.
+
+Still TODO:
+- **Real payment integration** — Stripe or Mollie Connect. Payment link → webhook confirmation → automatic booking status update.
+- **Config automator** — tool/script that generates a valid client.json from a questionnaire or intake form.
+- **Full audit/log trail** — append-only logging of every booking lifecycle event. 6-month retention. Critical for dispute resolution once real money flows.
 
 **Estimated briefs:** 8-12
 
@@ -182,18 +191,28 @@ See `marina_status_90.md` for full details.
 
 **Goal:** Expand capabilities after the product template is proven.
 
-### Milestone I: WhatsApp Full Booking Flow
+### Milestone I: Booking Flow Unification
 
-- Extract booking state machine from `email_poller.py` into `shared/booking_flow.py`
-- Both email and WhatsApp channels share the same validation, capacity checking, calendar hold, payment link generation
-- Biggest refactor in the project — requires comprehensive test coverage first
+Done:
+- WhatsApp has full booking flow (Brief 070+)
+- Email has full booking flow (original)
+- IG/FB DMs have full booking flow (Brief 138)
+- All three channels share the same booking_flow toggle
+
+Still TODO:
+- Extract shared booking state machine from `email_poller.py` and `social_agent.py` into `shared/booking_flow.py` — reduces duplication, makes maintenance easier
+- Website form integration (BlueMarlin-hosted booking page)
 
 ### Milestone J: Expansion
 
-- Website form integration (webhook endpoint → agent → email reply)
+Done:
+- Instagram + Facebook DMs via Zernio (Briefs 130-131, 138)
+- Instagram + Facebook publishing via Zernio
+
+Still TODO:
 - Operator notification system (configurable alerts via email + WhatsApp)
-- Additional channels (Facebook Messenger, Instagram DMs)
-- Additional platforms for auto-posting (X/Twitter)
+- Additional publishing platforms (X/Twitter, LinkedIn, TikTok — all supported by Zernio, just need connecting)
+- Comment handling via Zernio
 
 ---
 
@@ -250,16 +269,32 @@ See `marina_status_90.md` for full details.
 5. Sweet spot: small operators with no existing system (BlueFinn type)
 
 ### Open Items
-- Add departure point addresses/directions to client.json (Mood Beach, Village Marina, Spanish Water) — Marina knows the names but can't give directions
-- WhatsApp fallback on API failure still silent — need a solution that doesn't violate Rule 3 (no static reply templates)
-- **Performance tracking / post analytics:** Late's free tier doesn't include analytics (402 error). Analytics add-on is $10/mo on top of Build plan ($19/mo) = $29/mo total. Alternative: use Instagram Graph API directly with the business account token (account has `instagram_business_manage_insights` permission via Late). For now, store post history (Instagram URL, post ID, publish date, content class) in SQLite — real engagement metrics (likes, reach, saves) plug in later when we upgrade or go direct API. This feeds into content planning optimization and weekly reports.
-- **Content planning optimization:** Feed post performance data back into content generation — the bot learns which topics, content classes, and trip types drive engagement and adjusts its content mix. Blocked by: no performance metrics yet (requires Late analytics add-on $29/mo or direct Instagram Graph API insights). Once metrics exist, inject top-performing post patterns into the content agent's user prompt alongside rejection history.
-- **Graphics engine overhaul (Brief 095 follow-up):** default Pillow font doesn't support Unicode (ñ, ç in Curaçao renders as placeholder boxes). Need a proper font (Inter/Montserrat .ttf with Latin Extended). Overall template quality needs work — better layouts, different templates per content class, premium look. Current output is functional but not demo-quality.
-- **Facebook publishing:** Late account only has Instagram connected. Add Facebook Page to Late dashboard, update social_publisher.py to post to both.
-- **Content pipeline scheduling:** auto_poster.py is manual CLI. Needs cron/systemd timer for automated daily generation + queued publishing after approval. Deferred — should be part of a main operator dashboard, not standalone cron.
-- **Operator dashboard:** Web-based UI where the operator reviews drafts, approves/rejects, sees published posts, monitors metrics, triggers generation, manages learnings. Replaces the CLI workflow. All current CLI commands become dashboard features. This is the production approval workflow SR described.
-- **Media library / photo intake:** Business owner uploads real photos (boat shots, sunsets, crew, guests) to a shared cloud folder (Google Drive or similar). The content agent pulls from this library when generating posts — real photos paired with AI-written captions instead of only branded graphics. Supports mixed-source media: operator-provided photos, crew shots, customer UGC (with permission). The system should tag/categorize photos (trip type, mood, subject) so the content agent can match the right photo to the right post. This is what makes posts look real instead of template-generated.
-- **Brand voice learning from existing posts:** Scrape/ingest the client's existing Instagram/Facebook posts and feed them into the content agent prompt as style examples. The AI should learn how the business already communicates — tone, word choice, emoji usage, caption structure, hashtag patterns — and mirror that in generated drafts. This is separate from rejection learning (which teaches what NOT to do). This teaches what TO do. Critical for onboarding new clients who already have a social presence.
+
+**Blocking (for April 15 deadline):**
+- Docker setup (Milestone F) — the one deliverable left
+
+**BlueFinn-specific polish:**
+- Add departure point addresses/directions to client.json (Mood Beach, Village Marina, Spanish Water)
+- [PAYMENT_LINK] cosmetic bug — blank line in confirmation when payment.timing="none"
+- Graphics engine Unicode fix — Pillow font doesn't support ñ, ç (Curaçao renders as boxes)
+
+**Content pipeline improvements:**
+- Post analytics — blocked by Late $29/mo analytics add-on, or use Instagram Graph API directly
+- Content planning optimization — blocked by analytics (no metrics to learn from yet)
+- Graphics engine overhaul — better layouts, different templates per content class
+- Brand voice learning from existing posts — scrape client's IG, learn their style
+- Photo matching — content agent picks from photo library (library exists, matching doesn't)
+
+**Future platform work:**
+- Channel toggle per client (which channels active — currently all-or-nothing)
+- Content toggle per client (on/off)
+- Escalation routing config (where notifications go — currently dashboard only)
+- Open schedule availability model (salons, clinics — build when first Tier 2 client signs)
+- Date range availability model (rentals — build when needed)
+- Dashboard channel badges (Brief 132 — DMs show but no IG/FB/WA icons)
+- Dashboard booking management page
+- Dashboard analytics page
+- Dashboard multi-client view
 
 ---
 

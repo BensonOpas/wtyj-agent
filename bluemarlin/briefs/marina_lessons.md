@@ -399,3 +399,59 @@ inconsistency — system notes are internal and not displayed to
 customers. If the dashboard ever shows system notes by channel, this
 will need fixing (pass channel through to the orchestrator or use
 `dm_store_message` for system notes).
+
+---
+
+## Brief 139 — Manifest API Error Handling
+
+### What happened
+Live DM test (Brief 138): booked Klein Curaçao for April 6, 08:30
+departure. The Google Calendar for that slot returned 404 (calendar
+deleted or service account lost access). The code treated it as "slot
+filled up" — told the customer the slot was taken. Customer tried the
+08:00 slot, Claude returned empty JSON (separate API hiccup), and the
+fallback said "I'll get right back to you" — but there's no mechanism
+to get back. Conversation died.
+
+### The deeper problem
+The manifest failure handler (Step 8) treated ALL errors the same:
+404 config error, 500 transient error, business logic error — all
+showed the same "slot filled up" customer message. No distinction,
+no retry, no escalation for persistent failures.
+
+### What we did
+Added API error detection: check the error string for HTTP codes
+(404, 500, 403, 401) and config errors. For API errors: reset
+booking_confirmed and awaiting_booking_confirmation so the customer
+can retry. Track retry count; after 2 failures, create a [SYSTEM]
+escalation. Clear count on success (circuit breaker doesn't leak
+across bookings). For business errors: unchanged.
+
+Also changed the fallback from "give me a moment" to "could you
+send that again?" — prompts retry instead of promising a callback
+that never comes.
+
+### The brief reviewer caught a critical flaw
+First version of the brief tried to replace the hardcoded "fully
+booked" strings in Step 7 with Marina's `reply_hold_failed`. But
+`reply_hold_failed` is only written when Marina gets the confirmation
+action context — which only happens when `awaiting_booking_confirmation`
+was already True BEFORE the Claude call. On the FIRST availability
+check, it's set AFTER the call by post-validate. So `reply_hold_failed`
+is empty, and the fallback would show the booking summary prompt for
+an unavailable slot. Worse than the hardcoded string.
+
+### Principle
+Not all errors are the same to the customer. "Slot filled up" is an
+honest business outcome. "Calendar API returned 404" is a system
+problem the customer shouldn't see. Distinguish them.
+
+### What to watch for
+- The API error detection uses string matching on the error message.
+  If gws CLI changes its error format, the detection silently fails
+  and all errors become "business" errors. Defensive: also check for
+  single-quote Python dict format (`'code': 404`).
+- The four hardcoded "fully booked" strings in Step 7 are accepted
+  Rule 3 exceptions. They can't use `reply_hold_failed` because it's
+  empty at that point. Future fix: add `reply_hold_failed` to the
+  non-confirmation action context too.

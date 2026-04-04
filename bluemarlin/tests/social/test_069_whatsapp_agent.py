@@ -107,7 +107,7 @@ def test_process_message_whatsapp_failure_fallback_reply(mock_cls):
     mock_cls.return_value.messages.create.side_effect = Exception("API down")
     result = process_message("5991234567", "", "Hello", {}, {},
                               channel="whatsapp")
-    assert "give me a moment" in result["reply"]
+    assert "send that again" in result["reply"]
 
 
 # --- state_registry conversation history tests ---

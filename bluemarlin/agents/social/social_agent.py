@@ -675,8 +675,14 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
 
             res = gws_calendar.create_or_update_manifest(fields)
             if not res.get("ok"):
+                _manifest_error = str(res.get("error", ""))
+                _is_api_error = any(s in _manifest_error for s in (
+                    '"code": 404', '"code": 500', '"code": 403', '"code": 401',
+                    "'code': 404", "'code': 500", "'code': 403", "'code': 401",
+                    'Calendar ID not configured'))
                 bm_logger.log("whatsapp_manifest_failed", phone=phone,
-                              error=res.get("error"))
+                              error=_manifest_error[:200],
+                              error_type="api" if _is_api_error else "business")
                 if flags.get("hold_id"):
                     state_registry.cancel_hold(flags["hold_id"])
                     _h_svc = flags.pop("hold_service_key", "")
@@ -687,15 +693,31 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                         gws_calendar.remove_from_manifest(_h_svc, _h_date, _h_dep)
                 flags["slot_checked"] = False
                 flags["slot_available"] = False
+                if _is_api_error:
+                    _retry_count = flags.get("manifest_retry_count", 0) + 1
+                    flags["manifest_retry_count"] = _retry_count
+                    if _retry_count >= 2:
+                        _cname = fields.get("customer_name") or from_name or "Unknown"
+                        state_registry.create_pending_notification(
+                            'escalation', 'whatsapp', phone, _cname,
+                            f"[SYSTEM] Manifest failure for {_cname} (WhatsApp: {phone})",
+                            f"Booking failed {_retry_count} times due to API error.\n"
+                            f"Error: {_manifest_error[:300]}\n"
+                            f"Fields: {json.dumps(fields, indent=2, ensure_ascii=False)}")
+                        bm_logger.log("whatsapp_manifest_escalated", phone=phone,
+                                      retry_count=_retry_count)
+                    flags["booking_confirmed"] = False
+                    flags["awaiting_booking_confirmation"] = True
                 reply_text = result.get("reply_hold_failed") or reply_text
                 sheets_writer.log_hold_failed({
                     "email": phone, "subject": "WhatsApp",
                     "service_name": fields.get("service_name"),
                     "date": fields.get("date"),
                     "guests": fields.get("guests"),
-                    "error": res.get("error"),
+                    "error": _manifest_error[:200],
                 })
             else:
+                flags.pop("manifest_retry_count", None)
                 flags["hold_created"] = True
                 if flags.get("hold_id"):
                     state_registry.confirm_hold(flags["hold_id"])

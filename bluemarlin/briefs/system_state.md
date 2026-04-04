@@ -841,3 +841,9 @@ Outcome: complete — 617 tests, 0 failures. Deployed.
 Brief 138 — DM Booking: Route DMs Through Booking Orchestrator
 Decision: Route Instagram/Facebook DMs through the WhatsApp booking orchestrator (`handle_incoming_whatsapp_message`) when `booking_flow` is ON. Conversation_id serves as the "phone" key — all state functions accept any string. Reply delivered via Zernio DM API (`send_dm_reply`). When `booking_flow` is OFF, DMs continue using the Q&A agent (`dm_agent.py`). Critical detail: user message stored AFTER orchestrator call to prevent Marina seeing it twice. Only file changed: `webhook_server.py`.
 Outcome: complete — 7/7 new tests pass, 624 total tests pass, 0 failures
+
+---
+
+Brief 139 — Manifest API Error Handling
+Decision: Live DM test exposed that manifest creation failures (Google Calendar 404) tell the customer "slot filled up" when it's actually a config error. Now the code distinguishes API errors (404, 500, 403, 401, config) from business logic errors. API errors: reset booking state so customer can retry on next message, track retry count, escalate to operator after 2 consecutive failures. Business errors: unchanged behavior. Also changed fallback wording from "give me a moment, I'll get right back" to "could you send that again?" — prompts the customer to retry instead of waiting.
+Outcome: complete — 6/6 new tests pass, 624 total pass, 6 pre-existing failures

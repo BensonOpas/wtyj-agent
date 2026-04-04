@@ -147,9 +147,9 @@ skip the brief. Just fix, test, commit, TLDR.
 
 - Email fallback reply in marina_agent.py is a hardcoded string — accepted
   Rule 3 exception for API failure path only.
-- WhatsApp fallback reply in marina_agent.py: "Hey, give me a moment,
-  I'll get right back to you." — same exception. **If the agent name
-  changes from Marina, update both fallback messages together.**
+- WhatsApp/DM fallback reply in marina_agent.py and dm_agent.py:
+  "Sorry, could you send that again? I missed it." — same exception.
+  **If the agent name changes from Marina, update both fallback messages together.**
 
 ---
 
