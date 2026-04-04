@@ -71,8 +71,8 @@ _BOOKING_INTENTS = {"booking", "reschedule"}
 
 # System/automated email prefixes to skip (never reply to these)
 _SYSTEM_EMAIL_PREFIXES = (
-    "noreply@", "no-reply@", "no_reply@", "do-not-reply@", "donotreply@",
-    "mailer-daemon@", "postmaster@", "bounce@",
+    "noreply", "no-reply", "no_reply", "do-not-reply", "donotreply",
+    "mailer-daemon@", "postmaster@", "bounce@", "dmarc",
 )
 
 # ========= HELPERS =========
