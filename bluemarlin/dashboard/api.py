@@ -998,7 +998,7 @@ async def suggest_reply(req: SuggestReplyRequest):
         trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
 
     agent_name = business.get("agent_name", "Marina")
-    company_name = business.get("name", "BlueFinn Charters Curaçao")
+    company_name = business.get("name", "the business")
     persona = csk.get("marina_persona", "")
 
     system_prompt = f"""You are {agent_name}, the booking agent for {company_name}.

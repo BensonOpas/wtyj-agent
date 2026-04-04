@@ -86,9 +86,9 @@ def get_resources() -> dict:
 
 def get_agent_signature() -> str:
     try:
-        return _load().get("business", {}).get("agent_signature", "Marina\nBlueFinn Charters Curaçao")
+        return _load().get("business", {}).get("agent_signature", "The Team")
     except Exception:
-        return "Marina\nBlueFinn Charters Curaçao"
+        return "The Team"
 
 
 def get_common_sense_knowledge() -> dict:

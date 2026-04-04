@@ -219,7 +219,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             f"AGENT SIGNATURE: {signature}"
         )
 
-    return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'BlueFinn Charters Curaçao')}.
+    return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 PERSONA: {csk.get('marina_persona', '')}
 
