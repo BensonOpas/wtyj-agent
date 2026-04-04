@@ -16,72 +16,18 @@ See `marina_status_90.md` for full details.
 
 ---
 
-## Phase 1 — Social Agent
+## Phase 1 — Social Agent — COMPLETE
 
-**Goal:** WhatsApp DM Q&A + Instagram/Facebook auto-posting. Visible, demo-worthy feature.
+**Goal:** WhatsApp DM Q&A + Instagram/Facebook auto-posting + full booking flow on all channels.
 
-### Milestone A: WhatsApp Q&A Live
+### Milestone A: WhatsApp Q&A Live — COMPLETE
+WhatsApp webhook, Q&A agent, full booking orchestrator (availability, holds, payment, confirmation), escalation system (semi + full), relay bridge, debouncing, rate limiting, returning customer detection, multi-booking conversations. Briefs 067-089.
 
-**Delivers:** Customers message BlueFinn on WhatsApp, get instant answers about trips, pricing, availability. Booking requests redirected to email.
+### Milestone B: Auto-Posting Live — COMPLETE
+Content agent, branded graphics engine, Instagram + Facebook publishing via Zernio/Late SDK, rejection learning, photo library, scheduling. Briefs 092-098.
 
-**Architecture:**
-- Separate FastAPI process (`agents/social/webhook_server.py`), own systemd service (`bluemarlin-social`)
-- nginx reverse proxy + Let's Encrypt on `api.wetakeyourjob.com` for Meta webhook HTTPS
-- Own Claude prompt in `agents/social/social_agent.py` — Q&A focused, shorter replies, no booking flow
-- Shared knowledge via `config_loader` (same trips, FAQ, business data as Marina)
-- WhatsApp Cloud API (Meta) for send/receive
-- Conversation tracking in `state_registry.py` (new `whatsapp_threads` table)
-- Dedup by message ID, per-phone rate limiting, anti-loop guard
-
-**Key files:**
-- `agents/social/webhook_server.py` — FastAPI webhook receiver
-- `agents/social/whatsapp_client.py` — parse inbound + send replies
-- `agents/social/social_agent.py` — Claude-powered Q&A
-
-**Risks:** Meta Business verification takes 1-5 business days. Start account setup first.
-
-**Estimated briefs:** 6-8
-
-> **Business milestone:** WhatsApp Q&A demo-ready. Show BlueFinn owner.
-
----
-
-### Milestone B: Auto-Posting Live
-
-**Delivers:** Automatic promotional content published to Instagram and Facebook on a schedule. Operator configures frequency and themes in client.json.
-
-**Architecture:**
-- Claude-powered content generation (`agents/social/content_agent.py`)
-- Meta Graph API for Instagram Content Publishing + Facebook Pages
-- Cron/systemd timer (not always-running — no inbound trigger)
-- Posting schedule and rules in client.json (`social_content` section)
-- Post tracking in `state_registry.py` (new `social_posts` table)
-
-**Key files:**
-- `agents/social/content_agent.py` — generates captions, hashtags, post ideas
-- `agents/social/meta_publisher.py` — Instagram + Facebook publishing
-- `agents/social/auto_poster.py` — cron-triggered scheduler
-
-**Risks:** Meta App Review for `instagram_content_publish` takes 3-5 business days. Images must be at publicly accessible URLs.
-
-**Estimated briefs:** 4-5
-
-> **Business milestone:** Full social presence demo. WhatsApp Q&A + auto-posting both live.
-
----
-
-### Milestone C: Social Hardening
-
-**Delivers:** Production-ready social agent with monitoring, logging, and test coverage.
-
-- WhatsApp booking redirect polish (warm message with email + summary)
-- Structured logging (bm_logger pattern), heartbeat, error alerting
-- Social agent test suite (minimum 20 scenarios)
-- Cross-channel awareness (optional: store partial intent from WhatsApp so Marina recognizes returning customer)
-
-**Estimated briefs:** 2-3
-
-> **Business milestone:** Social agent production-hardened. Confident enough for client presentation.
+### Milestone C: Social Hardening — COMPLETE
+Structured logging, 624 tests, IG/FB DM integration (Zernio webhooks), DM booking through orchestrator, booking flow guard on all channels, feature toggles, terminology system, manifest error handling. Briefs 099-139.
 
 ---
 
@@ -273,8 +219,7 @@ Still TODO:
 **Blocking (for April 15 deadline):**
 - Docker setup (Milestone F) — the one deliverable left
 
-**BlueFinn-specific polish:**
-- Add departure point addresses/directions to client.json (Mood Beach, Village Marina, Spanish Water)
+**Polish:**
 - [PAYMENT_LINK] cosmetic bug — blank line in confirmation when payment.timing="none"
 - Graphics engine Unicode fix — Pillow font doesn't support ñ, ç (Curaçao renders as boxes)
 
