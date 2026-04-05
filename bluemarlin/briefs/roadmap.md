@@ -8,11 +8,11 @@
 
 ---
 
-## Current State (Brief 066)
+## Current State (Brief 142)
 
-Marina (email booking agent) is complete and running in production.
-50 E2E test scenarios, 90% pass rate, zero functional bugs.
-See `marina_status_90.md` for full details.
+Phase 1 complete (Briefs 067-141). Phase 2 complete (Briefs 133-142).
+633 tests, Docker deployed, system running in container on VPS.
+BlueFinn live as first client. Code is fully client-agnostic.
 
 ---
 
@@ -60,9 +60,7 @@ Completed:
 - Restaurant and real estate configs tested and working
 
 Still TODO (non-blocking):
-- Template `client.json.template` for new clients
 - JSON schema validation in config_loader
-- `requirements.txt` with pinned dependencies
 
 ---
 
@@ -82,20 +80,18 @@ Deferred (build when Path A hits limits):
 
 ---
 
-### Milestone F: Docker + Deployment Automation
+### Milestone F: Docker + Deployment Automation — COMPLETE
 
-**Delivers:** Mechanical deployment. New client = fill in client.json + .env, run deploy script.
+**Status:** Done (Brief 142). BlueFinn running in Docker container on VPS.
 
-- Dockerfile (python:3.12-slim + gws CLI binary)
-- docker-compose.yml (template per client)
-- supervisord.conf (runs email poller + webhook server in one container)
-- requirements.txt (pinned Python dependencies)
-- `deploy.sh` — one-command deployment
-- client.json.template (skeleton for new clients)
-- Migrate BlueFinn from systemd to Docker
-- Target: < 1 hour from zero to running
-
-**Estimated briefs:** 2-3
+Completed:
+- Dockerfile (python:3.12-slim + gws binary + supervisord)
+- docker-compose.yml with volume mounts for config/data/logs
+- requirements.txt (27 pinned packages)
+- deploy.sh (build/start/stop/restart/logs/status)
+- client.json.template for new clients
+- BlueFinn migrated from systemd to Docker
+- systemd services disabled (kept for rollback)
 
 > **Business milestone:** Product template ready. First client invoice (setup fee + monthly). Start sales outreach to prospective clients.
 
@@ -172,10 +168,14 @@ Still TODO:
 Done:
 - Instagram + Facebook DMs via Zernio (Briefs 130-131, 138)
 - Instagram + Facebook publishing via Zernio
+- WhatsApp connected to Zernio (Calvin's number +599 9 688 1585, as of 2026-04-05)
+- LinkedIn connected to Zernio (as of 2026-04-05)
+- Twitter/X connected to Zernio (as of 2026-04-05)
 
 Still TODO:
 - Operator notification system (configurable alerts via email + WhatsApp)
-- Additional publishing platforms (X/Twitter, LinkedIn, TikTok — all supported by Zernio, just need connecting)
+- Publishing to LinkedIn, X/Twitter (accounts connected, code not wired yet)
+- WhatsApp via Zernio — potential to replace Meta Cloud API for WhatsApp messages (needs investigation)
 - Comment handling via Zernio
 
 ---
@@ -234,13 +234,16 @@ Still TODO:
 
 ### Open Items
 
-**Blocking (for April 15 deadline):**
-- Docker setup (Milestone F) — the one deliverable left
-
-**Done (this session):**
-- ~~Booking confirmation wording~~ — Brief 141. "Check availability and hold a spot" instead of "go ahead and book."
-- ~~Booking flow pacing~~ — Brief 141. BOOKING PACING prompt section added. Marina gives service info before collecting fields.
-- ~~Client email config~~ — Brief 141. Added `booking_email` to client.json. DM agent uses it for redirect.
+**Done (Briefs 138-142):**
+- ~~Docker setup~~ — Brief 142. Running in container.
+- ~~Booking confirmation wording~~ — Brief 141. "Check availability and hold a spot."
+- ~~Booking flow pacing~~ — Brief 141. BOOKING PACING prompt section.
+- ~~Client email config~~ — Brief 141. `booking_email` field added.
+- ~~Manifest error handling~~ — Brief 139. API errors allow retry, escalate after 2.
+- ~~Large group pre-check~~ — Brief 140. Groups > capacity get escalated.
+- ~~DM booking~~ — Brief 138. IG/FB DMs through orchestrator.
+- ~~Noreply email filter~~ — Quick fix. Marina stops replying to DMARC reports.
+- ~~BlueFinn fallback defaults~~ — Quick fix. Generic placeholders.
 
 **Prompt / UX (before or alongside Docker):**
 - Large group escalation — rework to full escalation with warm handoff. Let Marina handle in prompt, not Python override. (Discussed 2026-04-04)
