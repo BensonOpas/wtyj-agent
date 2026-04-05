@@ -219,10 +219,13 @@ Still TODO:
 **Blocking (for April 15 deadline):**
 - Docker setup (Milestone F) — the one deliverable left
 
+**Done (this session):**
+- ~~Booking confirmation wording~~ — Brief 141. "Check availability and hold a spot" instead of "go ahead and book."
+- ~~Booking flow pacing~~ — Brief 141. BOOKING PACING prompt section added. Marina gives service info before collecting fields.
+- ~~Client email config~~ — Brief 141. Added `booking_email` to client.json. DM agent uses it for redirect.
+
 **Prompt / UX (before or alongside Docker):**
-- Booking confirmation wording — Marina says "want me to book?" before checking availability. Change to "let me check availability" vibe. Prompt change in action context.
-- Booking flow too fast on all channels — Marina jumps to field collection. Should give info about the service first, be conversational, then naturally flow into booking.
-- Large group escalation — change from pre-check to full escalation with warm handoff. "That's a big group, let me connect you with the team." Not a Python override, let Marina handle it in prompt.
+- Large group escalation — rework to full escalation with warm handoff. Let Marina handle in prompt, not Python override. (Discussed 2026-04-04)
 - AI tone tuning — em-dashes, "I'd be happy to", over-eagerness. More banned phrases in prompt + post-filter. Later development.
 - FAQ learning from relay answers — when operator answers a relay question, store as FAQ for future. New dashboard tab. Later development.
 
@@ -233,7 +236,6 @@ Still TODO:
 
 **Polish:**
 - [PAYMENT_LINK] cosmetic bug — blank line when payment.timing="none"
-- Client email config — business.email should be the customer-facing inbox (hello@wetakeyourjob.com for demo), business.support_email for escalations (info@bluefinncharters.com). Verify both are used correctly.
 
 **Content pipeline:**
 - Post analytics — blocked by Late $29/mo add-on or direct Instagram Graph API
@@ -253,6 +255,20 @@ Still TODO:
 - Dashboard analytics page
 - Dashboard multi-client view
 - Payment integration — Stripe Connect webhook (we watch transactions, never touch money). Must work for any business type including no-payment businesses.
+
+**Needs discussion (noted 2026-04-04):**
+
+These are open design questions Benson raised. Not ready to build — need thinking first.
+
+1. **Payment integration design** — Must work for any business type. Some have online payments (Stripe), some are bank-only, some have no payment at all. Stripe Connect = we watch the webhook, never touch money. But what about businesses without Stripe? What about bank transfer? The `payment.timing` config already handles no-payment cases. The open question is: how does the real Stripe integration work for businesses that DO take online payment, and how do we make it generic enough for any payment provider?
+
+2. **Booking flow balance** — Brief 141 added pacing (service info before fields). But email replies still feel thin. The balance: enough info to feel professional, not so much that Marina blabs. Need real examples of good vs bad email replies to tune further.
+
+3. **Large group escalation flow** — Currently a Python pre-check (Brief 140). Should be reworked: let Marina handle it in her prompt as a full escalation with warm handoff. "That's a big group, let me connect you with the team." The team may need to arrange private charters or special logistics that Marina can't handle.
+
+4. **BlueMarlin-hosted booking page** — If a business doesn't have a website, we host a branded booking form for them. Reads from client.json (brand colors, services, fields). Customer fills form → hits our API → Marina handles it. Like a Calendly but for any business type. Phase 3 work but the concept needs fleshing out.
+
+5. **Email routing confirmed** — `business.booking_email` = customer-facing inbox (hello@wetakeyourjob.com for demo). `business.email` = business owner's email. `business.support_email` = escalation destination. All in client.json. Done in Brief 141.
 
 ---
 
