@@ -1,0 +1,17 @@
+services:
+  bluemarlin:
+    build: .
+    container_name: bluemarlin-${CLIENT_NAME:-default}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8001}:8001"
+    env_file:
+      - ./config/bluemarlin.env
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/bluemarlin-calendar-key.json
+    volumes:
+      - ./config/client.json:/app/config/client.json:ro
+      - ./config/bluemarlin-calendar-key.json:/app/config/bluemarlin-calendar-key.json:ro
+      - ./config/azure_refresh_token.txt:/app/config/azure_refresh_token.txt:rw
+      - ./data:/app/data
+      - ./logs:/app/logs

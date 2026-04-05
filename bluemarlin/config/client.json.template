@@ -1,0 +1,62 @@
+{
+  "business": {
+    "name": "BUSINESS_NAME",
+    "email": "owner@business.com",
+    "booking_email": "bookings@yourdomain.com",
+    "phone": "+1234567890",
+    "whatsapp": "+1234567890",
+    "location": "Business Address",
+    "languages": ["English"],
+    "operating_days": "Monday to Friday",
+    "agent_name": "Marina",
+    "agent_signature": "Marina\nBUSINESS_NAME",
+    "support_email": "owner@business.com",
+    "spreadsheet_id": "GOOGLE_SHEETS_ID"
+  },
+  "payment": {
+    "timing": "none",
+    "methods": [],
+    "cancellation_policy": ""
+  },
+  "features": {
+    "booking_flow": true
+  },
+  "terminology": {
+    "service_label": "service",
+    "party_size_label": "guests",
+    "slot_label": "time slot"
+  },
+  "booking_rules": {
+    "required_fields": ["service_name", "date", "guests"],
+    "hold_duration_hours": 24,
+    "group_threshold_requires_human": 15,
+    "max_bookings_per_thread": 3
+  },
+  "services": {
+    "example_service": {
+      "display_name": "Example Service",
+      "description": "Description of the service",
+      "price": 50,
+      "capacity": 20,
+      "days_available": "daily",
+      "duration_hours": 2,
+      "included": ["item1", "item2"],
+      "slots": [
+        {
+          "time": "09:00",
+          "resource": "Resource Name",
+          "location": "Departure Location",
+          "calendar_id": "GOOGLE_CALENDAR_ID@group.calendar.google.com"
+        }
+      ]
+    }
+  },
+  "service_aliases": {},
+  "faq": {
+    "hours": "We operate Monday to Friday, 9am to 5pm.",
+    "parking": "Free parking available on site."
+  },
+  "common_sense_knowledge": {
+    "marina_persona": "Friendly, professional, and helpful."
+  }
+}

@@ -1,0 +1,10 @@
+bluemarlin/backups/
+bluemarlin/tests/
+bluemarlin/briefs/
+bluemarlin/src/
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+.git/
+.gitignore
+*.md
