@@ -100,7 +100,7 @@ def test_build_booking_summary_west_coast():
     assert "Wednesday" in summary
     assert "09:00" in summary
     assert "Red Dragon" in summary
-    assert "book this?" in summary.lower()
+    assert "check availability" in summary.lower()
 
 
 def test_build_booking_summary_single_departure_auto():
@@ -215,11 +215,12 @@ def test_orchestrator_post_validate_day_override(mock_process):
     _cleanup_phone(phone)
 
 
+@patch("shared.state_registry.create_soft_hold")
 @patch("agents.social.social_agent.sheets_writer")
 @patch("agents.social.social_agent.payment_stub")
 @patch("agents.social.social_agent.gws_calendar")
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, mock_sheets):
+def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, mock_sheets, mock_hold):
     """Valid booking fields trigger summary and awaiting_booking_confirmation flag."""
     phone = "TEST_070_SUMMARY_001"
     _cleanup_phone(phone)
@@ -234,11 +235,12 @@ def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, moc
         "flags": {}, "internal_note": ""
     }
     mock_cal.check_availability.return_value = {"available": True, "spots_remaining": 23, "capacity": 25}
+    mock_hold.return_value = 888
     msg = {"from": phone, "text": "West Coast Beach March 18 for 2", "from_name": "John"}
     reply = handle_incoming_whatsapp_message(msg)
     # Should contain booking summary (from _post_validate — single departure auto-selects 09:00)
     assert "$240" in reply  # 2 * $120
-    assert "book this?" in reply.lower()
+    assert "check availability" in reply.lower()
     # Check awaiting flag was set
     state = state_registry.wa_get_booking_state(phone)
     assert state["flags"].get("awaiting_booking_confirmation") is True

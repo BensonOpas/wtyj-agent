@@ -853,3 +853,9 @@ Outcome: complete — 6/6 new tests pass, 624 total pass, 6 pre-existing failure
 Brief 140 — Large Group Pre-Check
 Decision: Adversarial E2E test found that groups exceeding service capacity (e.g., 200 on a 20-person boat) get "fully booked" instead of being escalated. Added a capacity pre-check at the top of Step 7: if guests > capacity, skip availability check, create escalation, send Marina's original conversational reply (not the booking summary). Normal groups still go through the standard availability check.
 Outcome: complete — 5/5 new tests pass, 629 total pass, 6 pre-existing failures
+
+---
+
+Brief 141 — Booking UX + Email Config
+Decision: Three fixes from Phase 1 review. (1) Booking summary changed from "Want me to go ahead and book this?" to "Want me to check availability and hold a spot for you?" — sets correct expectation before availability check. (2) Added BOOKING PACING to Marina's prompt — give service info before collecting fields. (3) Added `business.booking_email` to client.json for customer-facing contact email, separate from business owner email.
+Outcome: complete — 4/4 new tests pass, 633 total pass, 6 pre-existing failures

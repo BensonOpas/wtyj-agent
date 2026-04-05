@@ -26,7 +26,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     company_name = business.get("name", "the business")
     wa_number = business.get("whatsapp", "")
     wa_link = wa_number.replace("+", "").replace(" ", "")
-    booking_email = business.get("email", "")
+    booking_email = business.get("booking_email", business.get("email", ""))
     languages = ", ".join(business.get("languages", ["English"]))
     terminology = config_loader.get_raw().get("terminology", {})
     service_label = terminology.get("service_label", "service")

@@ -83,7 +83,7 @@ def _build_booking_summary(fields, service):
         f"{slot_time} from {location} on {resource}. "
         f"{guests} guests, ${total} total (${price_base} each). "
         f"Includes {included}.\n\n"
-        f"Want me to go ahead and book this?"
+        f"Want me to check availability and hold a spot for you?"
     )
 
 
@@ -91,9 +91,10 @@ def _build_action_context(flags):
     """Build action_context string for the Claude prompt based on flags."""
     if flags.get("awaiting_booking_confirmation"):
         return (
-            "ACTION: A booking summary was sent. The customer is replying. "
+            "ACTION: A booking summary was sent and the customer was asked if they "
+            "want you to check availability. The customer is replying. "
             "Determine if they are: (a) confirming — set booking_confirmed: true, "
-            "awaiting_booking_confirmation: false, write a warm celebratory reply "
+            "awaiting_booking_confirmation: false, write a warm confirmation reply "
             "with the exact string [PAYMENT_LINK] where the payment link goes. "
             "Also write reply_hold_failed — an apologetic message if the slot turns "
             "out to be unavailable, without [PAYMENT_LINK]; "

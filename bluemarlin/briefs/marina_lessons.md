@@ -479,3 +479,24 @@ The pre-check uses `>` not `>=`. A group of exactly 20 on a 20-capacity
 boat goes through normal availability. This is intentional — if the
 slot is empty, 20 fits. If partially filled, `check_availability`
 handles it correctly.
+
+---
+
+## Brief 141 — Booking UX + Email Config
+
+### Decision
+Three UX fixes: booking summary wording (check availability, not
+book), booking pacing prompt (give service info first), and separate
+booking_email config field.
+
+### Key technique
+The booking summary is a Python-generated string, not a Claude reply.
+Changing one line in `_build_booking_summary()` changes what every
+customer sees. The action context prompt was also updated to match —
+Marina now knows the customer was asked about availability, not booking.
+
+### What to watch for
+The `booking_email` field falls back to `business.email` if not set.
+New client configs should include `booking_email` explicitly. The DM
+agent is the only place that currently uses it — if other code paths
+need the customer-facing email, they should also read `booking_email`.
