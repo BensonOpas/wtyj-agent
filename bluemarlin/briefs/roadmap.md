@@ -219,27 +219,40 @@ Still TODO:
 **Blocking (for April 15 deadline):**
 - Docker setup (Milestone F) — the one deliverable left
 
-**Polish:**
-- [PAYMENT_LINK] cosmetic bug — blank line in confirmation when payment.timing="none"
-- Graphics engine Unicode fix — Pillow font doesn't support ñ, ç (Curaçao renders as boxes)
+**Prompt / UX (before or alongside Docker):**
+- Booking confirmation wording — Marina says "want me to book?" before checking availability. Change to "let me check availability" vibe. Prompt change in action context.
+- Booking flow too fast on all channels — Marina jumps to field collection. Should give info about the service first, be conversational, then naturally flow into booking.
+- Large group escalation — change from pre-check to full escalation with warm handoff. "That's a big group, let me connect you with the team." Not a Python override, let Marina handle it in prompt.
+- AI tone tuning — em-dashes, "I'd be happy to", over-eagerness. More banned phrases in prompt + post-filter. Later development.
+- FAQ learning from relay answers — when operator answers a relay question, store as FAQ for future. New dashboard tab. Later development.
 
-**Content pipeline improvements:**
-- Post analytics — blocked by Late $29/mo analytics add-on, or use Instagram Graph API directly
-- Content planning optimization — blocked by analytics (no metrics to learn from yet)
-- Graphics engine overhaul — better layouts, different templates per content class
+**Brand / Config:**
+- Brand assets in client config — logo, icon, fonts, colors for AI content generation + dashboard white-labeling
+- Client website URL in config — Marina references it in conversations
+- Deprecate Pillow graphics engine — AI image generation replaces it. Deactivate, don't delete yet.
+
+**Polish:**
+- [PAYMENT_LINK] cosmetic bug — blank line when payment.timing="none"
+- Client email config — business.email should be the customer-facing inbox (hello@wetakeyourjob.com for demo), business.support_email for escalations (info@bluefinncharters.com). Verify both are used correctly.
+
+**Content pipeline:**
+- Post analytics — blocked by Late $29/mo add-on or direct Instagram Graph API
+- Content planning optimization — blocked by analytics
 - Brand voice learning from existing posts — scrape client's IG, learn their style
-- Photo matching — content agent picks from photo library (library exists, matching doesn't)
+- Photo matching — content agent picks from photo library
 
 **Future platform work:**
-- Channel toggle per client (which channels active — currently all-or-nothing)
+- BlueMarlin-hosted booking page — branded form per client, reads from config. For businesses without a website.
+- Channel toggle per client (which channels active)
 - Content toggle per client (on/off)
-- Escalation routing config (where notifications go — currently dashboard only)
+- Escalation routing config (where notifications go)
 - Open schedule availability model (salons, clinics — build when first Tier 2 client signs)
 - Date range availability model (rentals — build when needed)
-- Dashboard channel badges (Brief 132 — DMs show but no IG/FB/WA icons)
+- Dashboard channel badges (Brief 132)
 - Dashboard booking management page
 - Dashboard analytics page
 - Dashboard multi-client view
+- Payment integration — Stripe Connect webhook (we watch transactions, never touch money). Must work for any business type including no-payment businesses.
 
 ---
 
