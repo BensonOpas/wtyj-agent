@@ -859,3 +859,9 @@ Outcome: complete — 5/5 new tests pass, 629 total pass, 6 pre-existing failure
 Brief 141 — Booking UX + Email Config
 Decision: Three fixes from Phase 1 review. (1) Booking summary changed from "Want me to go ahead and book this?" to "Want me to check availability and hold a spot for you?" — sets correct expectation before availability check. (2) Added BOOKING PACING to Marina's prompt — give service info before collecting fields. (3) Added `business.booking_email` to client.json for customer-facing contact email, separate from business owner email.
 Outcome: complete — 4/4 new tests pass, 633 total pass, 6 pre-existing failures
+
+---
+
+Brief 142 — Docker Setup
+Decision: Containerize BlueMarlin with Docker. One container per client running email poller + webhook server via supervisord. python:3.12-slim image with gws CLI binary. Config and data mounted as volumes. BlueFinn migrated from systemd to Docker. Deploy script for one-command management. Client template for onboarding.
+Outcome: complete — container running on VPS, all health checks pass, systemd disabled. Three build issues fixed during execution (setuptools v82 removed pkg_resources, python-multipart missing, volume path mismatch).

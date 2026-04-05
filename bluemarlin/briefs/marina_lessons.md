@@ -500,3 +500,43 @@ The `booking_email` field falls back to `business.email` if not set.
 New client configs should include `booking_email` explicitly. The DM
 agent is the only place that currently uses it — if other code paths
 need the customer-facing email, they should also read `booking_email`.
+
+---
+
+## Brief 142 — Docker Setup
+
+### What happened
+Containerized BlueMarlin and migrated BlueFinn from systemd to Docker.
+Three build failures during execution, all fixed within minutes.
+
+### Problem 1: setuptools v82 removed pkg_resources
+supervisor requires `pkg_resources` which comes from `setuptools`.
+But `setuptools>=82.0` moved `pkg_resources` out. The `>=70.0.0`
+constraint pulled v82, which broke supervisor. Fixed by pinning
+`setuptools==75.8.0`. Lesson: always pin exact versions in Docker,
+never use `>=`.
+
+### Problem 2: python-multipart not in requirements
+On the VPS, `python-multipart` was installed system-wide by an earlier
+`pip install`. The Docker image only has what's in requirements.txt.
+FastAPI requires it for form data (file uploads). Fixed by adding to
+requirements.txt. Lesson: requirements.txt must be complete — Docker
+images don't inherit system packages.
+
+### Problem 3: volume path mismatch
+The git repo root on VPS is `/root/` (not `/root/bluemarlin/`).
+docker-compose.yml said `./config/` but config lives at
+`./bluemarlin/config/`. Fixed by prefixing all volume paths with
+`bluemarlin/`. Lesson: always verify the directory structure on the
+target machine before writing Docker paths.
+
+### Problem 4: Docker layer caching
+After fixing requirements.txt, `docker compose build` reused the
+cached pip install layer. Required `--no-cache` flag. Lesson: when
+changing requirements, always rebuild with `--no-cache`.
+
+### What to watch for
+The deploy workflow changed. No more `ssh && git pull && systemctl
+restart`. Now it's `ssh && git pull && docker compose build &&
+docker compose up -d`. The deploy.sh script handles this but infra.md
+needs updating.

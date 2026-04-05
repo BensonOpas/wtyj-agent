@@ -77,28 +77,26 @@ The systemd units source this file at startup.
 
 ---
 
-## Services (systemd)
+## Services (Docker — as of Brief 142)
 
-### Email Poller
-
-| Item | Value |
-|------|-------|
-| Service name | `bluemarlin` |
-| What it does | IMAP polling → Marina agent → booking flow → SMTP reply |
-| Status | `systemctl is-active bluemarlin` |
-| Restart | `systemctl restart bluemarlin` |
-| Logs | `journalctl -u bluemarlin -n 50` |
-
-### Social Webhook Server
+Single Docker container running both services via supervisord.
 
 | Item | Value |
 |------|-------|
-| Service name | `bluemarlin-social` |
-| What it does | FastAPI: WhatsApp webhook + Zernio DM webhook + dashboard API + scheduler |
-| Internal port | `8001` (localhost only) |
-| Status | `systemctl is-active bluemarlin-social` |
-| Restart | `systemctl restart bluemarlin-social` |
-| Logs | `journalctl -u bluemarlin-social -n 50` |
+| Container name | `bluemarlin-default` |
+| Image | `root-bluemarlin` (built from Dockerfile) |
+| Port | `8001` (mapped to host) |
+| Status | `docker compose ps` |
+| Restart | `docker compose restart` |
+| Logs | `docker compose logs --tail=50` or `/root/bluemarlin/logs/` |
+| Processes inside | `email-poller` + `webhook-server` (via supervisord) |
+
+### Old services (systemd — disabled, kept for rollback)
+
+| Service | Command to re-enable |
+|---------|---------------------|
+| `bluemarlin` (email poller) | `systemctl enable --now bluemarlin` |
+| `bluemarlin-social` (webhook server) | `systemctl enable --now bluemarlin-social` |
 
 ---
 
@@ -213,19 +211,33 @@ For full Zernio feature reference → `memory/reference_late_dms.md`
 
 ---
 
-## Deploy Flow
+## Deploy Flow (Docker — as of Brief 142)
 
 ```bash
-# Full deploy (both services)
-ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin && systemctl restart bluemarlin-social"
+# Code-only deploy (no new packages)
+ssh root@108.61.192.52 "cd /root && git pull && docker compose build && docker compose up -d"
 
-# Social only (faster, no email restart)
-ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin-social"
+# Full rebuild (new packages or Dockerfile changes)
+ssh root@108.61.192.52 "cd /root && git pull && docker compose down && docker compose build --no-cache && docker compose up -d"
+
+# Check status
+ssh root@108.61.192.52 "docker compose ps && curl -s http://localhost:8001/health"
+
+# View logs
+ssh root@108.61.192.52 "docker compose logs --tail=50"
 ```
 
 Key auth configured — no password needed.
 
-After adding new pip packages: `ssh root@108.61.192.52 "pip3 install <package> --break-system-packages"`
+**Rollback to systemd (if Docker fails):**
+```bash
+ssh root@108.61.192.52 "docker compose down && systemctl start bluemarlin && systemctl start bluemarlin-social"
+```
+
+### Old deploy flow (systemd — disabled, kept for rollback)
+```bash
+ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin && systemctl restart bluemarlin-social"
+```
 
 ---
 
