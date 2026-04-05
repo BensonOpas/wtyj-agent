@@ -540,3 +540,25 @@ The deploy workflow changed. No more `ssh && git pull && systemctl
 restart`. Now it's `ssh && git pull && docker compose build &&
 docker compose up -d`. The deploy.sh script handles this but infra.md
 needs updating.
+
+---
+
+## Brief 143 — Zernio WhatsApp
+
+### Decision
+Route WhatsApp through Zernio instead of Meta Cloud API. One API for
+all messaging channels. Simpler onboarding for new clients.
+
+### Key technique: reuse existing debounce buffer
+The Meta WhatsApp debounce system (`_buffer_message` + `_flush_buffer`)
+already handles rapid-fire message batching. Zernio WhatsApp messages
+get injected into the same buffer with `_zernio_*` metadata fields.
+`_flush_buffer` checks for these fields to decide: send via Zernio or
+Meta. No new debounce code needed.
+
+### What to watch for
+After deploying, the Meta WhatsApp webhook must be disabled in Meta's
+developer dashboard. Until then, WhatsApp messages arrive TWICE (once
+from Meta, once from Zernio) and get processed twice. The dedup check
+won't help because Meta and Zernio use different message IDs for the
+same message.

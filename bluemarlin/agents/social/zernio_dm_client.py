@@ -77,7 +77,7 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
                        data_keys=list(data.keys()) if isinstance(data, dict) else [])
         return None
 
-    channel = f"{platform}_dm" if platform else "unknown_dm"
+    channel = "whatsapp" if platform == "whatsapp" else (f"{platform}_dm" if platform else "unknown_dm")
 
     return {
         "conversation_id": conversation_id,

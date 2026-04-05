@@ -163,15 +163,63 @@ def _flush_buffer(phone):
         log("whatsapp_batch_flushed", phone=phone, count=batched_count,
             combined_length=len(combined_text))
     try:
-        reply_text = handle_incoming_whatsapp_message(final_msg)
-        # Always store user message — even if reply is empty, context must be preserved
-        state_registry.wa_store_message(phone, "user", combined_text)
-        if reply_text:
-            send_text_message(to=phone, text=reply_text)
-            state_registry.wa_store_message(phone, "assistant", reply_text)
+        # Check if this came from Zernio (has _zernio metadata)
+        _zernio_conv = final_msg.get("_zernio_conversation_id")
+        _zernio_acct = final_msg.get("_zernio_account_id")
+        _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
+        _zernio_sender = final_msg.get("_zernio_sender_name", "")
+        if _zernio_conv:
+            # Zernio WhatsApp — check booking_flow toggle
+            _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+            if _booking_flow_on:
+                reply_text = handle_incoming_whatsapp_message(final_msg)
+                # Store user message after orchestrator (same ordering as DM path)
+                state_registry.dm_store_message(
+                    conversation_id=_zernio_conv,
+                    channel=_zernio_channel,
+                    role="user",
+                    text=combined_text,
+                    sender_name=_zernio_sender,
+                )
+            else:
+                # Q&A only — use DM agent
+                _dm_msg = {
+                    "conversation_id": _zernio_conv,
+                    "platform": "whatsapp",
+                    "channel": _zernio_channel,
+                    "sender_name": _zernio_sender,
+                    "text": combined_text,
+                    "account_id": _zernio_acct,
+                    "message_id": final_msg.get("message_id", ""),
+                }
+                # Store user message before DM agent (same as DM path)
+                state_registry.dm_store_message(
+                    conversation_id=_zernio_conv,
+                    channel=_zernio_channel,
+                    role="user",
+                    text=combined_text,
+                    sender_name=_zernio_sender,
+                )
+                reply_text = handle_incoming_dm(_dm_msg)
+            if reply_text:
+                send_dm_reply(_zernio_conv, _zernio_acct, reply_text)
+                state_registry.dm_store_message(
+                    conversation_id=_zernio_conv,
+                    channel=_zernio_channel,
+                    role="assistant",
+                    text=reply_text,
+                )
+        else:
+            # Meta WhatsApp (legacy) — original path
+            reply_text = handle_incoming_whatsapp_message(final_msg)
+            state_registry.wa_store_message(phone, "user", combined_text)
+            if reply_text:
+                send_text_message(to=phone, text=reply_text)
+                state_registry.wa_store_message(phone, "assistant", reply_text)
     except Exception as e:
-        log("webhook_process_error", source="meta_whatsapp", error=str(e),
-            phone=phone)
+        log("webhook_process_error",
+            source="zernio_whatsapp" if final_msg.get("_zernio_conversation_id") else "meta_whatsapp",
+            error=str(e), phone=phone)
 
 
 @app.post("/webhooks/zernio")
@@ -221,6 +269,22 @@ def _process_zernio_event(payload: dict):
         conversation_id = msg["conversation_id"]
         channel = msg["channel"]
         account_id = msg["account_id"]
+
+        # WhatsApp via Zernio: debounce like Meta WhatsApp
+        if msg["platform"] == "whatsapp":
+            _wa_msg = {
+                "from": conversation_id,
+                "text": text,
+                "from_name": msg.get("sender_name", ""),
+                "message_id": msg["message_id"],
+                "_zernio_conversation_id": conversation_id,
+                "_zernio_account_id": account_id,
+                "_zernio_channel": channel,
+                "_zernio_sender_name": msg.get("sender_name", ""),
+            }
+            send_typing_indicator(conversation_id, account_id)
+            _buffer_message(_wa_msg)
+            return
 
         # Send typing indicator (best-effort)
         send_typing_indicator(conversation_id, account_id)

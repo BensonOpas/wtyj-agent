@@ -865,3 +865,9 @@ Outcome: complete — 4/4 new tests pass, 633 total pass, 6 pre-existing failure
 Brief 142 — Docker Setup
 Decision: Containerize BlueMarlin with Docker. One container per client running email poller + webhook server via supervisord. python:3.12-slim image with gws CLI binary. Config and data mounted as volumes. BlueFinn migrated from systemd to Docker. Deploy script for one-command management. Client template for onboarding.
 Outcome: complete — container running on VPS, all health checks pass, systemd disabled. Three build issues fixed during execution (setuptools v82 removed pkg_resources, python-multipart missing, volume path mismatch).
+
+---
+
+Brief 143 — Zernio WhatsApp
+Decision: Route WhatsApp through Zernio instead of Meta Cloud API. WhatsApp messages now come through the same Zernio webhook as IG/FB DMs, get debounced (batching rapid-fire messages), processed through the orchestrator (or DM agent when booking_flow=false), and replied to via Zernio API. Channel stored as "whatsapp" (not "whatsapp_dm"). Meta WhatsApp code kept as fallback. Manual step: disable Meta webhook after verifying Zernio works live.
+Outcome: complete — 6/6 new tests pass, 639 total pass, 6 pre-existing failures
