@@ -87,14 +87,32 @@ Deferred (build when Path A hits limits):
 **Delivers:** Mechanical deployment. New client = fill in client.json + .env, run deploy script.
 
 - Dockerfile (python:3.12-slim + gws CLI binary)
-- docker-compose.yml (marina + social-webhook + social-poster services)
+- docker-compose.yml (template per client)
+- supervisord.conf (runs email poller + webhook server in one container)
+- requirements.txt (pinned Python dependencies)
 - `deploy.sh` — one-command deployment
+- client.json.template (skeleton for new clients)
 - Migrate BlueFinn from systemd to Docker
 - Target: < 1 hour from zero to running
 
-**Estimated briefs:** 4-6
+**Estimated briefs:** 2-3
 
 > **Business milestone:** Product template ready. First client invoice (setup fee + monthly). Start sales outreach to prospective clients.
+
+**What Docker does NOT solve (noted 2026-04-05):**
+
+These are per-client manual steps that stay manual regardless of Docker. This is the "setup fee" work.
+
+1. **Email per client** — each client needs an Outlook inbox + Azure OAuth. First token requires interactive browser login. 30-60 min per client. Future: switch to shared email provider (Mailgun/SendGrid) to eliminate this.
+2. **WhatsApp per client** — own WhatsApp Business number, Meta Business account, webhook URL. Meta verification 1-5 business days.
+3. **Zernio per client** — connect their IG/FB accounts in Zernio dashboard. Manual.
+4. **Google Calendar per client** — create calendars for their services, share with service account. Manual.
+5. **SSL/nginx per client** — domain DNS pointing to VPS, SSL cert via certbot, nginx config. Partially automatable.
+6. **Monitoring** — no built-in way to know if a container is down. Need health check dashboard or alerting. Build later.
+7. **Updates** — code changes require rebuilding the image and restarting all containers. Need a script for this.
+8. **Database backups** — each client has their own SQLite. Need a backup cron job.
+
+An **onboarding checklist** document should be created alongside Docker to formalize these steps.
 
 ---
 
