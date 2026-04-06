@@ -1,7 +1,7 @@
 services:
-  bluemarlin:
-    image: root-bluemarlin
-    container_name: bluemarlin-adamus
+  agent:
+    image: wtyj-agent
+    container_name: wtyj-adamus
     restart: unless-stopped
     ports:
       - "8002:8001"

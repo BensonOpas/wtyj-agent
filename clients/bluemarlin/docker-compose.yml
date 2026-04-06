@@ -1,9 +1,9 @@
 services:
-  bluemarlin:
+  agent:
     build:
       context: ../..
-    image: root-bluemarlin
-    container_name: bluemarlin-default
+    image: wtyj-agent
+    container_name: wtyj-bluemarlin
     restart: unless-stopped
     ports:
       - "8001:8001"

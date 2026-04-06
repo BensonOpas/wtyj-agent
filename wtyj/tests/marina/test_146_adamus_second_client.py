@@ -186,7 +186,8 @@ def adamus_compose_text():
 
 
 def test_adamus_docker_compose_uses_prebuilt_image(adamus_compose_text):
-    assert "image: root-bluemarlin" in adamus_compose_text
+    # Brief 152: image renamed from root-bluemarlin to wtyj-agent
+    assert "image: wtyj-agent" in adamus_compose_text
     assert "build:" not in adamus_compose_text
 
 
@@ -195,4 +196,5 @@ def test_adamus_docker_compose_port_8002(adamus_compose_text):
 
 
 def test_adamus_docker_compose_container_name(adamus_compose_text):
-    assert "bluemarlin-adamus" in adamus_compose_text
+    # Brief 152: container renamed from bluemarlin-adamus to wtyj-adamus
+    assert "wtyj-adamus" in adamus_compose_text

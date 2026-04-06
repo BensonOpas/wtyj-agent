@@ -76,8 +76,9 @@ def test_bluemarlin_docker_compose_uses_port_8001():
 
 
 def test_bluemarlin_docker_compose_image_name():
+    # Brief 152: image renamed from root-bluemarlin to wtyj-agent
     content = _read(BM_COMPOSE)
-    assert "image: root-bluemarlin" in content, "Image name must be root-bluemarlin"
+    assert "image: wtyj-agent" in content, "Image name must be wtyj-agent"
 
 
 # ---------------------------------------------------------------------------

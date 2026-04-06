@@ -164,9 +164,10 @@ def test_adamus_docker_compose_preserves_data_and_logs_mounts():
 
 
 def test_adamus_docker_compose_preserves_image_ref():
-    """Regression guard: Adamus must use the pre-built image, not start rebuilding its own."""
+    """Regression guard: Adamus must use the pre-built image, not start rebuilding its own.
+    Brief 152: image renamed from root-bluemarlin to wtyj-agent."""
     content = _read(ADAMUS_COMPOSE_PATH)
-    assert "image: root-bluemarlin" in content, "Adamus image ref missing or changed"
+    assert "image: wtyj-agent" in content, "Adamus image ref missing or changed"
     assert "build:" not in content, "Adamus docker-compose.yml added a build: directive"
 
 
