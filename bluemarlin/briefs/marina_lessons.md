@@ -891,3 +891,88 @@ hygiene, dockerignore for image hygiene.
 This was the mental-model bug that caused the Brief 146 discovery.
 "It's gitignored, so it's not in the image" is wrong. "It's
 dockerignored, so it's not in the image" is right.
+
+---
+
+## Brief 149 — Structured agent_persona Config
+
+### Decision
+Replaced the free-text `common_sense_knowledge.marina_persona` blob with
+a structured `agent_persona` section with 10 discrete fields (tone,
+language_register, greeting_style, closing_style, brand_voice_rules,
+topics_allowed, topics_refused, small_talk, escalation_tone, freeform_notes).
+The prompt builder assembles a multi-section block from these fields with
+empty-field skipping. Backward compat preserved via fallback to the legacy
+string when the structured section is missing. Also added `operating_mode`
+as a human-readable alias for `booking_flow`.
+
+### Outcome
+19/19 new tests, 700 total, zero new regressions. Live verification inside
+both containers showed distinct structured personas active for BlueFinn
+and Adamus. The reviewer cycle took two rounds and found 8 total issues
+(5 in round 1, 3 in round 2). All were material — doubling-injection via
+the auto-iterator, a second persona reader in dashboard/api.py, dead
+variable binding, a decorative test that couldn't catch its target bug.
+
+### Technique — invisible auto-injection via _build_client_context()
+
+`marina_agent._build_client_context()` has a loop that iterates every
+top-level key in `client.json` and emits `=== KEY NAME ===` sections into
+the user prompt's CLIENT DATA block, skipping only keys in `_SKIP_TOP_LEVEL`.
+It's a convenient auto-documentation mechanism — any new client.json
+section automatically shows up in Marina's prompt with zero code changes.
+
+The trap: if you ADD a top-level section AND write your own prompt builder
+for it (like `_build_agent_persona_block()`), the section gets injected
+twice — once via your helper, once via the auto-iterator. Claude receives
+the persona as both a structured `AGENT PERSONA:` heading AND as a JSON
+dump under `=== AGENT PERSONA ===`. Wastes tokens and risks contradictions.
+
+Fix: add the new key to `_SKIP_TOP_LEVEL`. But remember to also update
+any TEST that hardcodes the skip set (`test_client_context_includes_all_sections`
+had `skip = {"service_aliases"}` inline and broke the moment we added
+`agent_persona` to the real set). The cleanest pattern: tests should
+import the set from the module under test, not duplicate its contents.
+
+### Technique — decorative tests that can't catch their target bug
+
+Round 2 reviewer caught that the original Brief 149 test 19 called
+`_build_system_prompt()` and asserted `=== AGENT PERSONA ===` was absent.
+But `_build_client_context()` (the auto-iterator that would produce
+`=== AGENT PERSONA ===`) is called from `_build_user_prompt()`, NOT
+`_build_system_prompt()`. The system prompt builder never invokes the
+auto-iterator. So the test would pass regardless of whether the
+`_SKIP_TOP_LEVEL` set had the entry or not. Decorative.
+
+Fix: call the function that actually exercises the loop body. In this
+case, `_build_client_context()` directly. The correct test pattern for
+"skip-list protects against auto-injection" is:
+
+```python
+def test_foo_not_auto_injected():
+    context = marina_agent._build_client_context()
+    assert "=== FOO ===" not in context
+```
+
+Combined with a constant-level guard (`"foo" in marina_agent._SKIP_TOP_LEVEL`),
+you get defense in depth: constant check catches future code that drops the
+skip entry, loop-body check catches future code that bypasses the check.
+
+### Principle — when adding a structured config that gets injected into a prompt
+
+1. Put it in client.json as a top-level section with a descriptive name.
+2. Write a helper that reads it and produces a prompt block with section headings.
+3. Have the helper fall back to any legacy field for backward compat.
+4. Add the new top-level key to every `_SKIP_TOP_LEVEL` set in any module that
+   has a `_build_client_context()`-style auto-iterator.
+5. Migrate every existing client.json to the new format, preserving the legacy
+   field as a fallback.
+6. Find every code path that reads the legacy field (`grep -rn legacy_key_name`)
+   and migrate each one to the new helper.
+7. Write both constant-level and loop-body-level regression tests for the
+   skip-list protection.
+8. Run the full regression suite BEFORE deploying — the new top-level key will
+   break any test that hardcodes a skip set.
+
+The Brief 149 reviewer cycle caught every one of these. Worth remembering as
+a checklist for future structured-config migrations.
