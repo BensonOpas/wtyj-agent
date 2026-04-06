@@ -1,7 +1,19 @@
-# INFRA.md — BlueMarlin Infrastructure Reference
+# INFRA.md — WTYJ Agent Infrastructure Reference
 
 **Owns:** Everything about HOW the system runs — VPS, services, credentials, URLs, ports, nginx, SSL, env vars, deploy commands.
 **Related:** For what we're building and why → `master_plan.md`. For what's next → `roadmap.md`. For what each brief did → `system_state.md`.
+
+## Project & business naming (IMPORTANT — read before using this doc)
+
+- **WTYJ (wetakeyourjob.com)** is the project / platform. Owns all the code. All infrastructure in this file belongs to WTYJ.
+- **BlueMarlin** is demo business #1, deployed on port 8001. Its `client.json` business data is mirrored from BlueFinn Charters Curaçao's public website (phone, trips, prices, FAQ) for realistic Caribbean-tourism content. The DEPLOYMENT is BlueMarlin's; the DATA inside the config happens to use BlueFinn's labels.
+- **Restaurant Adamus** is demo business #2, deployed on port 8002. Fully fictional restaurant. Zero real-world analog.
+- **BlueFinn Charters Curaçao** is a REAL, UNRELATED company. We have zero connection to them. Never signed, never contacted. The only link: BlueMarlin's demo client.json uses BlueFinn's public info. BlueFinn does NOT run on our platform. Do not confuse "BlueMarlin container running" with "BlueFinn running" — BlueFinn is not a client.
+
+Legacy naming that's being cleaned up in Briefs 150-152:
+- Source tree is still `bluemarlin/` (being renamed to `wtyj/` in Brief 151)
+- BlueMarlin's deployment is at `/root/bluemarlin/` instead of `/root/clients/bluemarlin/` (being moved in Brief 150)
+- Docker image is `root-bluemarlin` (being renamed in Brief 152)
 
 ---
 
