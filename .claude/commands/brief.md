@@ -42,10 +42,18 @@ based on complexity. Tests should catch bugs, not just confirm types.
        - NEVER skip this step. NEVER write less than 3 lines.
     c. If new credentials, env vars, services, or URLs were added: update briefs/infra.md
     d. git add -A && git commit && git push
-17. End with a TLDR: what changed, what file, what it does now. Plain English.
+    e. Deploy to VPS:
+       ```
+       ssh root@108.61.192.52 "cd /root && git pull && docker compose down && docker compose build && docker compose up -d"
+       ```
+       Verify: `ssh root@108.61.192.52 "docker compose ps && curl -s http://localhost:8001/health"`
+17. End with a TLDR section. ALWAYS include this. Plain English, no jargon:
+    - What changed (file names)
+    - What it does now
+    - What the user should notice
 
 ## Quick fix path
 
 If the user says "just fix it" or the change is a one-liner / config tweak
 with no architectural significance: skip the brief. Just make the change,
-test it, commit with a descriptive message, and TLDR.
+test it, commit with a descriptive message, deploy to VPS, and TLDR.
