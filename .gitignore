@@ -48,6 +48,8 @@ a.out
 clients/*/config/platform.env
 clients/*/config/calendar-key.json
 clients/*/config/azure_refresh_token.txt
+clients/*/data/
+clients/*/logs/
 
 # Legacy specific paths (kept for clarity)
 bluemarlin/config/azure_refresh_token.txt

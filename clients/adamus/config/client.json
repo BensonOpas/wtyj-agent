@@ -1,0 +1,118 @@
+{
+  "business": {
+    "name": "Restaurant Adamus",
+    "email": "sophia@wetakeyourjob.com",
+    "booking_email": "sophia@wetakeyourjob.com",
+    "phone": "+599 9 XXX XXXX",
+    "whatsapp": "+599 9 XXX XXXX",
+    "location": "Jan Thiel Beach, Curaçao",
+    "languages": [
+      "English",
+      "Dutch",
+      "Spanish",
+      "Papiamentu"
+    ],
+    "operating_days": "Wednesday to Sunday",
+    "agent_name": "Sofia",
+    "agent_signature": "Sofia\nRestaurant Adamus",
+    "spreadsheet_id": "1OYtPI5Fn7btaPROsJgtpXnoWR025cbjHWudHx2a8ggc",
+    "support_email": "butlerbensonagent@gmail.com"
+  },
+  "payment": {
+    "timing": "none",
+    "methods": [
+      "Cash",
+      "Credit card",
+      "Debit card"
+    ],
+    "cancellation_policy": "Please cancel at least 2 hours before your reservation.",
+    "hold_duration_hours": 4
+  },
+  "features": {
+    "booking_flow": true
+  },
+  "terminology": {
+    "service_label": "reservation",
+    "party_size_label": "diners",
+    "slot_label": "seating"
+  },
+  "booking_rules": {
+    "required_fields": [
+      "service_name",
+      "date",
+      "guests"
+    ],
+    "group_threshold_requires_human": 12,
+    "max_bookings_per_thread": 2
+  },
+  "services": {
+    "lunch": {
+      "display_name": "Lunch",
+      "description": "Beachfront lunch with Caribbean fusion menu",
+      "price": 0,
+      "capacity": 40,
+      "days_available": "Wed, Thu, Fri, Sat, Sun",
+      "duration_hours": 2,
+      "included": [
+        "Complimentary water",
+        "Bread basket"
+      ],
+      "slots": [
+        {
+          "time": "12:00",
+          "resource": "Main Terrace",
+          "location": "Jan Thiel Beach",
+          "calendar_id": "c3058824908775658a72e60877f8cea295b54b2b0d5c1c5a33c295e0ec2f8094@group.calendar.google.com"
+        },
+        {
+          "time": "13:30",
+          "resource": "Main Terrace",
+          "location": "Jan Thiel Beach",
+          "calendar_id": "c3058824908775658a72e60877f8cea295b54b2b0d5c1c5a33c295e0ec2f8094@group.calendar.google.com"
+        }
+      ]
+    },
+    "dinner": {
+      "display_name": "Dinner",
+      "description": "Evening dining with ocean view, cocktails, and fresh seafood",
+      "price": 0,
+      "capacity": 60,
+      "days_available": "Wed, Thu, Fri, Sat, Sun",
+      "duration_hours": 2.5,
+      "included": [
+        "Amuse-bouche",
+        "Live music on Fridays"
+      ],
+      "slots": [
+        {
+          "time": "18:00",
+          "resource": "Beach Deck",
+          "location": "Jan Thiel Beach",
+          "calendar_id": "5b51d6514c5576577fd39e8cb385c0fbcbfc285d283b8ca27095d322b9af50a1@group.calendar.google.com"
+        },
+        {
+          "time": "20:00",
+          "resource": "Beach Deck",
+          "location": "Jan Thiel Beach",
+          "calendar_id": "5b51d6514c5576577fd39e8cb385c0fbcbfc285d283b8ca27095d322b9af50a1@group.calendar.google.com"
+        }
+      ]
+    }
+  },
+  "service_aliases": {
+    "lunch": ["middag", "almuerzo", "eten"],
+    "dinner": ["diner", "cena", "avondeten", "sena"]
+  },
+  "faq": {
+    "dress_code": "Smart casual. No swimwear at dinner.",
+    "parking": "Free parking at Jan Thiel Beach lot, 2-minute walk.",
+    "kids": "Children are welcome. We have a kids menu available.",
+    "vegetarian": "We offer vegetarian and vegan options. Let us know about allergies when booking.",
+    "private_events": "We host private events for groups of 20+. Contact us for details.",
+    "music": "Live music every Friday evening from 19:00.",
+    "drinks": "Full bar with cocktails, wine, and local beers. Happy hour 17:00-18:00 Wed-Sat."
+  },
+  "common_sense_knowledge": {
+    "marina_persona": "Warm, casual, beachy. You work at a chill beach restaurant on Jan Thiel Beach. Keep it relaxed and welcoming. Your name is Sofia. Your business is Restaurant Adamus. You handle reservations for lunch and dinner seatings only — nothing else."
+  }
+}

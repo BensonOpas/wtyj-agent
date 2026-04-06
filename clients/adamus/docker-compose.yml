@@ -1,0 +1,16 @@
+services:
+  bluemarlin:
+    image: root-bluemarlin
+    container_name: bluemarlin-adamus
+    restart: unless-stopped
+    ports:
+      - "8002:8001"
+    env_file:
+      - ./config/platform.env
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+    volumes:
+      - ./config/client.json:/app/config/client.json:ro
+      - ./config/calendar-key.json:/app/config/calendar-key.json:ro
+      - ./data:/app/data
+      - ./logs:/app/logs

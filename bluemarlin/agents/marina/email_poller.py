@@ -502,6 +502,14 @@ def _post_validate(th, result, service):
 
 # ========= MAIN LOOP =========
 def main():
+    # Email-disabled path for clients that don't use email.
+    # Exit 0 cleanly; supervisord is configured not to restart on clean exits.
+    if not EMAIL_ADDR or not os.path.exists(REFRESH_TOKEN_PATH):
+        log(f"Email polling disabled for this client "
+            f"(EMAIL_ADDRESS={'set' if EMAIL_ADDR else 'empty'}, "
+            f"refresh_token={'present' if os.path.exists(REFRESH_TOKEN_PATH) else 'missing'}). "
+            f"Exiting cleanly.")
+        return
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
     demo_support_email = (
         config_loader.get_business().get("support_email")
