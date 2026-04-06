@@ -74,9 +74,13 @@ state lives under `/root/clients/<client>/`. The repo root is `/root/`.
 
 ## Environment Variables
 
-All secrets live in `/root/bluemarlin/config/bluemarlin.env`.
+Each client has its own secrets file:
+- BlueMarlin: `/root/clients/bluemarlin/config/platform.env`
+- Adamus: `/root/clients/adamus/config/platform.env`
+
+Loaded by docker-compose's `env_file:` directive at container start.
 **NOT in `.bashrc`, `.zshrc`, or `.profile`** — never look there.
-The systemd units source this file at startup.
+(Brief 145 renamed the file from `bluemarlin.env` → `platform.env`. Brief 150 moved it from `/root/bluemarlin/config/` to `/root/clients/<client>/config/`.)
 
 ### Complete env var inventory
 
@@ -93,18 +97,18 @@ The systemd units source this file at startup.
 | `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token) |
 | `OPENAI_API` | OpenAI | Optional: DALL-E image generation for content pipeline |
 | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | gws CLI | Set at runtime to path of service account key |
-| `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default: BlueFinn's app. |
-| `AZURE_TENANT_ID` | Email poller | Microsoft Azure tenant ID. Default: BlueFinn's tenant. |
-| `EMAIL_ADDRESS` | Email poller | Inbox email address to poll. Default: hello@wetakeyourjob.com |
+| `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default in source: `28e94343-2f77-444c-ac32-58b7bed33b65` (the WTYJ Azure app, shared across all clients on the wetakeyourjob.com Microsoft 365 tenant). |
+| `AZURE_TENANT_ID` | Email poller | Microsoft Azure tenant ID. Default in source: `caac06b5-1420-4223-9dcc-ba4a670ec26a`. |
+| `EMAIL_ADDRESS` | Email poller | Inbox email address to poll. BlueMarlin: `hello@wetakeyourjob.com` (also the source default). Adamus: empty (triggers Brief 146 graceful exit until OAuth bootstrap is done). |
 
-### Credential files
+### Credential files (per-client, post-Brief-150)
 
-| File | VPS Path | Purpose |
-|------|----------|---------|
-| `platform.env` | `/root/bluemarlin/config/platform.env` | All env vars above (renamed from bluemarlin.env in Brief 145) |
-| `calendar-key.json` | `/root/bluemarlin/config/calendar-key.json` | Google service account key (renamed from bluemarlin-calendar-key.json) |
-| `azure_refresh_token.txt` | `/root/bluemarlin/config/azure_refresh_token.txt` | Microsoft OAuth2 refresh token (persisted, auto-rotated) |
-| `client.json` | `/root/bluemarlin/config/client.json` | Business config (not credentials — safe in git) |
+| File | BlueMarlin path | Adamus path | Purpose |
+|------|-----------------|-------------|---------|
+| `platform.env` | `/root/clients/bluemarlin/config/platform.env` | `/root/clients/adamus/config/platform.env` | All env vars above |
+| `calendar-key.json` | `/root/clients/bluemarlin/config/calendar-key.json` | `/root/clients/adamus/config/calendar-key.json` | Google service account key (currently the same physical key, copied to both during Brief 146 setup — see GCP roadmap note for the rename) |
+| `azure_refresh_token.txt` | `/root/clients/bluemarlin/config/azure_refresh_token.txt` | (not yet — needs OAuth bootstrap for `sophia@wetakeyourjob.com`, see open work memory) | Microsoft OAuth2 refresh token (persisted, auto-rotated) |
+| `client.json` | `/root/clients/bluemarlin/config/client.json` | `/root/clients/adamus/config/client.json` | Business config (not credentials — safe in git) |
 
 ### Email mailboxes (GoDaddy / Microsoft 365)
 
@@ -112,23 +116,21 @@ GoDaddy email plan currently has 2 seats total.
 
 | Mailbox | Client | Password | Notes |
 |---------|--------|----------|-------|
-| `marina@wetakeyourjob.com` | BlueFinn Charters | (not recorded — uses stored OAuth refresh token) | Primary BlueFinn inbox. Polled by email_poller via Microsoft Graph OAuth. |
-| `sophia@wetakeyourjob.com` | Restaurant Adamus (demo) | `Cur@ao2026` | Repurposed from a previously unused seat. Needs interactive OAuth login to generate initial refresh token. |
+| `hello@wetakeyourjob.com` | BlueMarlin Charters (deployed demo) | (not recorded — uses stored OAuth refresh token) | Primary BlueMarlin inbox. Polled by email_poller via Microsoft Graph OAuth. Refresh token at `/root/clients/bluemarlin/config/azure_refresh_token.txt`. |
+| `sophia@wetakeyourjob.com` | Restaurant Adamus (deployed demo) | `Cur@ao2026` | Created in GoDaddy. Needs interactive OAuth login to generate initial refresh token before email polling can start. See `memory/project_open_work.md` IMMEDIATE section. |
 
 ### Hardcoded constants in source (not env vars — Brief 145 moved to env vars)
 
 | Constant | File | Value | Purpose |
 |----------|------|-------|---------|
-| ~~Microsoft `CLIENT_ID`~~ | ~~email_poller.py:27~~ | Now env var `AZURE_CLIENT_ID` (default: BlueFinn's) | Azure app registration |
-| ~~Microsoft `TENANT_ID`~~ | ~~email_poller.py:28~~ | Now env var `AZURE_TENANT_ID` (default: BlueFinn's) | Azure tenant |
-| ~~`EMAIL_ADDR`~~ | ~~email_poller.py:29~~ | Now env var `EMAIL_ADDRESS` (default: hello@wetakeyourjob.com) | Inbox to poll |
-| WhatsApp API version | whatsapp_client.py:14 | `v22.0` | Meta Cloud API version |
+| ~~Microsoft `CLIENT_ID`~~ | ~~email_poller.py:27~~ | Now env var `AZURE_CLIENT_ID` (default: WTYJ Azure app `28e94343-...`) | Azure app registration |
+| ~~Microsoft `TENANT_ID`~~ | ~~email_poller.py:28~~ | Now env var `AZURE_TENANT_ID` (default: `caac06b5-...`) | Azure tenant |
+| ~~`EMAIL_ADDR`~~ | ~~email_poller.py:29~~ | Now env var `EMAIL_ADDRESS` (default: `hello@wetakeyourjob.com` for BlueMarlin; empty for Adamus triggers graceful exit) | Inbox to poll |
+| WhatsApp API version | wtyj/agents/social/whatsapp_client.py:14 | `v22.0` | Meta Cloud API version |
 
 ---
 
-## Services (Docker — as of Brief 142)
-
-Single Docker container running both services via supervisord.
+## Services (Docker — post Brief 152)
 
 Two containers, one shared image. Multi-client architecture proven and isolated as of Brief 152.
 
@@ -162,13 +164,6 @@ ssh root@108.61.192.52 "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Sta
 ```
 
 The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus's compose references `image: wtyj-agent` directly and pulls the just-built image — no separate build step. To rebuild only (no restart), use `docker compose build` from `/root/clients/bluemarlin/` alone.
-
-### Old services (systemd — disabled, kept for rollback)
-
-| Service | Command to re-enable |
-|---------|---------------------|
-| `bluemarlin` (email poller) | `systemctl enable --now bluemarlin` |
-| `bluemarlin-social` (webhook server) | `systemctl enable --now bluemarlin-social` |
 
 ---
 
@@ -239,10 +234,10 @@ https://*.replit.dev|app       # Regex for all Replit domains
 | Item | Value |
 |------|-------|
 | Marina's inbox | `hello@wetakeyourjob.com` (Microsoft Outlook, OAuth2) |
+| Adamus inbox (created, not yet polled) | `sophia@wetakeyourjob.com` (Microsoft Outlook via GoDaddy — needs OAuth bootstrap) |
 | IMAP host | `outlook.office365.com:993` |
 | SMTP host | `smtp.office365.com:587` |
 | Demo support/relay | `butlerbensonagent@gmail.com` |
-| Production support | `info@bluefinncharters.com` (from client.json) |
 
 ### Email Authentication (DNS)
 
@@ -259,11 +254,14 @@ https://*.replit.dev|app       # Regex for all Replit domains
 
 | Item | Value |
 |------|-------|
-| Binary path | `/usr/bin/gws` |
-| Auth env var | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` |
-| Credentials file | `/root/bluemarlin/config/bluemarlin-calendar-key.json` |
-| Spreadsheet ID | `1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I` |
-| Service account | `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com` |
+| Binary path | `/usr/local/bin/gws` (downloaded in Dockerfile from googleworkspace/cli releases) |
+| Auth env var | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` (set in each client's docker-compose `environment:` block) |
+| Credentials file (BlueMarlin host) | `/root/clients/bluemarlin/config/calendar-key.json` |
+| Credentials file (Adamus host) | `/root/clients/adamus/config/calendar-key.json` |
+| Credentials file (inside container) | `/app/config/calendar-key.json` (mounted from host) |
+| BlueMarlin spreadsheet ID | `1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I` |
+| Adamus spreadsheet ID | `1OYtPI5Fn7btaPROsJgtpXnoWR025cbjHWudHx2a8ggc` |
+| Service account | `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com` (rename to wtyj-* deferred — see roadmap) |
 
 ---
 
@@ -283,36 +281,6 @@ For full Zernio feature reference → `memory/reference_late_dms.md`
 
 ---
 
-## Deploy Flow (Docker — as of Brief 142)
-
-```bash
-# Code-only deploy (no new packages)
-ssh root@108.61.192.52 "cd /root && git pull && docker compose build && docker compose up -d"
-
-# Full rebuild (new packages or Dockerfile changes)
-ssh root@108.61.192.52 "cd /root && git pull && docker compose down && docker compose build --no-cache && docker compose up -d"
-
-# Check status
-ssh root@108.61.192.52 "docker compose ps && curl -s http://localhost:8001/health"
-
-# View logs
-ssh root@108.61.192.52 "docker compose logs --tail=50"
-```
-
-Key auth configured — no password needed.
-
-**Rollback to systemd (if Docker fails):**
-```bash
-ssh root@108.61.192.52 "docker compose down && systemctl start bluemarlin && systemctl start bluemarlin-social"
-```
-
-### Old deploy flow (systemd — disabled, kept for rollback)
-```bash
-ssh root@108.61.192.52 "cd /root/bluemarlin && git pull && systemctl restart bluemarlin && systemctl restart bluemarlin-social"
-```
-
----
-
 ## Console Convention
 
 - **"Run on VPS:"** → SSH session at `root@108.61.192.52`
@@ -324,10 +292,12 @@ Never say "run this command" without specifying which machine.
 
 ## Things Claude Code Keeps Getting Wrong
 
-1. **API key location** — in `bluemarlin.env`, NOT in `.bashrc` or shell profile.
-2. **Poller is always running** — do not start it. Just restart after deploys.
-3. **VPS project path** — `/root/bluemarlin/`, NOT `/root/bluemarlin-agent/` (Mac path).
-4. **SSH from Claude Code** — works. Key auth set up. No password needed.
-5. **bm_logger.log() first arg** — the parameter is named `event`. Never pass `event=` as a kwarg.
-6. **Config caching** — `config_loader.get_raw()` returns a mutable dict. Modifying it in tests leaks between tests.
-7. **Use `trash` not `rm`** — macOS has `/usr/bin/trash`. Always use it for file deletions.
+1. **API key location** — in each client's `platform.env` at `/root/clients/<client>/config/platform.env`. NOT in `.bashrc` or shell profile. NOT in source code.
+2. **Poller is always running** — do not start it. Just restart the container after deploys (`docker compose down && up -d`).
+3. **VPS source path** — `/root/wtyj/`, NOT `/root/bluemarlin/` (legacy, removed in Brief 151).
+4. **VPS client deployment paths** — `/root/clients/bluemarlin/`, `/root/clients/adamus/`. Each client has its own `docker-compose.yml`.
+5. **SSH from Claude Code** — works. Key auth set up. No password needed.
+6. **bm_logger.log() first arg** — the parameter is named `event`. Never pass `event=` as a kwarg.
+7. **Config caching** — `config_loader.get_raw()` returns a mutable dict. Modifying it in tests leaks between tests.
+8. **CLIENT_CONFIG_PATH env var** — set in conftest.py for Mac dev tests so config_loader finds the moved client.json. Inside the container, the legacy default still resolves correctly.
+9. **Use `trash` not `rm`** — macOS has `/usr/bin/trash`. Always use it for file deletions.
