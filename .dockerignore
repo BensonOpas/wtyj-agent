@@ -4,6 +4,7 @@ wtyj/backups/
 wtyj/tests/
 wtyj/briefs/
 wtyj/src/
+wtyj/templates/
 
 # === Runtime config — provided at runtime via volume mount, never in the image ===
 wtyj/config/

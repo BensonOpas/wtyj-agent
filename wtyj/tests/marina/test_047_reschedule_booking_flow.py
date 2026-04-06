@@ -10,7 +10,7 @@ _trip_snorkel = {
     "included": ["lunch", "3 snorkel sites"],
 }
 _th_resched = {
-    "fields": {"service_name": "3-in-1 Snorkeling", "date": "2026-04-03", "guests": "2", "service_key": "snorkeling_3in1"},
+    "fields": {"service_name": "3-in-1 Snorkeling", "date": "2027-12-17", "guests": "2", "service_key": "snorkeling_3in1"},
     "flags": {},
 }
 
@@ -32,14 +32,14 @@ def test_inquiry_not_in_booking_intents():
 
 def test_reschedule_triggers_summary():
     """T4: reschedule triggers summary."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
     override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
     assert override is not None and "Want me to go ahead and book this" in override
 
 
 def test_reschedule_sets_awaiting():
     """T5: reschedule sets awaiting."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
     override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
     assert awaiting is True
 
@@ -68,13 +68,13 @@ def test_wrong_day_reschedule():
 
 def test_reschedule_summary_correct_price():
     """T9: summary contains correct price for snorkeling ($110 x 2 = $220)."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
     override, _ = _post_validate(_th_resched, result, _trip_snorkel)
     assert "$220" in override
 
 
 def test_reschedule_summary_trip_name():
     """T10: summary contains service name."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2026-04-03"}, "flags": {}}
+    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
     override, _ = _post_validate(_th_resched, result, _trip_snorkel)
     assert "3-in-1 Snorkeling Trip" in override

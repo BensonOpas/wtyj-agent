@@ -147,7 +147,7 @@ def test_booking_still_sets_awaiting():
 def test_reschedule_still_triggers():
     """T16: reschedule still triggers validation (Brief 047 regression)."""
     override, _ = _post_validate(
-        {"fields": {"service_name": "Snorkeling", "date": "2026-04-03", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}},
+        {"fields": {"service_name": "Snorkeling", "date": "2027-12-17", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}},
         {"intents": ["reschedule"], "fields": {}, "flags": {}},
         _trip_fri,
     )

@@ -9,9 +9,17 @@ import urllib.request
 
 from shared.bm_logger import log
 
-_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
-_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 _API_VERSION = "v22.0"
+
+
+# Brief 154 — read env vars at call time, not at import time. Same lazy pattern
+# Brief 147 used for gws_calendar.py to fix the test_068 import-order bug.
+def _access_token() -> str:
+    return os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+
+
+def _phone_number_id() -> str:
+    return os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 
 
 def parse_webhook_payload(payload: dict) -> list:
@@ -56,9 +64,9 @@ def parse_webhook_payload(payload: dict) -> list:
 
 def send_text_message(to: str, text: str) -> bool:
     """Send a text message via WhatsApp Cloud API. Returns True on success."""
-    url = f"https://graph.facebook.com/{_API_VERSION}/{_PHONE_NUMBER_ID}/messages"
+    url = f"https://graph.facebook.com/{_API_VERSION}/{_phone_number_id()}/messages"
     headers = {
-        "Authorization": f"Bearer {_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {_access_token()}",
         "Content-Type": "application/json",
     }
     body = json.dumps({

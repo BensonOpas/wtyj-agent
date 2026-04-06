@@ -157,6 +157,24 @@ def test_agent_returns_reply(mock_process):
 
 # --- Send tests ---
 
+
+def test_whatsapp_client_reads_env_var_lazily(monkeypatch):
+    """Brief 154 — regression: whatsapp_client must read env vars at call time,
+    not at import time, so tests can override them after import.
+
+    Before Brief 154, whatsapp_client.py read WHATSAPP_ACCESS_TOKEN and
+    WHATSAPP_PHONE_NUMBER_ID at module import time and cached them. If any
+    other test imported whatsapp_client transitively before this test set
+    the env vars, the module would have empty cached values and the assertions
+    would fail. Brief 147 fixed the same shape of bug for gws_calendar.py.
+    """
+    from agents.social import whatsapp_client
+    monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "fresh-token-from-test")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "fresh-phone-id-from-test")
+    assert whatsapp_client._access_token() == "fresh-token-from-test"
+    assert whatsapp_client._phone_number_id() == "fresh-phone-id-from-test"
+
+
 @patch("agents.social.whatsapp_client.urllib.request.urlopen")
 def test_send_text_message_success(mock_urlopen):
     """send_text_message calls correct URL with correct body."""
