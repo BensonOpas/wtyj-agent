@@ -969,7 +969,6 @@ async def suggest_reply(req: SuggestReplyRequest):
 
     booking_state = state_registry.wa_get_booking_state(req.phone)
     business = config_loader.get_business()
-    csk = config_loader.get_common_sense_knowledge()
     trips = config_loader.get_services()
     signature = config_loader.get_agent_signature()
 
@@ -999,11 +998,12 @@ async def suggest_reply(req: SuggestReplyRequest):
 
     agent_name = business.get("agent_name", "Marina")
     company_name = business.get("name", "the business")
-    persona = csk.get("marina_persona", "")
+    persona_block = marina_agent._build_agent_persona_block()
 
     system_prompt = f"""You are {agent_name}, the booking agent for {company_name}.
 
-PERSONA: {persona}
+AGENT PERSONA:
+{persona_block}
 
 WRITING STYLE FOR EMAIL:
 Write as a real member of the {company_name} team. Warm, practical, human.

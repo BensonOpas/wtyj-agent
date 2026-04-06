@@ -28,7 +28,10 @@ _RESPONSE_DEFAULTS = {
 # Keys to exclude from the client context (internal system config, not customer-facing)
 _INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature", "calendar_id"}
 # Top-level keys to skip (already injected elsewhere or handled separately)
-_SKIP_TOP_LEVEL = {"service_aliases"}  # Already in system prompt via _build_service_alias_text()
+_SKIP_TOP_LEVEL = {
+    "service_aliases",      # Already in system prompt via _build_service_alias_text()
+    "agent_persona",        # Already in system prompt via _build_agent_persona_block() — Brief 149
+}
 
 
 def _strip_verify(obj):
@@ -87,6 +90,61 @@ def _build_service_alias_text() -> str:
         lines.append(f'      {quoted} → {service_key}')
     return "\n".join(lines)
 
+
+
+def _build_agent_persona_block() -> str:
+    """Build the AGENT PERSONA prompt block from the structured agent_persona
+    section in client.json. Falls back to the legacy common_sense_knowledge.marina_persona
+    free-text string if the structured section is missing or empty.
+
+    Brief 149.
+    """
+    persona = config_loader.get_raw().get("agent_persona", {}) or {}
+    lines = []
+
+    if persona.get("tone"):
+        lines.append(f"Tone: {persona['tone']}")
+    if persona.get("language_register"):
+        lines.append(f"Language register: {persona['language_register']}")
+
+    if persona.get("greeting_style"):
+        lines.append(f"\nGreeting style:\n{persona['greeting_style']}")
+
+    if persona.get("closing_style"):
+        lines.append(f"\nClosing style:\n{persona['closing_style']}")
+
+    rules = persona.get("brand_voice_rules") or []
+    if rules:
+        lines.append("\nBrand voice rules (MUST follow):")
+        for rule in rules:
+            lines.append(f"- {rule}")
+
+    allowed = persona.get("topics_allowed") or []
+    if allowed:
+        lines.append("\nTopics you handle:")
+        for t in allowed:
+            lines.append(f"- {t}")
+
+    refused = persona.get("topics_refused") or []
+    if refused:
+        lines.append("\nTopics you refuse (politely redirect without apology):")
+        for t in refused:
+            lines.append(f"- {t}")
+
+    if persona.get("small_talk"):
+        lines.append(f"\nSmall talk:\n{persona['small_talk']}")
+
+    if persona.get("escalation_tone"):
+        lines.append(f"\nEscalation tone:\n{persona['escalation_tone']}")
+
+    if persona.get("freeform_notes"):
+        lines.append(f"\nAdditional context:\n{persona['freeform_notes']}")
+
+    if lines:
+        return "\n".join(lines)
+
+    # Legacy fallback — pre-Brief-149 clients use common_sense_knowledge.marina_persona
+    return config_loader.get_common_sense_knowledge().get("marina_persona", "")
 
 
 def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
@@ -221,7 +279,8 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
 
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
-PERSONA: {csk.get('marina_persona', '')}
+AGENT PERSONA:
+{_build_agent_persona_block()}
 
 {writing_style_block}
 

@@ -170,14 +170,16 @@ def test_response_empty_reply_returns_fallback():
 
 
 def test_client_context_includes_all_sections():
-    """T16: All customer-facing client.json sections appear in the prompt."""
+    """T16: All customer-facing client.json sections appear in the prompt,
+    except those in marina_agent._SKIP_TOP_LEVEL which are injected elsewhere
+    (service_aliases via _build_service_alias_text, agent_persona via
+    _build_agent_persona_block — Brief 149)."""
     from shared import config_loader
     raw = config_loader.get_raw()
     prompt = marina_agent._build_user_prompt("test@test.com", "Test", "Hello", {}, {})
     # Every top-level key (except skipped ones) should have a section
-    skip = {"service_aliases"}  # Already in system prompt
     for key in raw:
-        if key in skip:
+        if key in marina_agent._SKIP_TOP_LEVEL:
             continue
         section_header = key.upper().replace("_", " ")
         assert section_header in prompt, f"Section '{section_header}' missing from prompt (key: {key})"
