@@ -12,7 +12,8 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'bluemarlin-calendar-key.json'))
+_DEFAULT_KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'calendar-key.json'))
+KEY_PATH = os.environ.get('GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE', _DEFAULT_KEY_PATH)
 _SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 

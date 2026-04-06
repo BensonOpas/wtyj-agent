@@ -11,7 +11,8 @@ from shared import config_loader
 from shared import state_registry
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-_KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'bluemarlin-calendar-key.json'))
+_DEFAULT_KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'calendar-key.json'))
+_KEY_PATH = os.environ.get('GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE', _DEFAULT_KEY_PATH)
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 

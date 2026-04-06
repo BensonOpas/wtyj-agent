@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from shared import config_loader
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'bluemarlin-calendar-key.json'))
+_DEFAULT_KEY_PATH = os.path.normpath(os.path.join(_MODULE_DIR, '..', '..', 'config', 'calendar-key.json'))
+KEY_PATH = os.environ.get('GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE', _DEFAULT_KEY_PATH)
 
 
 def _get_spreadsheet_id() -> str:
