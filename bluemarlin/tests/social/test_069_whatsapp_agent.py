@@ -38,7 +38,8 @@ def test_system_prompt_whatsapp_style():
     assert "WHATSAPP" in prompt
     assert "AGENT SIGNATURE" not in prompt
     assert "Marina" in prompt
-    assert "BlueFinn" in prompt
+    # Brief 150 — rebrand: BlueFinn → BlueMarlin
+    assert "BlueMarlin" in prompt
 
 
 def test_system_prompt_email_default():

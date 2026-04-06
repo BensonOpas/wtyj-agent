@@ -1,10 +1,10 @@
 {
   "business": {
-    "name": "BlueFinn Charters Curaçao",
-    "email": "info@bluefinncharters.com",
+    "name": "BlueMarlin Charters",
+    "email": "butlerbensonagent@gmail.com",
     "booking_email": "hello@wetakeyourjob.com",
-    "phone": "+599 9690 3717",
-    "whatsapp": "+599 9690 3717",
+    "phone": "+15155005577",
+    "whatsapp": "+15155005577",
     "location": "Jan Thiel Beach, z/n, Willemstad, Curaçao",
     "languages": [
       "English",
@@ -15,7 +15,7 @@
     ],
     "operating_days": "7 days a week",
     "agent_name": "Marina",
-    "agent_signature": "Marina\nBlueFinn Charters Curaçao",
+    "agent_signature": "Marina\nBlueMarlin Charters",
     "spreadsheet_id": "1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I",
     "support_email": "butlerbensonagent@gmail.com",
     "demo_support_email": "butlerbensonagent@gmail.com",
@@ -98,7 +98,7 @@
   "private_charters": {
     "available": true,
     "pricing": "From $1,500 per day depending on vessel and itinerary. Contact us for a tailored quote.",
-    "contact_for_booking": "info@bluefinncharters.com"
+    "contact_for_booking": "butlerbensonagent@gmail.com"
   },
   "faq": {
     "what_to_bring": "Towel, sunscreen, hat, sunglasses. Seasickness pill if you are prone.",
@@ -112,10 +112,10 @@
     "turtles": "Turtles are very likely near Klein Curaçao. You cannot pet them — they are protected by law.",
     "toilets": "Catamarans have 2 marine toilets. Kailani has 1. No toilets on Klein Curaçao island.",
     "swimming_ability": "Being comfortable in water is recommended. Life jackets and noodles are available. Guests can take the dinghy to the beach instead of swimming.",
-    "scuba_diving": "Kailani is equipped for scuba. You can also join a 1-tank dive on BlueFinn1 for the Klein Curaçao trip. Contact Scuba Do separately: info@divecenterscubado.com",
+    "scuba_diving": "Kailani is equipped for scuba. You can also join a 1-tank dive on BlueMarlin1 for the Klein Curaçao trip. Contact Scuba Do separately: info@divecenterscubado.com",
     "local_student_rate": "Available via WhatsApp. Valid local ID or internship agreement required.",
-    "private_charters": "Yes, private charters are available. Contact info@bluefinncharters.com for availability and pricing.",
-    "sustainability": "BlueFinn uses reusable cups, solar panels, and a can pressing system.",
+    "private_charters": "Yes, private charters are available. Contact butlerbensonagent@gmail.com for availability and pricing.",
+    "sustainability": "We use reusable cups, solar panels, and a can pressing system.",
     "ride_duration_klein_curacao": "Approximately 1 hour 45 minutes by catamaran, approximately 1 hour 15 minutes by Kailani. Depends on weather.",
     "snorkel_gear_included": "Snorkel masks and pipe included. Flippers are not included.",
     "no_payment_at_boarding": "No payment is accepted at boarding. Payment must be completed in advance.",
@@ -260,20 +260,20 @@
       "not_included": [
         "flippers"
       ],
-      "notes": "Travel time to Klein Curaçao is approximately 1 hour 45 minutes by catamaran. Both BlueFinn 1 and BlueFinn 2 have the same travel time. Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing.",
+      "notes": "Travel time to Klein Curaçao is approximately 1 hour 45 minutes by catamaran. Both BlueMarlin 1 and BlueMarlin 2 have the same travel time. Turtles very likely near Klein Curaçao. Cannot pet turtles — protected by law. Dolphins possible while sailing.",
       "price": 120,
       "price_child": 65,
       "slots": [
         {
           "time": "08:00",
           "calendar_id": "4ce23ea0e7ec08da249c778969d71c199b8aaf7bf6114efac4fae7e0928f1b31@group.calendar.google.com",
-          "resource": "BlueFinn2",
+          "resource": "BlueMarlin2",
           "location": "Jan Thiel Beach"
         },
         {
           "time": "08:30",
           "calendar_id": "9f25610370f0f57fa395735502fcff767ba8276ee5a280d028fee7f003054928@group.calendar.google.com",
-          "resource": "BlueFinn1",
+          "resource": "BlueMarlin1",
           "location": "Jan Thiel Beach"
         }
       ]
@@ -454,14 +454,14 @@
     "jet-ski": "jet_ski"
   },
   "resources": {
-    "bluefinn1": {
-      "display_name": "BlueFinn 1 (B&W)",
+    "bluemarlin1": {
+      "display_name": "BlueMarlin 1",
       "type": "sailing catamaran",
       "length_ft": 75,
       "max_guests": 65
     },
-    "bluefinn2": {
-      "display_name": "BlueFinn 2 (Apache)",
+    "bluemarlin2": {
+      "display_name": "BlueMarlin 2",
       "type": "sailing catamaran",
       "length_ft": 80,
       "max_guests": 95

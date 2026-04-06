@@ -5,7 +5,11 @@
 
 import json, os
 
-with open(os.path.join(os.path.dirname(__file__), "..", "..", "config", "client.json")) as f:
+# Brief 150 — BlueMarlin config moved from bluemarlin/config/ to clients/bluemarlin/config/
+_CLIENT_JSON = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "clients", "bluemarlin", "config", "client.json"
+))
+with open(_CLIENT_JSON) as f:
     c = json.load(f)
 
 # T1: No [VERIFY] strings remain anywhere in the file

@@ -20,7 +20,8 @@ _BM_ROOT = os.path.dirname(_BM_TESTS)                      # bluemarlin
 _REPO_ROOT = os.path.dirname(_BM_ROOT)                     # repo root
 
 DOCKERIGNORE_PATH = os.path.join(_REPO_ROOT, ".dockerignore")
-BM_COMPOSE_PATH = os.path.join(_REPO_ROOT, "docker-compose.yml")
+# Brief 150 — BlueMarlin's docker-compose moved from repo root to clients/bluemarlin/
+BM_COMPOSE_PATH = os.path.join(_REPO_ROOT, "clients", "bluemarlin", "docker-compose.yml")
 ADAMUS_COMPOSE_PATH = os.path.join(_REPO_ROOT, "clients", "adamus", "docker-compose.yml")
 
 
@@ -97,19 +98,20 @@ def test_dockerignore_preserves_brief_142_exclusions():
 # ---------------------------------------------------------------------------
 
 def test_bluemarlin_docker_compose_has_config_directory_mount():
-    """The new directory mount must be present."""
+    """The new directory mount must be present. Brief 150 changed path from
+    ./bluemarlin/config to ./config (relative to clients/bluemarlin/)."""
     content = _read(BM_COMPOSE_PATH)
-    assert "./bluemarlin/config:/app/config:rw" in content, \
-        "BlueMarlin docker-compose.yml missing directory mount './bluemarlin/config:/app/config:rw'"
+    assert "./config:/app/config:rw" in content, \
+        "BlueMarlin docker-compose.yml missing directory mount './config:/app/config:rw'"
 
 
 def test_bluemarlin_docker_compose_no_per_file_mounts():
     """Regression guard: old per-file mounts must be gone."""
     content = _read(BM_COMPOSE_PATH)
     forbidden = [
-        "./bluemarlin/config/client.json:/app/config/client.json",
-        "./bluemarlin/config/calendar-key.json:/app/config/calendar-key.json",
-        "./bluemarlin/config/azure_refresh_token.txt:/app/config/azure_refresh_token.txt",
+        "./config/client.json:/app/config/client.json",
+        "./config/calendar-key.json:/app/config/calendar-key.json",
+        "./config/azure_refresh_token.txt:/app/config/azure_refresh_token.txt",
     ]
     present = [f for f in forbidden if f in content]
     assert not present, f"BlueMarlin docker-compose.yml still has old per-file mounts: {present}"
@@ -117,13 +119,13 @@ def test_bluemarlin_docker_compose_no_per_file_mounts():
 
 def test_bluemarlin_docker_compose_preserves_data_and_logs_mounts():
     content = _read(BM_COMPOSE_PATH)
-    assert "./bluemarlin/data:/app/data" in content, "BlueMarlin data mount missing"
-    assert "./bluemarlin/logs:/app/logs" in content, "BlueMarlin logs mount missing"
+    assert "./data:/app/data" in content, "BlueMarlin data mount missing"
+    assert "./logs:/app/logs" in content, "BlueMarlin logs mount missing"
 
 
 def test_bluemarlin_docker_compose_preserves_env_file():
     content = _read(BM_COMPOSE_PATH)
-    assert "./bluemarlin/config/platform.env" in content, \
+    assert "./config/platform.env" in content, \
         "BlueMarlin env_file directive missing or changed path"
 
 

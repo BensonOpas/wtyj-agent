@@ -176,14 +176,13 @@ def test_prompt_contact_email_from_config():
                            channel="whatsapp", messages=[])
     # The CONTACT INFO RULE should contain the email from config
     business_email = config_loader.get_business().get("email", "")
+    assert business_email, "business.email must be set in client.json"
     assert f"CONTACT INFO RULE: {business_email}" in prompt
-    # The hardcoded literal "info@bluefinncharters.com" should NOT appear
-    # as a string constant in the source — it comes from config
-    # (It WILL appear in the client data sections because that IS the config value)
-    assert "CONTACT INFO RULE: info@bluefinncharters.com" in prompt  # Currently same value, that's fine
-    # The key test: no literal hardcoded email in the source code prompt template
-    # (verified by checking the source file itself is better, but this at least
-    #  confirms the f-string interpolation works)
+    # Brief 150 — rebrand: email is no longer info@bluefinncharters.com, it's
+    # butlerbensonagent@gmail.com. The key test is that WHATEVER value is in
+    # config flows into the prompt, not the specific email literal.
+    # The test above (f"CONTACT INFO RULE: {business_email}") does that check
+    # dynamically regardless of the actual value.
 
 
 # --- Test 7: Prompt EXAMPLES (source code) have no charter-specific content ---

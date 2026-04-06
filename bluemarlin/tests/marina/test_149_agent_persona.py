@@ -21,7 +21,10 @@ _BM_TESTS = os.path.dirname(os.path.dirname(_TEST_FILE))
 _BM_ROOT = os.path.dirname(_BM_TESTS)
 _REPO_ROOT = os.path.dirname(_BM_ROOT)
 
-BLUEFINN_CLIENT_JSON = os.path.join(_BM_ROOT, "config", "client.json")
+# Brief 150 — BlueMarlin config moved from bluemarlin/config/ to clients/bluemarlin/config/
+# Name kept as BLUEFINN_CLIENT_JSON for historical reasons in test names only;
+# the value now points at BlueMarlin's new location.
+BLUEFINN_CLIENT_JSON = os.path.join(_REPO_ROOT, "clients", "bluemarlin", "config", "client.json")
 ADAMUS_CLIENT_JSON = os.path.join(_REPO_ROOT, "clients", "adamus", "config", "client.json")
 DASHBOARD_API_PATH = os.path.join(_BM_ROOT, "dashboard", "api.py")
 

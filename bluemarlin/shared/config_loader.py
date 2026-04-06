@@ -5,7 +5,15 @@
 import json
 import os
 
-_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "client.json")
+# Brief 150 — client.json may live in different places:
+# - Inside the Docker container: /app/config/client.json (mounted by docker-compose)
+# - Mac dev (post-Brief-150): clients/bluemarlin/config/client.json (or clients/<name>/config/...)
+# - Container default (Dockerfile COPY target): resolves to /app/shared/../config/client.json = /app/config/client.json
+#
+# Precedence: CLIENT_CONFIG_PATH env var (explicit) wins. Otherwise use the module-relative
+# default, which works inside the container. Mac dev tests set CLIENT_CONFIG_PATH in conftest.py.
+_DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "client.json")
+_CONFIG_PATH = os.environ.get("CLIENT_CONFIG_PATH", _DEFAULT_CONFIG_PATH)
 _cache: dict = {}
 
 
