@@ -742,8 +742,8 @@ async def get_available_platforms():
 
 @router.put("/drafts/{draft_id}/platforms", dependencies=[Depends(_check_auth)])
 async def update_draft_platforms(draft_id: int, req: PlatformsRequest):
-    valid = {"instagram", "facebook"}
-    filtered = [p for p in req.platforms if p in valid]
+    available = set(social_publisher.get_available_platforms()) or {"instagram", "facebook"}
+    filtered = [p for p in req.platforms if p in available]
     ok = state_registry.update_draft_platforms(draft_id, filtered)
     if not ok:
         raise HTTPException(status_code=404, detail="Draft not found")
