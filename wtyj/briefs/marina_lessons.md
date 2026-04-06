@@ -1087,3 +1087,49 @@ tagged `wtyj-agent` and runs as a container named `wtyj-bluemarlin`. Don't confl
 - Test files that hardcode "BlueFinn" or "bluemarlin" as literal strings in assertions
   are a recurring pain point. A pre-commit hook that grepped for forbidden client names
   in test files would have saved time across all three briefs.
+
+---
+
+## Brief 154 — Pre-Existing Latent Issues Cleanup
+
+### Decision
+Cleanup of 5 pre-existing issues from the systemwide check: 2 investigations (both came back NORMAL), 3 actual fixes (0-byte stale file deleted, template moved to platform-level, whatsapp_client lazy env var refactor). Plus fixing 7 long-standing test failures (6 stale dates, 1 import-order bug — same shape Brief 147 fixed for gws_calendar).
+
+### Outcome
+738 passed / 0 failures. **First fully clean test suite in months.** All 7 stale failures fixed, 1 new mandatory regression test added.
+
+### Technique 1 — When fixing stale dates in tests, check the day of the week
+
+Updated `2026-04-03` (Friday at the time of Brief 047) to `2027-12-17` because the test exercises a "Fridays only" service. My first attempt was `2027-12-15` which is a Wednesday — the test failed with "doesn't run on Wednesdays, only Fridays only" instead of producing the expected booking summary. The error message itself helpfully suggested "Friday 17 December" as an alternative, which I used.
+
+Lesson: when picking future dates for tests that exercise day-of-week-restricted services or operating-day rules, check the day of the week, not just "is it in the future." Even better: use a relative date computed from `today + N days` BUT pinned to a specific weekday (e.g., the Friday of week `today + 30 days`). That avoids both staleness AND day-of-week traps. Brief 154 went with the simpler "fixed future Friday" approach since the original tests used a fixed date and it's a 1-line fix to maintain.
+
+### Technique 2 — Lazy env var reads (Brief 147 pattern reused)
+
+Same pattern Brief 147 used for `gws_calendar.py`. Module-level `_ACCESS_TOKEN = os.environ.get(...)` is fragile because it caches at import time. If any other test imports the module before the env var is set, the cached value is empty and tests that set the var later get unexpected behavior.
+
+Fix: replace module-level constants with helper functions that read at call time:
+```python
+def _access_token() -> str:
+    return os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+```
+
+Update all call sites to use the helper. Add a regression test that imports the module FIRST, sets the env var via `monkeypatch.setenv` SECOND, and asserts the helper returns the new value. This locks in the lazy-read pattern — if anyone reverts to module constants, the test fails.
+
+Worth checking if any OTHER modules in the codebase have this same shape (module-level `_VAR = os.environ.get(...)`). At minimum: `email_poller.py` was already fixed in Brief 145+147; `gws_calendar.py` in Brief 147; `whatsapp_client.py` in Brief 154. Sweep candidates for the future: any other client of an external API.
+
+### Technique 3 — Read-only investigations should have explicit stopping criteria
+
+Issues 5 and 6 were investigations, not fixes. The brief committed to "investigate, document, decide" — either the finding is "normal" (move on) or "real bug" (open follow-up brief, do NOT try to fix in the same brief). Both came back normal. The decision criteria were spelled out in the brief itself:
+- Heartbeat fresh + log silent + no eligible state changes → normal
+- Heartbeat stale or log shows errors → real bug, follow-up brief
+
+Without the explicit criteria, investigations turn into "let me dig more, maybe one more thing" rabbit holes that block the actual cleanup work.
+
+### Critical lesson — don't assume past briefs are complete
+
+Reviewer round 1 caught that I had assumed Brief 141 unified the booking summary wording across both builders. In fact, Brief 141 only updated `social_agent._build_booking_summary` (line 86). The parallel builder at `email_poller._build_booking_summary` (line 412) still uses the old wording verbatim. My initial brief draft would have replaced correct test assertions with wrong substrings, breaking 6 tests against actually-correct production code.
+
+The right move: when "fixing" tests that look stale, ALWAYS verify what the code actually does TODAY. Don't assume that because a brief said "we changed X" that the change propagated to every parallel implementation. The platform has TWO booking summary builders, and Brief 141 only fixed one of them. That's either intentional (different channels, different tone) or a Brief 141 incompleteness — but it's a separate decision and a separate brief, not something to silently patch into a "test cleanup."
+
+Process lesson: before changing a test assertion, run the code path the test exercises and observe the actual output. Then either update the test to match observed reality, or fix the code to match the (correct) assertion. Don't update the test to match what you THINK the code should output — that ships red tests against working code or vice versa.
