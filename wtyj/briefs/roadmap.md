@@ -255,7 +255,13 @@ Still TODO:
 - Client website URL in config — Marina references it in conversations
 - Deprecate Pillow graphics engine — AI image generation replaces it. Deactivate, don't delete yet.
 - **Rename Google Cloud project to agnostic name (DEFERRED — Benson decision pending, re-noted 2026-04-06)** — Service account is currently `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com`. Project ID `bluemarlin-ops` is permanent and visible to clients when they share calendars with us. Should be renamed to something agnostic like `wtyj-platform`. Requires manual work in Google Cloud Console: create new GCP project, create new service account, download new key, re-share every BlueFinn calendar + every Adamus calendar + every future-client calendar with the new robot email, replace `/root/bluemarlin/config/calendar-key.json` on VPS. Not blocking — current setup works — but visible in calendar share lists. Benson deferred executing this, needs further discussion. Re-open when ready to onboard a paying client who'll actually see the share list.
-- ~~**Brief 148: .dockerignore + directory-mount refactor**~~ — COMPLETE as of 2026-04-06. Both docker-compose.yml files now use directory mounts, `.dockerignore` excludes `bluemarlin/config/`, `bluemarlin/data/`, `bluemarlin/logs/`, `clients/` from the build context. Adamus's container verified to contain ONLY its own 4 files at `/app/config/`. Multi-client image isolation achieved.
+- ~~**Brief 148: .dockerignore + directory-mount refactor**~~ — COMPLETE 2026-04-06. Both docker-compose.yml files use directory mounts. Multi-client image isolation achieved.
+- ~~**Brief 149: Structured agent_persona config + operating_mode alias**~~ — COMPLETE 2026-04-06. 10-field structured persona block in client.json, custom prompt builder, both clients migrated.
+- ~~**Brief 150: Move BlueMarlin deployment to clients/bluemarlin/ + rebrand**~~ — COMPLETE 2026-04-06. Symmetric layout with Adamus. BlueMarlin's client.json scrubbed of BlueFinn (real unrelated company) identity: name → BlueMarlin Charters, phone → +15155005577, email → butlerbensonagent@gmail.com.
+- ~~**Brief 151: Rename source tree bluemarlin/ → wtyj/**~~ — COMPLETE 2026-04-06. Source directory renamed to platform identifier. Python imports unchanged because they're relative to dir contents not name.
+- ~~**Brief 152: Rename Docker image + container names to wtyj-***~~ — COMPLETE 2026-04-06. Image is `wtyj-agent`, containers are `wtyj-bluemarlin` (port 8001) and `wtyj-adamus` (port 8002). Zero "bluemarlin" branding visible in `docker ps`.
+
+**WTYJ naming sweep complete.** Remaining BlueMarlin references: legacy backups, old briefs, source file header comments. None of these affect runtime. Cosmetic-only cleanup, can be swept later.
 
 **Polish:**
 - [PAYMENT_LINK] cosmetic bug — blank line when payment.timing="none"

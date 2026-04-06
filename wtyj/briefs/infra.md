@@ -10,10 +10,13 @@
 - **Restaurant Adamus** is demo business #2, deployed on port 8002. Fully fictional restaurant. Zero real-world analog.
 - **BlueFinn Charters Curaçao** is a REAL, UNRELATED company. We have zero connection to them. Never signed, never contacted. The only link: BlueMarlin's demo client.json uses BlueFinn's public info. BlueFinn does NOT run on our platform. Do not confuse "BlueMarlin container running" with "BlueFinn running" — BlueFinn is not a client.
 
-Legacy naming that's being cleaned up in Briefs 150-152:
-- Source tree is still `bluemarlin/` (being renamed to `wtyj/` in Brief 151)
-- BlueMarlin's deployment is at `/root/bluemarlin/` instead of `/root/clients/bluemarlin/` (being moved in Brief 150)
-- Docker image is `root-bluemarlin` (being renamed in Brief 152)
+Legacy naming that has been cleaned up (Briefs 150-152, complete 2026-04-06):
+- Source tree: `bluemarlin/` → `wtyj/` ✅
+- BlueMarlin's deployment: `/root/bluemarlin/` → `/root/clients/bluemarlin/` ✅
+- Docker image: `root-bluemarlin` → `wtyj-agent` ✅
+- BlueMarlin container: `bluemarlin-default` → `wtyj-bluemarlin` ✅
+- Adamus container: `bluemarlin-adamus` → `wtyj-adamus` ✅
+- BlueMarlin's client.json business identity: `BlueFinn Charters Curaçao` → `BlueMarlin Charters` (rebrand to remove real-company impersonation) ✅
 
 ---
 
@@ -33,17 +36,20 @@ Legacy naming that's being cleaned up in Briefs 150-152:
 
 ## Project on VPS
 
+After Briefs 150-152, source code lives at `/root/wtyj/` and each client's runtime
+state lives under `/root/clients/<client>/`. The repo root is `/root/`.
+
 | Item | Value |
 |------|-------|
-| Project root | `/root/bluemarlin/` |
-| Marina agent | `/root/bluemarlin/agents/marina/` |
-| Social agent | `/root/bluemarlin/agents/social/` |
-| Dashboard API | `/root/bluemarlin/dashboard/` |
-| Shared libs | `/root/bluemarlin/shared/` |
-| Runtime data | `/root/bluemarlin/data/` (SQLite DB, graphics, photos) |
-| Config files | `/root/bluemarlin/config/` |
-| Log directory | `/root/bluemarlin/logs/` |
-| Log file | `bluemarlin.log` (JSONL via bm_logger) |
+| Repo root | `/root/` |
+| Source tree | `/root/wtyj/` |
+| Marina agent (source) | `/root/wtyj/agents/marina/` |
+| Social agent (source) | `/root/wtyj/agents/social/` |
+| Dashboard API (source) | `/root/wtyj/dashboard/` |
+| Shared libs (source) | `/root/wtyj/shared/` |
+| BlueMarlin runtime | `/root/clients/bluemarlin/` (config, data, logs, docker-compose) |
+| Adamus runtime | `/root/clients/adamus/` (config, data, logs, docker-compose) |
+| Inside container | `/app/` (working dir, mounts at `/app/config`, `/app/data`, `/app/logs`) |
 
 ---
 
@@ -105,29 +111,38 @@ GoDaddy email plan currently has 2 seats total.
 
 Single Docker container running both services via supervisord.
 
-Two containers as of Brief 146 (multi-client proof).
+Two containers, one shared image. Multi-client architecture proven and isolated as of Brief 152.
 
-| Client | Container name | Port | Compose file | Data dir |
-|--------|----------------|------|--------------|----------|
-| BlueFinn (default) | `bluemarlin-default` | 8001 | `/root/docker-compose.yml` | `/root/bluemarlin/data/` |
-| Restaurant Adamus (demo) | `bluemarlin-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/data/` |
+| Client | Container name | Port | Compose file | Runtime dir |
+|--------|----------------|------|--------------|-------------|
+| BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
+| Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
 
-Both containers use the same Docker image `root-bluemarlin:latest` (built from `Dockerfile` via BlueFinn's `docker compose build`). Adamus uses `image: root-bluemarlin` directly — no rebuild. Inside each: `email-poller` + `webhook-server` via supervisord. Email-poller exits cleanly on Adamus (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token).
+Both containers use the same image `wtyj-agent:latest` (built from `Dockerfile` at `/root/Dockerfile`). Adamus uses `image: wtyj-agent` directly — no rebuild on Adamus deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus's email-poller exits cleanly on startup (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token).
 
-**⚠️ Known issue (Brief 147 will fix):** Dockerfile `COPY bluemarlin/ /app/` bakes BlueFinn's runtime config files (azure_refresh_token.txt, email_thread_state.json, platform.env, state_registry.db) into the image. Current workaround is that volume mounts override client.json + calendar-key.json at runtime, and `env_file:` wins over baked-in platform.env, and graceful-exit guards prevent the poller from touching the baked-in token. But this is a data-leak risk for any real multi-client deployment.
+Runtime isolation: Brief 148 added `.dockerignore` exclusion of `wtyj/config/`, `wtyj/data/`, `wtyj/logs/`, `clients/`, plus directory mounts in both compose files. Each container's `/app/config/` is populated entirely from its own host directory at runtime — zero cross-tenant leakage at the image layer.
 
-### Deploy commands
+### Deploy commands (post-Brief-152)
 
 ```bash
-# Rebuild BlueFinn (and the shared image)
-ssh root@108.61.192.52 "cd /root && git pull && docker compose build && docker compose up -d"
-
-# Start Adamus (uses pre-built image, no rebuild)
-ssh root@108.61.192.52 "cd /root/clients/adamus && docker compose up -d"
+# Standard deploy: pull, rebuild image, restart both containers
+ssh root@108.61.192.52 "
+  cd /root/clients/bluemarlin && docker compose down
+  cd /root/clients/adamus && docker compose down
+  cd /root && git pull
+  cd /root/clients/bluemarlin && docker compose build && docker compose up -d
+  cd /root/clients/adamus && docker compose up -d
+"
 
 # Health check both
 ssh root@108.61.192.52 "curl -s http://localhost:8001/health && echo && curl -s http://localhost:8002/health"
+
+# Inspect running containers
+ssh root@108.61.192.52 "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+# Expected: wtyj-bluemarlin and wtyj-adamus, both running wtyj-agent image
 ```
+
+The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus's compose references `image: wtyj-agent` directly and pulls the just-built image — no separate build step. To rebuild only (no restart), use `docker compose build` from `/root/clients/bluemarlin/` alone.
 
 ### Old services (systemd — disabled, kept for rollback)
 

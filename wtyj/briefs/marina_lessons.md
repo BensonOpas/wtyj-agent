@@ -976,3 +976,114 @@ skip entry, loop-body check catches future code that bypasses the check.
 
 The Brief 149 reviewer cycle caught every one of these. Worth remembering as
 a checklist for future structured-config migrations.
+
+---
+
+## Briefs 150-152 — The WTYJ Naming Sweep (back-to-back execution)
+
+### Decision
+Three sequential briefs to remove BlueMarlin branding from platform infrastructure
+and replace it with WTYJ:
+- Brief 150: Move BlueMarlin's deployment from /root/bluemarlin/ to
+  /root/clients/bluemarlin/ + rebrand client.json identity (BlueFinn data
+  scrubbed; new name "BlueMarlin Charters", phone +15155005577,
+  email butlerbensonagent@gmail.com).
+- Brief 151: Rename source tree bluemarlin/ → wtyj/.
+- Brief 152: Rename Docker image root-bluemarlin → wtyj-agent and containers
+  bluemarlin-default → wtyj-bluemarlin, bluemarlin-adamus → wtyj-adamus.
+
+### Outcome
+All three briefs shipped end-to-end in one session. Final: 730 tests passing,
+7 pre-existing failures unchanged, both containers running under new names with
+zero data loss. The 290 KB email_thread_state.json with 105 conversation threads
+survived the move + rename + rebuild sequence intact.
+
+### Technique 1 — git mv for tracked files, manual mv for gitignored runtime state
+
+Brief 150's deployment move had two parallel tracks. Git-tracked files (client.json,
+client.json.template, brand/, .gitkeep) moved via `git mv` on the Mac, captured as
+renames in the commit. After git pull on the VPS, the new files appeared at the new
+path automatically.
+
+But the gitignored runtime files (azure_refresh_token.txt, email_thread_state.json,
+archived_threads.jsonl, calendar-key.json, platform.env) only exist on the VPS — git
+doesn't know about them. They had to be moved with literal `mv` commands while the
+container was stopped:
+
+    docker compose down  # critical: stop container so files aren't held open
+    git pull             # tracked files arrive at new location
+    mv /root/bluemarlin/config/{secrets} /root/clients/bluemarlin/config/  # runtime state
+    docker compose build && docker compose up -d  # restart from new location
+
+Lesson: when moving a deployment that has both tracked and gitignored files, plan for
+two separate move operations and stop the running process before either runs.
+
+### Technique 2 — CLIENT_CONFIG_PATH env var for dev-vs-container path mismatch
+
+Brief 150 moved client.json from bluemarlin/config/ to clients/bluemarlin/config/.
+Inside the Docker container this didn't matter — docker-compose mounts the host's
+clients/bluemarlin/config over /app/config/, so `_CONFIG_PATH = /app/shared/../config/`
+still worked. But on the Mac, `_CONFIG_PATH` resolved to `bluemarlin/config/client.json`
+which no longer existed. Every test that called `config_loader.get_business()` got an
+empty dict because `_load()` caught the FileNotFoundError and returned `{}`. Cascading
+failures across the suite — not just `test_034` (which had a hardcoded `open()`) but
+many others.
+
+Fix: add `CLIENT_CONFIG_PATH` env var support to config_loader with the existing
+module-relative path as fallback. Have `conftest.py` set the env var to the new
+BlueMarlin location before any test imports config_loader. The container doesn't need
+the env var — the legacy fallback still works there because `/app/shared/../config/`
+is correct.
+
+This pattern works for any "the file moved but the import is module-relative" problem.
+Don't fight the import; pass the path via env var with a sensible default.
+
+### Technique 3 — Renaming a Python source directory has near-zero blast radius
+
+Brief 151 renamed bluemarlin/ → wtyj/. I expected this to be invasive because of the
+massive number of files (1480 file moves in the commit). It was almost effortless.
+Python imports like `from agents.marina import ...` are relative to the directory
+CONTENTS, not the directory NAME. The directory name doesn't appear in any import.
+Renaming it just required:
+
+1. `git mv bluemarlin wtyj`
+2. Update Dockerfile `COPY bluemarlin/` → `COPY wtyj/`
+3. Update .dockerignore `bluemarlin/*` → `wtyj/*`
+
+Inside the container, `/app/` is the working directory regardless of the host name.
+None of the running code ever sees the host directory name.
+
+The only places that broke were tests that hardcoded `bluemarlin/` as a literal
+substring in assertion strings. Mechanical to update.
+
+Lesson: if a directory name only appears in build tooling (Dockerfile, .dockerignore)
+and not in source code or imports, renaming it is a small mechanical change. Don't be
+afraid of "1480 file changes" if every single one is a path rename.
+
+### Technique 4 — Service key vs container_name vs image: three independent identifiers
+
+Brief 152 renamed the Docker layer. docker-compose has three independent naming knobs:
+
+- Service key (the YAML key under services:): internal to the compose file. Renamed
+  from bluemarlin: to agent: for both clients — cleanup-only.
+- container_name: what `docker ps` shows in NAMES column. Renamed to wtyj-bluemarlin
+  and wtyj-adamus.
+- image: the tag name when the image is built. Visible in `docker images` and
+  `docker ps`. Renamed to wtyj-agent (singular — both clients use the same image).
+
+These three are independent. You can have a service called `agent` that builds an image
+tagged `wtyj-agent` and runs as a container named `wtyj-bluemarlin`. Don't conflate them.
+
+### What I'd do differently next time
+
+- Brief 150 introduced subtle path-resolution bugs in tests that I didn't catch until
+  full regression. I should have run the full regression AFTER each major file move
+  instead of batching everything. Faster feedback would have saved minutes of "what
+  broke?" debugging.
+- I skipped the brief-reviewer for Briefs 151 and 152 to keep momentum in back-to-back
+  mode. Cost: three rounds of fixes per brief to clean up test fixtures pointing at
+  old paths/names. Next time: run the brief-reviewer at least for the first brief in
+  a multi-brief sequence to lock in the test-update checklist.
+- Test files that hardcode "BlueFinn" or "bluemarlin" as literal strings in assertions
+  are a recurring pain point. A pre-commit hook that grepped for forbidden client names
+  in test files would have saved time across all three briefs.
