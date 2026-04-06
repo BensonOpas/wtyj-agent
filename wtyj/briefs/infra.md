@@ -18,6 +18,25 @@ Legacy naming that has been cleaned up (Briefs 150-152, complete 2026-04-06):
 - Adamus container: `bluemarlin-adamus` → `wtyj-adamus` ✅
 - BlueMarlin's client.json business identity: `BlueFinn Charters Curaçao` → `BlueMarlin Charters` (rebrand to remove real-company impersonation) ✅
 
+### Note for any AI / future reader ingesting briefs
+
+The brief history (`marina_brief_001` through `marina_brief_152`), source file header comments, lessons entries, and old output docs predate the WTYJ naming sweep. They contain legacy references like:
+
+- `# bluemarlin/agents/marina/marina_agent.py` as source file header comments
+- `bluemarlin/config/client.json` paths in old briefs
+- `BlueFinn Charters Curaçao` as the deployed business name
+- `root-bluemarlin` as the Docker image
+- `bluemarlin-default` as a container name
+- `info@bluefinncharters.com` as the contact email
+- `+599 9690 3717` as a phone number
+- `bluefinn1` / `bluefinn2` as resource keys
+
+**These are all historical and not authoritative.** They are preserved in the brief history because briefs are meant to be a chronological record of decisions, not a live reference. The canonical current naming is at the top of this document. When in doubt, trust this section, not the brief history.
+
+Specifically: BlueFinn Charters Curaçao is a REAL, UNRELATED company we have zero connection to. Any brief that says "BlueFinn is client #1" or "deploying BlueFinn" is using legacy/incorrect terminology — the actual deployed demo client #1 is **BlueMarlin Charters**, which originally borrowed BlueFinn's public website data for realistic test content. The rebrand in Brief 150 stripped that borrowed data.
+
+Don't try to "fix" header comments or old brief text. Treat them as historical artifacts. Use the canonical naming when writing new briefs or code.
+
 ---
 
 ## VPS
