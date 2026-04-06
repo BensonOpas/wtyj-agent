@@ -36,10 +36,24 @@ _archive/
 a.out
 .DS_Store
 
-# Credentials — new location
+# Credentials — broad patterns (catch any location, any client)
+**/bluemarlin-calendar-key.json
+**/calendar-key.json
+**/platform.env
+**/bluemarlin.env
+**/azure_refresh_token.txt
+**/email_thread_state.json
+
+# Client-specific config trees (Adamus, etc.)
+clients/*/config/platform.env
+clients/*/config/calendar-key.json
+clients/*/config/azure_refresh_token.txt
+
+# Legacy specific paths (kept for clarity)
 bluemarlin/config/azure_refresh_token.txt
 bluemarlin/config/bluemarlin-calendar-key.json
 bluemarlin/config/email_thread_state.json
+
 _archive_old_system/
 bluemarlin/src/node_modules/
 bluemarlin/src/package-lock.json
