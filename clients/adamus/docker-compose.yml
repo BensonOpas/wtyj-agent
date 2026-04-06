@@ -10,7 +10,6 @@ services:
     environment:
       - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
     volumes:
-      - ./config/client.json:/app/config/client.json:ro
-      - ./config/calendar-key.json:/app/config/calendar-key.json:ro
+      - ./config:/app/config:rw
       - ./data:/app/data
       - ./logs:/app/logs

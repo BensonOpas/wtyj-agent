@@ -1,10 +1,28 @@
+# === Source-tree exclusions (build context size) ===
 bluemarlin/backups/
 bluemarlin/tests/
 bluemarlin/briefs/
 bluemarlin/src/
+
+# === Runtime config — provided at runtime via volume mount, never in the image ===
+bluemarlin/config/
+
+# === Runtime data + logs — never in the image ===
+bluemarlin/data/
+bluemarlin/logs/
+
+# === Per-client trees — each client mounts its own config via their own compose ===
+clients/
+
+# === Mac/macOS junk ===
+**/.DS_Store
+
+# === Python build artifacts ===
 **/__pycache__/
 **/.pytest_cache/
 *.pyc
+
+# === Repo metadata + docs ===
 .git/
 .gitignore
 *.md

@@ -10,8 +10,6 @@ services:
     environment:
       - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
     volumes:
-      - ./bluemarlin/config/client.json:/app/config/client.json:ro
-      - ./bluemarlin/config/calendar-key.json:/app/config/calendar-key.json:ro
-      - ./bluemarlin/config/azure_refresh_token.txt:/app/config/azure_refresh_token.txt:rw
+      - ./bluemarlin/config:/app/config:rw
       - ./bluemarlin/data:/app/data
       - ./bluemarlin/logs:/app/logs
