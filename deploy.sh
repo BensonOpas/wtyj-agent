@@ -6,7 +6,7 @@ set -e
 ACTION="${1:-start}"
 
 # Validate required config files
-for f in config/client.json config/bluemarlin.env config/bluemarlin-calendar-key.json config/azure_refresh_token.txt; do
+for f in config/client.json config/platform.env config/calendar-key.json config/azure_refresh_token.txt; do
     if [ ! -f "$f" ]; then
         echo "ERROR: Missing $f"
         exit 1

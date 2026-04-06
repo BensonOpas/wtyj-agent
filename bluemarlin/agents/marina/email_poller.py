@@ -24,9 +24,9 @@ from agents.marina import payment_stub
 from agents.social.whatsapp_client import send_text_message as wa_send_text_message
 
 # ========= CONFIG =========
-CLIENT_ID = "28e94343-2f77-444c-ac32-58b7bed33b65"
-TENANT_ID = "caac06b5-1420-4223-9dcc-ba4a670ec26a"
-EMAIL_ADDR = "hello@wetakeyourjob.com"
+CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "28e94343-2f77-444c-ac32-58b7bed33b65")
+TENANT_ID = os.environ.get("AZURE_TENANT_ID", "caac06b5-1420-4223-9dcc-ba4a670ec26a")
+EMAIL_ADDR = os.environ.get("EMAIL_ADDRESS", "hello@wetakeyourjob.com")
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.normpath(os.path.join(_MODULE_DIR, "..", "..", "config"))

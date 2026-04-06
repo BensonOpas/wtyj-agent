@@ -56,23 +56,26 @@ The systemd units source this file at startup.
 | `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token) |
 | `OPENAI_API` | OpenAI | Optional: DALL-E image generation for content pipeline |
 | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | gws CLI | Set at runtime to path of service account key |
+| `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default: BlueFinn's app. |
+| `AZURE_TENANT_ID` | Email poller | Microsoft Azure tenant ID. Default: BlueFinn's tenant. |
+| `EMAIL_ADDRESS` | Email poller | Inbox email address to poll. Default: hello@wetakeyourjob.com |
 
 ### Credential files
 
 | File | VPS Path | Purpose |
 |------|----------|---------|
-| `bluemarlin.env` | `/root/bluemarlin/config/bluemarlin.env` | All env vars above |
-| `bluemarlin-calendar-key.json` | `/root/bluemarlin/config/bluemarlin-calendar-key.json` | Google service account key (Calendar + Sheets) |
+| `platform.env` | `/root/bluemarlin/config/platform.env` | All env vars above (renamed from bluemarlin.env in Brief 145) |
+| `calendar-key.json` | `/root/bluemarlin/config/calendar-key.json` | Google service account key (renamed from bluemarlin-calendar-key.json) |
 | `azure_refresh_token.txt` | `/root/bluemarlin/config/azure_refresh_token.txt` | Microsoft OAuth2 refresh token (persisted, auto-rotated) |
 | `client.json` | `/root/bluemarlin/config/client.json` | Business config (not credentials — safe in git) |
 
-### Hardcoded constants in source (not env vars)
+### Hardcoded constants in source (not env vars — Brief 145 moved to env vars)
 
 | Constant | File | Value | Purpose |
 |----------|------|-------|---------|
-| Microsoft `CLIENT_ID` | email_poller.py:27 | `28e94343-2f77-444c-ac32-58b7bed33b65` | Azure app registration |
-| Microsoft `TENANT_ID` | email_poller.py:28 | `caac06b5-1420-4223-9dcc-ba4a670ec26a` | Azure tenant |
-| `EMAIL_ADDR` | email_poller.py:29 | `hello@wetakeyourjob.com` | Marina's inbox |
+| ~~Microsoft `CLIENT_ID`~~ | ~~email_poller.py:27~~ | Now env var `AZURE_CLIENT_ID` (default: BlueFinn's) | Azure app registration |
+| ~~Microsoft `TENANT_ID`~~ | ~~email_poller.py:28~~ | Now env var `AZURE_TENANT_ID` (default: BlueFinn's) | Azure tenant |
+| ~~`EMAIL_ADDR`~~ | ~~email_poller.py:29~~ | Now env var `EMAIL_ADDRESS` (default: hello@wetakeyourjob.com) | Inbox to poll |
 | WhatsApp API version | whatsapp_client.py:14 | `v22.0` | Meta Cloud API version |
 
 ---
