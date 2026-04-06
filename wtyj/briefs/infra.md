@@ -94,7 +94,7 @@ Loaded by docker-compose's `env_file:` directive at container start.
 | `ZERNIO_WEBHOOK_SECRET` | Zernio | HMAC-SHA256 secret for DM webhook signature verification |
 | `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth2 | Dashboard Google Drive integration |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth2 | Dashboard Google Drive integration |
-| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token) |
+| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token). **Current value: `123`** ⚠️ insecure, change before any public exposure of the dashboard. |
 | `OPENAI_API` | OpenAI | Optional: DALL-E image generation for content pipeline |
 | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | gws CLI | Set at runtime to path of service account key |
 | `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default in source: `28e94343-2f77-444c-ac32-58b7bed33b65` (the WTYJ Azure app, shared across all clients on the wetakeyourjob.com Microsoft 365 tenant). |
@@ -250,6 +250,39 @@ https://*.replit.dev|app       # Regex for all Replit domains
 
 ---
 
+## WhatsApp / Messaging Channels
+
+### BlueMarlin WhatsApp (live as of 2026-04-06)
+
+| Item | Value |
+|------|-------|
+| Phone number | `+1 (515) 500-5577` (E.164: `+15155005577`) |
+| Type | Twilio number connected to Zernio for WhatsApp Business |
+| Display name in Meta WhatsApp Business | "BlueMarlin Tours Curaçao" (set in Zernio dashboard) ⚠️ note: client.json `business.name` is "BlueMarlin Charters" — Zernio profile name and platform business name are slightly inconsistent, customers may see both. Cosmetic, not blocking. |
+| WhatsApp profile name in Meta | "Name not set" — needs to be configured in the Meta WhatsApp Business profile |
+| Daily message limit | 250/day (Zernio plan tier) |
+| Webhook path | Inbound: Zernio → `https://api.wetakeyourjob.com/webhooks/zernio` → BlueMarlin's container (HMAC-SHA256 signed). Brief 143 routes WhatsApp through the same Zernio webhook as IG/FB DMs. |
+| Outbound | Marina sends replies via Zernio's `send_dm` API (not Meta Cloud API directly anymore, post-Brief-143) |
+| Verified working | 2026-04-06 21:48 UTC — multiple test messages from Calvin Adamus processed end-to-end (received via Zernio webhook → debounced → Claude → reply sent via Zernio API). See `marina_output_154.md` open work memory for the test trace. |
+
+### Adamus WhatsApp
+
+Not connected. Adamus has zero live channels right now (no WhatsApp number, no email OAuth bootstrap, no IG/FB pages). Email is the simplest first channel — see `memory/project_open_work.md` IMMEDIATE section for the OAuth bootstrap procedure for sophia@wetakeyourjob.com.
+
+### Meta WhatsApp Cloud API (legacy, ARCHIVED)
+
+| Item | Value |
+|------|-------|
+| Status | ARCHIVED in Meta developer dashboard at https://developers.facebook.com/apps/3092097104309170/ |
+| Why | Brief 143 migrated WhatsApp to Zernio. Meta app left in archived state as a fallback rollback path. |
+| Re-enable | Unarchive the app in Meta dashboard. Webhook server still has all the env vars (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, etc.) and the `/webhooks/meta/whatsapp` endpoint is still alive. Restoration is one click in Meta. |
+
+### Instagram + Facebook (BlueMarlin)
+
+Connected via Zernio. See Zernio section below for IG/FB account IDs.
+
+---
+
 ## Google Workspace CLI (gws)
 
 | Item | Value |
@@ -262,6 +295,19 @@ https://*.replit.dev|app       # Regex for all Replit domains
 | BlueMarlin spreadsheet ID | `1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I` |
 | Adamus spreadsheet ID | `1OYtPI5Fn7btaPROsJgtpXnoWR025cbjHWudHx2a8ggc` |
 | Service account | `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com` (rename to wtyj-* deferred — see roadmap) |
+
+### Adamus Google Calendars (per-service)
+
+| Service | Calendar ID |
+|---------|-------------|
+| Adamus Lunch | `c3058824908775658a72e60877f8cea295b54b2b0d5c1c5a33c295e0ec2f8094@group.calendar.google.com` |
+| Adamus Dinner | `5b51d6514c5576577fd39e8cb385c0fbcbfc285d283b8ca27095d322b9af50a1@group.calendar.google.com` |
+
+Both calendars owned by `butlerbensonagent@gmail.com` (Benson's personal Google account), shared with the `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com` service account with "Make changes to events" permission.
+
+### BlueMarlin Google Calendars (per-service slot)
+
+5 services (klein_curacao, snorkeling_3in1, west_coast_beach, sunset_cruise, jet_ski) — each slot in `clients/bluemarlin/config/client.json` has its own `calendar_id` field. See client.json for the full list. Calendars owned by `ops.bluemarlindemo@gmail.com` and shared with the same service account.
 
 ---
 
