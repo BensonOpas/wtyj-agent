@@ -673,9 +673,160 @@ hygiene, maintain a `.dockerignore` independently.
 
 - When deploying any new client container in the future, always inspect
   `/app/config/` inside the container to verify nothing unexpected was
-  baked in. The Brief 147 `.dockerignore` fix should eliminate this,
+  baked in. The Brief 148 `.dockerignore` refactor should eliminate this,
   but verify at deploy time.
 - Brief 146's architecture proof was successful at the CONFIG LOADER
   level — don't assume this means the multi-client architecture is
-  production-ready. It's not. Brief 147 is a prerequisite for real
+  production-ready. It's not. Brief 148 is a prerequisite for real
   multi-client deployment.
+
+---
+
+## Brief 147 — Fix gws Hardcoded Calendar Key Path (the silent 24h outage)
+
+### What happened
+
+Brief 145 renamed `bluemarlin-calendar-key.json` → `calendar-key.json`,
+updated docker-compose.yml and deploy.sh, and deployed. The rename
+looked complete. BlueMarlin kept running, health checks passed, email
+poller processed messages, Claude replies went out. For 24 hours we
+thought everything was fine.
+
+During Brief 147's original writing (the .dockerignore version), the
+reviewer noticed three Python source files — `gws_calendar.py`,
+`format_sheets.py`, `sheets_writer.py` — hardcoded the OLD filename.
+Worse, `gws_calendar._run_gws()` and `sheets_writer._append()` did:
+
+    env = os.environ.copy()
+    env['GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE'] = _KEY_PATH
+
+where `_KEY_PATH` was the stale module-level constant pointing at the
+old filename. So even though docker-compose correctly set the env var
+to the new path, the Python code overwrote it immediately before the
+subprocess call. Every `gws` invocation received the old path, failed
+auth, logged an error, and moved on.
+
+I checked the VPS logs. Confirmed active. The error had been appearing
+in `email_poller.log` continuously since Brief 145:
+
+    sheets_writer: _append error (All Events): {
+      "error": {
+        "message": "Authentication failed: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+        points to /app/config/bluemarlin-calendar-key.json, but file does not exist"
+
+### Why nobody noticed for 24 hours
+
+The gws failures only affected:
+- Sheets audit logging (append rows to All Events, Bookings, etc.)
+- Calendar manifest event creation (booking confirmations)
+- Calendar availability reads (hold checks)
+
+These failures did NOT affect:
+- Email polling itself (the poller kept running)
+- Claude API calls (independent of gws)
+- marina_agent responses to customers (generated, sent, looked fine)
+- SQLite state registry (local, not gws)
+- Dashboard API
+
+In other words: the CUSTOMER EXPERIENCE was unaffected. Customers
+emailed, Marina replied, the replies made sense. The operator-facing
+audit trail (Google Sheet) stopped updating, but nobody was watching
+the sheet live during the window. No alarm bells.
+
+Lesson: "it's running" != "it works." A service can be deeply broken
+in its audit / persistence / integration layer while its customer-
+facing surface looks fine. The failure was invisible because we didn't
+have a regression test that exercised the gws code path post-deploy,
+and we didn't have a monitor on Sheets write success. We also didn't
+notice because the `email_poller.log` is written in a free-form
+mixed-severity stream — the "error" lines blended in with the
+successful "Replied + marked Seen" lines.
+
+### The specific bug shape — env var clobbering
+
+This is a pattern worth remembering:
+
+    # docker-compose.yml — correct
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+
+    # Python source — WRONG
+    _KEY_PATH = '/app/config/bluemarlin-calendar-key.json'  # hardcoded OLD name
+    ...
+    def _run_gws(args):
+        env = os.environ.copy()                              # starts correct
+        env['GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE'] = _KEY_PATH  # <-- clobbers
+        subprocess.run(['gws'] + args, env=env)              # sees OLD path
+
+The Python code explicitly REPLACES the correct value from the
+environment with a stale module constant. Any tool — shell, supervisor,
+docker-compose, systemd — that tries to configure this process via env
+var is defeated by the Python overwrite.
+
+The fix:
+
+    _DEFAULT_KEY_PATH = '/app/config/calendar-key.json'  # NEW name fallback
+    _KEY_PATH = os.environ.get('GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE', _DEFAULT_KEY_PATH)
+    ...
+    def _run_gws(args):
+        env = os.environ.copy()
+        env['GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE'] = _KEY_PATH  # now a no-op if env already set
+        subprocess.run(...)
+
+Reading the env var at module load means `_KEY_PATH` BECOMES the env
+var value (if set) or a sensible default (if not). The later override
+in `_run_gws` is still there but it's now a no-op in the normal case —
+it's just re-setting the same value. In the unusual case (someone
+running `_run_gws` after `os.environ.pop(...)`) the module constant
+still holds the correct fallback.
+
+### The critical regression test
+
+Test 7 in the new test file monkey-patches `subprocess.run` to capture
+the `env` dict it receives:
+
+    def test_run_gws_does_not_clobber_env_var(reload_gws_calendar):
+        reload_gws_calendar.setenv(ENV_VAR, "/tmp/sentinel-from-compose.json")
+        mod = _reload("agents.marina.gws_calendar")
+        captured = {}
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env", {})
+            return _SubprocessResult()
+        reload_gws_calendar.setattr(mod.subprocess, "run", fake_run)
+        mod._run_gws(["stub"])
+        assert captured["env"][ENV_VAR] == "/tmp/sentinel-from-compose.json"
+
+This test would have caught the original bug on the day Brief 145
+landed. It asserts the specific invariant that was violated: "the env
+var value that gws sees must equal the value the test set." No value
+judgement about which path is right — just "whatever the parent sets,
+the child receives, unchanged."
+
+Principle for future similar fixes: when writing a regression test
+for an env-var / config-passthrough bug, assert PRESERVATION of the
+value across the call, not that it equals some known-correct literal.
+"Don't mutate what I gave you" is a stronger invariant than "produce
+this specific string."
+
+### What to watch for
+
+- ANY time you rename a file that's referenced in source code, grep
+  the entire repo for the old name BEFORE considering the rename
+  complete. Brief 145's grep was incomplete — it missed three .py
+  files that hardcoded the name. A ripgrep for
+  `bluemarlin-calendar-key` would have caught them in one second.
+- When a Python function accepts `env = os.environ.copy()` and then
+  reassigns keys within that env before calling a subprocess, that is
+  a code smell. It means the function is overriding caller intent.
+  Unless there's a documented reason, the function should pass the
+  parent env through unchanged.
+- When docker-compose sets an env var AND source code hardcodes the
+  same env var name, they are fighting each other. One of them has
+  to give. Preferred resolution: source code reads the env var with
+  a default; compose/deploy provides the real value.
+- A 24-hour silent production outage in an audit path is a warning
+  about observability. BlueMarlin had no alert on "gws write failed"
+  or "sheets append returned non-200." Brief 149+ should consider
+  adding a simple "failed gws call count" counter that triggers a
+  semi-escalation to butlerbensonagent@gmail.com after N failures
+  in M minutes. For now the regression tests are the guard.
