@@ -96,12 +96,9 @@ def test_email_poller_proceeds_past_guard_when_both_present(monkeypatch, tmp_pat
 
     with pytest.raises(_SentinelException, match="reached imap_connect"):
         email_poller.main()
-
-    # Confirm the real dev checkout config file was not written to by this test.
-    real_thread_state = os.path.join(_BM_ROOT, "config", "email_thread_state.json")
-    # The file may pre-exist from normal development — we only assert it wasn't
-    # just created by this test. The monkeypatch of THREAD_STATE_PATH is the
-    # real guard; this is a belt-and-suspenders check.
+    # The real guard against touching bluemarlin/config/email_thread_state.json
+    # is the THREAD_STATE_PATH monkeypatch above. Sentinel propagation here
+    # proves we got past the guard without hitting imap_connect's real body.
 
 
 # ---------------------------------------------------------------------------

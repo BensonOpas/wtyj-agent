@@ -562,3 +562,120 @@ developer dashboard. Until then, WhatsApp messages arrive TWICE (once
 from Meta, once from Zernio) and get processed twice. The dedup check
 won't help because Meta and Zernio use different message IDs for the
 same message.
+
+---
+
+## Brief 146 — Adamus Second-Client Deployment
+
+### What happened
+Deployed Restaurant Adamus as the second Docker container on the same VPS
+to prove Phase 2 multi-client architecture. Goal was narrow: show one
+Docker image serving two completely different businesses from two different
+client.json files. Email was deliberately disabled (orchestrator-only test)
+so we didn't have to bootstrap a new Microsoft OAuth refresh token for
+sophia@wetakeyourjob.com just to prove config loading works.
+
+The proof worked cleanly: same image, two containers, config_loader.get_business()
+returns "Sofia/Restaurant Adamus/reservation/diners" in one container and
+"Marina/BlueFinn Charters/trip/guests" in the other. Zero cross-contamination
+at the config-loading layer. 14 new tests, all pass. Full regression clean.
+
+### Technique 1 — Sentinel exceptions to break catch-all loops in tests
+
+The `email_poller.main()` has a `while True:` loop with a catch-all
+`except Exception` at line 1346 that wraps the entire loop body. Test 3
+needed to prove the new graceful-exit guard doesn't trigger when both
+EMAIL_ADDR and the refresh token are present — i.e., that execution
+continues into the normal polling path. The natural way to prove this is
+monkeypatch `imap_connect` to raise, then assert it was reached.
+
+First attempt used `class _Sentinel(Exception)`. The test hung forever
+because the main loop's `except Exception` caught the sentinel, logged it,
+slept 30s, and retried — loop never exited.
+
+Fix: `class _Sentinel(BaseException)`. Python's `except Exception` does NOT
+catch `BaseException` subclasses. The sentinel propagated up through the
+exception handler, broke out of the `while True`, and out of `main()`.
+`pytest.raises(_Sentinel)` caught it at the test boundary. Clean.
+
+Key lesson: when the code under test has a catch-all `except Exception`,
+BaseException-derived sentinels are the safe way to break out in tests.
+Don't fight the catch-all — go around it.
+
+### Technique 2 — supervisord startsecs=0 for graceful-exit processes
+
+The brief originally set `autorestart=unexpected` + `exitcodes=0` on the
+email-poller supervisord program, expecting that a clean exit would be
+respected. The reviewer caught that this is NOT enough — supervisord has
+a second gate called `startsecs` (default: 5) which is the interval a
+process must stay alive before transitioning from STARTING to RUNNING.
+If a process exits faster than `startsecs`, supervisord treats it as a
+startup failure, goes to BACKOFF, and retries up to `startretries` times
+before marking FATAL — regardless of what `exitcodes` and `autorestart`
+say. The exitcodes/autorestart rules only apply to processes that have
+actually reached RUNNING.
+
+For Adamus, `email_poller.main()` exits in milliseconds (logs one line,
+returns). That's way faster than 5 seconds. Without `startsecs=0`, the
+container would show the same FATAL-retry stack trace noise the brief
+was written to eliminate.
+
+Fix: add `startsecs=0` to the email-poller program block. BlueFinn is
+unaffected because its poller never exits the `while True` loop.
+
+### Problem — Dockerfile bakes runtime secrets into the image
+
+Discovered during deployment verification that the Adamus container's
+`/app/config/` directory contained BlueFinn's entire runtime config:
+`azure_refresh_token.txt`, `email_thread_state.json`, `platform.env`,
+`state_registry.db`, `archived_threads.jsonl`. None of these files
+were mounted by Adamus's docker-compose. They were baked into the
+Docker image at build time.
+
+Root cause: `Dockerfile` does `COPY bluemarlin/ /app/`. On the VPS,
+`/root/bluemarlin/config/` is a live directory with gitignored-but-
+present runtime files (the actual secrets used by the running service).
+`docker build` does not read `.gitignore` — it copies whatever is in
+the build context. So every image built on the VPS bakes in BlueFinn's
+real secrets.
+
+Why Brief 146's proof still worked:
+1. Adamus volume-mounts `client.json` and `calendar-key.json` over the
+   baked-in versions, so config_loader reads Adamus's real config.
+2. Docker's `env_file:` directive injects env vars at container start,
+   which takes precedence over any baked-in platform.env file. So
+   `EMAIL_ADDRESS=""` wins and the graceful-exit path fires.
+3. The orchestrator proof only needed `client.json`, which IS mounted.
+
+Why it's a blocker for real multi-client deployment:
+- Every client container has BlueFinn's refresh token at
+  `/app/config/azure_refresh_token.txt`. If a future client ever sets
+  `EMAIL_ADDRESS` without explicitly mounting their own refresh token
+  file, they'd read BlueFinn's inbox.
+- Every client container has BlueFinn's `email_thread_state.json` —
+  customer email threads, PII, in-flight booking state.
+
+Fix (Brief 147): add a `.dockerignore` excluding `bluemarlin/config/*`
+from the build context, with exceptions for `brand/` (fonts needed at
+build time) and `.gitkeep`. Image's `/app/config/` becomes empty,
+populated entirely by volume mounts at runtime.
+
+### Principle
+
+When a Docker image might be used by multiple tenants, treat ANYTHING
+in a config or data directory on the build host as potentially tenant-
+specific and exclude it from the build context. `.gitignore` does NOT
+protect you from `docker build` — those are two independent systems
+that happen to share the filesystem. If you care about build-context
+hygiene, maintain a `.dockerignore` independently.
+
+### What to watch for
+
+- When deploying any new client container in the future, always inspect
+  `/app/config/` inside the container to verify nothing unexpected was
+  baked in. The Brief 147 `.dockerignore` fix should eliminate this,
+  but verify at deploy time.
+- Brief 146's architecture proof was successful at the CONFIG LOADER
+  level — don't assume this means the multi-client architecture is
+  production-ready. It's not. Brief 147 is a prerequisite for real
+  multi-client deployment.

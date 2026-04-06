@@ -52,19 +52,40 @@ The same 7 pre-existing failures remain. Zero new failures introduced. The 7 are
 
 ## Deployment
 
-### BlueFinn redeploy (pick up email_poller + supervisord changes)
-
-Pending — will run after commit + push.
+### BlueFinn redeploy
+- `git pull` + `docker compose down` + `docker compose build` + `docker compose up -d` ran cleanly on VPS.
+- Image rebuilt and tagged as `root-bluemarlin:latest`.
+- Container `bluemarlin-default` restarted, health check `{"status":"ok"}` on port 8001.
+- Email poller log shows "Email poller started..." (entered normal polling loop, did not hit the graceful-exit path — BlueFinn's `EMAIL_ADDRESS` and refresh token are both present, as expected).
 
 ### Adamus container startup
+- Verified image `root-bluemarlin:latest` exists (pre-check Step 12).
+- `ssh root@... "cd /root/clients/adamus && docker compose up -d"` succeeded.
+- Container `bluemarlin-adamus` running on port 8002, health check `{"status":"ok"}`.
+- Adamus email poller log: `Email polling disabled for this client (EMAIL_ADDRESS=empty, refresh_token=present). Exiting cleanly.` — graceful-exit path fired correctly.
+- Both containers confirmed running simultaneously via `docker ps`.
 
-Pending — will run after commit + push + BlueFinn rebuild.
+### Orchestrator proof (the thing we came here to prove)
 
-### Verification
+Inside `bluemarlin-adamus`:
+```
+name: Restaurant Adamus
+agent_name: Sofia
+service_label: reservation
+party_size_label: diners
+services: ['lunch', 'dinner']
+```
 
-Pending — config_loader check inside both containers to prove the multi-client split works:
-- BlueFinn: `name = BlueFinn Charters`, `agent = Marina`, `service_label = trip`
-- Adamus: `name = Restaurant Adamus`, `agent = Sofia`, `service_label = reservation`
+Inside `bluemarlin-default`:
+```
+name: BlueFinn Charters Curaçao
+agent_name: Marina
+service_label: trip
+party_size_label: guests
+services: ['klein_curacao', 'snorkeling_3in1', 'west_coast_beach', 'sunset_cruise', 'jet_ski']
+```
+
+**Multi-client architecture proven.** Two containers, same Docker image, completely different client.json files produce completely different business profiles, agent names, terminology, and services. No cross-contamination at the config-loading layer.
 
 ## Unexpected / problems encountered
 
@@ -74,13 +95,30 @@ Pending — config_loader check inside both containers to prove the multi-client
 
 3. **Both above were caught by existing tests before deployment.** System working as designed.
 
-## Next: deploy + prove
+## ⚠️ Architectural flaw discovered during deployment
 
-Still need to run:
-- Commit + push
-- VPS rebuild BlueFinn (to pick up email_poller + supervisord changes)
-- Create `/root/clients/adamus/` runtime dirs on VPS, copy calendar-key, create real platform.env with ANTHROPIC_API_KEY
-- Pre-check `docker images | grep bluemarlin` to verify `root-bluemarlin` exists
-- Start Adamus container
-- Verify both containers healthy on ports 8001 and 8002
-- Run the `config_loader.get_business()` proof inside both containers
+While inspecting `/app/config/` inside the Adamus container, I found that it contains **BlueFinn's entire runtime config directory** — including `platform.env`, `azure_refresh_token.txt` (BlueFinn's real refresh token), `email_thread_state.json` (BlueFinn's conversation history), `archived_threads.jsonl`, and `state_registry.db`. None of these files are mounted by Adamus's docker-compose; they are **baked into the Docker image** at build time.
+
+### Root cause
+
+The Dockerfile does `COPY bluemarlin/ /app/`. On the VPS, `/root/bluemarlin/config/` contains live runtime files that are gitignored but present on disk. `docker build` doesn't know or care about `.gitignore` — it copies whatever exists in the build context. So every image built on the VPS bakes in BlueFinn's secrets.
+
+### Why it didn't break Brief 146's proof
+
+1. Adamus's docker-compose volume-mounts its own `client.json` and `calendar-key.json` over the baked-in versions, so config_loader reads Adamus's real config.
+2. Docker's `env_file:` directive injects env vars at container start, which takes precedence over any baked-in `platform.env` file. So `EMAIL_ADDRESS=""` wins and the graceful-exit path fires.
+3. The orchestrator proof only needed `client.json`, which IS correctly mounted.
+
+### Why it's a blocker for real multi-client deployment
+
+- Every client container has BlueFinn's refresh token sitting at `/app/config/azure_refresh_token.txt`. If a future client ever sets `EMAIL_ADDRESS` without explicitly mounting their own token file, they would read BlueFinn's inbox.
+- Every client container has BlueFinn's `email_thread_state.json` baked in — which contains customer email threads, PII, and in-flight booking state.
+- This is a data leak waiting to happen at the next client deployment.
+
+### Fix (separate brief)
+
+Create a `.dockerignore` that excludes `bluemarlin/config/*` from the Docker build context, with exceptions for `brand/` (fonts needed at build time) and `.gitkeep`. The image will contain an empty `/app/config/` directory, populated entirely by volume mounts at runtime. Worth its own brief (one file, clear scope, needs regression testing to confirm BlueFinn still deploys cleanly).
+
+## Next
+
+The orchestrator proof is done. Brief 146 is architecturally complete for its stated goal ("prove multi-client works"). The `.dockerignore` fix is Brief 147.

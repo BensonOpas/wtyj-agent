@@ -93,15 +93,29 @@ GoDaddy email plan currently has 2 seats total.
 
 Single Docker container running both services via supervisord.
 
-| Item | Value |
-|------|-------|
-| Container name | `bluemarlin-default` |
-| Image | `root-bluemarlin` (built from Dockerfile) |
-| Port | `8001` (mapped to host) |
-| Status | `docker compose ps` |
-| Restart | `docker compose restart` |
-| Logs | `docker compose logs --tail=50` or `/root/bluemarlin/logs/` |
-| Processes inside | `email-poller` + `webhook-server` (via supervisord) |
+Two containers as of Brief 146 (multi-client proof).
+
+| Client | Container name | Port | Compose file | Data dir |
+|--------|----------------|------|--------------|----------|
+| BlueFinn (default) | `bluemarlin-default` | 8001 | `/root/docker-compose.yml` | `/root/bluemarlin/data/` |
+| Restaurant Adamus (demo) | `bluemarlin-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/data/` |
+
+Both containers use the same Docker image `root-bluemarlin:latest` (built from `Dockerfile` via BlueFinn's `docker compose build`). Adamus uses `image: root-bluemarlin` directly — no rebuild. Inside each: `email-poller` + `webhook-server` via supervisord. Email-poller exits cleanly on Adamus (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token).
+
+**⚠️ Known issue (Brief 147 will fix):** Dockerfile `COPY bluemarlin/ /app/` bakes BlueFinn's runtime config files (azure_refresh_token.txt, email_thread_state.json, platform.env, state_registry.db) into the image. Current workaround is that volume mounts override client.json + calendar-key.json at runtime, and `env_file:` wins over baked-in platform.env, and graceful-exit guards prevent the poller from touching the baked-in token. But this is a data-leak risk for any real multi-client deployment.
+
+### Deploy commands
+
+```bash
+# Rebuild BlueFinn (and the shared image)
+ssh root@108.61.192.52 "cd /root && git pull && docker compose build && docker compose up -d"
+
+# Start Adamus (uses pre-built image, no rebuild)
+ssh root@108.61.192.52 "cd /root/clients/adamus && docker compose up -d"
+
+# Health check both
+ssh root@108.61.192.52 "curl -s http://localhost:8001/health && echo && curl -s http://localhost:8002/health"
+```
 
 ### Old services (systemd — disabled, kept for rollback)
 

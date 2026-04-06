@@ -255,6 +255,7 @@ Still TODO:
 - Client website URL in config — Marina references it in conversations
 - Deprecate Pillow graphics engine — AI image generation replaces it. Deactivate, don't delete yet.
 - **Rename Google Cloud project to agnostic name (noted 2026-04-06)** — Service account is currently `bluemarlin-calendar@bluemarlin-ops.iam.gserviceaccount.com`. Project ID `bluemarlin-ops` is permanent and visible to clients when they share calendars with us. Should be renamed to something agnostic like `wtyj-platform` or `platform-ops`. Requires creating a new GCP project, new service account, re-sharing all existing calendars (BlueFinn's 5), replacing the key file. ~30 min manual work. Not blocking but visible to clients.
+- **Add .dockerignore to exclude bluemarlin/config/* from build (Brief 147, noted 2026-04-06)** — BLOCKER for real multi-client. Current Dockerfile `COPY bluemarlin/ /app/` bakes BlueFinn's runtime secrets (azure_refresh_token.txt, email_thread_state.json, platform.env) into every image built on the VPS. `.gitignore` does not protect against `docker build`. Any second client deployment currently ships with BlueFinn's email refresh token on disk. Fix: add `.dockerignore` that excludes `bluemarlin/config/*` except `brand/` and `.gitkeep`. Populate `/app/config/` entirely from volume mounts. Discovered during Brief 146 orchestrator proof deployment.
 
 **Polish:**
 - [PAYMENT_LINK] cosmetic bug — blank line when payment.timing="none"
