@@ -69,6 +69,15 @@ The systemd units source this file at startup.
 | `azure_refresh_token.txt` | `/root/bluemarlin/config/azure_refresh_token.txt` | Microsoft OAuth2 refresh token (persisted, auto-rotated) |
 | `client.json` | `/root/bluemarlin/config/client.json` | Business config (not credentials — safe in git) |
 
+### Email mailboxes (GoDaddy / Microsoft 365)
+
+GoDaddy email plan currently has 2 seats total.
+
+| Mailbox | Client | Password | Notes |
+|---------|--------|----------|-------|
+| `marina@wetakeyourjob.com` | BlueFinn Charters | (not recorded — uses stored OAuth refresh token) | Primary BlueFinn inbox. Polled by email_poller via Microsoft Graph OAuth. |
+| `sophia@wetakeyourjob.com` | Restaurant Adamus (demo) | `Cur@ao2026` | Repurposed from a previously unused seat. Needs interactive OAuth login to generate initial refresh token. |
+
 ### Hardcoded constants in source (not env vars — Brief 145 moved to env vars)
 
 | Constant | File | Value | Purpose |
