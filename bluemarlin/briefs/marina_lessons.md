@@ -830,3 +830,64 @@ this specific string."
   adding a simple "failed gws call count" counter that triggers a
   semi-escalation to butlerbensonagent@gmail.com after N failures
   in M minutes. For now the regression tests are the guard.
+
+---
+
+## Brief 148 — .dockerignore + Directory-Mount Refactor
+
+### Decision
+Stop baking BlueMarlin's runtime secrets into the Docker image.
+Two coordinated changes: (1) `.dockerignore` excludes the entire
+`bluemarlin/config/`, `bluemarlin/data/`, `bluemarlin/logs/`, and
+`clients/` trees from the build context, so `docker build` can't
+copy live runtime files into the image layer. (2) Both docker-compose
+files use directory mounts (`./bluemarlin/config:/app/config:rw` and
+`./config:/app/config:rw`) instead of per-file mounts.
+
+### Outcome
+16 new tests, all pass. BlueMarlin's rebuild preserved the critical
+292 KB `email_thread_state.json` via the mount (confirmed inside
+the running container). Brief 147's gws subprocess trace re-ran
+successfully after the rebuild, confirming the gws fix survived the
+refactor. Adamus's `/app/config/` now contains ONLY its 4 own files —
+no BlueMarlin contamination at all.
+
+### Technique — directory mount beats per-file mount for config overlay
+
+The per-file mount approach has a dangerous foot-gun: if the host
+file doesn't exist at the moment `docker compose up` runs, Docker
+silently creates an empty *directory* at that path instead of
+erroring out. Later code that tries to `open(...)` that path gets
+"is a directory" errors. The failure mode is noisy and annoying to
+debug. The per-file approach also requires enumerating every file
+that might exist in the config dir, and that enumeration has to stay
+in sync with whatever the code writes at runtime.
+
+The directory mount (`./host/path:/container/path:rw`) eliminates both
+problems. Docker mounts the whole host directory over the container's
+target directory. Whatever is in the host dir is what the container
+sees. Nothing to enumerate, nothing to pre-create. Writes at runtime
+propagate back to the host and persist across restarts. This is the
+right primitive for "client config lives on the host and should be
+visible inside the container."
+
+Tradeoff: the mount is the ENTIRE directory, so you can't selectively
+hide files from a subset. For BlueMarlin that's fine — every file in
+its config dir is BlueMarlin's own. For Adamus that's fine too — every
+file in Adamus's config dir is Adamus's own. The tenant boundary is
+the directory boundary, which is the correct mental model for per-
+client isolation.
+
+### Principle
+
+`.gitignore` protects git from seeing files. `.dockerignore` protects
+`docker build` from seeing files. They are TWO SEPARATE SYSTEMS that
+happen to share the filesystem. A file can be gitignored (invisible
+to git) but still exist on disk, and `docker build` will cheerfully
+copy it into an image layer. If you care about build-context hygiene
+for a multi-tenant image, you need BOTH files — gitignore for commit
+hygiene, dockerignore for image hygiene.
+
+This was the mental-model bug that caused the Brief 146 discovery.
+"It's gitignored, so it's not in the image" is wrong. "It's
+dockerignored, so it's not in the image" is right.
