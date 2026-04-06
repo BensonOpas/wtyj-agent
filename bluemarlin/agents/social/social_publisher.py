@@ -164,6 +164,56 @@ def publish_to_facebook(caption: str, media_url: str, account_id: str,
         return None
 
 
+def get_account_id(platform: str) -> str:
+    """Get the active account ID for any connected platform."""
+    client = _get_client()
+    if not client:
+        return ""
+    try:
+        resp = client.accounts.list()
+        for acc in resp.accounts:
+            if acc.platform == platform and acc.isActive:
+                return str(acc.field_id)
+        return ""
+    except Exception:
+        return ""
+
+
+def publish_to_platform(platform: str, caption: str, media_url: str,
+                        account_id: str, hashtags: list = None) -> dict | None:
+    """Publish to any Zernio-connected platform. Returns {post_id, post_url} or None."""
+    if not account_id:
+        bm_logger.log("late_publish_no_account", platform=platform)
+        return None
+    client = _get_client()
+    if not client:
+        return None
+
+    full_caption = caption
+    if hashtags:
+        full_caption = f"{caption}\n\n{' '.join(hashtags)}"
+
+    try:
+        result = client.posts.create(
+            content=full_caption,
+            platforms=[{"platform": platform, "accountId": account_id}],
+            media_items=[{"url": media_url, "type": "image"}],
+            publish_now=True,
+        )
+        post = result.post
+        post_id = post.field_id if post else ""
+        post_url = ""
+        if post and post.platforms:
+            for p in post.platforms:
+                if hasattr(p, "platformPostUrl") and p.platformPostUrl:
+                    post_url = str(p.platformPostUrl)
+        bm_logger.log("late_published", platform=platform, post_id=post_id, post_url=post_url)
+        return {"post_id": post_id, "post_url": post_url}
+    except Exception as e:
+        bm_logger.log("late_publish_failed", platform=platform, error=str(e)[:200])
+        return None
+
+
 def delete_post(late_post_id: str) -> bool:
     """Delete a published post from Instagram via Late. Returns True on success."""
     if not late_post_id:

@@ -109,6 +109,20 @@ def execute_publish(draft: dict) -> dict:
                     facebook_url=fb_result.get("post_url", "")
                 )
 
+    # Publish to other connected platforms (LinkedIn, Twitter, etc.)
+    for _plat in platforms:
+        if _plat in ("instagram", "facebook"):
+            continue  # Already handled above
+        _plat_account = social_publisher.get_account_id(_plat)
+        if _plat_account:
+            _plat_caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+            _plat_result = social_publisher.publish_to_platform(
+                platform=_plat, caption=_plat_caption, media_url=media_url,
+                account_id=_plat_account, hashtags=hashtags
+            )
+            if _plat_result:
+                results[_plat] = _plat_result
+
     if not results:
         return {"ok": False, "error": "Publish failed on all platforms"}
 
