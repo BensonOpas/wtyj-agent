@@ -44,23 +44,23 @@ def _lines(path):
 # .dockerignore tests
 # ---------------------------------------------------------------------------
 
-def test_dockerignore_excludes_bluemarlin_config():
-    """The core fix: runtime config must be excluded from the build context."""
+def test_dockerignore_excludes_wtyj_config():
+    """Brief 151: source dir renamed from bluemarlin/ to wtyj/."""
     lines = _lines(DOCKERIGNORE_PATH)
-    assert "bluemarlin/config/" in lines, \
-        f".dockerignore must contain 'bluemarlin/config/' as a full line. Got: {lines}"
+    assert "wtyj/config/" in lines, \
+        f".dockerignore must contain 'wtyj/config/' as a full line. Got: {lines}"
 
 
-def test_dockerignore_excludes_bluemarlin_data():
+def test_dockerignore_excludes_wtyj_data():
     lines = _lines(DOCKERIGNORE_PATH)
-    assert "bluemarlin/data/" in lines, \
-        f".dockerignore must contain 'bluemarlin/data/' as a full line. Got: {lines}"
+    assert "wtyj/data/" in lines, \
+        f".dockerignore must contain 'wtyj/data/' as a full line. Got: {lines}"
 
 
-def test_dockerignore_excludes_bluemarlin_logs():
+def test_dockerignore_excludes_wtyj_logs():
     lines = _lines(DOCKERIGNORE_PATH)
-    assert "bluemarlin/logs/" in lines, \
-        f".dockerignore must contain 'bluemarlin/logs/' as a full line. Got: {lines}"
+    assert "wtyj/logs/" in lines, \
+        f".dockerignore must contain 'wtyj/logs/' as a full line. Got: {lines}"
 
 
 def test_dockerignore_excludes_clients_dir():
@@ -77,20 +77,21 @@ def test_dockerignore_excludes_ds_store():
 
 
 def test_dockerignore_preserves_brief_142_exclusions():
-    """Regression guard: all pre-existing exclusions from Brief 142 must still be present."""
+    """Regression guard: all pre-existing exclusions from Brief 142 must still be present.
+    Brief 151 renamed bluemarlin/ → wtyj/ but kept the same exclusion structure."""
     lines = _lines(DOCKERIGNORE_PATH)
     required = [
-        "bluemarlin/backups/",
-        "bluemarlin/tests/",
-        "bluemarlin/briefs/",
-        "bluemarlin/src/",
+        "wtyj/backups/",
+        "wtyj/tests/",
+        "wtyj/briefs/",
+        "wtyj/src/",
         "**/__pycache__/",
         "**/.pytest_cache/",
         "*.pyc",
         ".git/",
     ]
     missing = [r for r in required if r not in lines]
-    assert not missing, f"Brief 142 exclusions dropped from .dockerignore: {missing}"
+    assert not missing, f"Brief 142 exclusions (now wtyj-prefixed) dropped from .dockerignore: {missing}"
 
 
 # ---------------------------------------------------------------------------

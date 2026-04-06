@@ -1,15 +1,16 @@
 # === Source-tree exclusions (build context size) ===
-bluemarlin/backups/
-bluemarlin/tests/
-bluemarlin/briefs/
-bluemarlin/src/
+# Brief 151: bluemarlin/ renamed to wtyj/
+wtyj/backups/
+wtyj/tests/
+wtyj/briefs/
+wtyj/src/
 
 # === Runtime config — provided at runtime via volume mount, never in the image ===
-bluemarlin/config/
+wtyj/config/
 
 # === Runtime data + logs — never in the image ===
-bluemarlin/data/
-bluemarlin/logs/
+wtyj/data/
+wtyj/logs/
 
 # === Per-client trees — each client mounts its own config via their own compose ===
 clients/

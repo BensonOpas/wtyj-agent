@@ -17,8 +17,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
-COPY bluemarlin/ /app/
+# Copy application source (Brief 151: bluemarlin/ renamed to wtyj/)
+COPY wtyj/ /app/
 
 # Copy supervisord config
 COPY supervisord.conf /etc/supervisord.conf
