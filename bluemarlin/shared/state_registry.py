@@ -685,7 +685,7 @@ def wa_list_conversations() -> list:
     conn = _get_conn()
     # Get unique phones with latest message
     rows = conn.execute(
-        "SELECT t.phone, t.text, t.created_at, t.role "
+        "SELECT t.phone, t.text, t.created_at, t.role, t.channel "
         "FROM whatsapp_threads t "
         "INNER JOIN ("
         "  SELECT phone, MAX(created_at) as max_ts "
@@ -710,6 +710,7 @@ def wa_list_conversations() -> list:
         count_row = conn.execute(
             "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ?", (phone,)
         ).fetchone()
+        channel = r[4] if len(r) > 4 and r[4] else "whatsapp"
         conversations.append({
             "phone": phone,
             "customer_name": name,
@@ -718,6 +719,7 @@ def wa_list_conversations() -> list:
             "last_message_at": r[2],
             "status": status,
             "message_count": count_row[0] if count_row else 0,
+            "channel": channel,
         })
     conn.close()
     return conversations
