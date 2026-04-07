@@ -1133,3 +1133,83 @@ Reviewer round 1 caught that I had assumed Brief 141 unified the booking summary
 The right move: when "fixing" tests that look stale, ALWAYS verify what the code actually does TODAY. Don't assume that because a brief said "we changed X" that the change propagated to every parallel implementation. The platform has TWO booking summary builders, and Brief 141 only fixed one of them. That's either intentional (different channels, different tone) or a Brief 141 incompleteness — but it's a separate decision and a separate brief, not something to silently patch into a "test cleanup."
 
 Process lesson: before changing a test assertion, run the code path the test exercises and observe the actual output. Then either update the test to match observed reality, or fix the code to match the (correct) assertion. Don't update the test to match what you THINK the code should output — that ships red tests against working code or vice versa.
+
+---
+
+## Brief 155 — Dashboard: dry-run visibility, WhatsApp publish filter, Developer accordion
+
+### Decision
+User reported "approve doesn't post". Investigation revealed dry_run had been silently true since at least 2026-03-25 — every "published" draft had empty `late_post_id`. Fix: filter whatsapp from `get_available_platforms()`, add a global dry_run banner so the state is un-ignorable, move the toggle into a Developer accordion in Settings. Critically: the brief did NOT auto-flip dry_run off — the user does that themselves via the new affordance.
+
+### Outcome
+Both backend (`b83ca0c`) and dashboard (`55c5c73`) shipped. 351 social tests pass. Verified live: `whatsapp` no longer in `/platforms/available`.
+
+### Critical lesson — investigate the live state BEFORE writing the brief
+
+The user's complaint was vague: "when I approve, it doesn't get posted." My first instinct was to trace the approve→publish frontend wiring. After 30 minutes of code reading I found the wiring was correct. The actual root cause was a single SQLite setting (`dry_run = true`) discovered by curling `/dashboard/api/settings/dry-run` — a 30-second check I should have done FIRST.
+
+Process lesson: when a user reports "X doesn't work" on a deployed system, the FIRST diagnostic should be reading live state via the API/DB, not reading code. Code is the schema; live state is what's actually happening. I wasted half an hour assuming the bug was structural when it was a runtime config.
+
+### Critical lesson — Brief 155 round 1 was over-engineered, user pushed back hard
+
+I drafted Brief 155 with a "comprehensive" scope: filter whatsapp, add a banner, add a regression test for the filter, add a one-time dry_run flip via SQLite, add a UI signal everywhere. The user's exact words after I summarized: "so my error was that dry run was on? thats it? if that was it then u did too much no?"
+
+They were right. The minimal fix was ONE command: `state_registry.set_setting('dry_run', 'false')`. Everything else I added was defensive coding unrelated to their complaint. They cancelled the brief, told me to delete it, and asked me to write a new one with strict scope: just the three things they actually wanted (whatsapp filter + global banner + Developer accordion).
+
+CLAUDE.md is explicit about this: "Avoid over-engineering. Only make changes that are directly requested or clearly necessary." I had this rule in front of me and still violated it. The cost: writing the brief twice, two reviewer rounds, the user losing trust in my scope discipline.
+
+Process lesson: after researching a bug, the brief should fix the bug. NOT also add monitoring, NOT also add tests for adjacent code, NOT also add safeguards "while we're in there". Each "and also" is a separate brief. If the user wants more scope, they'll ask. If they want defensive engineering, they'll ask for it.
+
+### Technique — banner injection inside a horizontal flex layout
+
+`AppLayout.tsx` outer wrapper is `<div className="flex h-screen overflow-hidden">` — a horizontal flex row. Putting a top-of-page banner as the first child of THIS div makes the banner a flex item competing horizontally with the sidebar, not a banner above. The reviewer caught this in round 1 and proposed the fix: inject the banner inside the inner main column (which is `flex-col`) above the existing TopBar. The banner naturally stacks above without disrupting the sidebar's vertical full-height behavior.
+
+Tradeoff accepted: no `sticky top-0 z-50` because TopBar already has `sticky top-0 z-20`. Stacking sticky elements inside the same scroll context is awkward — let the banner be a normal block at the top of the column.
+
+### Discovery — local test DB has accumulated cruft
+
+Running the social regression suite during Brief 155 execution surfaced a `test_073_whatsapp_hardening::test_change_detection_cancels_hold` failure. Investigation: 2 stale `confirmed`-status `service_bookings` rows (ids 17, 18) from `test_129` had filled the west_coast_beach 09:00 slot to 24/25 capacity, blocking the test_073 hold creation. Confirmed bookings have no `expires_at` so they never get garbage collected.
+
+Cleanup: `DELETE FROM service_bookings WHERE customer_email IN ('129_large_group','129_normal_group')`. Local-only — production DB is a separate file.
+
+Recurring papercut: this surfaced AGAIN in Brief 156's regression run. Worth a follow-up brief to make `test_129` self-clean — either add cleanup at end of test, or use `expires_at` so the rows auto-prune. Current workaround documented in any brief that runs the social regression.
+
+---
+
+## Brief 156 — Discontinue LinkedIn + per-platform Twitter caption
+
+### Decision
+Two scopes bundled in one brief at user request, after a live publish to X failed (315 chars, 280 limit). Discontinue LinkedIn via the `_EXCLUDED_PLATFORMS` filter + frontend cleanup. Add per-platform `twitter_caption` field (Option B from a 3-option proposal: prompt rule + new column + per-platform routing + safety truncate).
+
+### Outcome
+Backend `1b938a5` and dashboard `9ab1e2b` shipped. 351 social tests pass. Schema migration auto-applied on container restart. Verified live: linkedin gone from `/platforms/available`.
+
+### Critical lesson — same false-premise bug shape as Brief 154, twice in a row
+
+Round 1 reviewer caught me referencing `test_get_available_platforms_filters_whatsapp` as if it existed from Brief 155. It didn't — Brief 155 only added the production constant, never a test for it. My brief said "this existing test will still pass" → false premise → executor would have looked for a test that doesn't exist.
+
+This is the THIRD time in 3 briefs (154, 155, 156) that I've assumed a past brief did something it didn't. Pattern: I read the brief's TLDR or memory and assume it covered everything, instead of grepping the actual code/tests. Then I write the new brief on top of the assumption.
+
+Mitigation that DIDN'T work: I knew the rule from Brief 154's lessons. I had it in my head when writing Brief 156. I still made the same mistake.
+
+What would actually help: before writing any brief that says "the existing X will Y", grep for X. If the grep returns nothing, X doesn't exist. The brief-reviewer is the safety net but I should hit it less by checking myself first.
+
+### Technique — high-risk dict construction off-by-one
+
+The most dangerous part of Brief 156 was the `get_content_drafts` dict construction in `state_registry.py`. Adding `twitter_caption` between `facebook_caption` and `hashtags_json` shifted r-indices for 16 fields. A wrong index would silently corrupt every draft API response — `image_path` could end up returning `late_post_id`'s value, etc. No test would catch it because no test asserts exhaustive draft.keys().
+
+Mitigation: I wrote the proposed dict construction code IN THE BRIEF verbatim, walked through each index myself in the explanatory text, AND told the executor "use the proposed code below verbatim, do NOT recompute indices yourself". The reviewer round 1 pointed out my prose said "shift +1 from r[3] onward" but actually r[3] (facebook_caption) STAYS — only r[4] and beyond shift. The proposed code was correct, only the prose was misleading. Patched the prose to enumerate each index explicitly.
+
+The output-reviewer walked the indices column-by-column in the verification. Clean.
+
+Process lesson: when adding a column to a SELECT-by-position function, copy the proposed code verbatim, don't recompute indices. The prose explanation should enumerate every index, not summarize ("shift by +1 from X") because summaries can mislead.
+
+### Technique — Twitter character limit handled at TWO layers
+
+The brief implements both a prompt rule AND a publish-time safety net. Layered defense:
+1. Prompt rule: content_agent generates `twitter_caption` ≤240 chars
+2. Safety net: `publish_to_platform` truncates to 240 chars on last word + ellipsis if Claude over-shoots
+
+The safety net logs `late_twitter_truncated` so we can spot how often Claude obeys vs over-shoots. If we see frequent truncations, the prompt needs to be tightened (or the limit dropped to 200 to give more headroom).
+
+This is the right pattern for any LLM-output validation: prompt for the constraint, enforce at the edge. Don't rely on either layer alone.
