@@ -39,7 +39,9 @@ SMTP_HOST = "smtp.office365.com"
 SMTP_PORT = 587
 
 MAILBOX = "INBOX"
-POLL_INTERVAL = 30
+# Demo-phase value — overridable via env var, default 10s for responsive demo UX.
+# Bump back toward 30-60s once running at scale to reduce IMAP/Graph throttling risk.
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "10"))
 
 STATE_DIR = _CONFIG_DIR
 THREAD_STATE_PATH = os.path.join(_CONFIG_DIR, "email_thread_state.json")

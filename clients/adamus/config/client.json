@@ -131,8 +131,13 @@
     }
   },
   "service_aliases": {
-    "lunch": ["middag", "almuerzo", "eten"],
-    "dinner": ["diner", "cena", "avondeten", "sena"]
+    "middag": "lunch",
+    "almuerzo": "lunch",
+    "eten": "lunch",
+    "diner": "dinner",
+    "cena": "dinner",
+    "avondeten": "dinner",
+    "sena": "dinner"
   },
   "faq": {
     "dress_code": "Smart casual. No swimwear at dinner.",
