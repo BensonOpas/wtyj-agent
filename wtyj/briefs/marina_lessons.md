@@ -1296,3 +1296,64 @@ Why: the relay body is short (<500 chars), structured (newline-separated labels)
 A `<pre>` block of the raw body shows EVERYTHING the backend wrote, requires zero coupling between frontend and backend label format, and renders cleanly. It's the right tradeoff for short structured strings.
 
 The general principle: when the data is small, structured, and human-readable, don't parse it — just display it. Parsing is for when you need to compute on the data or transform it for display. For relay details, no transformation is needed; the operator just needs to read it.
+
+---
+
+## Brief 159 — Relay reply repair (the "wa_send_text_message left behind" bug)
+
+### Decision
+Two real bugs that combined to make the entire relay-reply flow non-functional in production: (1) both relay reply paths used the legacy Meta Cloud API send function for Zernio customers, silently failing; (2) the dashboard reply handler stripped `awaiting_relay` from agent_flags so Marina didn't enter RELAY MODE. Fix: new `send_whatsapp_message` helper that detects Zernio conversation_id format (24-char hex) and routes to the correct send function. Updated dashboard handler to keep the relay flag AND check the helper return value to fail loudly instead of silently.
+
+### Outcome
+738 tests passing / 0 failures. Backend `b075392` pushed and deployed. The 3-brief escalation sequence (157 → 158 → 159) is complete; all 5 issues from the user's original report are addressed.
+
+### Critical lesson — when migrating a feature, grep for ALL call sites of the OLD function
+
+Brief 143 migrated WhatsApp from Meta Cloud API to Zernio. The migration updated `webhook_server.py` to use `send_dm_reply` for the immediate reply, but DIDN'T update the two RELAY reply paths (dashboard `/escalations/{id}/reply` and email_poller WhatsApp relay branch). Those still called the legacy `wa_send_text_message`.
+
+The bug was invisible until the user actually tried to use a relay in production. From the moment Brief 143 shipped, every relay reply attempt failed silently. Six months of unused code? No — escalations themselves were rare in testing. The first real relay attempt was during the user's manual demo session.
+
+**Process lesson:** when migrating an API or function (Meta → Zernio in this case), grep for ALL call sites of the old function, not just the obvious ones. `grep -rn "wa_send_text_message" wtyj/agents/ wtyj/dashboard/` would have revealed the two relay paths immediately. Brief 143's migration touched the webhook server but not the dashboard or email_poller — that's a leftover that should have been caught at migration time.
+
+**Future migration checklist:**
+1. Before the migration, grep for ALL call sites of the function being replaced
+2. List them in the brief's "Files" section
+3. Update each call site as part of the migration brief
+4. After the migration, grep again and assert zero references to the old function (or document each remaining one as intentional)
+
+### Critical lesson — silent failure is the worst kind of bug
+
+Both bugs in Brief 159 produced silent failures: the operator clicked Reply, the dashboard showed a success toast, the customer received nothing. The operator had no signal that anything was wrong unless they cross-checked the customer's WhatsApp.
+
+The fix added a return-value check + explicit `raise HTTPException(500)` so the next time the send path fails for ANY reason (Zernio account disconnected, API error, etc.), the operator sees a clear error toast on the dashboard and knows to retry or investigate.
+
+**Process lesson:** every time you call a function that returns a bool indicating success, CHECK THE RETURN VALUE. If False is possible, decide what to do (raise, retry, fall back). Don't let False silently propagate.
+
+### Discovery — Brief 158's "Zernio history table mismatch" was a false alarm
+
+While researching Brief 159, I verified Brief 158's flagged-for-investigation finding about `wa_get_history` returning empty for Zernio customers. **It was wrong.** Both `wa_store_message` and `dm_store_message` write to the SAME `whatsapp_threads` table. `wa_get_history` filters by `phone = ?` only — no channel filter — so it returns rows for any conversation_id stored in the phone column, including Zernio's hex IDs.
+
+I'd assumed without verifying that "different store function = different table". A 30-second look at the actual function bodies would have caught the error in Brief 158 itself. Instead, the finding propagated as a known-bug for Brief 159 to address — wasting research time.
+
+**Process lesson:** when noting a "latent bug" in one brief for a future brief to fix, verify it's actually a bug by reading the function body, not just inferring from the function name. Function names can lie. The actual code is the truth.
+
+### Technique — format-detection for routing decisions
+
+The new `_is_zernio_conversation_id` helper uses two checks: `len(s) == 24 AND int(s, 16) succeeds`. This is a structural format check, not language classification (Rule 5 compliant). The two formats (24-char hex vs phone number) don't overlap in practice — phone numbers are 10-15 digits with optional `+` prefix, never 24 hex chars.
+
+Format-detection is the right pattern when:
+1. The two formats are structurally distinct and easy to discriminate
+2. The data is short (a few chars to a few dozen)
+3. There's no ambiguity at the boundaries
+
+When format-detection is the WRONG pattern: when the data is variable-length, when the formats can overlap (e.g. UUIDs that happen to look like phone numbers), or when you need confidence beyond format. In those cases, store the channel/format explicitly at creation time (e.g. add a `channel` column to the table that tracks how the row was created).
+
+For Brief 159, format detection works because Zernio IDs are unambiguously hex and phones are unambiguously decimal. If Zernio ever changes their conversation_id format, the helper misclassifies — but the helper is in ONE place and the fix is one regex line.
+
+### Process lesson — reviewer "executor sanity check" items are NOT optional
+
+Brief 158's reviewer round 1 added an "executor sanity check" recommendation to verify the inbound message timing before assuming the chat log would have it. That sanity check exposed a fundamental design error in the v1 brief and forced the v1 → v2 rewrite (frontend-only approach).
+
+Brief 159's reviewer round 1 added a similar surface check on the test_125 mock kwargs assertion — would have failed in execution if not patched first.
+
+**Pattern:** the reviewer's "verify X before executing" recommendations are catch-points for things the brief writer missed. They're not polish — they're tripwires for real bugs. Always implement them BEFORE running the test suite, because debugging a failed test is more expensive than verifying upfront.
