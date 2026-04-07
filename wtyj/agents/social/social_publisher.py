@@ -57,15 +57,19 @@ def get_facebook_account_id() -> str:
         return ""
 
 
-# DM-only platforms — Zernio reports them as "connected" because we use them
-# for inbound DM ingestion (Brief 143), but Late's posts.create cannot publish
-# content to them. Filter them out of the publish-target list. Brief 155.
-_DM_ONLY_PLATFORMS = {"whatsapp"}
+# Platforms that show up as "connected" in Late but should NOT appear as
+# publish targets in our dashboard:
+#   - whatsapp: Zernio uses it for inbound DM ingestion (Brief 143). Late's
+#     posts.create cannot publish content to messaging channels.
+#   - linkedin: Discontinued for our use case (Brief 156).
+# Brief 155 introduced the filter for whatsapp. Brief 156 added linkedin
+# and renamed the constant.
+_EXCLUDED_PLATFORMS = {"whatsapp", "linkedin"}
 
 
 def get_available_platforms() -> list:
     """Return list of connected platform names that can receive published posts.
-    DM-only platforms (e.g. whatsapp) are excluded — see _DM_ONLY_PLATFORMS."""
+    Excluded platforms (DM-only or discontinued) are filtered — see _EXCLUDED_PLATFORMS."""
     client = _get_client()
     if not client:
         return []
@@ -75,7 +79,7 @@ def get_available_platforms() -> list:
         for acc in resp.accounts:
             if not acc.isActive:
                 continue
-            if acc.platform in _DM_ONLY_PLATFORMS:
+            if acc.platform in _EXCLUDED_PLATFORMS:
                 continue
             if acc.platform not in platforms:
                 platforms.append(acc.platform)
@@ -203,6 +207,21 @@ def publish_to_platform(platform: str, caption: str, media_url: str,
     full_caption = caption
     if hashtags:
         full_caption = f"{caption}\n\n{' '.join(hashtags)}"
+
+    # Twitter safety truncate — Twitter/X rejects posts >280 chars (URLs count
+    # as 23 chars each post-shortening). Trim to 240 chars on the last full
+    # word + ellipsis. This is a fallback — content_agent should already cap
+    # twitter_caption at 240 chars per Brief 156 prompt rule, but Claude can
+    # over-shoot by a few chars and we don't want a partial publish.
+    _TWITTER_MAX = 240
+    if platform == "twitter" and len(full_caption) > _TWITTER_MAX:
+        truncated = full_caption[:_TWITTER_MAX]
+        last_space = truncated.rfind(" ")
+        if last_space > _TWITTER_MAX - 40:  # don't lose more than 40 chars to word boundary
+            truncated = truncated[:last_space]
+        full_caption = truncated.rstrip() + "…"
+        bm_logger.log("late_twitter_truncated", original_len=len(caption),
+                      final_len=len(full_caption))
 
     try:
         result = client.posts.create(

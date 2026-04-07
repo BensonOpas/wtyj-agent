@@ -186,6 +186,7 @@ def _get_conn():
         "content_class TEXT NOT NULL, "
         "instagram_caption TEXT, "
         "facebook_caption TEXT, "
+        "twitter_caption TEXT DEFAULT '', "
         "hashtags_json TEXT DEFAULT '[]', "
         "visual_suggestion TEXT DEFAULT '', "
         "reasoning TEXT DEFAULT '', "
@@ -295,6 +296,10 @@ def _get_conn():
         pass
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN late_facebook_post_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN twitter_caption TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     try:
@@ -867,15 +872,16 @@ def get_relay_by_token(relay_token: str) -> "dict | None":
 
 def save_content_draft(content_class: str, instagram_caption: str,
                        facebook_caption: str, hashtags: list,
-                       visual_suggestion: str, reasoning: str) -> int:
+                       visual_suggestion: str, reasoning: str,
+                       twitter_caption: str = "") -> int:
     """Save a content draft. Returns row id."""
     conn = _get_conn()
     cur = conn.execute(
         "INSERT INTO content_drafts "
-        "(content_class, instagram_caption, facebook_caption, hashtags_json, "
-        "visual_suggestion, reasoning, status, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-        (content_class, instagram_caption, facebook_caption,
+        "(content_class, instagram_caption, facebook_caption, twitter_caption, "
+        "hashtags_json, visual_suggestion, reasoning, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (content_class, instagram_caption, facebook_caption, twitter_caption,
          json.dumps(hashtags, ensure_ascii=False), visual_suggestion, reasoning,
          datetime.now(timezone.utc).isoformat())
     )
@@ -890,7 +896,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
     conn = _get_conn()
     if status:
         rows = conn.execute(
-            "SELECT id, content_class, instagram_caption, facebook_caption, "
+            "SELECT id, content_class, instagram_caption, facebook_caption, twitter_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
             "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
             "platforms_json, facebook_url, late_facebook_post_id, scheduled_at "
@@ -899,7 +905,7 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, content_class, instagram_caption, facebook_caption, "
+            "SELECT id, content_class, instagram_caption, facebook_caption, twitter_caption, "
             "hashtags_json, visual_suggestion, reasoning, status, rejection_reason, "
             "created_at, approved_at, published_at, image_path, late_post_id, instagram_url, photo_id, "
             "platforms_json, facebook_url, late_facebook_post_id, scheduled_at "
@@ -910,16 +916,17 @@ def get_content_drafts(status: str = None, limit: int = 50) -> list:
     return [
         {
             "id": r[0], "content_class": r[1], "instagram_caption": r[2],
-            "facebook_caption": r[3], "hashtags": json.loads(r[4] or "[]"),
-            "visual_suggestion": r[5], "reasoning": r[6], "status": r[7],
-            "rejection_reason": r[8], "created_at": r[9], "approved_at": r[10],
-            "published_at": r[11], "image_path": r[12],
-            "late_post_id": r[13], "instagram_url": r[14],
-            "photo_id": r[15] if len(r) > 15 else 0,
-            "platforms": json.loads(r[16]) if len(r) > 16 and r[16] else ["instagram"],
-            "facebook_url": r[17] if len(r) > 17 else "",
-            "late_facebook_post_id": r[18] if len(r) > 18 else "",
-            "scheduled_at": r[19] if len(r) > 19 else None,
+            "facebook_caption": r[3], "twitter_caption": r[4] or "",
+            "hashtags": json.loads(r[5] or "[]"),
+            "visual_suggestion": r[6], "reasoning": r[7], "status": r[8],
+            "rejection_reason": r[9], "created_at": r[10], "approved_at": r[11],
+            "published_at": r[12], "image_path": r[13],
+            "late_post_id": r[14], "instagram_url": r[15],
+            "photo_id": r[16] if len(r) > 16 else 0,
+            "platforms": json.loads(r[17]) if len(r) > 17 and r[17] else ["instagram"],
+            "facebook_url": r[18] if len(r) > 18 else "",
+            "late_facebook_post_id": r[19] if len(r) > 19 else "",
+            "scheduled_at": r[20] if len(r) > 20 else None,
         }
         for r in rows
     ]
@@ -958,7 +965,8 @@ def update_draft_status(draft_id: int, status: str,
 
 
 def update_draft_content(draft_id: int, instagram_caption: str = None,
-                         facebook_caption: str = None, hashtags: list = None) -> bool:
+                         facebook_caption: str = None, hashtags: list = None,
+                         twitter_caption: str = None) -> bool:
     """Update draft content fields. Only works on pending drafts.
     Only updates non-None params. Returns True if row updated."""
     sets = []
@@ -969,6 +977,9 @@ def update_draft_content(draft_id: int, instagram_caption: str = None,
     if facebook_caption is not None:
         sets.append("facebook_caption = ?")
         params.append(facebook_caption)
+    if twitter_caption is not None:
+        sets.append("twitter_caption = ?")
+        params.append(twitter_caption)
     if hashtags is not None:
         sets.append("hashtags_json = ?")
         params.append(json.dumps(hashtags, ensure_ascii=False))

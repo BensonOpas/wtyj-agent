@@ -22,6 +22,7 @@ _DRAFT_DEFAULTS = {
     "content_class": "A",
     "instagram_caption": "",
     "facebook_caption": "",
+    "twitter_caption": "",
     "hashtags": [],
     "visual_suggestion": "",
     "reasoning": "",
@@ -219,7 +220,8 @@ VOICE RULES:
 PLATFORM RULES:
 Instagram (primary): shorter captions, punchy, visual-first. Max 150 words.
 Facebook (secondary): slightly longer, more informational, same core message. Max 200 words.
-Both get the same concept but adapted per platform.
+Twitter/X: tight, atmospheric, ≤240 CHARACTERS TOTAL including any hashtags or mentions. NOT words — characters. URLs, if any, count as 23 characters each (Twitter auto-shortens). The Twitter caption is a separate field and must be a self-contained version of the same idea — not a truncation of the Instagram caption.
+All three captions get the same concept but adapted per platform.
 
 CONTENT BOUNDARIES:
 NEVER post about: {', '.join(boundaries)}
@@ -245,6 +247,7 @@ The "drafts" array must contain exactly {count} items.
       "content_class": "<A|B|C|D>",
       "instagram_caption": "<caption for Instagram — max 150 words>",
       "facebook_caption": "<caption for Facebook — max 200 words, slightly more informational>",
+      "twitter_caption": "<caption for Twitter/X — MAXIMUM 240 characters total INCLUDING hashtags. Self-contained, atmospheric, not a truncation of Instagram.>",
       "hashtags": ["#Tag1", "#Tag2"],
       "visual_suggestion": "<description of ideal accompanying image>",
       "reasoning": "<why this post, why now, what it achieves>"
@@ -388,6 +391,7 @@ def generate_drafts(count: int = 3, days_ahead: int = 7) -> list:
                 content_class=draft["content_class"],
                 instagram_caption=draft.get("instagram_caption", ""),
                 facebook_caption=draft.get("facebook_caption", ""),
+                twitter_caption=draft.get("twitter_caption", ""),
                 hashtags=draft.get("hashtags", []),
                 visual_suggestion=draft.get("visual_suggestion", ""),
                 reasoning=draft.get("reasoning", ""),

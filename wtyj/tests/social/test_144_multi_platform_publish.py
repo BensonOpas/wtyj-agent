@@ -26,20 +26,25 @@ def _mock_accounts(*platforms):
     return resp
 
 
-# --- Test 1: get_available_platforms returns all connected ---
+# --- Test 1: get_available_platforms filters excluded platforms (Brief 155 + 156) ---
 @patch("agents.social.social_publisher._get_client")
-def test_get_available_platforms_returns_all(mock_client):
+def test_get_available_platforms_filters_excluded(mock_client):
+    """Brief 156 — get_available_platforms must exclude DM-only and discontinued
+    platforms (whatsapp from Brief 155, linkedin from Brief 156)."""
     from agents.social.social_publisher import get_available_platforms
     client = MagicMock()
-    client.accounts.list.return_value = _mock_accounts("instagram", "facebook", "linkedin", "twitter")
+    client.accounts.list.return_value = _mock_accounts(
+        "instagram", "facebook", "whatsapp", "linkedin", "twitter"
+    )
     mock_client.return_value = client
 
     platforms = get_available_platforms()
     assert "instagram" in platforms
     assert "facebook" in platforms
-    assert "linkedin" in platforms
     assert "twitter" in platforms
-    assert len(platforms) == 4
+    assert "whatsapp" not in platforms, "whatsapp must be filtered (DM-only)"
+    assert "linkedin" not in platforms, "linkedin must be filtered (discontinued)"
+    assert len(platforms) == 3
 
 
 # --- Test 2: get_account_id finds correct platform ---

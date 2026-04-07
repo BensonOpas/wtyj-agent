@@ -109,19 +109,31 @@ def execute_publish(draft: dict) -> dict:
                     facebook_url=fb_result.get("post_url", "")
                 )
 
-    # Publish to other connected platforms (LinkedIn, Twitter, etc.)
+    # Publish to other connected platforms (Twitter, etc.) — LinkedIn discontinued in Brief 156
     for _plat in platforms:
         if _plat in ("instagram", "facebook"):
             continue  # Already handled above
         _plat_account = social_publisher.get_account_id(_plat)
-        if _plat_account:
-            _plat_caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
-            _plat_result = social_publisher.publish_to_platform(
-                platform=_plat, caption=_plat_caption, media_url=media_url,
-                account_id=_plat_account, hashtags=hashtags
+        if not _plat_account:
+            continue
+        # Twitter/X: prefer the dedicated twitter_caption (≤240 chars).
+        # If empty, fall back to instagram_caption (publish_to_platform will
+        # safety-truncate to 240 chars + ellipsis if needed).
+        if _plat == "twitter":
+            _plat_caption = (
+                draft.get("twitter_caption")
+                or draft.get("instagram_caption")
+                or draft.get("facebook_caption")
+                or ""
             )
-            if _plat_result:
-                results[_plat] = _plat_result
+        else:
+            _plat_caption = draft.get("instagram_caption") or draft.get("facebook_caption") or ""
+        _plat_result = social_publisher.publish_to_platform(
+            platform=_plat, caption=_plat_caption, media_url=media_url,
+            account_id=_plat_account, hashtags=hashtags
+        )
+        if _plat_result:
+            results[_plat] = _plat_result
 
     if not results:
         return {"ok": False, "error": "Publish failed on all platforms"}
