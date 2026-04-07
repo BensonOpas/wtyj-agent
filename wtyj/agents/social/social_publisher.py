@@ -57,8 +57,15 @@ def get_facebook_account_id() -> str:
         return ""
 
 
+# DM-only platforms — Zernio reports them as "connected" because we use them
+# for inbound DM ingestion (Brief 143), but Late's posts.create cannot publish
+# content to them. Filter them out of the publish-target list. Brief 155.
+_DM_ONLY_PLATFORMS = {"whatsapp"}
+
+
 def get_available_platforms() -> list:
-    """Return list of connected platform names."""
+    """Return list of connected platform names that can receive published posts.
+    DM-only platforms (e.g. whatsapp) are excluded — see _DM_ONLY_PLATFORMS."""
     client = _get_client()
     if not client:
         return []
@@ -66,7 +73,11 @@ def get_available_platforms() -> list:
         resp = client.accounts.list()
         platforms = []
         for acc in resp.accounts:
-            if acc.isActive and acc.platform not in platforms:
+            if not acc.isActive:
+                continue
+            if acc.platform in _DM_ONLY_PLATFORMS:
+                continue
+            if acc.platform not in platforms:
                 platforms.append(acc.platform)
         return platforms
     except Exception:
