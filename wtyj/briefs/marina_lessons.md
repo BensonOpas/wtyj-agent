@@ -1241,3 +1241,58 @@ Template substitution is the cleanest pattern: Claude sees the real value, the v
 First attempt at the Step 3 verification used `ANTHROPIC_API_KEY=test python3 -c "..."` which the security hook blocked as "Credential in command" because the regex matches `_API_KEY=`. Workaround: write the verification script to `/tmp/verify_157.py` with `os.environ.setdefault("ANTHROPIC_API_KEY", "test")` inside the script, then `python3 /tmp/verify_157.py`. Same outcome, hook-friendly.
 
 For future briefs: avoid command-line `<API_KEY>=value` prefixes. Set env vars inside scripts.
+
+---
+
+## Brief 158 — Escalation display fixes (the v1 → v2 rewrite saga)
+
+### Decision
+Three dashboard escalation display bugs from the user's screenshots: PHONE shows "69" (regex truncation), semi escalation has no body section (no chat log marker in relay body), REASON shows customer name (cleanSubject takes last subject segment which is the name for relays). v1 brief proposed backend changes; v2 (after a critical reviewer catch) is frontend-only — parses `Their question:` from the existing relay body.
+
+### Outcome
+3 frontend edits to one file (`Escalations.tsx`). Zero backend changes. Zero VPS deploy. Smallest brief of the session.
+
+### Critical lesson — the brief-reviewer's "executor sanity check" item caught a fundamental design error
+
+I was about to ship a backend brief that called `state_registry.wa_get_full_history(phone, limit=20)` inside the relay creation block. The reviewer asked: "Verify the user's actual relay-triggering question is in the WA history before line 537." I checked. It wasn't.
+
+Both code paths in `webhook_server.py` (legacy Meta at line 215, Zernio at line 177-183) call `wa_store_message`/`dm_store_message` AFTER `handle_incoming_whatsapp_message` returns. This ordering exists for a reason: Brief 089 explicitly moved storage to after-processing to avoid duplicating the current message in Claude's prompt context (the message would appear once in CONVERSATION HISTORY and once in INBOUND MESSAGE if stored before).
+
+If I had executed v1, the chat log on every relay would be missing the most important message — the one the operator needs to answer. The bug would have been silent: the chat log section would render, but the actual question wouldn't be in it.
+
+**Process lesson:** when the brief plan involves "fetch state and use it", verify the state is actually populated at the point of use. Don't assume "the conversation history has the conversation" — check WHERE in the call graph the storage happens. The reviewer's sanity check items are not optional polish — they catch real correctness bugs.
+
+### Critical lesson — "fight the wrong battle" recovery is faster than people think
+
+Once I confirmed v1 was structurally wrong, I had two options:
+1. **Inject the current message manually** into the chat log (complex, requires reshuffling argument flow)
+2. **Pivot to a frontend approach** (parse the existing `Their question:` line in the relay body)
+
+I picked option 2. The pivot took maybe 10 minutes — I rewrote the brief, which then sailed through review and execution because:
+- Zero backend changes = zero risk of test breakage
+- Zero VPS deploy = ~5 min faster ship
+- Frontend regex parses data the backend ALREADY produces correctly
+- All three bugs fixed with one file edit
+
+The lesson: when a planned approach has a fundamental problem, don't try to patch around it with more layers. Step back and ask "is there a simpler approach that sidesteps this entirely?" Often the answer is yes and the rewrite is faster than the workaround.
+
+### Discovery — Zernio WhatsApp messages live in `dm_messages` not `wa_messages`
+
+While tracing the chat log timing bug, I discovered a separate latent issue: the Zernio path calls `dm_store_message` (different table) instead of `wa_store_message`. This means `social_agent.py:617`'s call to `wa_get_history(phone)` for FULL escalation chat logs returns EMPTY for Zernio-mediated WhatsApp customers — they have no messages in the wa_messages table.
+
+This is a real bug in the FULL escalation chat log path for Zernio customers. The user's full escalation screenshot showed a populated chat log, which means either (a) the test was on the legacy Meta path, or (b) something else populates the chat log. Worth investigating in Brief 159.
+
+**Process lesson:** when investigating one bug, note unrelated bugs you discover. Don't fix them in the same brief (scope creep), but write them down so the next brief that touches the same code path knows to address them.
+
+### Technique — render structured raw text instead of parsing every field
+
+For the semi escalation body, I considered parsing every section (`Their question:`, `Booking context:`, `INSTRUCTIONS:`) into separate fields and rendering each in its own card. Instead I rendered the entire `selected.body` in a `<pre>` block under a "Relay Details" header.
+
+Why: the relay body is short (<500 chars), structured (newline-separated labels), and changes infrequently. Adding parsers for each section means:
+- More code to maintain
+- More regex fragility (a label rename in the backend breaks the frontend)
+- Less information on screen (parsers might miss new fields the backend adds)
+
+A `<pre>` block of the raw body shows EVERYTHING the backend wrote, requires zero coupling between frontend and backend label format, and renders cleanly. It's the right tradeoff for short structured strings.
+
+The general principle: when the data is small, structured, and human-readable, don't parse it — just display it. Parsing is for when you need to compute on the data or transform it for display. For relay details, no transformation is needed; the operator just needs to read it.
