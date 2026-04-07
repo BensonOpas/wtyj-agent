@@ -88,3 +88,36 @@ def send_text_message(to: str, text: str) -> bool:
     except Exception as e:
         log("whatsapp_send_failed", to=to, error=str(e))
         return False
+
+
+def _is_zernio_conversation_id(s: str) -> bool:
+    """Zernio conversation IDs are 24-char lowercase hex strings.
+    Meta phone numbers are E.164 or all-digit (10-15 chars).
+    The two formats don't overlap. Brief 159."""
+    if len(s) != 24:
+        return False
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def send_whatsapp_message(customer_id: str, text: str) -> bool:
+    """Send a WhatsApp text via Zernio Inbox API (preferred, Brief 143)
+    if customer_id is a Zernio conversation_id, otherwise fall back to the
+    legacy Meta Cloud API. Returns True on success.
+
+    Brief 159: introduced to fix relay reply paths that previously used
+    the legacy Meta API for ALL customers, silently failing for Zernio
+    customers (everyone in production)."""
+    if _is_zernio_conversation_id(customer_id):
+        # Deferred imports to avoid circular dependency with social_publisher
+        from agents.social.zernio_dm_client import send_dm_reply
+        from agents.social import social_publisher
+        account_id = social_publisher.get_account_id("whatsapp")
+        if not account_id:
+            log("zernio_send_no_account", conversation_id=customer_id[:20])
+            return False
+        return send_dm_reply(customer_id, account_id, text)
+    return send_text_message(to=customer_id, text=text)

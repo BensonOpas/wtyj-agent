@@ -85,7 +85,7 @@ def test_generate_mode(mock_anthropic_module):
 
 
 # --- Test 3: Escalation reply sends WhatsApp message ---
-@patch("dashboard.api.wa_send_text_message")
+@patch("dashboard.api.send_whatsapp_message")
 @patch("dashboard.api.marina_agent")
 def test_escalation_reply_sends_whatsapp(mock_marina, mock_wa_send):
     from shared import state_registry
@@ -117,7 +117,7 @@ def test_escalation_reply_sends_whatsapp(mock_marina, mock_wa_send):
     assert "150kg" in data["reply"]
 
     mock_wa_send.assert_called_once()
-    assert mock_wa_send.call_args.kwargs["to"] == phone
+    assert mock_wa_send.call_args.args[0] == phone
 
     escs = state_registry.get_all_escalations()
     esc = next((e for e in escs if e["id"] == esc_id), None)

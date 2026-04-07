@@ -18,7 +18,7 @@ from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
 from agents.social import content_agent, social_publisher, graphics_engine
-from agents.social.whatsapp_client import send_text_message as wa_send_text_message
+from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
 from agents.social.content_agent import _build_seasonal_context
 
@@ -1097,7 +1097,10 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         wa_history = state_registry.wa_get_history(customer_id, limit=10)
 
         agent_flags = dict(wa_flags)
-        for rk in ("relay_token", "reply_times", "awaiting_relay", "relay_question"):
+        # Brief 159: keep awaiting_relay so Marina enters RELAY MODE and
+        # reformulates the operator's answer instead of generating a fresh reply.
+        # Mirrors email_poller.py:661-663 which does the same.
+        for rk in ("relay_token", "reply_times"):
             agent_flags.pop(rk, None)
 
         relay_result = marina_agent.process_message(
@@ -1107,12 +1110,13 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         )
         relay_reply = relay_result.get("reply", "")
 
-        if relay_reply:
-            wa_send_text_message(to=customer_id, text=relay_reply)
-            state_registry.wa_store_message(customer_id, "assistant", relay_reply)
-            bm_logger.log("dashboard_relay_sent", phone=customer_id, escalation_id=escalation_id)
-        else:
+        if not relay_reply:
             raise HTTPException(status_code=500, detail="Marina returned empty reply")
+        sent_ok = send_whatsapp_message(customer_id, relay_reply)
+        if not sent_ok:
+            raise HTTPException(status_code=500, detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
+        state_registry.wa_store_message(customer_id, "assistant", relay_reply)
+        bm_logger.log("dashboard_relay_sent", phone=customer_id, escalation_id=escalation_id)
 
         wa_flags.pop("awaiting_relay", None)
         wa_flags.pop("relay_token", None)

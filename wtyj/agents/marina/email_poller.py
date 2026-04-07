@@ -21,7 +21,7 @@ from agents.marina import marina_agent
 from agents.marina import sheets_writer
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
-from agents.social.whatsapp_client import send_text_message as wa_send_text_message
+from agents.social.whatsapp_client import send_whatsapp_message
 
 # ========= CONFIG =========
 CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "28e94343-2f77-444c-ac32-58b7bed33b65")
@@ -668,7 +668,7 @@ def main():
                             )
                             relay_reply = relay_result.get("reply", "")
                             if relay_reply:
-                                wa_send_text_message(to=_wa_phone, text=relay_reply)
+                                send_whatsapp_message(_wa_phone, relay_reply)
                                 state_registry.wa_store_message(
                                     _wa_phone, "assistant", relay_reply)
                                 log(f"RELAY: WhatsApp relay sent to {_wa_phone}")
