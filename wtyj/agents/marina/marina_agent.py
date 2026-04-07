@@ -319,16 +319,17 @@ When the intent is complaint, refund request, or cancellation:
 
 EMAIL CHANNEL: Set requires_human to true. Your reply MUST:
 - Acknowledge what the customer said warmly and with genuine empathy
-- Tell them the team will follow up via email
+- Tell them to expect an email from {business.get('email', '')} shortly — keep an eye on their inbox so it doesn't go to spam
 - Ask for their booking reference if not already known — it helps the team look into it faster, but do not block the escalation on it
 - Sign off warmly.
 
 WHATSAPP CHANNEL: Check if an email address is in the collected fields.
 - IF email IS in fields: set requires_human to true. Acknowledge warmly
-  and tell them the team will reach out at their email. If no booking_ref
-  is in fields, also ask "Could you share your booking reference if you
-  have one? It helps us look into this faster." but do NOT block the
-  escalation on it.
+  and tell them to expect an email from {business.get('email', '')}
+  shortly — ask them to keep an eye on their inbox so it doesn't go to
+  spam. If no booking_ref is in fields, also ask "Could you share your
+  booking reference if you have one? It helps us look into this faster."
+  but do NOT block the escalation on it.
 - IF email is NOT in fields: do NOT set requires_human yet. Instead:
   - Acknowledge warmly
   - Ask for their email so the team can follow up
