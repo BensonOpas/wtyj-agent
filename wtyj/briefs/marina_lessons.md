@@ -1357,3 +1357,56 @@ Brief 158's reviewer round 1 added an "executor sanity check" recommendation to 
 Brief 159's reviewer round 1 added a similar surface check on the test_125 mock kwargs assertion — would have failed in execution if not patched first.
 
 **Pattern:** the reviewer's "verify X before executing" recommendations are catch-points for things the brief writer missed. They're not polish — they're tripwires for real bugs. Always implement them BEFORE running the test suite, because debugging a failed test is more expensive than verifying upfront.
+
+---
+
+## Brief 160 — Prescriptive escalation wording + language match + Papiamentu
+
+### Decision
+Follow-up brief that fixed 3 regressions from Brief 157/158 + added Papiamentu. The root causes were: (a) Brief 157's positive-only prompt instruction was being overridden by Claude's tendency to pattern-match the most contextually-prominent email; (b) the LANGUAGE RULE had a "default to English" escape hatch; (c) Brief 158's `(\S+)` regex captured trailing parens.
+
+### Outcome
+738 tests passing. E2E live verification confirmed all 3 fixes work for Marina's conversational replies. **But discovered a pre-existing Rule 3 violation:** `social_agent._build_booking_summary` is a hardcoded English template that overrides Marina's reply during booking confirmation, so non-English customers still get English summaries. Flagged for a follow-up brief.
+
+### Critical lesson — positive-only prompt instructions get overridden by contextual pattern-matching
+
+Brief 157 said "tell them to expect an email from {business.email}". The rendered prompt correctly contained the literal `"expect an email from butlerbensonagent@gmail.com"`. But Claude STILL wrote the customer's email back at them, because the customer's email was more prominent in the COLLECTED FIELDS section of the same prompt.
+
+The fix pattern that worked: **positive instruction + CRITICAL negative constraint**:
+
+```
+- Tell them to expect an email from {business.email} shortly.
+  CRITICAL: The email address in the sentence above MUST be {business.email}. It is WRONG to write the customer's own email address in this sentence.
+```
+
+The negative constraint is what overrides the pattern-match. Simple positive instructions are too weak when competing signals exist in context.
+
+**Process lesson:** when a prompt tells Claude to use a specific value, also tell Claude explicitly NOT to use the obvious competing value. LLMs pattern-match; negative constraints steer them away from local maxima.
+
+Side effect I didn't anticipate: Claude now mentions BOTH emails (customer's for confirmation + business's as sender). This is actually BETTER UX — the customer gets two pieces of info: "we have your email right" + "look for this sender". Accepted without further tightening.
+
+### Critical lesson — Rule 4 config vs source boundary
+
+Round-1 reviewer caught a fundamental design error: my first draft hardcoded the 6-language list inside the LANGUAGE RULE f-string. Adamus has only 4 languages (no German, no Portuguese), so Sofia's rendered prompt would have falsely advertised German and Portuguese support to her customers.
+
+The fix: move per-language data out of the f-string literal and into a dynamic loop over `business.get('languages', [])`. Each client only sees bullets for their own supported languages.
+
+**Where the per-language hints live:** I put them in a module-level `_LANGUAGE_HINTS` dict in marina_agent.py, NOT in client.json. This is deliberate — the hints are prompt engineering data (recognition words for each language), not business data. They belong in the source code alongside the prompt. The per-client selection happens at render time by iterating the client's supported languages and pulling matching hints.
+
+**Process lesson:** when adding any per-language/per-service/per-client behavior to the prompt, ask: "which part is prompt engineering (shared across clients)?" and "which part is business data (per-client)?". The latter goes in client.json. The former goes in source. Don't conflate them. Don't hardcode lists that should be dynamic.
+
+### Discovery — Rule 3 violation in `_build_booking_summary`
+
+While verifying the Dutch language fix, I discovered that `social_agent._build_booking_summary` is a hardcoded English string template (`f"Just to confirm: {svc_name} on {date_fmt}..."`). It's called by `_post_validate` (line 170) and its return value REPLACES Marina's Claude-generated reply at `social_agent.py:433` (`reply_text = _pv_override`).
+
+This means the booking CONFIRMATION path ignores whatever language Marina generated and sends the customer a hardcoded English summary. Pre-existing bug that predates Brief 160, but it's the reason Dutch/Papiamentu booking confirmations still look like English.
+
+Not fixed in Brief 160 (out of scope). Needs a follow-up brief with a real decision: trust Claude to generate the summary in-language (remove the template), or accept that transactional content stays English. My vote is remove — Claude has all the data in the prompt context and is better positioned to write the summary in the customer's voice.
+
+**Process lesson:** when debugging a language-matching issue, don't assume the LANGUAGE RULE is the only place language gets decided. Other Python code paths that produce reply text (booking summaries, availability errors, escalation builders) can override Claude entirely. Grep for all f-strings that end up in `reply_text` before concluding a LANGUAGE RULE fix is broken.
+
+### Technique — verify rendered prompts per client BEFORE deploying
+
+I wrote a verification script that invokes `_build_system_prompt` directly for BOTH BlueMarlin and Adamus configs, extracts the LANGUAGE RULE and ESCALATION BEHAVIOUR sections, and asserts they contain client-specific expected content. The Adamus check caught a caching bug in my first verification attempt (reused Python process couldn't reload config cleanly). The correct verification pattern is to run each client config check in a FRESH Python process with `CLIENT_CONFIG_PATH` set at shell level before import.
+
+**Process lesson:** for multi-client prompt changes, verify rendering per-client in a fresh Python process. Module-level constants and config caches make in-process reloads unreliable.
