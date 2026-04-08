@@ -33,6 +33,21 @@ _SKIP_TOP_LEVEL = {
     "agent_persona",        # Already in system prompt via _build_agent_persona_block() — Brief 149
 }
 
+# Language recognition hints for the LANGUAGE RULE — Brief 160.
+# Maps language name (matching client.json business.languages entries) to
+# a recognition-hint string. Per-client language selection happens in
+# _build_system_prompt by iterating over business.get('languages', []).
+# Adding a new supported language: add an entry here + the client's
+# client.json business.languages array.
+_LANGUAGE_HINTS = {
+    "English": 'If the body is in English ("Hi", "I want", "please", "thanks"), reply in English.',
+    "Dutch": 'If the body is in Dutch ("Hallo", "ik wil", "alstublieft", "graag", "bedankt", "morgen", "zondag"), reply in Dutch.',
+    "German": 'If the body is in German ("Hallo", "ich möchte", "bitte", "danke"), reply in German.',
+    "Spanish": 'If the body is in Spanish ("Hola", "quiero", "por favor", "mañana", "domingo"), reply in Spanish.',
+    "Portuguese": 'If the body is in Portuguese ("Olá", "eu quero", "por favor", "obrigado"), reply in Portuguese.',
+    "Papiamentu": 'If the body is in Papiamentu ("Bon dia", "Bon tardi", "mi ke", "mi por", "djadumingu", "djaluna", "kiko", "kuantu", "pa", "ku", "ta"), reply in Papiamentu. Papiamentu is the Creole spoken on Curaçao — it sounds similar to Spanish and Portuguese but has its own vocabulary and grammar. Do NOT misidentify it as Spanish.',
+}
+
 
 def _strip_verify(obj):
     """Recursively strip [VERIFY...] placeholder values from nested structures."""
@@ -156,6 +171,26 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
     service_label = terminology.get("service_label", "service")
     party_size_label = terminology.get("party_size_label", "guests")
     slot_label = terminology.get("slot_label", "time slot")
+
+    # Brief 160: build the LANGUAGE RULE block dynamically from the client's
+    # supported languages. Each client only sees hints for languages they
+    # actually support — BlueMarlin gets 6, Adamus gets 4, etc.
+    _client_langs = business.get("languages", ["English"])
+    _lang_bullets = []
+    for _lang in _client_langs:
+        _hint = _LANGUAGE_HINTS.get(_lang)
+        if _hint:
+            _lang_bullets.append(f"- {_hint}")
+    _language_rule_block = (
+        "LANGUAGE RULE: MATCH the customer's language. Read the body text of "
+        "the inbound message (NOT the sender's name) and reply in whatever "
+        f"language they used. Supported languages: {', '.join(_client_langs)}.\n\n"
+        + "\n".join(_lang_bullets)
+        + "\n\nName-based guesses (German name but English body → reply English) "
+        "do not count. Read the body text only. Only fall back to English if "
+        "the body is actually in English or is too short to identify (e.g. just "
+        '"ok" or "yes" — use the language from the previous turn).'
+    )
 
     relay_mode_section = ""
     if thread_flags.get("awaiting_relay"):
@@ -284,7 +319,7 @@ AGENT PERSONA:
 
 {writing_style_block}
 
-LANGUAGE RULE: Identify the reply language by reading the body text of the inbound message only. If the body is written in English, your reply MUST be in English — even if the sender has a German, Dutch, or other non-English name. Only use a non-English language if the body text itself is clearly written in that language. Supported languages: {', '.join(business.get('languages', []))}. When in doubt, default to English.
+{_language_rule_block}
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find ({service_label} name,
@@ -319,7 +354,8 @@ When the intent is complaint, refund request, or cancellation:
 
 EMAIL CHANNEL: Set requires_human to true. Your reply MUST:
 - Acknowledge what the customer said warmly and with genuine empathy
-- Tell them to expect an email from {business.get('email', '')} shortly — keep an eye on their inbox so it doesn't go to spam
+- Tell them to expect an email from {business.get('email', '')} shortly — keep an eye on their inbox so it doesn't go to spam.
+  CRITICAL: The email address in the sentence above MUST be {business.get('email', '')} (the business email). It is WRONG to write the customer's own email address in this sentence. Even if the customer's email is in the COLLECTED FIELDS section of this prompt, it must NOT appear in your reply's "expect an email from" sentence — that sentence names OUR sending address, not the customer's inbox.
 - Ask for their booking reference if not already known — it helps the team look into it faster, but do not block the escalation on it
 - Sign off warmly.
 
@@ -327,7 +363,9 @@ WHATSAPP CHANNEL: Check if an email address is in the collected fields.
 - IF email IS in fields: set requires_human to true. Acknowledge warmly
   and tell them to expect an email from {business.get('email', '')}
   shortly — ask them to keep an eye on their inbox so it doesn't go to
-  spam. If no booking_ref is in fields, also ask "Could you share your
+  spam.
+  CRITICAL: The email address in the sentence above MUST be {business.get('email', '')} (the business email). It is WRONG to write the customer's own email address in this sentence. The customer's email is in the COLLECTED FIELDS so the team knows where to send the reply — it must NOT appear in your "expect an email from" sentence, which names OUR sending address.
+  If no booking_ref is in fields, also ask "Could you share your
   booking reference if you have one? It helps us look into this faster."
   but do NOT block the escalation on it.
 - IF email is NOT in fields: do NOT set requires_human yet. Instead:
