@@ -1410,3 +1410,52 @@ Not fixed in Brief 160 (out of scope). Needs a follow-up brief with a real decis
 I wrote a verification script that invokes `_build_system_prompt` directly for BOTH BlueMarlin and Adamus configs, extracts the LANGUAGE RULE and ESCALATION BEHAVIOUR sections, and asserts they contain client-specific expected content. The Adamus check caught a caching bug in my first verification attempt (reused Python process couldn't reload config cleanly). The correct verification pattern is to run each client config check in a FRESH Python process with `CLIENT_CONFIG_PATH` set at shell level before import.
 
 **Process lesson:** for multi-client prompt changes, verify rendering per-client in a fresh Python process. Module-level constants and config caches make in-process reloads unreliable.
+
+---
+
+## Brief 161 — Race condition lock + ref regex + multi-language booking flow
+
+### Decision
+Three distinct bugs surfaced by the 2026-04-08 autonomous E2E run, bundled into one brief because fixing them separately would have been three full brief cycles of overhead. All three are small individually, but the multi-language fix is the important architectural one — it closes a Rule 3 violation (CLAUDE.md: "no static reply templates") that had survived 100+ briefs because nobody thought to E2E-test Dutch booking confirmations specifically.
+
+### Outcome
+734 tests passing, 10/10 live E2E cases pass. Marina now writes booking flow wording in 6 languages (English, Dutch, Papiamentu, Spanish, German, Portuguese) herself, including past-date rejections, wrong-day rejections with computed alternative dates, multi-departure choice questions, and booking confirmation summaries. No Python-generated English templates remain in the booking flow.
+
+### Critical lesson — Python-generated text is a trap for multi-language
+
+`_build_booking_summary` had existed since Brief 046 (the "hybrid Python/Claude state machine" refactor). At the time, English-only was fine because we only had one client and one language. As we added Dutch, German, Spanish, Portuguese, and Papiamentu via LANGUAGE RULE work in Briefs 059/060/160, nobody noticed that the booking SUMMARY — the most important step of the entire flow — was still forced through an English f-string template via `_post_validate` → `reply_text = _pv_override`. Marina would happily chat in Dutch for the whole conversation, then hit the confirmation step and suddenly switch to English *"Just to confirm: Sunset Cruise on Friday, 17 April 2026..."*.
+
+The bug was INVISIBLE to unit tests because those tests asserted the template's English content. It was INVISIBLE to Marina prompt tests because those only check the prompt structure, not the actual flow through `_post_validate`. It was INVISIBLE to the multi-language work in Brief 160 because that only tested inquiries (no booking fields extracted = `_post_validate` doesn't run). It only showed up when I wrote a Dutch booking test in the E2E harness at the end of Brief 160.
+
+**Process lesson:** when moving to multi-language, don't just test that the LANGUAGE RULE is present in the prompt. Test the END-TO-END reply in every language on every code path that produces reply text. Grep for every string override that ends up in `reply_text` or is returned from any function whose return value is sent to the customer. Look for f-strings that build customer-facing messages. They're all Rule 3 violations waiting to happen.
+
+### Critical lesson — race conditions hide behind "our tests pass"
+
+The a1 race condition had been in the code since the original WhatsApp brief (Brief 067+). It was silent in production because:
+1. Customers usually don't reply within 6-8 seconds of a booking summary.
+2. When they do and they hit the race, the symptom is "Marina forgot me" — which customers blame on "dumb AI" and walk away from. No error. No exception. Nothing logged. The orchestrator cheerfully saves the overwritten state and Marina sends her "who are you?" welcome.
+3. Our unit tests mock the marina_agent call to return instantly, so there's never any actual concurrency to race.
+
+The bug only surfaced when the E2E test harness sent messages 6s apart via real webhook calls. Even then it was intermittent — a5 (same pattern) happened to pass because msg 1 processing was 1.4s faster. The deterministic trigger is "msg 1 processing time > inter-message gap + debounce window", which varies with Claude response time, availability check time, calendar API latency, etc.
+
+**Process lesson:** any orchestrator code path that reads state, calls an LLM, then writes state, is a critical section. If multiple triggers can fire for the same key concurrently, you MUST serialize them. The debounce in `_flush_buffer` was added in Brief 076 to coalesce RAPID messages into one Claude call — it does nothing to prevent concurrent processing of messages that arrive AFTER the debounce window flushes.
+
+### Critical lesson — the f-string escape rule is a landmine
+
+Adding instructional placeholder text like `{service}` to a prompt that lives inside an `f"""..."""` literal fails with `KeyError` at prompt-build time. Escape rules: single-brace `{var}` for Python interpolation, double-brace `{{var}}` to pass literal `{var}` to the output. The round-1 reviewer caught my original draft where I had `{service}` single-brace in the instructional block, which would have crashed Marina on every message until redeployed.
+
+**Process lesson:** when adding blocks of text to f-strings with mixed interpolation and literal braces, add a verification command that (a) runs `ast.parse` to catch syntax errors and (b) actually calls the prompt-building function to catch runtime KeyError. Put the verification inline in the brief so the executor can copy-paste and run it immediately after editing.
+
+### Critical lesson — multi-client Rule 4 means testing per client
+
+The reviewer also flagged that the summary instruction "compute total = guests × price" would produce "$0 total" for Adamus restaurant (where `services.lunch.price = 0` and `services.dinner.price = 0` because restaurant reservations don't charge per person up front). The original draft didn't have a price=0 guard. I added explicit "OMIT the price line entirely. Never print '$0 total'" instructions.
+
+This is an easy thing to miss when you test only with BlueMarlin. Adamus's config is a genuinely different business shape (restaurant, not charter) and its edge cases — price=0, single-service-type, diners instead of guests — require explicit test coverage. I added `test_prompt_for_adamus_uses_restaurant_terminology` which directly rewrites `config_loader._CONFIG_PATH` + clears the cache (the `os.environ` trick doesn't work because config_loader captures the path at module import time).
+
+**Process lesson:** every prompt change or validation change needs a parallel test for both BlueMarlin AND Adamus. Configure `config_loader._CONFIG_PATH` directly (not via env var) inside the test, clear `_cache`, build the prompt, assert the expected terminology. This is the only way to catch client-specific bugs without deploying and eyeballing both containers.
+
+### Technique — directly-runnable E2E harness with hex cids
+
+I rewrote the E2E harness (`/tmp/e2e_brief161.py`) to generate 24-character hex conversation IDs via `hashlib.md5(slug + run_id).hexdigest()[:24]`. This matters because Brief 159's routing code (`_is_zernio_conversation_id`) only treats hex 24-char strings as real Zernio conversation IDs. My previous E2E harness used readable slugs like `a1happyb69d5be9faaaaaaaa` which are 24 chars but contain `s`, `m`, `i` — not hex — so the dashboard relay reply path fell through to legacy Meta (archived, 400 error). With hex cids, the full Zernio send path runs end-to-end and the only failure mode is "conversation not found" (because the synthetic cid isn't registered in Zernio), which means the code is correct and only the test environment is fake.
+
+**Process lesson:** when writing synthetic test harnesses for systems that route based on ID format (hex vs phone, UUID vs slug, etc.), make sure the synthetic IDs match the real format exactly. Otherwise you'll bypass code paths you think you're testing.
