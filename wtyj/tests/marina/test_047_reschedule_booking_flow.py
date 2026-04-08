@@ -30,11 +30,12 @@ def test_inquiry_not_in_booking_intents():
     assert "inquiry" not in _BOOKING_INTENTS
 
 
-def test_reschedule_triggers_summary():
-    """T4: reschedule triggers summary."""
+def test_reschedule_advances_state():
+    """Brief 161: reschedule with valid fields advances state, override is None."""
     result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
     override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
-    assert override is not None and "Want me to go ahead and book this" in override
+    assert override is None
+    assert awaiting is True
 
 
 def test_reschedule_sets_awaiting():
@@ -51,30 +52,18 @@ def test_inquiry_skips_validation():
     assert override is None and awaiting is False
 
 
-def test_booking_still_triggers_summary():
-    """T7: booking still triggers summary (regression)."""
+def test_booking_still_advances_state():
+    """Brief 161 (was T7): booking still advances state, override is None."""
     result = {"intents": ["booking"], "fields": {}, "flags": {}}
     override, awaiting = _post_validate(_th_resched, result, _trip_snorkel)
-    assert override is not None and "Want me to go ahead and book this" in override
+    assert override is None
+    assert awaiting is True
 
 
-def test_wrong_day_reschedule():
-    """T8: wrong day + reschedule returns day-of-week error."""
+def test_wrong_day_reschedule_does_not_advance():
+    """Brief 161 (was T8): wrong day + reschedule returns (None, False)."""
     th_bad = {"fields": {"service_name": "3-in-1 Snorkeling", "date": "2026-03-09", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}}
     result = {"intents": ["reschedule"], "fields": {"date": "2026-03-09"}, "flags": {}}
     override, awaiting = _post_validate(th_bad, result, _trip_snorkel)
-    assert override is not None and "Friday" in override
-
-
-def test_reschedule_summary_correct_price():
-    """T9: summary contains correct price for snorkeling ($110 x 2 = $220)."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
-    override, _ = _post_validate(_th_resched, result, _trip_snorkel)
-    assert "$220" in override
-
-
-def test_reschedule_summary_trip_name():
-    """T10: summary contains service name."""
-    result = {"intents": ["reschedule"], "fields": {"date": "2027-12-17"}, "flags": {}}
-    override, _ = _post_validate(_th_resched, result, _trip_snorkel)
-    assert "3-in-1 Snorkeling Trip" in override
+    assert override is None
+    assert awaiting is False

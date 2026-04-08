@@ -45,11 +45,31 @@ app.include_router(dashboard_router)
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
 
+# Brief 161: _DEBOUNCE_SECONDS coalesces rapid customer messages into a single
+# Claude call. It does NOT protect against concurrent orchestrator access —
+# that's what the per-phone lock below is for. Two different problems.
 _DEBOUNCE_SECONDS = 2.0
 _MAX_BATCH_SECONDS = 5.0
 
 _message_buffers = {}   # phone -> {"messages": [...], "timer": Timer, "started": float}
 _buffer_lock = threading.Lock()
+
+# Brief 161: per-phone lock serializes concurrent handle_incoming_whatsapp_message
+# calls for the same phone/conversation. Fixes race where msg 2 reads stale state
+# before msg 1 has persisted its orchestrator output. Keyed by conversation_id
+# (Zernio) or phone (legacy Meta). Registry grows monotonically; locks are cheap.
+_phone_locks = {}  # key -> threading.Lock
+_phone_locks_registry_lock = threading.Lock()
+
+
+def _get_phone_lock(key: str) -> threading.Lock:
+    """Get or create a per-phone lock for serializing orchestrator calls."""
+    with _phone_locks_registry_lock:
+        lock = _phone_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _phone_locks[key] = lock
+        return lock
 
 
 def _maybe_run_cleanup():
@@ -162,64 +182,71 @@ def _flush_buffer(phone):
     if batched_count > 1:
         log("whatsapp_batch_flushed", phone=phone, count=batched_count,
             combined_length=len(combined_text))
-    try:
-        # Check if this came from Zernio (has _zernio metadata)
-        _zernio_conv = final_msg.get("_zernio_conversation_id")
-        _zernio_acct = final_msg.get("_zernio_account_id")
-        _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
-        _zernio_sender = final_msg.get("_zernio_sender_name", "")
-        if _zernio_conv:
-            # Zernio WhatsApp — check booking_flow toggle
-            _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
-            if _booking_flow_on:
-                reply_text = handle_incoming_whatsapp_message(final_msg)
-                # Store user message after orchestrator (same ordering as DM path)
-                state_registry.dm_store_message(
-                    conversation_id=_zernio_conv,
-                    channel=_zernio_channel,
-                    role="user",
-                    text=combined_text,
-                    sender_name=_zernio_sender,
-                )
+    # Brief 161: acquire per-phone lock BEFORE the try block so both Zernio
+    # and legacy Meta paths are serialized. Lock key: zernio conv id (if
+    # present) or phone. Fixes race where msg 2 starts processing while msg
+    # 1 is still mid-flight and overwrites msg 1's state.
+    _lock_key = final_msg.get("_zernio_conversation_id") or phone
+    _phone_lock = _get_phone_lock(_lock_key)
+    with _phone_lock:
+        try:
+            # Check if this came from Zernio (has _zernio metadata)
+            _zernio_conv = final_msg.get("_zernio_conversation_id")
+            _zernio_acct = final_msg.get("_zernio_account_id")
+            _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
+            _zernio_sender = final_msg.get("_zernio_sender_name", "")
+            if _zernio_conv:
+                # Zernio WhatsApp — check booking_flow toggle
+                _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+                if _booking_flow_on:
+                    reply_text = handle_incoming_whatsapp_message(final_msg)
+                    # Store user message after orchestrator (same ordering as DM path)
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv,
+                        channel=_zernio_channel,
+                        role="user",
+                        text=combined_text,
+                        sender_name=_zernio_sender,
+                    )
+                else:
+                    # Q&A only — use DM agent
+                    _dm_msg = {
+                        "conversation_id": _zernio_conv,
+                        "platform": "whatsapp",
+                        "channel": _zernio_channel,
+                        "sender_name": _zernio_sender,
+                        "text": combined_text,
+                        "account_id": _zernio_acct,
+                        "message_id": final_msg.get("message_id", ""),
+                    }
+                    # Store user message before DM agent (same as DM path)
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv,
+                        channel=_zernio_channel,
+                        role="user",
+                        text=combined_text,
+                        sender_name=_zernio_sender,
+                    )
+                    reply_text = handle_incoming_dm(_dm_msg)
+                if reply_text:
+                    send_dm_reply(_zernio_conv, _zernio_acct, reply_text)
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv,
+                        channel=_zernio_channel,
+                        role="assistant",
+                        text=reply_text,
+                    )
             else:
-                # Q&A only — use DM agent
-                _dm_msg = {
-                    "conversation_id": _zernio_conv,
-                    "platform": "whatsapp",
-                    "channel": _zernio_channel,
-                    "sender_name": _zernio_sender,
-                    "text": combined_text,
-                    "account_id": _zernio_acct,
-                    "message_id": final_msg.get("message_id", ""),
-                }
-                # Store user message before DM agent (same as DM path)
-                state_registry.dm_store_message(
-                    conversation_id=_zernio_conv,
-                    channel=_zernio_channel,
-                    role="user",
-                    text=combined_text,
-                    sender_name=_zernio_sender,
-                )
-                reply_text = handle_incoming_dm(_dm_msg)
-            if reply_text:
-                send_dm_reply(_zernio_conv, _zernio_acct, reply_text)
-                state_registry.dm_store_message(
-                    conversation_id=_zernio_conv,
-                    channel=_zernio_channel,
-                    role="assistant",
-                    text=reply_text,
-                )
-        else:
-            # Meta WhatsApp (legacy) — original path
-            reply_text = handle_incoming_whatsapp_message(final_msg)
-            state_registry.wa_store_message(phone, "user", combined_text)
-            if reply_text:
-                send_text_message(to=phone, text=reply_text)
-                state_registry.wa_store_message(phone, "assistant", reply_text)
-    except Exception as e:
-        log("webhook_process_error",
-            source="zernio_whatsapp" if final_msg.get("_zernio_conversation_id") else "meta_whatsapp",
-            error=str(e), phone=phone)
+                # Meta WhatsApp (legacy) — original path
+                reply_text = handle_incoming_whatsapp_message(final_msg)
+                state_registry.wa_store_message(phone, "user", combined_text)
+                if reply_text:
+                    send_text_message(to=phone, text=reply_text)
+                    state_registry.wa_store_message(phone, "assistant", reply_text)
+        except Exception as e:
+            log("webhook_process_error",
+                source="zernio_whatsapp" if final_msg.get("_zernio_conversation_id") else "meta_whatsapp",
+                error=str(e), phone=phone)
 
 
 @app.post("/webhooks/zernio")
@@ -286,55 +313,60 @@ def _process_zernio_event(payload: dict):
             _buffer_message(_wa_msg)
             return
 
-        # Send typing indicator (best-effort)
+        # Send typing indicator (best-effort) — outside the critical section
         send_typing_indicator(conversation_id, account_id)
 
-        # Route based on booking_flow toggle
-        _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+        # Brief 161: per-phone lock serializes the IG/FB DM path the same way
+        # the WhatsApp debounce path is serialized. Required so concurrent
+        # Zernio webhooks for the same conversation cannot race on state.
+        _dm_lock = _get_phone_lock(conversation_id)
+        with _dm_lock:
+            # Route based on booking_flow toggle
+            _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 
-        if _booking_flow_on:
-            # Full booking flow — route through orchestrator
-            # NOTE: store user message AFTER orchestrator call, not before.
-            # The orchestrator reads wa_get_history(conversation_id) internally.
-            # If we store before, Marina sees the message twice (once in history,
-            # once as the current inbound). This matches the WhatsApp _flush_buffer
-            # pattern which also stores after the call.
-            orchestrator_msg = {
-                "from": conversation_id,
-                "text": text,
-                "from_name": msg.get("sender_name", ""),
-            }
-            reply_text = handle_incoming_whatsapp_message(orchestrator_msg)
-            # Store user message after orchestrator (same as WhatsApp path)
-            state_registry.dm_store_message(
-                conversation_id=conversation_id,
-                channel=channel,
-                role="user",
-                text=text,
-                sender_name=msg["sender_name"],
-            )
-        else:
-            # Q&A only — use DM agent
-            # DM agent reads dm_get_history which is separate, so store before is fine
-            state_registry.dm_store_message(
-                conversation_id=conversation_id,
-                channel=channel,
-                role="user",
-                text=text,
-                sender_name=msg["sender_name"],
-            )
-            reply_text = handle_incoming_dm(msg)
+            if _booking_flow_on:
+                # Full booking flow — route through orchestrator
+                # NOTE: store user message AFTER orchestrator call, not before.
+                # The orchestrator reads wa_get_history(conversation_id) internally.
+                # If we store before, Marina sees the message twice (once in history,
+                # once as the current inbound). This matches the WhatsApp _flush_buffer
+                # pattern which also stores after the call.
+                orchestrator_msg = {
+                    "from": conversation_id,
+                    "text": text,
+                    "from_name": msg.get("sender_name", ""),
+                }
+                reply_text = handle_incoming_whatsapp_message(orchestrator_msg)
+                # Store user message after orchestrator (same as WhatsApp path)
+                state_registry.dm_store_message(
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    role="user",
+                    text=text,
+                    sender_name=msg["sender_name"],
+                )
+            else:
+                # Q&A only — use DM agent
+                # DM agent reads dm_get_history which is separate, so store before is fine
+                state_registry.dm_store_message(
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    role="user",
+                    text=text,
+                    sender_name=msg["sender_name"],
+                )
+                reply_text = handle_incoming_dm(msg)
 
-        if reply_text:
-            # Send reply via Zernio
-            send_dm_reply(conversation_id, account_id, reply_text)
-            # Store assistant reply
-            state_registry.dm_store_message(
-                conversation_id=conversation_id,
-                channel=channel,
-                role="assistant",
-                text=reply_text,
-            )
+            if reply_text:
+                # Send reply via Zernio
+                send_dm_reply(conversation_id, account_id, reply_text)
+                # Store assistant reply
+                state_registry.dm_store_message(
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    role="assistant",
+                    text=reply_text,
+                )
     except Exception as e:
         log("webhook_process_error", source="zernio", error=str(e))
 

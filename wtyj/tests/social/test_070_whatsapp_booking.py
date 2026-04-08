@@ -27,7 +27,7 @@ def _next_wed():
     return d.isoformat()
 
 from agents.social.social_agent import (
-    _day_matches, _suggest_dates, _build_booking_summary,
+    _day_matches,
     _build_action_context, _post_validate,
     _BOOKING_INTENTS, _BOOKING_FLAGS_TO_RESET, _PERSISTENT_FIELDS,
     handle_incoming_whatsapp_message,
@@ -77,45 +77,6 @@ def test_day_matches_specific_days():
     assert _day_matches("Friday", "Tuesday, Thursday, Friday, Saturday") is True
 
 
-def test_suggest_dates_west_coast():
-    """West Coast Beach runs Wed/Sun — Monday 2026-03-16 suggests nearby valid dates."""
-    suggestions = _suggest_dates(_NEXT_MON, "Wednesdays and Sundays")
-    assert "Wednesday" in suggestions  # 2026-03-18
-    assert "Sunday" in suggestions  # 2026-03-22
-
-
-def test_build_booking_summary_west_coast():
-    """Summary contains correct price, date, guests from real service config."""
-    service = config_loader.get_service("west_coast_beach")
-    fields = {
-        "service_key": "west_coast_beach",
-        "service_name": "West Coast Beach Trip",
-        "date": _NEXT_WED,  # Wednesday
-        "guests": "3",
-        "slot_time": "09:00",
-    }
-    summary = _build_booking_summary(fields, service)
-    assert "$360" in summary  # 3 * $120
-    assert "$120" in summary  # per person
-    assert "Wednesday" in summary
-    assert "09:00" in summary
-    assert "Red Dragon" in summary
-    assert "check availability" in summary.lower()
-
-
-def test_build_booking_summary_single_departure_auto():
-    """Single-departure service auto-selects departure when not specified."""
-    service = config_loader.get_service("west_coast_beach")
-    fields = {
-        "service_key": "west_coast_beach",
-        "service_name": "West Coast Beach Trip",
-        "date": _NEXT_WED,  # Wednesday
-        "guests": "2",
-    }
-    summary = _build_booking_summary(fields, service)
-    assert "09:00" in summary  # auto-selected from single departure
-
-
 def test_build_action_context_awaiting():
     """Action context generated when awaiting_booking_confirmation is True."""
     ctx = _build_action_context({"awaiting_booking_confirmation": True})
@@ -130,54 +91,48 @@ def test_build_action_context_not_awaiting():
     assert ctx == ""
 
 
-def test_post_validate_day_of_week_rejection():
-    """Monday booking for West Coast Beach (Wed/Sun only) is rejected."""
+def test_post_validate_day_of_week_does_not_advance():
+    """Brief 161: wrong day returns (None, False) — Marina handles the rejection reply."""
     service = config_loader.get_service("west_coast_beach")
     fields = {"service_name": "West Coast Beach Trip", "date": _NEXT_MON,
-              "guests": "2", "service_key": "west_coast_beach"}  # Monday
+              "guests": "2", "service_key": "west_coast_beach"}  # Monday — Wed/Sun only
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, service)
-    assert override is not None
-    assert "doesn't run on Monday" in override
+    assert override is None
     assert should_set is False
 
 
-def test_post_validate_past_date_rejection():
-    """Past date is rejected (klein_curacao is daily, so day-of-week check passes first)."""
+def test_post_validate_past_date_does_not_advance():
+    """Brief 161: past date returns (None, False)."""
     service = config_loader.get_service("klein_curacao")
     fields = {"service_name": "Klein Curacao", "date": "2025-01-15",
               "guests": "2", "service_key": "klein_curacao"}
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, service)
-    assert override is not None
-    assert "already passed" in override
+    assert override is None
     assert should_set is False
 
 
-def test_post_validate_multi_departure_asks():
-    """Multi-departure service (klein_curacao: 08:00, 08:30) without slot_time asks for selection."""
+def test_post_validate_multi_departure_does_not_advance():
+    """Brief 161: multi-departure without slot_time returns (None, False)."""
     service = config_loader.get_service("klein_curacao")
     fields = {"service_name": "Klein Curacao", "date": _FUTURE_DATE,
               "guests": "2", "service_key": "klein_curacao"}
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, service)
-    assert override is not None
-    assert "departure time" in override.lower()
-    assert "08:00" in override
-    assert "08:30" in override
+    assert override is None
     assert should_set is False
 
 
-def test_post_validate_all_pass_builds_summary():
-    """All fields valid — summary built, should_set_awaiting is True."""
+def test_post_validate_all_pass_advances_state():
+    """Brief 161: all valid returns (None, True) — no reply override, just state."""
     service = config_loader.get_service("west_coast_beach")
     fields = {"service_name": "West Coast Beach Trip", "date": _NEXT_WED,
               "guests": "2", "service_key": "west_coast_beach",
               "slot_time": "09:00"}  # Wednesday, single departure
     result = {"intents": ["booking"], "flags": {}}
     override, should_set = _post_validate(fields, {}, result, service)
-    assert override is not None
-    assert "$240" in override  # 2 * $120
+    assert override is None
     assert should_set is True
 
 
@@ -195,8 +150,8 @@ def test_post_validate_skips_non_booking_intent():
 # --- Orchestrator integration tests (mocked externals) ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_orchestrator_post_validate_day_override(mock_process):
-    """Booking on wrong day returns day-of-week override instead of Claude reply."""
+def test_orchestrator_wrong_day_keeps_marinas_reply(mock_process):
+    """Brief 161: Marina's own wrong-day reply is preserved; state does not advance."""
     phone = "TEST_070_DAY_001"
     _cleanup_phone(phone)
     mock_process.return_value = {
@@ -204,42 +159,49 @@ def test_orchestrator_post_validate_day_override(mock_process):
         "fields": {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
                     "date": _NEXT_MON, "guests": "2"},  # Monday — Wed/Sun only
         "confidence": "high",
-        "reply": "I'll book West Coast Beach for you!",
+        "reply": "The West Coast Beach Trip only runs Wednesdays and Sundays. Would Wednesday work?",
         "clarifications_needed": [], "requires_human": False,
         "flags": {}, "internal_note": ""
     }
-    msg = {"from": phone, "text": "Book West Coast Beach March 16 for 2", "from_name": "Test"}
+    msg = {"from": phone, "text": "Book West Coast Beach Monday for 2", "from_name": "Test"}
     reply = handle_incoming_whatsapp_message(msg)
-    assert "doesn't run on Monday" in reply
+    # Marina's own reply is preserved — no Python override
+    assert "Wednesday" in reply
     assert "[BOOKING_REF]" not in reply
+    # State must NOT have advanced
+    state = state_registry.wa_get_booking_state(phone)
+    assert not state["flags"].get("awaiting_booking_confirmation")
     _cleanup_phone(phone)
 
 
-@patch("shared.state_registry.create_soft_hold")
+@patch("agents.social.social_agent.state_registry.create_soft_hold")
 @patch("agents.social.social_agent.sheets_writer")
 @patch("agents.social.social_agent.payment_stub")
 @patch("agents.social.social_agent.gws_calendar")
 @patch("agents.social.social_agent.marina_agent.process_message")
-def test_orchestrator_booking_summary_sent(mock_process, mock_cal, mock_pay, mock_sheets, mock_hold):
-    """Valid booking fields trigger summary and awaiting_booking_confirmation flag."""
+def test_orchestrator_all_valid_advances_state_keeps_marinas_summary(mock_process, mock_cal, mock_pay, mock_sheets, mock_hold):
+    """Brief 161: valid booking — Marina's own summary kept, awaiting flag set, hold placed.
+    NOTE: patch agents.social.social_agent.state_registry (local import), not shared.state_registry,
+    because social_agent.py imports state_registry at the top."""
     phone = "TEST_070_SUMMARY_001"
     _cleanup_phone(phone)
     mock_process.return_value = {
         "intents": ["booking"],
         "fields": {"service_key": "west_coast_beach", "service_name": "West Coast Beach",
                     "date": _NEXT_WED, "guests": "2",
-                    "customer_name": "John"},  # Wednesday — single departure, auto-selects 09:00
+                    "slot_time": "09:00",
+                    "customer_name": "John"},
         "confidence": "high",
-        "reply": "Sounds good!",
+        "reply": "Just to confirm: West Coast Beach Trip on Wednesday, 2 guests, $240 total. Want me to check availability and hold a spot?",
         "clarifications_needed": [], "requires_human": False,
         "flags": {}, "internal_note": ""
     }
     mock_cal.check_availability.return_value = {"available": True, "spots_remaining": 23, "capacity": 25}
     mock_hold.return_value = 888
-    msg = {"from": phone, "text": "West Coast Beach March 18 for 2", "from_name": "John"}
+    msg = {"from": phone, "text": "West Coast Beach Wed for 2", "from_name": "John"}
     reply = handle_incoming_whatsapp_message(msg)
-    # Should contain booking summary (from _post_validate — single departure auto-selects 09:00)
-    assert "$240" in reply  # 2 * $120
+    # Marina's own summary is preserved exactly (no Python override)
+    assert "$240" in reply
     assert "check availability" in reply.lower()
     # Check awaiting flag was set
     state = state_registry.wa_get_booking_state(phone)

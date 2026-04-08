@@ -7,8 +7,8 @@ from agents.marina.marina_agent import _build_user_prompt
 from shared import config_loader, state_registry
 
 
-def test_past_date_returns_already_passed():
-    """T1: Past date returns 'already passed'."""
+def test_past_date_does_not_advance_state():
+    """Brief 161 (was T1): past date returns (None, False) — Marina writes the rejection herself."""
     _service = config_loader.get_service("sunset_cruise")
     th = {
         "fields": {"service_key": "sunset_cruise", "service_name": "Sunset Cruise", "date": "2025-01-02", "guests": "2"},
@@ -16,8 +16,9 @@ def test_past_date_returns_already_passed():
         "messages": [],
     }
     result = {"intents": ["booking"], "fields": {"service_key": "sunset_cruise", "date": "2025-01-02", "guests": "2"}}
-    reply, _ = _post_validate(th, result, _service)
-    assert reply is not None and "already passed" in reply
+    reply, awaiting = _post_validate(th, result, _service)
+    assert reply is None
+    assert awaiting is False
 
 
 def test_future_date_no_already_passed():

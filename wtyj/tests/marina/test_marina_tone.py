@@ -5,7 +5,7 @@ import sys
 import os
 from agents.marina import marina_agent
 from shared import config_loader
-from agents.marina.email_poller import _build_booking_summary
+# Brief 161: _build_booking_summary deleted — Marina writes summaries herself now.
 
 
 def test_system_prompt_contains_writing_style():
@@ -48,77 +48,9 @@ def test_build_prompt_wrapper_combines_both():
     assert "INBOUND MESSAGE:" in full
 
 
-def test_booking_summary_no_old_header():
-    """T7: Booking summary does NOT contain old bullet-point header."""
-    service = {
-        "display_name": "Sunset Cruise",
-        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
-        "price": 79,
-        "included": ["open bar", "snacks"],
-    }
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
-        service,
-    )
-    assert "Here's a quick summary" not in summary
-
-
-def test_booking_summary_no_old_lock_phrase():
-    """T8: Booking summary does NOT contain old lock-in phrase."""
-    service = {
-        "display_name": "Sunset Cruise",
-        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
-        "price": 79,
-        "included": ["open bar", "snacks"],
-    }
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
-        service,
-    )
-    assert "Shall I lock this in" not in summary
-
-
-def test_booking_summary_has_price():
-    """T9: Booking summary contains exact prices."""
-    service = {
-        "display_name": "Sunset Cruise",
-        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
-        "price": 79,
-        "included": ["open bar", "snacks"],
-    }
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
-        service,
-    )
-    assert "$158" in summary
-    assert "$79" in summary
-
-
-def test_booking_summary_new_closer():
-    """T10: Booking summary contains the new closer phrase."""
-    service = {
-        "display_name": "Sunset Cruise",
-        "slots": [{"time": "17:30", "resource": "Kailani", "location": "Village Marina"}],
-        "price": 79,
-        "included": ["open bar", "snacks"],
-    }
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-03-26", "guests": "2", "slot_time": "17:30"},
-        service,
-    )
-    assert "Want me to go ahead and book this?" in summary
-
-
-def test_post_validate_day_of_week_no_em_dashes():
-    """T11: Day-of-week override has no em dashes or old phrasing."""
-    from agents.marina.email_poller import _post_validate
-    th = {"fields": {"service_name": "Snorkeling", "date": "2026-03-09", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}}
-    service = {"display_name": "3-in-1 Snorkeling Trip", "slots": [{"time": "10:00"}], "days_available": "Fridays only"}
-    result = {"intents": ["booking"], "fields": {}, "flags": {}}
-    override, _ = _post_validate(th, result, service)
-    assert override is not None
-    assert "—" not in override
-    assert "Great choice" not in override
+# Brief 161: Tests T7-T11 deleted — _build_booking_summary removed, Marina writes
+# booking summaries in the customer's language via her prompt now. The old
+# hardcoded English template tests are no longer applicable.
 
 
 def test_persona_in_client_json():
@@ -207,11 +139,6 @@ if __name__ == "__main__":
         test_user_prompt_contains_inbound_message,
         test_user_prompt_contains_trips_and_faq,
         test_build_prompt_wrapper_combines_both,
-        test_booking_summary_no_old_header,
-        test_booking_summary_no_old_lock_phrase,
-        test_booking_summary_has_price,
-        test_booking_summary_new_closer,
-        test_post_validate_day_of_week_no_em_dashes,
         test_persona_in_client_json,
     ]
     passed = 0

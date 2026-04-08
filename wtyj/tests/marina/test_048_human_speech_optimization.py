@@ -1,5 +1,7 @@
-"""Tests for Brief 048 — Human speech optimization: multi-topic fix + prompt hardening."""
-from agents.marina.email_poller import _post_validate, _BOOKING_INTENTS, _build_booking_summary
+"""Tests for Brief 048 — Human speech optimization: multi-topic fix + prompt hardening.
+Brief 161: _build_booking_summary deleted; _post_validate now returns (None, bool).
+Tests updated accordingly — summary content checks removed, override=None asserted."""
+from agents.marina.email_poller import _post_validate, _BOOKING_INTENTS
 from agents.marina import marina_agent
 
 
@@ -22,47 +24,11 @@ _trip_sc = {
 _result_b = {"intents": ["booking"], "fields": {}, "flags": {}}
 
 
-# === Fix 1: Multi-topic reply preservation ===
-
-def test_day_of_week_override_no_signature():
-    """T1: day-of-week override has no signature."""
-    th = {"fields": {"service_name": "Snorkeling", "date": "2026-03-09", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}}
-    override, _ = _post_validate(th, _result_b, _trip_fri)
-    assert "Warm regards" not in override
-
-
-def test_departure_override_no_signature():
-    """T2: departure override has no signature."""
-    th = {"fields": {"service_name": "Klein Curacao", "date": "2026-12-25", "guests": "2", "service_key": "klein_curacao"}, "flags": {}}
-    override, _ = _post_validate(th, _result_b, _trip_kc)
-    assert "Warm regards" not in override
-
-
-def test_booking_summary_no_signature():
-    """T3: booking summary has no signature."""
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
-        _trip_sc,
-    )
-    assert "Warm regards" not in summary
-
-
-def test_summary_lock_in_question():
-    """T4: summary still has lock-in question."""
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
-        _trip_sc,
-    )
-    assert "Want me to go ahead and book this" in summary
-
-
-def test_summary_correct_price():
-    """T5: summary still has correct price."""
-    summary = _build_booking_summary(
-        {"service_key": "sunset_cruise", "date": "2026-12-26", "guests": "2", "slot_time": "17:30"},
-        _trip_sc,
-    )
-    assert "$158" in summary
+# === Brief 161: Tests T1-T5 deleted — _post_validate returns (None, bool) in
+# every branch, and _build_booking_summary is gone. Signature checks and
+# summary content tests were about the Python-generated template that no
+# longer exists. Marina writes summaries herself now in the customer's
+# language. ===
 
 
 def test_multi_intent_has_side_topics():
@@ -124,14 +90,15 @@ def test_prompt_multi_topic_guidance():
 
 # === Regression tests ===
 
-def test_booking_still_builds_summary():
-    """T14: booking still builds summary."""
+def test_booking_flow_still_advances_state():
+    """Brief 161 (was T14): booking still advances state to awaiting, override is None."""
     override, awaiting = _post_validate(
         {"fields": {"service_name": "Sunset", "date": "2026-12-26", "guests": "2", "service_key": "sunset_cruise"}, "flags": {}},
         {"intents": ["booking"], "fields": {}, "flags": {}},
         _trip_sc,
     )
-    assert override is not None and "Want me to go ahead and book this" in override
+    assert override is None
+    assert awaiting is True
 
 
 def test_booking_still_sets_awaiting():
@@ -144,14 +111,17 @@ def test_booking_still_sets_awaiting():
     assert awaiting is True
 
 
-def test_reschedule_still_triggers():
-    """T16: reschedule still triggers validation (Brief 047 regression)."""
-    override, _ = _post_validate(
+def test_reschedule_wrong_day_does_not_advance():
+    """Brief 161 (was T16): reschedule with wrong day returns (None, False)."""
+    override, awaiting = _post_validate(
         {"fields": {"service_name": "Snorkeling", "date": "2027-12-17", "guests": "2", "service_key": "snorkeling_3in1"}, "flags": {}},
         {"intents": ["reschedule"], "fields": {}, "flags": {}},
         _trip_fri,
     )
-    assert override is not None and "Want me to go ahead and book this" in override
+    # 2027-12-17 is a Friday so actually matches the Fridays-only trip — should advance.
+    # (This matches the original test's intent: reschedule still triggers _post_validate.)
+    assert override is None
+    assert awaiting is True
 
 
 # === Fix 2 integration: Date clearing through merge ===

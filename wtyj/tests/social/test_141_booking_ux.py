@@ -12,21 +12,8 @@ os.environ.setdefault("ZERNIO_WEBHOOK_SECRET", "test")
 from shared import config_loader
 
 
-# --- Test 1: Booking summary says "check availability" not "book" ---
-def test_booking_summary_says_check_availability():
-    from agents.social.social_agent import _build_booking_summary
-    service = config_loader.get_service("sunset_cruise")
-    fields = {
-        "service_key": "sunset_cruise",
-        "date": "2026-04-10",
-        "guests": "2",
-        "slot_time": "17:30",
-    }
-    summary = _build_booking_summary(fields, service)
-    assert "check availability" in summary.lower() or "hold a spot" in summary.lower(), \
-        f"Summary should mention checking availability, got: {summary}"
-    assert "go ahead and book" not in summary.lower(), \
-        f"Summary should NOT say 'go ahead and book', got: {summary}"
+# --- Test 1: DELETED in Brief 161 — _build_booking_summary no longer exists.
+#     Marina now writes booking summaries herself in the customer's language. ---
 
 
 # --- Test 2: Action context mentions availability check ---

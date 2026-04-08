@@ -297,7 +297,11 @@ def _maybe_reset_stale_thread(msg, thread_key: str, th: dict, threads: dict, now
 
 def _detect_booking_ref(body: str) -> "str | None":
     """Extract a 6-char alphanumeric booking reference from message body. Returns ref or None."""
-    match = re.search(r'\b[A-Z0-9]{6}\b', body)
+    # Brief 161: require at least one digit so all-caps service words like
+    # "SUNSET" or "FRIDAY" don't get misread as booking references. Defensive
+    # symmetry with social_agent.py — the email path's caller already guards
+    # with state_registry.get_booking, but we keep the two regexes aligned.
+    match = re.search(r'\b(?=[A-Z0-9]*\d)[A-Z0-9]{6}\b', body)
     if match:
         # Verify it's a real booking ref, not a random 6-char string
         candidate = match.group()
@@ -372,49 +376,6 @@ def _day_matches(day_name, days_available):
     return day_name.lower() in days_available.lower()
 
 
-def _suggest_dates(date_str, days_available):
-    """Suggest 2-3 nearby valid dates."""
-    from datetime import timedelta as _td
-    base = datetime.strptime(date_str, "%Y-%m-%d")
-    suggestions = []
-    for offset in range(1, 14):
-        candidate = base + _td(days=offset)
-        if _day_matches(candidate.strftime("%A"), days_available):
-            suggestions.append(f"  {candidate.strftime('%A %d %B')}")
-            if len(suggestions) >= 3:
-                break
-    return "\n".join(suggestions) if suggestions else "Please suggest another date!"
-
-
-def _build_booking_summary(fields, service):
-    """Build a data-driven booking summary from fields and service config."""
-    svc_name = service.get("display_name", fields.get("service_key", ""))
-    date_str = fields.get("date", "")
-    guests = int(fields.get("guests") or 1)
-    slot_time = fields.get("slot_time", "")
-    slots = service.get("slots", [])
-    slot_info = next((d for d in slots if d.get("time") == slot_time), None)
-    if not slot_info and slots:
-        slot_info = slots[0]
-        slot_time = slot_info.get("time", "")
-    resource = slot_info.get("resource", "") if slot_info else ""
-    location = slot_info.get("location", "") if slot_info else ""
-    price_base = service.get("price", 0)
-    total = price_base * guests
-    included = ", ".join(service.get("included", [])) or "see details"
-    try:
-        date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
-    except ValueError:
-        date_fmt = date_str
-    return (
-        f"Just to confirm the details: {svc_name} on {date_fmt}, "
-        f"{slot_time} from {location} on {resource}. "
-        f"{guests} guests, ${total} total (${price_base} each). "
-        f"Includes {included}.\n\n"
-        f"Want me to go ahead and book this?"
-    )
-
-
 def _build_action_context(th):
     """Build action_context string for the Claude prompt based on thread state."""
     flags = th.get("flags", {})
@@ -439,8 +400,13 @@ def _build_action_context(th):
 
 def _post_validate(th, result, service):
     """
-    Validate extracted fields after Claude call.
-    Returns (reply_override, should_set_awaiting).
+    Decide whether to advance booking state to awaiting_booking_confirmation.
+
+    Brief 161: returns (None, should_set_awaiting). Always returns None for
+    reply_override — Marina generates all booking-flow replies in the
+    customer's language via her prompt (see BOOKING VALIDATION block in
+    marina_agent._build_system_prompt). This function is now a pure state
+    manager.
     """
     fields = th.get("fields", {})
     flags = th.get("flags", {})
@@ -455,51 +421,33 @@ def _post_validate(th, result, service):
     date = fields["date"]
     slots = service.get("slots", [])
 
-    # 1. Day-of-week check
+    # Day-of-week: do not advance state on wrong day.
     try:
         day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A")
         days_avail = service.get("days_available", "daily")
         if not _day_matches(day_name, days_avail):
-            return (
-                f"The {service.get('display_name', fields['service_key'])} "
-                f"doesn't run on {day_name}s, only {days_avail}. "
-                f"Would any of these work instead?\n\n"
-                f"{_suggest_dates(date, days_avail)}"
-            ), False
+            return None, False
     except ValueError:
         pass
 
-    # 1b. Past date check
+    # Past date: do not advance state on past date.
     try:
         _pv_date_obj = datetime.strptime(date, "%Y-%m-%d").date()
         _pv_today = datetime.now(timezone(timedelta(hours=-4))).date()
         if _pv_date_obj < _pv_today:
-            return (
-                f"That date ({date}) has already passed. "
-                f"Would you like to pick a different date?"
-            ), False
+            return None, False
     except ValueError:
         pass
 
-    # 2. Departure time check (multi-departure trips only)
+    # Multi-departure: do not advance until the customer has chosen a slot.
     if len(slots) > 1 and not fields.get("slot_time"):
-        dep_lines = "\n".join(
-            f"- {d['time']} aboard {d.get('resource', '?')} from {d.get('location', '?')}"
-            for d in slots
-        )
-        return (
-            f"The {service.get('display_name', fields['service_key'])} has "
-            f"a couple of departure times:\n\n{dep_lines}\n\n"
-            f"Which one works for you?"
-        ), False
+        return None, False
 
-    # 3. Child pricing — Claude sets needs_child_ages flag
+    # Child pricing: Marina is still gathering ages.
     if result.get("flags", {}).get("needs_child_ages"):
         return None, False
 
-    # 4. All checks pass — build data-driven summary
-    summary = _build_booking_summary(fields, service)
-    return summary, True
+    return None, True
 
 
 # ========= MAIN LOOP =========
@@ -871,19 +819,12 @@ def main():
                     if not any(_new_f.get(k) for k in ("service_name", "date", "guests", "service_key", "slot_time")):
                         _run_pv = False
                 if _run_pv:
+                    # Brief 161: _post_validate no longer returns reply text — Marina
+                    # writes all booking-flow replies in the customer's language via
+                    # her prompt. This step only decides whether to advance state.
                     _pv_override, _pv_set_awaiting = _post_validate(th, result, _pv_service)
-                    if _pv_override:
-                        _intents = result.get("intents", [])
-                        _has_side_topics = any(i not in _BOOKING_INTENTS for i in _intents)
-                        if _has_side_topics:
-                            # Preserve Claude's answers to non-booking questions
-                            reply_text = result["reply"].rstrip() + "\n\n" + _pv_override
-                        else:
-                            # Booking-only: use override with signature
-                            _sig = config_loader.get_agent_signature()
-                            reply_text = _pv_override + f"\n\nWarm regards,\n{_sig}"
-                        if _booking_flow_on and _pv_set_awaiting:
-                            th["flags"]["awaiting_booking_confirmation"] = True
+                    if _booking_flow_on and _pv_set_awaiting:
+                        th["flags"]["awaiting_booking_confirmation"] = True
 
                 # Step 3b: Availability pre-check + soft hold (SKIP when booking_flow is OFF)
                 if (_booking_flow_on
