@@ -1569,3 +1569,36 @@ Brief 164's new business-sender guard deliberately PASSES THROUGH emails with `[
 
 This was the right instinct here but it's worth writing down because it's easy to get wrong: a "block all X" filter is rarely correct in a system with multiple message-type handlers. The correct pattern is "block X EXCEPT Y" where Y is the specific subset that downstream code depends on.
 
+
+## Brief 166 — Typed identifier tables survive new channels without migrations
+
+The temptation when designing a customer table is to put flat columns: `phone TEXT`, `email TEXT`, `fb_id TEXT`, `ig_id TEXT`. Easy to query, cheap to scan. But every new channel = a schema migration.
+
+Brief 166 went with a two-table design: `customers` (the identity row) + `customer_identifiers` (typed rows, `type TEXT NOT NULL, value TEXT NOT NULL, UNIQUE(type, value)`). Adding a new channel next year = start writing rows with a new `type` string like `"telegram"` or `"bluesky"`. Zero DDL change. No migration. No backfill. The typed table scales to N channels with O(N) rows per customer, and the UNIQUE index makes cross-channel lookups O(log N).
+
+**The lesson:** when a piece of data is "multi-valued with a type dimension", resist the urge to enumerate columns. Use a typed child table. The mild query complexity (one extra JOIN) is worth it versus the pain of adding a column per channel forever.
+
+**What to watch for in future briefs:** any config option that enumerates channels (WhatsApp-only hack, IG-specific logic, FB exception) is a smell. Try to express it as a property of the channel type string instead so new channels inherit the behavior automatically.
+
+## Brief 166 — Merge by audit, not by delete
+
+Brief 166 merges two customer rows when a new identifier collides. The obvious implementation: move identifiers + interactions, DELETE the absorbed row. Done.
+
+But that throws away the history of the merge. If we ever discover a merge was wrong (two real customers accidentally shared an email address because one used a family member's inbox), we can't unmerge — the absorbed row's original linkage is gone.
+
+The design: `customers` has an `active` flag, the absorbed row is DEACTIVATED (not deleted), and `customer_merges` audit table captures `(surviving_id, absorbed_id, merged_at)`. Future unmerge is messy but possible. And the audit lets us debug "why is Calvin's identifier showing up on Alice's row?"
+
+**The lesson:** destructive operations on real customer data should leave a trail. Soft-delete + audit table > hard DELETE. Add ~2% storage cost, gain forensic capability. This is the same principle behind Brief 162's semantic-invariant cleanup guards.
+
+**What to watch for:** any migration or cleanup that does `DELETE FROM customers` / `bookings` / similar. Ask: "if we discover this was wrong 6 months from now, can we recover?" If the answer is no, add a soft-delete and audit path before shipping.
+
+## Brief 166 — Prompt-size bound is non-negotiable for context-aware features
+
+Brief 166 could have dumped the full customer history into Marina's prompt: all identifiers, every past message, every booking, every interaction. Would Marina be smarter? Marginally. Would the prompt explode from 3000 tokens to 30000+ for a long-term customer? Yes. Would latency and cost triple for returning customers? Yes.
+
+The solution: cap at the data layer. `customer_get_full` uses `LIMIT 20` on identifiers and `LIMIT 5` on recent interactions. The prompt block adds a one-line-per-item rendering. Total CUSTOMER FILE block stays under ~400 tokens regardless of how long the customer has been around. A 500-interaction customer costs the same as a 5-interaction customer.
+
+**The lesson:** when building a context feature that grows with customer history, the bound must live at the DB query layer (`LIMIT N ORDER BY created_at DESC`), not at the prompt-build layer. If you bound at the prompt layer you still pay for the DB scan. Bounding at the query layer caps both.
+
+**What to watch for:** any feature that reads "all of X" for prompt injection — check if there's a natural time-window or count cap that makes sense. No cap = an architectural accident waiting to happen when a customer accumulates history.
+
