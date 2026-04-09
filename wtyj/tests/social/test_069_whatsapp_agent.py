@@ -107,11 +107,17 @@ def test_process_message_whatsapp_success(mock_cls):
 
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
 def test_process_message_whatsapp_failure_fallback_reply(mock_cls):
-    """WhatsApp API failure returns a fallback reply (not silence)."""
+    """Brief 176: WhatsApp API failure returns a context-aware fallback reply."""
     mock_cls.return_value.messages.create.side_effect = Exception("API down")
     result = process_message("5991234567", "", "Hello", {}, {},
                               channel="whatsapp")
-    assert "send that again" in result["reply"]
+    # Brief 174 invariant: internal_note marks this as the fallback path
+    assert result["internal_note"] == (
+        "Fallback response — Claude API call failed or returned unparseable output."
+    )
+    # Brief 176 invariant: WhatsApp fallback is short and non-empty
+    assert result["reply"]
+    assert len(result["reply"].split()) < 40
 
 
 # --- state_registry conversation history tests ---

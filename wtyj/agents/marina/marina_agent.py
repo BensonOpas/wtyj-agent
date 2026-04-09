@@ -769,6 +769,97 @@ def _build_prompt(
     )
 
 
+def _build_contextual_fallback_reply(
+    thread_fields: dict,
+    channel: str,
+    signature: str,
+    svc_label: str,
+    party_label: str,
+) -> str:
+    """Brief 176: construct the fallback reply based on what Marina already knows
+    about this customer from the current thread state. Used ONLY on API-level
+    failures (timeout, rate limit, Anthropic outage, defensive guard) — not in
+    the normal Claude-succeeds path. Rule 3 accepted exception (documented in
+    CLAUDE.md KNOWN OPEN ISSUES).
+
+    Principles:
+    - Acknowledge the hiccup (not the customer's fault)
+    - Use the customer's name when known
+    - Only ask for missing fields (service / date / guests)
+    - WhatsApp stays under 40 words; email can be slightly longer
+    - If all fields present, acknowledge the full context and ask the customer
+      to resend their last message (the one that triggered the fallback)
+    """
+    fields = thread_fields or {}
+    name = (fields.get("customer_name") or "").strip()
+    guests = fields.get("guests")
+    service = (fields.get("service_name") or "").strip()
+    date = (fields.get("date") or "").strip()
+
+    has_name = bool(name)
+    has_guests = bool(guests)
+    has_service = bool(service)
+    has_date = bool(date)
+
+    known_parts = []
+    if has_guests and has_service:
+        known_parts.append(f"you as a group of {guests} for {service}")
+    elif has_guests:
+        known_parts.append(f"you as a group of {guests}")
+    elif has_service:
+        known_parts.append(f"the {service} booking")
+    if has_date:
+        if known_parts:
+            known_parts[-1] = known_parts[-1] + f" on {date}"
+        else:
+            known_parts.append(f"a booking for {date}")
+    known_str = " and ".join(known_parts)
+
+    missing_parts = []
+    if not has_service:
+        missing_parts.append(f"which {svc_label} you're looking at")
+    if not has_date:
+        missing_parts.append("what date works")
+    if not has_guests:
+        missing_parts.append(f"how many {party_label}")
+    missing_str = " and ".join(missing_parts)
+
+    name_prefix = f"{name}, " if has_name else ""
+
+    if channel == "whatsapp":
+        if not known_parts and not missing_parts:
+            return f"Sorry{', ' + name if has_name else ''}, had a brief hiccup. Could you resend your last message?"
+        if not missing_parts:
+            return f"Sorry {name_prefix}had a brief hiccup. I have {known_str} on file — could you resend your last message?"
+        if not known_parts:
+            return f"Sorry {name_prefix}had a hiccup. Could you let me know {missing_str}?"
+        return f"Sorry {name_prefix}had a hiccup. I've got {known_str} — could you remind me {missing_str}?"
+
+    signoff = f"\n\nWarm regards,\n{signature}"
+    if not known_parts and not missing_parts:
+        return (
+            f"Hi{' ' + name if has_name else ''},\n\n"
+            f"Sorry, I had a brief hiccup on my end — could you resend your "
+            f"last message and I'll get right back to you?{signoff}"
+        )
+    if not missing_parts:
+        return (
+            f"Hi{' ' + name if has_name else ''},\n\n"
+            f"Sorry, I had a brief hiccup on my end. I have {known_str} on "
+            f"file — could you resend your last message so I can pick up "
+            f"where we left off?{signoff}"
+        )
+    if not known_parts:
+        return (
+            f"Hi{' ' + name if has_name else ''}! Could you let me know "
+            f"{missing_str}? I'll get you sorted from there.{signoff}"
+        )
+    return (
+        f"Hi {name_prefix}sorry for the brief hiccup on my end. I have "
+        f"{known_str} — could you remind me {missing_str}?{signoff}"
+    )
+
+
 def process_message(
     from_email: str,
     subject: str,
@@ -786,26 +877,27 @@ def process_message(
     _svc_label = _terminology.get("service_label", "service")
     _party_label = _terminology.get("party_size_label", "guests")
 
+    # Brief 176: context-aware fallback — acknowledges what thread_fields
+    # already contains instead of gaslighting returning customers with a
+    # generic first-contact reply. Rule 3 accepted exception (API failure
+    # path only). See _build_contextual_fallback_reply docstring.
+    _fallback_reply = _build_contextual_fallback_reply(
+        thread_fields=thread_fields,
+        channel=channel,
+        signature=signature,
+        svc_label=_svc_label,
+        party_label=_party_label,
+    )
     fallback = {
         "intents": ["inquiry"],
         "fields": {},
         "confidence": "low",
-        "reply": (
-            f"Hi! Could you let me know which {_svc_label} you're looking at, "
-            f"what date works, and how many {_party_label}? I'll get you sorted "
-            f"from there.\n\n"
-            f"Warm regards,\n{signature}"
-        ),
+        "reply": _fallback_reply,
         "clarifications_needed": ["date", _party_label, "service_name"],
         "requires_human": False,
         "flags": {},
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",
     }
-    if channel == "whatsapp":
-        # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
-        # If agent name changes from "Marina", update this message.
-        # See also: email fallback above (lines 459-473) — same exception.
-        fallback["reply"] = "Sorry, could you send that again? I missed it."
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
