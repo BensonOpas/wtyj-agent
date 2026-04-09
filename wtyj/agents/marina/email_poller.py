@@ -118,13 +118,29 @@ def normalize_subject(subj: str) -> str:
     return s
 
 def _cleanup_stale_data(state, now):
-    """Prune threads >30d old (no active hold) and trim processed_hashes."""
+    """Prune threads >30d old (no active hold, no pending relay) and trim processed_hashes.
+
+    Brief 162: defensive guards against the class of bug where an early-return
+    code path forgets to set last_activity. A missing or zero last_activity
+    is now treated as "don't know, don't archive" rather than "ancient, archive
+    immediately". Also never archive a thread with awaiting_relay=True — that
+    would destroy the relay token lookup and silently drop the operator's reply.
+    """
     cutoff = now - (THREAD_RETENTION_DAYS * 86400)
     threads = state.get("threads", {})
     to_delete = []
     for tk, th in threads.items():
         last = th.get("last_activity") or 0
-        if last < cutoff and not th.get("flags", {}).get("hold_created"):
+        flags = th.get("flags", {})
+        # Brief 162: skip if any protection flag is set
+        if flags.get("hold_created"):
+            continue
+        if flags.get("awaiting_relay"):
+            continue
+        # Brief 162: missing or zero last_activity => unknown, don't archive
+        if not last:
+            continue
+        if last < cutoff:
             to_delete.append(tk)
     if to_delete:
         with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
@@ -551,6 +567,7 @@ def main():
                 if th.get("last_customer_hash") == customer_hash:
                     log("Duplicate customer content -> skip reply, mark Seen.")
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    th["last_activity"] = now  # Brief 162: prevent premature archive
                     threads[thread_key] = th
                     save_json(THREAD_STATE_PATH, state)
                     continue
@@ -572,6 +589,7 @@ def main():
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
+                    th["last_activity"] = now  # Brief 162: prevent premature archive
                     threads[thread_key] = th
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     save_json(THREAD_STATE_PATH, state)
@@ -665,6 +683,7 @@ def main():
                     customer_th["flags"]["awaiting_relay"] = False
                     customer_th["flags"].pop("relay_question", None)
                     customer_th["flags"].pop("relay_token", None)
+                    customer_th["last_activity"] = now  # Brief 162: prevent premature archive
                     state["threads"][customer_thread_key] = customer_th
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     save_json(THREAD_STATE_PATH, state)
@@ -698,6 +717,7 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
+                    th["last_activity"] = now  # Brief 162: prevent premature archive
                     threads[thread_key] = th
                     save_json(THREAD_STATE_PATH, state)
                     log(f"Fully escalated: holding reply sent to {from_email}")
@@ -945,6 +965,7 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
+                    th["last_activity"] = now  # Brief 162: prevent premature archive
                     threads[thread_key] = th
                     save_json(THREAD_STATE_PATH, state)
                     continue
@@ -1013,6 +1034,7 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
+                    th["last_activity"] = now  # Brief 162: prevent premature archive
                     threads[thread_key] = th
                     save_json(THREAD_STATE_PATH, state)
                     continue
@@ -1055,6 +1077,7 @@ def main():
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             th["reply_times"].append(now)
                             th["last_customer_hash"] = customer_hash
+                            th["last_activity"] = now  # Brief 162: prevent premature archive
                             threads[thread_key] = th
                             save_json(THREAD_STATE_PATH, state)
                             continue
@@ -1142,6 +1165,7 @@ def main():
                             im.uid("store", uid, "+FLAGS", r"(\Seen)")
                             th["reply_times"].append(now)
                             th["last_customer_hash"] = customer_hash
+                            th["last_activity"] = now  # Brief 162: prevent premature archive
                             threads[thread_key] = th
                             save_json(THREAD_STATE_PATH, state)
                             continue
