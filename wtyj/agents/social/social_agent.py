@@ -713,8 +713,23 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     flags["payment_status"] = "not_required"
                 bm_logger.log("whatsapp_booking_confirmed", phone=phone,
                               booking_ref=booking_ref, service_key=service_key)
-                state_registry.wa_store_message(phone, "system",
-                    f"Booking confirmed: {fields.get('service_name', service_key)}, {fields.get('date', '')}, {fields.get('guests', '')} guests (Ref: {booking_ref})")
+                # Brief 163: wording depends on payment state.
+                # If payment is required (upfront/deposit), the hold is placed but the booking
+                # is NOT yet confirmed — say "Hold placed — awaiting payment" so the dashboard
+                # tag stays amber until the payment webhook fires (Brief 168).
+                # If no payment is required (timing="none", e.g. restaurant reservations), the
+                # hold IS the confirmation — keep the "Booking confirmed" wording.
+                if _payment_timing in ("upfront", "deposit"):
+                    _system_msg = (f"Hold placed — awaiting payment: "
+                                   f"{fields.get('service_name', service_key)}, "
+                                   f"{fields.get('date', '')}, "
+                                   f"{fields.get('guests', '')} guests (Ref: {booking_ref})")
+                else:
+                    _system_msg = (f"Booking confirmed: "
+                                   f"{fields.get('service_name', service_key)}, "
+                                   f"{fields.get('date', '')}, "
+                                   f"{fields.get('guests', '')} guests (Ref: {booking_ref})")
+                state_registry.wa_store_message(phone, "system", _system_msg)
                 sheets_writer.log_hold_created({
                     "booking_ref": booking_ref,
                     "email": phone, "subject": "WhatsApp",
