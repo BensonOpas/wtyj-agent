@@ -1602,3 +1602,26 @@ The solution: cap at the data layer. `customer_get_full` uses `LIMIT 20` on iden
 
 **What to watch for:** any feature that reads "all of X" for prompt injection — check if there's a natural time-window or count cap that makes sense. No cap = an architectural accident waiting to happen when a customer accumulates history.
 
+
+## Brief 172 — Force-reset + surgical re-apply beats hand-merging when one side is more cohesive
+
+When my 4-commit sweep collided with SR's 18-commit independent UX pass in Replit, the obvious path was "merge in the UI, pick a side for each conflict". But SR's 18 commits formed a single coherent UX vision (archive → delete flow, consistent styling, visual differentiation between escalation types). Line-by-line merging risked subtly breaking that coherence — pick the wrong line in one file and you lose the design intent.
+
+The path I took: force-reset the dashboard origin/master to the pre-sweep tag, let SR push their branch as the new master, then I surgically added back only the pieces SR couldn't have known about (the ones tied to sweep backend work: Clock icon for Hold placed, customer file PHONE lookup, channel type field). Those additions were pure insertions — new imports, new function calls, new JSX branches — that don't touch SR's code at all. Zero conflict risk on the re-apply.
+
+**The lesson:** when you and a collaborator both branch from the same point and both ship overlapping features, the LESS coherent side should yield. In this case "less coherent" doesn't mean worse — it means smaller scope, more tactical, less load-bearing to the overall design. My 4 sweep commits were tactical dashboard polish + backend integration. SR's 18 commits were a design pass. Design passes yield last.
+
+**How to apply:** before hand-merging a collision, ask "can I keep one whole side untouched and add back the small independent pieces from the other side as pure insertions?" If yes, do that. If no (because both sides genuinely touch the same semantic surface area), then hand-merge carefully. The tie-breaker: whichever side took longer / has more cohesion / is less undoable wins the base, and the other side is re-applied on top.
+
+**The safety net:** preserve the yielding side as a local branch (`backup-sweep-dashboard-commits`) + a tag (`pre-brief-sweep-163`) before the force-reset. Nothing is lost, everything is recoverable.
+
+## Brief 172 — Wire existing stubs instead of building duplicate mechanisms
+
+When I pulled SR's version, I found TWO "API endpoint for delete coming soon — UI placeholder" stubs — one in Messages.tsx's `handleDelete`, one in Escalations.tsx's `handleDeleteEscalation`. My original sweep (Brief 165) built the backend DELETE /messages/conversations endpoint. I could have added a second backend endpoint or a second delete pathway to "complete" my original work. Instead I just wired SR's existing stub to call my existing endpoint — no new UI surface, no new abstraction.
+
+The escalation delete was the same shape: SR had the UI stub, I didn't have the backend. I added ONLY the backend (Brief 172's new `delete_escalation` helper + endpoint) and wired SR's stub to it. Net: one new backend endpoint + one JSX handler swap, instead of a whole new delete feature.
+
+**The lesson:** when you find a collaborator's stub with a clear "this should call an endpoint" intent, wire it to whatever endpoint you can provide (existing or new). Don't build a parallel delete button or a parallel helper function. Stubs are contract points — respect them.
+
+**How to apply:** before adding a new UI element or a new backend endpoint, grep the other side for existing stubs (`// TODO`, `// coming soon`, `handleX = (_) => {}`, etc.) that describe what you're about to build. If one exists, wire to it instead of duplicating.
+
