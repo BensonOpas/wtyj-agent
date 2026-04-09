@@ -104,8 +104,11 @@ If language needs to be understood, Claude does it.
 
 ## BRIEF WORKFLOW
 
-Use `/think` for planning. Use `/brief` for execution. Use `/scope` when
-you or the user needs an anti-tunnel-vision check.
+Use `/think` for planning, `/brief` for execution, `/scope` for
+anti-tunnel-vision checks. Briefs are this project's paper trail —
+keep them detailed. Procedural rules (reviewers, tests, deploys,
+doc sizing) live in `.claude/commands/brief.md` and are enforced
+when you invoke `/brief`.
 
 Brief template (mandatory):
 ```
@@ -113,33 +116,38 @@ Brief template (mandatory):
 **Status:** Draft | **Files:** list | **Depends on:** | **Blocks:**
 
 ## Context
-What is the current behaviour and why does it need to change.
+Current behaviour and why it needs to change. Real evidence —
+log lines, customer messages, error traces when relevant.
 
 ## Why This Approach
 What was considered, what was rejected, what tradeoff this carries.
-
-## Source Material
-All data needed to execute — paste it here, do not reference URLs.
+Name at least one rejected alternative.
 
 ## Instructions
-Step-by-step. Specific. Every hardcoded value confirmed from source.
+Step-by-step. Reference repo code by `path:line` — do NOT paste
+source into the brief. External data (API specs, schemas, payloads)
+DOES get pasted; repo code is referenced by path.
 
 ## Tests
-Assert specific known values, not just types. Include edge cases.
-Number of tests is your judgment based on complexity.
+Tests that check real behavior. Aim for 3-5 on a focused brief; scale
+up when the brief genuinely covers multiple behaviors. No source-level
+string guards ("assert 'foo' appears in file X") — those are tautologies.
 
 ## Success Condition
 One sentence: how to confirm this was executed correctly.
 
 ## Rollback
-How to undo if something goes wrong.
+How to undo if something goes wrong. Usually one git command (revert,
+reset to tag) + any data fix. One paragraph max.
 ```
 
-The `/brief` skill handles the full cycle: write → review → patch →
-execute → test → output-review → commit → push → TLDR.
+**Quick fix path** — for changes with NO behavioral impact: typo fixes,
+log level adjustments, config value changes that don't alter runtime
+logic, comment cleanup. Just fix, test, commit, deploy, TLDR.
 
-For quick fixes (one-liner, config tweak, no architectural significance):
-skip the brief. Just fix, test, commit, TLDR.
+Any BEHAVIORAL code change (regex, validation, state transition, prompt
+wording, new condition, new field, new endpoint) requires a brief — even
+if the diff is one line. When in doubt, write the brief.
 
 ---
 
@@ -160,4 +168,5 @@ skip the brief. Just fix, test, commit, TLDR.
 - Never hardcode business values — they go in client.json
 - Never add Python logic that reads or classifies language
 - Never add static reply strings
-- Never put URLs in briefs — include source material directly
+- Never put URLs to external docs in briefs — paste the data directly.
+  Repo code is referenced by `path:line`, not pasted.
