@@ -1459,3 +1459,61 @@ This is an easy thing to miss when you test only with BlueMarlin. Adamus's confi
 I rewrote the E2E harness (`/tmp/e2e_brief161.py`) to generate 24-character hex conversation IDs via `hashlib.md5(slug + run_id).hexdigest()[:24]`. This matters because Brief 159's routing code (`_is_zernio_conversation_id`) only treats hex 24-char strings as real Zernio conversation IDs. My previous E2E harness used readable slugs like `a1happyb69d5be9faaaaaaaa` which are 24 chars but contain `s`, `m`, `i` — not hex — so the dashboard relay reply path fell through to legacy Meta (archived, 400 error). With hex cids, the full Zernio send path runs end-to-end and the only failure mode is "conversation not found" (because the synthetic cid isn't registered in Zernio), which means the code is correct and only the test environment is fake.
 
 **Process lesson:** when writing synthetic test harnesses for systems that route based on ID format (hex vs phone, UUID vs slug, etc.), make sure the synthetic IDs match the real format exactly. Otherwise you'll bypass code paths you think you're testing.
+
+---
+
+## Brief 162 — Email thread persistence bug (8 paths + defensive cleanup)
+
+### Decision
+Production-blocking bug discovered during live E2E: `email_poller._cleanup_stale_data` was silently archiving every semi-escalation and full-escalation thread within seconds of creation because 8 early-return code paths persisted the thread state without first setting `th["last_activity"] = now`. The cleanup function defaulted missing `last_activity` to 0 and compared against a 30-day cutoff, so `0 < now - 30*86400` was always true — every freshly-created escalation thread got archived on the next poll. This destroyed the `awaiting_relay` + `relay_token` flags, so when the operator replied to the relay email, the token lookup failed and the reply was silently dropped.
+
+### Outcome
+Fixed 8 sites + hardened `_cleanup_stale_data` with defensive guards (skip-if-awaiting_relay, skip-if-missing-last_activity). 746 tests passing including 12 new Brief 162 tests. Deployed. Real evidence: calvin@gaimin.io sent a wheelchair/nut allergy question, Marina correctly escalated, operator replied, reply dropped with `RELAY: no pending relay for token=158cf2b73100 — skipping`.
+
+### Critical lesson — invisible bugs live in early-return paths
+
+The happy path at line 1262 was correct all along. The 8 broken paths were all `continue` statements in the main `for uid in uids` loop — each one a valid reason to skip the normal reply flow (anti-loop, duplicate, semi-escalation, full escalation, booking-flow-off, manifest-failed, etc). Every one of them persisted thread state. Only ONE of them remembered to set `last_activity`.
+
+This is a specific anti-pattern: **shared state mutation duplicated across early-return branches**. The canonical pattern was defined in one place (the happy path), but every branch had to independently remember to include `th["last_activity"] = now`. There was no compiler check, no linter, no structural enforcement. Nothing prevented a developer adding a new branch from omitting it. Over 160+ briefs, the omission accumulated silently.
+
+**Why it was invisible:**
+1. **The bug only manifested on a subsequent poll cycle**, not immediately. The thread got saved correctly in the moment — `save_json` wrote all the flags. It only disappeared later when `_cleanup_stale_data` ran on the next poll (~10 seconds later).
+2. **The log message was misleading**: `Archived 1 stale threads (>30d)` implies "this thread is over 30 days old" but the actual meaning was "this thread has zero or missing last_activity". Anyone reading the log would assume genuinely old threads were being cleaned up.
+3. **Unit tests for `_maybe_reset_stale_thread` existed** (test_stale_thread.py from Brief 053) but they tested a different function (the in-process stale detection during new message handling), not the cleanup archive logic (`_cleanup_stale_data`) which was the actual bug location. The naming similarity masked the coverage gap.
+4. **The brief-reviewer round-1 caught 3 additional paths** I had missed (lines 577, 670, 702). Without a second review pass, the fix would have been 5/8 complete and the Calvin bug would have reappeared after a random subsequent branch hit. Relying on a single developer's code-walk to find all 8 sites is exactly the kind of thing code review is for.
+
+**Process lessons:**
+
+1. **Whenever you write an early-return branch that mutates shared state, compare it line-by-line against the happy path.** In this case the happy path at line 1262 set `last_activity`, `reply_times`, `last_customer_hash`, then did `threads[thread_key] = th; save_json(...)`. All 8 broken paths had the last 3 elements but were missing the first. A diff-focused review would have caught it in seconds.
+
+2. **Fuzzy/default-based sentinel values are dangerous.** `th.get("last_activity") or 0` treats missing and 0 the same way. That default was chosen to avoid a KeyError but it makes missing data indistinguishable from "ancient data". A better pattern: `last = th.get("last_activity"); if last is None: continue` (or skip entirely). The defensive cleanup guard now implements this.
+
+3. **The cleanup function should encode semantic invariants, not just timestamp comparisons.** "A thread with `awaiting_relay=True` must never be archived" is a semantic rule. It shouldn't depend on the mutation paths correctly maintaining `last_activity`. By adding `if flags.get("awaiting_relay"): continue` to the cleanup loop, we enforce the invariant at the right layer — regardless of whether every caller remembers to update `last_activity`.
+
+4. **Brief-reviewer agents are the right tool for catching "missed instances of a pattern" bugs.** The reviewer found 3 paths I missed on round-1 by systematically grepping `save_json` calls and checking each one. That's a search task that benefits from a fresh pair of eyes. Always invoke the reviewer on any fix that claims "I fixed N instances of a bug" — odds are there are N+k instances.
+
+### Technique — count-based structural regression test
+
+For bugs where the fix is "add a specific line to N specific places", a count-based test in the source file is the cheapest long-term safety net:
+
+```python
+def test_source_mutating_save_paths_set_last_activity():
+    src = open('wtyj/agents/marina/email_poller.py').read()
+    count = src.count('["last_activity"] = now')
+    assert count >= 9, f"Expected >= 9, got {count}. New path missing fix?"
+```
+
+Paired with proximity tests on known-critical paths (e.g. semi_escalation), this catches both "someone added a new early-return path and forgot the fix" AND "someone deleted one of the existing fixes". It's not as tight as a proximity-per-path check, but those produce false positives for legitimate non-mutation save_json calls (lines 513, 632, 636 in this file). Count + spot checks is the right trade-off.
+
+### Technique — brief-reviewer in two rounds
+
+This brief went through two full review rounds:
+- **Round 1**: caught 5 issues including 3 missed code paths, an impossible test, a vacuous test, a wrong indentation description, and an unnecessary Adamus restart
+- **Round 2**: caught 3 text consistency issues that the round-1 patches introduced (Success Condition stale count, Root Cause narrative contradiction, Tests section name drift)
+
+Neither round caught all the issues on its own. Round 1 addressed the fix logic; round 2 addressed the brief text quality after the round-1 patches. **For briefs with patches > ~5 lines, a second review round is cheap insurance**. The execution phase is the expensive part — catching a stale Success Condition in review costs 5 minutes; catching it during execution costs a half-hour of debugging why "the brief said this was done but it's not".
+
+### What to watch for
+Any future brief that touches `email_poller.py`'s main processing loop: check that every early-return branch that mutates `th` also sets `th["last_activity"] = now` before `save_json`. The count-based test will catch regressions automatically, but the author should still verify manually. The 9+ threshold is the floor, not the ceiling — new paths that persist state should RAISE the count, not merely preserve it.
+
+Also: any time a function like `_cleanup_stale_data` uses a "missing = default sentinel" pattern (`x.get("key") or 0`), ask whether the default value can distinguish "unknown" from "extreme". If not, the pattern is dangerous. Use explicit None checks or a separate "never set" flag.
