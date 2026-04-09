@@ -892,6 +892,20 @@ async def delete_conversation(phone: str):
     return {"ok": True, "deleted_rows": count, "phone": phone}
 
 
+# ── Customers (Brief 166/167) ────────────────────────────────────────────────
+
+@router.get("/customers/by-identifier/{type_}/{value}", dependencies=[Depends(_check_auth)])
+async def get_customer_by_identifier(type_: str, value: str):
+    """Brief 167: resolve a customer by identifier. Returns the full customer file
+    (display_name, all identifiers grouped by type, recent interactions) or null.
+    Used by the dashboard to translate Zernio conversation_ids into real phone
+    numbers / display names when available."""
+    cust = state_registry.customer_lookup(type_, value)
+    if not cust:
+        return None
+    return state_registry.customer_get_full(cust["id"])
+
+
 # ── Escalations ──────────────────────────────────────────────────────────────
 
 @router.get("/escalations", dependencies=[Depends(_check_auth)])
