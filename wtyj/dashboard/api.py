@@ -867,13 +867,27 @@ async def delete_brand_rule_endpoint(rule_id: int):
 
 @router.get("/messages/conversations", dependencies=[Depends(_check_auth)])
 async def list_conversations():
-    """List all WhatsApp conversations with latest message and status."""
-    return state_registry.wa_list_conversations()
+    """Brief 171: List WhatsApp + email conversations merged, sorted newest first.
+    Email conversation rows have phone prefixed with `email::` so the detail
+    endpoint can route to the email helper."""
+    wa_convos = state_registry.wa_list_conversations()
+    # WhatsApp rows get a channel tag if missing (some rows come from dm_messages
+    # via dm_store_message which already sets it; legacy rows default to 'whatsapp').
+    for c in wa_convos:
+        c.setdefault("channel", "whatsapp")
+    email_convos = state_registry.email_list_conversations()
+    merged = wa_convos + email_convos
+    merged.sort(key=lambda r: r.get("last_message_at") or "", reverse=True)
+    return merged
 
 
-@router.get("/messages/conversations/{phone}", dependencies=[Depends(_check_auth)])
+@router.get("/messages/conversations/{phone:path}", dependencies=[Depends(_check_auth)])
 async def get_conversation(phone: str):
-    """Get full conversation thread + booking state for a phone number."""
+    """Get full conversation thread + booking state. Brief 171: routes to the
+    email helper when phone starts with 'email::'."""
+    if phone.startswith("email::"):
+        thread_key = phone[len("email::"):]
+        return state_registry.email_get_conversation(thread_key)
     messages = state_registry.wa_get_full_history(phone, limit=200)
     booking_state = state_registry.wa_get_booking_state(phone)
     return {

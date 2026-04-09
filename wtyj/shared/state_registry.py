@@ -749,6 +749,110 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     conn.close()
 
 
+def _get_email_state_path() -> str:
+    """Brief 171: resolve the email_thread_state.json path the email_poller uses."""
+    # email_poller stores it at /app/config/email_thread_state.json inside the container.
+    # Fall back to the source-tree clients/bluemarlin path for local dev.
+    candidates = [
+        "/app/config/email_thread_state.json",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                     "clients", "bluemarlin", "config", "email_thread_state.json"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return candidates[0]
+
+
+def email_list_conversations() -> list:
+    """Brief 171: return email threads in the same shape as wa_list_conversations
+    (phone, customer_name, last_message, last_message_role, last_message_at,
+    status, message_count, channel) so the dashboard Messages page can merge them.
+
+    The `phone` field carries an `email::` prefix to disambiguate from WhatsApp
+    rows and make the URL unambiguous for the detail endpoint."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return []
+    threads = state.get("threads", {})
+    result = []
+    for thread_key, th in threads.items():
+        messages = th.get("messages", []) or []
+        if not messages:
+            continue
+        last = messages[-1]
+        last_ts = last.get("ts") or last.get("timestamp") or ""
+        last_role = last.get("role", "")
+        last_body = (last.get("body") or last.get("text") or "")[:200]
+        # Normalize role: customer -> user, marina -> assistant (matches WhatsApp shape)
+        if last_role == "customer":
+            last_role = "user"
+        elif last_role == "marina":
+            last_role = "assistant"
+        fields = th.get("fields", {}) or {}
+        flags = th.get("flags", {}) or {}
+        customer_name = fields.get("customer_name") or ""
+        if not customer_name:
+            # derive from thread_key like "subj:alice@x.com:..." → alice@x.com
+            parts = thread_key.split(":", 2)
+            if len(parts) >= 2:
+                customer_name = parts[1]
+        status = "escalated" if flags.get("fully_escalated") or flags.get("awaiting_relay") else "active"
+        result.append({
+            "phone": f"email::{thread_key}",
+            "customer_name": customer_name or "(email customer)",
+            "last_message": last_body,
+            "last_message_role": last_role,
+            "last_message_at": last_ts,
+            "status": status,
+            "message_count": len(messages),
+            "channel": "email",
+        })
+    # Sort newest first
+    result.sort(key=lambda r: r["last_message_at"] or "", reverse=True)
+    return result
+
+
+def email_get_conversation(thread_key: str) -> dict:
+    """Brief 171: return full message history + fields for an email thread.
+    Messages are normalized to the WhatsApp shape: {role, text, created_at}."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return {"phone": f"email::{thread_key}", "messages": [], "booking_state": {}}
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return {"phone": f"email::{thread_key}", "messages": [], "booking_state": {}}
+    th = state.get("threads", {}).get(thread_key, {})
+    raw_messages = th.get("messages", []) or []
+    out_messages = []
+    for m in raw_messages:
+        role = m.get("role", "")
+        if role == "customer":
+            role = "user"
+        elif role == "marina":
+            role = "assistant"
+        text = m.get("body") or m.get("text") or ""
+        ts = m.get("ts") or m.get("timestamp") or ""
+        out_messages.append({"role": role, "text": text, "created_at": ts})
+    return {
+        "phone": f"email::{thread_key}",
+        "messages": out_messages,
+        "booking_state": {
+            "fields": th.get("fields", {}) or {},
+            "flags": th.get("flags", {}) or {},
+            "completed_bookings": th.get("completed_bookings", []) or [],
+            "last_activity": th.get("last_activity"),
+        },
+    }
+
+
 def wa_delete_conversation(phone: str) -> int:
     """Brief 165: hard-delete all messages + booking state for a phone number.
     Returns the total number of rows deleted across whatsapp_threads and
