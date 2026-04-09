@@ -1552,3 +1552,20 @@ I considered a schema-based fix (add `bookings.payment_state` column, derive the
 
 **What to watch for:** when you see a bug that manifests in two places (customer-visible AND operator-visible), default to fixing BOTH in the same brief. Split only if one half is genuinely architectural and the other is cosmetic — in which case, do the cosmetic one immediately and schedule the architectural one. Never ship a half-fix where the contradiction is still visible.
 
+
+## Brief 164 — Conftest handles test path setup; new tests must NOT re-do it
+
+Brief 164's new test file started with `import sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))` — a pattern I copied reflexively from an older test header. Brief 154 removed this pattern codebase-wide (conftest.py handles path setup) and added `test_066_project_structure.py::test_no_sys_path_insert_in_tests` as a structural invariant. The first regression run failed this check.
+
+**The lesson:** when grabbing a test file header as boilerplate, check what's still load-bearing after the last test hygiene sweep. The Brief 154 cleanup is canonical; older test files that still have the line are grandfathered but should not be used as templates.
+
+**How to apply:** before writing a new test file, check `conftest.py` in the target test directory AND run `grep 'sys.path.insert' wtyj/tests/marina/*.py | head -3` — if the existing files don't have it, don't add it. The test_066 invariant will catch me next time but the lesson is to not make the mistake in the first place.
+
+## Brief 164 — Guards should compose with existing flow, not replace it
+
+Brief 164's new business-sender guard deliberately PASSES THROUGH emails with `[RELAY-` or `[ESCALATION]` subjects, even when the sender is a business address. Why: the email_poller has an existing flow at lines 599/605 that handles operator replies to those specific subject patterns. If my guard had filtered ALL business senders unconditionally, operator replies to escalations would have been dropped — silently breaking the relay flow Brief 159 just landed.
+
+**The lesson:** when adding a filter, always ask "what downstream code assumes the filtered messages are still arriving?" Read the code path past your insertion point. If there's logic that depends on the filtered class of messages, your filter must either (a) land AFTER that logic, or (b) use an exclusion within the filter to preserve the specific messages that downstream code needs.
+
+This was the right instinct here but it's worth writing down because it's easy to get wrong: a "block all X" filter is rarely correct in a system with multiple message-type handlers. The correct pattern is "block X EXCEPT Y" where Y is the specific subset that downstream code depends on.
+
