@@ -1027,6 +1027,18 @@ def get_pending_notifications(status: str = "pending") -> list:
             for r in rows]
 
 
+def delete_escalation(escalation_id: int) -> bool:
+    """Brief 172: hard-delete a pending_notifications row. Returns True if a
+    row was deleted. Used by the dashboard Escalations page trash button (SR's
+    UX — archive first, then from archive view you can delete permanently)."""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM pending_notifications WHERE id = ?", (escalation_id,))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def update_notification_status(notification_id: int, status: str) -> bool:
     """Update the status of a pending notification. Returns True if row updated."""
     conn = _get_conn()

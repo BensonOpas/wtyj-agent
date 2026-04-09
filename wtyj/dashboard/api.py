@@ -947,6 +947,17 @@ async def resolve_escalation(escalation_id: int):
     return {"ok": True}
 
 
+@router.delete("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
+async def delete_escalation_endpoint(escalation_id: int):
+    """Brief 172: hard-delete an escalation. SR built an archive-first UX
+    (localStorage hide, then trash button visible only in archive view).
+    This endpoint handles the actual permanent delete."""
+    ok = state_registry.delete_escalation(escalation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    return {"ok": True, "id": escalation_id}
+
+
 # ── Manual Draft Creation ────────────────────────────────────────────────────
 
 class ManualDraftRequest(BaseModel):
