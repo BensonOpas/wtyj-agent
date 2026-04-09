@@ -137,3 +137,79 @@ def test_cross_channel_rule_in_prompt_without_customer_file():
     prompt = marina_agent._build_system_prompt({}, channel="whatsapp", customer_file=None)
     assert "CROSS-CHANNEL CONTINUITY" in prompt
     assert "I can't check emails" in prompt
+
+
+# ---- data repair script ----
+
+def test_repair_script_merges_and_is_idempotent():
+    """Brief 178: repair_customer_email_case.main() merges case-dupe email
+    identifiers AND is safe to run multiple times (no double-merging, no crash).
+
+    Reconstructs a pre-fix buggy DB state by inserting a mixed-case email
+    identifier directly via raw SQL (bypassing the now-fixed normalization),
+    then runs the repair and asserts the merge. Runs the repair a second time
+    and asserts no further changes."""
+    from scripts import repair_customer_email_case
+
+    EMAIL_LOWER = "test178d@example.test"
+    EMAIL_MIXED = "Test178D@Example.Test"
+    WA_ID = "178dffffffff178dffffffff99"
+
+    row_a = state_registry.customer_lookup_or_create(
+        "email", EMAIL_LOWER, display_name="Test 178d (email)"
+    )
+    row_b = state_registry.customer_lookup_or_create(
+        "wa_conversation_id", WA_ID, display_name="Test 178d (wa)"
+    )
+
+    # Simulate the pre-fix buggy state: insert a mixed-case email directly
+    # via raw SQL, bypassing the normalization that would now collapse it.
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn = state_registry._get_conn()
+    conn.execute(
+        "INSERT INTO customer_identifiers (customer_id, type, value, first_seen) "
+        "VALUES (?, ?, ?, ?)",
+        (row_b["id"], "email", EMAIL_MIXED, now),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        # Run the repair once — should merge row_b into row_a.
+        # Pass the state_registry DB path so the test hits the same DB as the
+        # rows we just inserted (not the hardcoded container path).
+        summary1 = repair_customer_email_case.main(
+            db_path=state_registry.DB_PATH, verbose=False
+        )
+        assert summary1["merged"] >= 1
+
+        # Assert row_a survived and row_b is inactive (merged away)
+        conn = state_registry._get_conn()
+        row_a_after = conn.execute(
+            "SELECT active FROM customers WHERE id = ?", (row_a["id"],)
+        ).fetchone()
+        row_b_after = conn.execute(
+            "SELECT active FROM customers WHERE id = ?", (row_b["id"],)
+        ).fetchone()
+        # The surviving row is the OLDER one per _customer_choose_merge_survivor.
+        # row_a was created first, so it survives and row_b is inactive.
+        assert row_a_after[0] == 1
+        assert row_b_after[0] == 0
+
+        # The mixed-case identifier should be gone (only the lowercase remains)
+        mixed = conn.execute(
+            "SELECT COUNT(*) FROM customer_identifiers WHERE type='email' AND value = ?",
+            (EMAIL_MIXED,),
+        ).fetchone()[0]
+        assert mixed == 0
+        conn.close()
+
+        # Run the repair a second time — should be a no-op (idempotent)
+        summary2 = repair_customer_email_case.main(
+            db_path=state_registry.DB_PATH, verbose=False
+        )
+        assert summary2["merged"] == 0
+        assert summary2["lowercased_in_place"] == 0
+    finally:
+        _cleanup([row_a["id"], row_b["id"]])
