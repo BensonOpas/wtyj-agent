@@ -288,14 +288,9 @@ def _build_customer_file_block(customer_file) -> str:
     summary = customer_file.get("summary") or ""
     if summary:
         lines.append(f"\nRolling summary: {summary}")
-    lines.append(
-        "\nCROSS-CHANNEL REFERENCE RULE: if the customer references a channel or interaction "
-        "you do NOT see in the CUSTOMER FILE above (e.g. 'did you get my email?', 'I booked "
-        "last week'), ask ONE short question to link them — 'sure, what's your email or booking "
-        "reference?' — and wait for their next reply. Do NOT claim you have no access to other "
-        "channels; you do. Once they share an identifier you can look up, you will have their "
-        "full history."
-    )
+    # Brief 178: the CROSS-CHANNEL CONTINUITY rule that used to live here was moved
+    # into the main system prompt so it's emitted even when customer_file is empty
+    # (e.g. brand-new customer on their first message).
     return "\n".join(lines)
 
 
@@ -488,6 +483,32 @@ CRITICAL PRICE ACCURACY: When the service price is greater than zero, compute to
 CRITICAL LANGUAGE: Write EVERY booking flow reply — rejection, multi-departure question, summary — in the customer's detected language. See LANGUAGE RULE above. Do NOT write the summary in English if the customer wrote in Dutch, Papiamentu, Spanish, German, or Portuguese.
 
 STATE MANAGEMENT: Python still manages awaiting_booking_confirmation, hold creation, and booking_confirmed. Do not set these flags yourself unless an ACTION instruction in the user prompt explicitly tells you to.
+
+CROSS-CHANNEL CONTINUITY: You can see the same customer across email, WhatsApp, Instagram, Facebook, and X. The CUSTOMER FILE block above (if present) shows every identifier and interaction we have linked for this person so far.
+
+If the customer asks about a message, email, DM, or booking on ANOTHER channel that you do NOT see in their CUSTOMER FILE (examples: "did you get my email?", "I messaged you on Instagram last week", "I booked yesterday", "check the email I just sent"), you MUST:
+
+1. Acknowledge warmly and pivot to helping them right now.
+2. Ask ONE short question to link the missing channel. Example phrasings:
+   - "Absolutely — what's the email address you sent from? I'll pull it up."
+   - "Happy to help — do you have the booking reference handy?"
+   - "Got it — what's the name or email you used when you messaged us?"
+3. Once they share the identifier, the next turn will have their full history loaded automatically. Do NOT try to look it up yourself mid-reply.
+
+WHEN REPLYING TO A CROSS-CHANNEL REFERENCE QUESTION (e.g. "did you get my email?", "I messaged you before"), you MUST NEVER use any of these phrasings — they leak internal architecture and make the business look broken:
+  - "I don't have access to the inbox / email / messages / system"
+  - "I can't check emails from here"
+  - "I can't see your email / message"
+  - "no access to the inbox"
+  - "from here I can't"
+  - "my system doesn't show"
+  - "I'm not able to access"
+  - "unfortunately I can't see that"
+
+These phrases are FORBIDDEN ONLY in the cross-channel reference context. In other contexts (e.g. the customer asks about supplier details, staff schedules, legal questions, or anything genuinely outside your scope), normal "I'll need to check with the team" or "that's not something I can help with directly" replies are still fine and encouraged.
+
+WRONG (cross-channel reference): "Still no access to the inbox from here, so I can't check emails. But let's get your booking done — which trip?"
+RIGHT (cross-channel reference): "Absolutely — what's the email address you sent from? I'll pull it up right now, and in the meantime — which trip were you looking at?"
 
 DATE AMBIGUITY RESOLUTION: When the customer uses a relative date phrase, follow these rules:
 

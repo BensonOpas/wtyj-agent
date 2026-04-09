@@ -2002,9 +2002,26 @@ def expire_payment_hold(hold_id: int) -> bool:
 
 # ==================== Brief 166: Cross-channel customer file ====================
 
+def _normalize_identifier_value(type_: str, value: str) -> str:
+    """Brief 178: normalize identifier values for storage and lookup so case
+    variants don't create silos. Email is case-insensitive in practice
+    (every real mail system normalizes for comparison). Other identifier
+    types are stripped only. Returns the normalized value. Idempotent."""
+    if not value:
+        return ""
+    normalized = value.strip()
+    if type_ == "email":
+        normalized = normalized.lower()
+    return normalized
+
+
 def customer_lookup(type_: str, value: str):
-    """Brief 166: look up a customer by an identifier. Returns None if not found."""
+    """Brief 166: look up a customer by an identifier. Returns None if not found.
+    Brief 178: normalizes value (e.g. lowercases email) before lookup."""
     if not type_ or not value:
+        return None
+    value = _normalize_identifier_value(type_, value)
+    if not value:
         return None
     conn = _get_conn()
     row = conn.execute(
@@ -2013,7 +2030,7 @@ def customer_lookup(type_: str, value: str):
         "INNER JOIN customer_identifiers ci ON ci.customer_id = c.id "
         "WHERE ci.type = ? AND ci.value = ? AND c.active = 1 "
         "LIMIT 1",
-        (type_, value.strip())
+        (type_, value)
     ).fetchone()
     conn.close()
     if not row:
@@ -2026,9 +2043,13 @@ def customer_lookup(type_: str, value: str):
 
 def customer_lookup_or_create(type_: str, value: str, display_name: str = "") -> dict:
     """Brief 166: look up a customer by identifier, or create a new row if not found.
-    Idempotent — safe to call on every inbound message."""
+    Idempotent — safe to call on every inbound message.
+    Brief 178: normalizes value (e.g. lowercases email) before lookup/insert."""
     if not type_ or not value:
         raise ValueError("type and value required")
+    value = _normalize_identifier_value(type_, value)
+    if not value:
+        raise ValueError("normalized value empty")
     existing = customer_lookup(type_, value)
     if existing:
         if display_name and not existing["display_name"]:
@@ -2053,7 +2074,7 @@ def customer_lookup_or_create(type_: str, value: str, display_name: str = "") ->
         conn.execute(
             "INSERT INTO customer_identifiers (customer_id, type, value, first_seen) "
             "VALUES (?, ?, ?, ?)",
-            (customer_id, type_, value.strip(), now)
+            (customer_id, type_, value, now)
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -2126,10 +2147,13 @@ def customer_merge(surviving_id: int, absorbed_id: int) -> dict:
 def customer_add_identifier(customer_id: int, type_: str, value: str) -> dict:
     """Brief 166: add a new identifier to an existing customer. Handles the cross-channel
     merge case: if the (type, value) already belongs to a DIFFERENT customer, merge them.
+    Brief 178: normalizes value (e.g. lowercases email) before lookup/insert.
     Returns {"action": "added" | "merged" | "already_linked" | "noop", "customer_id": int}."""
     if not customer_id or not type_ or not value:
         return {"action": "noop", "customer_id": customer_id}
-    value = value.strip()
+    value = _normalize_identifier_value(type_, value)
+    if not value:
+        return {"action": "noop", "customer_id": customer_id}
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     existing_row = conn.execute(

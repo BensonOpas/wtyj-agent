@@ -215,7 +215,9 @@ def test_build_customer_file_block_populated():
     assert "Calvin" in block
     assert "calvin@gaimin.io" in block
     assert "wheelchair" in block
-    assert "CROSS-CHANNEL REFERENCE RULE" in block
+    # Brief 178: CROSS-CHANNEL CONTINUITY rule moved from the customer file
+    # block into the main system prompt. See test_178_email_normalization.py
+    # for the replacement assertion at the prompt level.
 
 
 def test_system_prompt_includes_customer_file_when_passed():
