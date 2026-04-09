@@ -102,8 +102,8 @@ def test_response_empty_reply_returns_fallback():
     with patch("agents.marina.marina_agent.anthropic.Anthropic") as mock_client:
         mock_client.return_value.messages.create.return_value = mock_response
         result = marina_agent.process_message("test", "", "hello", {}, {})
-    # Email fallback should fire — non-empty reply
-    assert "service" in result["reply"].lower() or "guests" in result["reply"].lower()
+    # Brief 174: assert on the explicit fallback marker instead of a weak substring proxy
+    assert result["internal_note"] == "Fallback response — Claude API call failed or returned unparseable output."
 
 
 def test_client_context_includes_all_sections():

@@ -1625,3 +1625,22 @@ The escalation delete was the same shape: SR had the UI stub, I didn't have the 
 
 **How to apply:** before adding a new UI element or a new backend endpoint, grep the other side for existing stubs (`// TODO`, `// coming soon`, `handleX = (_) => {}`, etc.) that describe what you're about to build. If one exists, wire to it instead of duplicating.
 
+
+## Brief 174 — Protocol enforcement beats convention-based contracts
+
+A real customer (Anne-Sophie Hammar, ash9772@gmail.com) got stuck on Marina for three hours, four messages, zero useful replies. Marina's code kept failing with `json.loads` "Expecting value at char 0" on responses where Claude had returned 500-700 output tokens of substantial content. The mystery: the API was clearly working, Claude was clearly generating text, yet the parser consistently failed at position 0.
+
+Root cause (verified live by replaying the exact message against Claude Sonnet 4.6 inside the container): Claude was emitting 1036 characters of free-text reasoning ("Let me work through the validation checks: Today is Thursday April 9... 'Next Saturday' could mean April 11 or April 18... wait, let me reconsider...") before the ```json code fence with the actual response. The parser only stripped markdown fences starting at position 0 — the prefix "L" from "Let me" was not a fence, so `json.loads` got the entire reasoning text and died at the first character.
+
+The Marina prompt explicitly said "Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Just the JSON." Claude ignored this instruction for ambiguous queries — it felt compelled to show its work on the date interpretation. The prompt was a suggestion, not a rule, and Claude overrode it when reasoning seemed more important than format compliance.
+
+The fix was not to make the parser more tolerant (first `{` to last `}`, strip reasoning preamble, etc.) — that's treating a symptom. The root problem is that Marina had a convention-based contract with Claude: "here are instructions, please follow them, I'll parse whatever you return". Conventions are enforced by hope, not by the API. Claude can break the convention any time with no consequence from our side except a silent fallback.
+
+The fix was to switch to Anthropic tool use with forced `tool_choice={"type": "tool", "name": "marina_response"}`. Claude is then STRUCTURALLY required by the API to emit a `tool_use` content block matching a schema. There is no text channel for reasoning to escape into. There is no string parsing — the response is already a dict, validated by the API against the schema. Seven classes of parse failure become physically impossible: preamble text, markdown fences, trailing text, invalid JSON, wrong types, missing required fields, Claude ignoring the "only JSON" instruction.
+
+**The principle:** when an AI contract is failing because the model ignores instructions, the solution is to move the contract from prompt-level (convention) to API-level (protocol). Don't make the parser more tolerant of bad output — make bad output structurally impossible. Tool use / structured output / JSON schema enforcement all achieve this. The prompt becomes simpler (you delete the "here's the format" section), the parser disappears, and the failure mode vanishes.
+
+**What to watch for in future:** any Marina or agent contract that depends on "the model will obey the prompt" is fragile. If the contract is load-bearing for correctness, migrate it to tool use. If the contract is stylistic (tone, length, language), the prompt is fine because a style miss degrades gracefully. The dividing line: does a protocol violation CRASH downstream code? If yes, enforce it via the API, not the prompt.
+
+**Reviewer save:** my first draft of Brief 174 would have silently deleted `{_build_service_alias_text()}` because the helper invocation was nested inside the JSON format block I was removing. Without it, Marina's service_key recognition (the exact feature ash9772's stuck case needs) would have degraded to exact-string-match only. The brief-reviewer agent caught this by cross-referencing `_SKIP_TOP_LEVEL` at line 32 which explicitly excluded `service_aliases` from auto-injection because it lived in the JSON block. Second lesson: **refactor briefs must explicitly trace EVERY helper/interpolation inside the blocks they're deleting.** A grep for `_build_*_text\|_build_*_block` inside the deletion range catches this class of bug. Adding this check to my pre-edit mental checklist.
+

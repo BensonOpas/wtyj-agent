@@ -130,7 +130,9 @@ def test_process_message_defaults_missing_optional_fields(mock_cls):
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
 def test_process_message_falls_back_on_empty_reply(mock_cls):
     """Brief 174: if the tool_use has an empty reply field (even though it's required),
-    process_message returns the fallback — an empty reply is useless to the customer."""
+    process_message returns the fallback — an empty reply is useless to the customer.
+    Assert on internal_note (the explicit fallback marker) rather than a reply substring,
+    so this test can't false-pass if Claude's reply happens to contain 'service' or 'guests'."""
     mock_resp = _mock_tool_use_response({
         "intents": ["inquiry"],
         "confidence": "low",
@@ -140,8 +142,7 @@ def test_process_message_falls_back_on_empty_reply(mock_cls):
     mock_cls.return_value.messages.create.return_value = mock_resp
 
     result = marina_agent.process_message("x@y.com", "Hi", "hello", {}, {})
-    # Fallback reply (email default from fallback dict)
-    assert "service" in result["reply"].lower() or "guests" in result["reply"].lower()
+    assert result["internal_note"] == "Fallback response — Claude API call failed or returned unparseable output."
 
 
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
@@ -150,8 +151,8 @@ def test_process_message_falls_back_on_anthropic_exception(mock_cls):
     mock_cls.return_value.messages.create.side_effect = Exception("API down")
     result = marina_agent.process_message("x@y.com", "Hi", "hello", {}, {})
     assert result["intents"] == ["inquiry"]
-    # Email channel fallback
-    assert "service" in result["reply"].lower() or "guests" in result["reply"].lower()
+    # Explicit fallback marker (strongest assertion)
+    assert result["internal_note"] == "Fallback response — Claude API call failed or returned unparseable output."
 
 
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
