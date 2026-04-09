@@ -77,6 +77,26 @@ _SYSTEM_EMAIL_PREFIXES = (
     "mailer-daemon@", "postmaster@", "bounce@", "dmarc",
 )
 
+
+def _business_sender_emails() -> set:
+    """Brief 164: return all business-owned email addresses (lowercased) that
+    should never be treated as customer senders. Inbound messages from these
+    addresses are skipped unless they match a relay/escalation reply subject.
+
+    Pulls from client.json business.email, business.support_email,
+    business.booking_email, business.demo_support_email. Deduplicates and
+    lowercases. Empty/None values are filtered out.
+    """
+    biz = config_loader.get_business()
+    candidates = (
+        biz.get("email"),
+        biz.get("support_email"),
+        biz.get("booking_email"),
+        biz.get("demo_support_email"),
+    )
+    return {e.strip().lower() for e in candidates if e and isinstance(e, str) and e.strip()}
+
+
 # ========= HELPERS =========
 def _decode_subj(raw):
     parts = []
@@ -517,6 +537,22 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     log(f"Skipped system email from {from_email}")
                     continue
+
+                # Brief 164: skip inbound emails whose sender is a business-owned address
+                # (operator forwards, reply-all on escalation alerts, test emails from
+                # the operator's own inbox). The existing [ESCALATION] / [RELAY-] subject
+                # checks below handle the legitimate operator-reply flow; everything else
+                # from a business sender is noise that must not be processed as a customer
+                # message — doing so pollutes the bookings DB with fake "returning customer"
+                # records (see Lucia SU0AHF 2026-04-08 incident).
+                _business_senders = _business_sender_emails()
+                if from_email.lower() in _business_senders:
+                    _is_relay = "[RELAY-" in subj
+                    _is_escalation = "[ESCALATION]" in subj
+                    if not (_is_relay or _is_escalation):
+                        im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                        log(f"Skipped business-sender email from {from_email} (subject: {subj[:60]}) — not a customer message")
+                        continue
 
                 # Per-sender rate limit (cross-thread)
                 _sr = state.setdefault("sender_rates", {})
