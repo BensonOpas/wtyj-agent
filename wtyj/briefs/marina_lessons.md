@@ -1644,3 +1644,10 @@ The fix was to switch to Anthropic tool use with forced `tool_choice={"type": "t
 
 **Reviewer save:** my first draft of Brief 174 would have silently deleted `{_build_service_alias_text()}` because the helper invocation was nested inside the JSON format block I was removing. Without it, Marina's service_key recognition (the exact feature ash9772's stuck case needs) would have degraded to exact-string-match only. The brief-reviewer agent caught this by cross-referencing `_SKIP_TOP_LEVEL` at line 32 which explicitly excluded `service_aliases` from auto-injection because it lived in the JSON block. Second lesson: **refactor briefs must explicitly trace EVERY helper/interpolation inside the blocks they're deleting.** A grep for `_build_*_text\|_build_*_block` inside the deletion range catches this class of bug. Adding this check to my pre-edit mental checklist.
 
+
+## Brief 175 — Transparent guessing beats blocking on ambiguity
+
+Decision: teach Marina to resolve ambiguous date phrases ("next Saturday") to the NEAREST upcoming instance AND state her interpretation inline in the reply, instead of asking the customer to clarify before resolving.
+
+Outcome: 828 passing, prompt-only change, deployed without issue. The non-obvious technique worth keeping: when an AI agent has to guess through ambiguous input, two wrong behaviors are (1) guess silently (causes invisible errors and angry customers who thought they were understood) and (2) ask to clarify before committing (costs a round-trip for the 80% common case even when the guess would have been right). The correct behavior is (3) guess the most likely interpretation AND expose the guess as a one-line escape hatch in the reply — "I'm reading that as Saturday April 11 — let me know if you meant a different date." Customer sees the assumption, correcting is cheap (one reply), and the common case doesn't pay the round-trip cost. This pattern generalizes beyond dates — anywhere Marina has to pick between interpretations (ambiguous guest count, ambiguous service name, ambiguous time), the same "guess + expose" flow gives the best expected UX.
+
