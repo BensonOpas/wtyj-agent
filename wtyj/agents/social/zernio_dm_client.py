@@ -70,6 +70,11 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         sender_id = ""
 
     platform = data.get("platform", "")
+    # Brief 170: normalize platform strings. Zernio's X / Twitter platform value
+    # has been reported as both "x" and "twitter" in different docs — map both
+    # to "twitter" internally so downstream routing and channel strings are stable.
+    if platform in ("x", "X"):
+        platform = "twitter"
 
     if not conversation_id or not message_id:
         bm_logger.log("zernio_webhook_missing_ids",
