@@ -1517,3 +1517,38 @@ Neither round caught all the issues on its own. Round 1 addressed the fix logic;
 Any future brief that touches `email_poller.py`'s main processing loop: check that every early-return branch that mutates `th` also sets `th["last_activity"] = now` before `save_json`. The count-based test will catch regressions automatically, but the author should still verify manually. The 9+ threshold is the floor, not the ceiling — new paths that persist state should RAISE the count, not merely preserve it.
 
 Also: any time a function like `_cleanup_stale_data` uses a "missing = default sentinel" pattern (`x.get("key") or 0`), ask whether the default value can distinguish "unknown" from "extreme". If not, the pattern is dangerous. Use explicit None checks or a separate "never set" flag.
+
+## Brief 163 — Forbidden-word tests can't grep the whole prompt
+
+Brief 163 added a CONFIRMATION WORDING rule to Marina's prompt with an explicit list of forbidden phrases for the pending-payment state: `"Confirmed"`, `"All set"`, `"You're all set"`, `"See you [day]"`, `"Done"`. The rule itself is a STRING in the prompt that contains all of these forbidden words.
+
+I wrote a test to verify the writing style example had been purged: `assert "You're all set" not in prompt`. It failed — because the assertion matched the CONFIRMATION WORDING rule's forbidden-word list, not the style example. The test was checking the whole prompt, but the "You're all set" it found was the rule saying DON'T say "You're all set".
+
+**The lesson:** when writing a test that asserts a forbidden phrase is absent from a prompt, you cannot grep the whole prompt. The rule text telling Marina NOT to use the phrase will necessarily contain the phrase. You must scope the search to the block you care about.
+
+**The fix pattern:** find the block's start and end delimiters, slice out just that block, assert against the slice:
+```python
+style_idx = prompt.find("GOOD REPLY EXAMPLES")
+end_idx = prompt.find("AVOID:", style_idx)  # or "BOOKING BEHAVIOUR"
+style_block = prompt[style_idx:end_idx]
+assert "You're all set" not in style_block
+```
+
+**What to watch for in future briefs:** any test that does a substring search on a prompt for a phrase that might ALSO appear in a rule forbidding that phrase. Defence-in-depth rules often contain the very words they forbid.
+
+## Brief 163 — Copy test cleanup patterns verbatim; don't guess table names
+
+Brief 163 tests called `state_registry._cleanup_phone` with a hand-written delete from `whatsapp_messages`. The actual table is `whatsapp_threads`. Test failed with `sqlite3.OperationalError: no such table: whatsapp_messages`.
+
+**The lesson:** for infrastructure stuff like table names, column names, API response shapes — don't guess or infer from naming convention. Open the nearest working test (`test_070_whatsapp_booking.py:55-61`) and copy the cleanup pattern verbatim. The cost of the extra file read is zero compared to the cost of a failing test on first run.
+
+This is a recurring pattern — brief after brief I waste a test run because I guessed a name. Adding to the discipline: **before writing a helper function in a test file, grep for an existing one in the same directory and copy it.**
+
+## Brief 163 — Two-surface fixes need both surfaces patched together
+
+The "Confirmed! 🎉" bug was visible in TWO places: (1) Marina's reply text bubble (customer-facing), and (2) the dashboard green "Booking confirmed" banner above the bubble (operator-facing). Fixing only one would leave the contradiction visible.
+
+I considered a schema-based fix (add `bookings.payment_state` column, derive the dashboard tag from that) but rejected it because Brief 168 will do that work properly with the state machine. For Brief 163 the cheapest mechanism was text-in-the-system-message, which the frontend already matches on. Adding a third regex state was three lines of JSX. The real lesson isn't "always match on text" — it's "don't invent new schema to solve a wording bug when the existing mechanism can carry the signal." Schema migrations cost. Text changes don't.
+
+**What to watch for:** when you see a bug that manifests in two places (customer-visible AND operator-visible), default to fixing BOTH in the same brief. Split only if one half is genuinely architectural and the other is cosmetic — in which case, do the cosmetic one immediately and schedule the architectural one. Never ship a half-fix where the contradiction is still visible.
+
