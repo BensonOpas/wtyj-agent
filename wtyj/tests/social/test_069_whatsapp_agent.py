@@ -86,14 +86,18 @@ def test_user_prompt_email_has_subject():
 
 @patch("agents.marina.marina_agent.anthropic.Anthropic")
 def test_process_message_whatsapp_success(mock_cls):
-    """process_message with channel=whatsapp returns parsed reply."""
-    mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=json.dumps({
+    """Brief 174: process_message with channel=whatsapp returns the tool_use input dict."""
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "marina_response"
+    tool_block.input = {
         "intents": ["inquiry"], "fields": {}, "confidence": "high",
         "reply": "Klein Curacao is $120 per adult!",
         "clarifications_needed": [], "requires_human": False,
-        "flags": {}, "internal_note": ""
-    }))]
+        "flags": {}, "internal_note": "",
+    }
+    mock_resp = MagicMock()
+    mock_resp.content = [tool_block]
     mock_resp.usage = MagicMock(input_tokens=500, output_tokens=30)
     mock_cls.return_value.messages.create.return_value = mock_resp
 

@@ -20,13 +20,6 @@ def test_system_prompt_contains_example_replies():
     assert "tone reference" in sp
 
 
-def test_system_prompt_contains_json_format():
-    """T3: _build_system_prompt contains JSON format spec."""
-    sp = marina_agent._build_system_prompt({})
-    assert '"intents"' in sp
-    assert '"reply"' in sp
-
-
 def test_user_prompt_contains_inbound_message():
     """T4: _build_user_prompt contains INBOUND MESSAGE and body."""
     up = marina_agent._build_user_prompt("a@b.com", "test", "hello world", {}, {})
@@ -68,13 +61,20 @@ def test_whatsapp_prompt_never_empty_rule():
 
 
 def test_response_defaults_missing_fields():
-    """T14: process_message defaults missing fields instead of rejecting."""
+    """T14: process_message defaults missing fields instead of rejecting.
+    Brief 174: mock updated to return tool_use block with sparse input."""
     from unittest.mock import patch, MagicMock
-    # Simulate Claude returning valid JSON missing flags and internal_note
-    incomplete_json = '{"intents": ["inquiry"], "fields": {}, "confidence": "high", ' \
-                      '"reply": "We do boat trips!", "clarifications_needed": [], "requires_human": false}'
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "marina_response"
+    tool_block.input = {
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "We do boat trips!", "clarifications_needed": [],
+        "requires_human": False,
+        # No 'flags' or 'internal_note' — defaults should fill them
+    }
     mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=incomplete_json)]
+    mock_response.content = [tool_block]
     mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
     with patch("agents.marina.marina_agent.anthropic.Anthropic") as mock_client:
         mock_client.return_value.messages.create.return_value = mock_response
@@ -85,14 +85,19 @@ def test_response_defaults_missing_fields():
 
 
 def test_response_empty_reply_returns_fallback():
-    """T15: process_message returns fallback when reply is empty, even if other fields present."""
+    """T15: process_message returns fallback when reply is empty, even if other fields present.
+    Brief 174: mock updated to return tool_use block."""
     from unittest.mock import patch, MagicMock
-    # Simulate Claude returning valid JSON with empty reply
-    empty_reply_json = '{"intents": ["inquiry"], "fields": {}, "confidence": "high", ' \
-                       '"reply": "", "clarifications_needed": [], "requires_human": false, ' \
-                       '"flags": {}, "internal_note": ""}'
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "marina_response"
+    tool_block.input = {
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "", "clarifications_needed": [], "requires_human": False,
+        "flags": {}, "internal_note": "",
+    }
     mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=empty_reply_json)]
+    mock_response.content = [tool_block]
     mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
     with patch("agents.marina.marina_agent.anthropic.Anthropic") as mock_client:
         mock_client.return_value.messages.create.return_value = mock_response
@@ -135,7 +140,6 @@ if __name__ == "__main__":
     tests = [
         test_system_prompt_contains_writing_style,
         test_system_prompt_contains_example_replies,
-        test_system_prompt_contains_json_format,
         test_user_prompt_contains_inbound_message,
         test_user_prompt_contains_trips_and_faq,
         test_build_prompt_wrapper_combines_both,

@@ -4,7 +4,6 @@
 
 import json
 import os
-import re
 from datetime import datetime, timezone, timedelta
 
 import anthropic
@@ -22,6 +21,100 @@ _RESPONSE_DEFAULTS = {
     "requires_human": False,
     "flags": {},
     "internal_note": "",
+}
+
+
+# Brief 174: tool use schema for Marina's structured response.
+# Replaces the "Respond with ONLY a JSON object" text contract with a
+# protocol-enforced schema. Claude Sonnet 4.6 (and later) MUST emit a
+# tool_use block matching this schema when called with tool_choice forced
+# to marina_response. No string parsing, no preamble, no markdown fences.
+#
+# Only `intents`, `confidence`, `reply`, `requires_human` are REQUIRED;
+# the rest default via _RESPONSE_DEFAULTS in process_message. Keeping the
+# required set minimal matches the pre-Brief-174 behaviour where Claude
+# could emit a subset of fields and the parser filled in the rest.
+MARINA_TOOL = {
+    "name": "marina_response",
+    "description": (
+        "Emit a structured response to the customer's message. This is the "
+        "ONLY way to reply — do not emit free text. Populate the fields you "
+        "have evidence for; leave others at their defaults. The `reply` field "
+        "is what the customer sees."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "intents": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["booking", "inquiry", "cancellation", "reschedule",
+                             "complaint", "social", "off_topic"],
+                },
+                "description": "One or more intent labels for this message.",
+            },
+            "fields": {
+                "type": "object",
+                "description": "Extracted booking fields. Only include fields with explicit evidence from the customer.",
+                "properties": {
+                    "service_name": {"type": "string"},
+                    "service_key": {"type": "string", "description": "Exact key from the services list. See SERVICE ALIASES in the system prompt for the customer-wording mapping."},
+                    "date": {"type": "string", "description": "YYYY-MM-DD format."},
+                    "guests": {"type": "integer"},
+                    "customer_name": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "email": {"type": "string"},
+                    "special_requests": {"type": "string"},
+                    "slot_time": {"type": "string", "description": "HH:MM format."},
+                },
+            },
+            "confidence": {
+                "type": "string",
+                "enum": ["high", "medium", "low"],
+            },
+            "reply": {
+                "type": "string",
+                "description": "The actual reply text shown to the customer. Write naturally, in the customer's language.",
+            },
+            "reply_hold_failed": {
+                "type": "string",
+                "description": "Optional — only when setting booking_confirmed=true. Apologetic message if the slot is unavailable.",
+            },
+            "clarifications_needed": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "requires_human": {
+                "type": "boolean",
+                "description": "Set true for complaints, refunds, cancellations, or explicit human requests.",
+            },
+            "flags": {
+                "type": "object",
+                "description": "Internal state flags Marina uses for orchestration.",
+                "properties": {
+                    "booking_confirmed": {"type": "boolean"},
+                    "awaiting_booking_confirmation": {"type": "boolean"},
+                    "needs_child_ages": {"type": "boolean"},
+                    "needs_escalation_email": {"type": "boolean"},
+                    "large_group": {"type": "boolean"},
+                },
+            },
+            "semi_escalation": {
+                "type": "boolean",
+                "description": "Set true only for specific factual questions Marina cannot answer from available context.",
+            },
+            "relay_question": {
+                "type": "string",
+                "description": "Exact question to relay to the human team. Only present when semi_escalation is true.",
+            },
+            "internal_note": {
+                "type": "string",
+                "description": "One sentence for the operator log. Never shown to the customer.",
+            },
+        },
+        "required": ["intents", "confidence", "reply", "requires_human"],
+    },
 }
 
 
@@ -492,46 +585,39 @@ When semi_escalation applies:
 - Do NOT set any booking confirmation flags
 - Do NOT attempt to answer the question, even partially
 
-Respond with ONLY a JSON object. No explanation. No markdown. No code fences. Just the JSON.
+FIELD EXTRACTION RULES (apply when populating the `fields` argument of your marina_response tool call):
 
-The JSON must have ALL of these fields, even if empty (use {{}} for objects, [] for arrays, "" for strings, false for booleans):
-{{
-  "intents": ["<one or more of: booking, inquiry, cancellation, reschedule, complaint, social, off_topic>"],
-  "fields": {{"<extracted booking fields — only if present and certain:
-    service_name: the service name as the customer described it
-    date: MUST be in YYYY-MM-DD format. You must convert any natural
-      language date (e.g. "April 20", "next Saturday", "in two weeks")
-      to YYYY-MM-DD using today's date as reference. If the customer
-      has given a vague or unresolvable date (e.g. "sometime next
-      month", "in the summer", "soon") you MUST omit this field and
-      ask for a specific date in clarifications_needed. Never infer,
-      guess, or pick a date the customer has not explicitly stated or
-      clearly implied. When in doubt, ask.
-      If the customer explicitly rejects or cancels a previously stated date
-      (e.g. "nvm the 28th", "not that date", "change the date"), you MUST
-      set date to "" (empty string) so the old date is cleared. Then ask
-      for a specific new date in clarifications_needed.
-    guests: exact integer ONLY when the customer explicitly states a number.
-      "We", "us", "our family" without a number does NOT count — omit this
-      field entirely. Never infer a guest count from context or business rules.
-    customer_name: customer's name
-    phone: customer's phone number
-    email: customer's email address — only if explicitly provided
-    special_requests: forward-looking preferences only
-    service_key: exact key from the trips list. Match the customer's wording to one of these keys:
+- date: MUST be in YYYY-MM-DD format. Convert any natural language date (e.g. "April 20", "next Saturday", "in two weeks") to YYYY-MM-DD using today's date as reference. If the customer has given a vague or unresolvable date (e.g. "sometime next month", "in the summer", "soon") you MUST omit this field and ask for a specific date in clarifications_needed. Never infer, guess, or pick a date the customer has not explicitly stated or clearly implied. When in doubt, ask. If the customer explicitly rejects or cancels a previously stated date (e.g. "nvm the 28th", "not that date", "change the date"), set date to "" (empty string) so the old date is cleared, then ask for a specific new date in clarifications_needed.
+
+- guests: exact integer ONLY when the customer explicitly states a number. "We", "us", "our family" without a number does NOT count — omit this field entirely. Never infer a guest count from context or business rules.
+
+- email: customer's email address — only if explicitly provided.
+
+- special_requests: forward-looking preferences only.
+
+- booking_confirmed (flag): true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided.
+
+- awaiting_booking_confirmation (flag): set to false only when the customer wants to change something after a booking summary.
+
+- needs_child_ages (flag): true when children are mentioned and the service has age-based pricing.
+
+- needs_escalation_email (flag): true when a WhatsApp escalation needs the customer's email before proceeding.
+
+- large_group (flag): true when the guest count meets or exceeds the large group threshold in booking_rules.
+
+- semi_escalation: true only when the customer asks a specific unanswerable factual question (crew-confirmable details, equipment specs, allergy cross-contamination) — NOT for complaints, refunds, or cancellations (those use requires_human).
+
+- relay_question: the exact question to relay to the human team — only populate when semi_escalation is true.
+
+- requires_human: true if complaint with no booking context, or explicit request to speak to a human.
+
+- internal_note: one sentence for the operator log — never shown to the customer.
+
+SERVICE ALIASES: When populating the service_key field in your tool call, use the exact key from this mapping. Match the customer's wording to the closest key:
+
 {_build_service_alias_text()}
-      Only include service_key if certain. If the customer's description is ambiguous, omit it and ask.
-    slot_time: the specific departure time the customer has chosen, in HH:MM format — only include if the customer has explicitly selected one from the available options>"}},
-  "confidence": "<high | medium | low>",
-  "reply": "<your reply to the customer, written naturally as a real person would. Follow any ACTION instruction. When no ACTION is given, reply conversationally.>",
-  "reply_hold_failed": "<optional — write ONLY when setting booking_confirmed to true. Apologetic message if the slot is unavailable, without [PAYMENT_LINK].>",
-  "clarifications_needed": ["<questions Marina still needs answered before proceeding>"],
-  "requires_human": <true if complaint with no booking context, or explicit request to speak to a human — otherwise false>,
-  "flags": {{"booking_confirmed": <true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided — omit or false otherwise>, "awaiting_booking_confirmation": <set to false only when the customer wants to change something after a booking summary — omit otherwise>, "needs_child_ages": <true when children are mentioned and the service has age-based pricing — omit or false otherwise>, "needs_escalation_email": <true when a WhatsApp escalation needs the customer's email before proceeding — omit or false otherwise>, "large_group": <true when the guest count meets or exceeds the large group threshold — omit or false otherwise>}},
-  "semi_escalation": <true only when the customer asks a specific unanswerable question — NOT for complaints or cancellations — omit or false otherwise>,
-  "relay_question": "<exact question to relay to the human team — only present when semi_escalation is true — omit otherwise>",
-  "internal_note": "<one sentence for the operator log — never shown to the customer>"
-}}"""
+
+Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask."""
 
 
 def _build_user_prompt(
@@ -708,9 +794,10 @@ def process_message(
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,
+            tools=[MARINA_TOOL],
+            tool_choice={"type": "tool", "name": "marina_response"},
             messages=[{"role": "user", "content": user_prompt}],
         )
-        raw = response.content[0].text.strip()
 
         # Log API token usage
         _usage = getattr(response, "usage", None)
@@ -722,16 +809,19 @@ def process_message(
                 channel=channel,
                 from_id=from_email[:50])
 
-        # Strip markdown code fences if present
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw.strip())
-
-        result = json.loads(raw)
-
-        if not isinstance(result, dict):
-            bm_logger.log("claude_response_invalid", reason="not_a_dict",
-                          raw_preview=raw[:200], channel=channel, from_id=from_email[:50])
+        # Brief 174: tool_choice forces Claude to emit a single tool_use block.
+        # Extract its input — already a dict, no parsing needed.
+        tool_use_block = next(
+            (b for b in response.content if b.type == "tool_use"),
+            None,
+        )
+        if tool_use_block is None:
+            # Should be impossible with forced tool_choice, but guard anyway.
+            bm_logger.log("claude_no_tool_use_block",
+                          content_types=[b.type for b in response.content],
+                          channel=channel, from_id=from_email[:50])
             return fallback
+        result = dict(tool_use_block.input)
 
         # Default missing fields instead of rejecting the entire response
         for field, default in _RESPONSE_DEFAULTS.items():
@@ -745,7 +835,7 @@ def process_message(
             bm_logger.log("claude_empty_reply",
                           intents=result.get("intents", []),
                           channel=channel, from_id=from_email[:50],
-                          raw_preview=raw[:300])
+                          input_preview=str(result)[:200])
             return fallback
 
         return result
