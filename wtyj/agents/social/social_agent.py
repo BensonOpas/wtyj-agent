@@ -205,6 +205,20 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     bm_logger.log("whatsapp_processing", phone=phone, text=text[:100],
                   from_name=from_name)
 
+    # Brief 166: cross-channel customer lookup. Use a typed identifier so WhatsApp
+    # conversation ids don't collide with IG/FB/X DMs.
+    from agents.social.whatsapp_client import _is_zernio_conversation_id
+    _cust_type = "wa_conversation_id" if _is_zernio_conversation_id(phone) else "phone"
+    _cust_row = None
+    _cust_file = None
+    try:
+        _cust_row = state_registry.customer_lookup_or_create(
+            _cust_type, phone, display_name=from_name or ""
+        )
+        _cust_file = state_registry.customer_get_full(_cust_row["id"])
+    except Exception as _e:
+        bm_logger.log("customer_lookup_failed", phone=phone, error=str(_e))
+
     # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
     if flags.get("fully_escalated"):
         _esc_flags = dict(flags)
@@ -214,6 +228,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             from_email=from_id, subject="", body=text,
             thread_fields=fields, thread_flags=_esc_flags,
             channel="whatsapp", messages=history,
+            customer_file=_cust_file,
         )
         esc_reply = esc_result.get("reply", "")
         bm_logger.log("whatsapp_escalated_reply", phone=phone,
@@ -292,7 +307,24 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         action_context=action_context,
         channel="whatsapp",
         messages=history,
+        customer_file=_cust_file,
     )
+
+    # Brief 166: record interaction + merge any new identifiers Marina extracted
+    if _cust_row and _cust_row.get("id"):
+        try:
+            state_registry.customer_record_interaction(
+                _cust_row["id"], "whatsapp", f"WhatsApp/DM: {text[:80]}"
+            )
+            _new_fields_for_merge = result.get("fields", {}) or {}
+            for _ftype, _fkey in (("email", "email"), ("phone", "phone")):
+                _val = _new_fields_for_merge.get(_fkey)
+                if _val and str(_val).strip() and str(_val).strip() != phone:
+                    state_registry.customer_add_identifier(
+                        _cust_row["id"], _ftype, str(_val).strip()
+                    )
+        except Exception as _e:
+            bm_logger.log("customer_postprocess_failed", phone=phone, error=str(_e))
 
     reply = result.get("reply", "")
 

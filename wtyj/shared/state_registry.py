@@ -166,6 +166,58 @@ def _get_conn():
             conn.commit()
     except Exception:
         pass  # Table might not exist yet on fresh DB
+    # Brief 166: cross-channel customer file
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS customers ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "display_name TEXT DEFAULT '', "
+        "summary TEXT DEFAULT '', "
+        "notes TEXT DEFAULT '', "
+        "first_seen TEXT NOT NULL, "
+        "last_seen TEXT NOT NULL, "
+        "active INTEGER DEFAULT 1"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS customer_identifiers ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "customer_id INTEGER NOT NULL, "
+        "type TEXT NOT NULL, "
+        "value TEXT NOT NULL, "
+        "first_seen TEXT NOT NULL, "
+        "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+        ")"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_identifiers_type_value "
+        "ON customer_identifiers(type, value)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_customer_identifiers_customer "
+        "ON customer_identifiers(customer_id)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS customer_interactions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "customer_id INTEGER NOT NULL, "
+        "channel TEXT NOT NULL, "
+        "summary TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_customer_interactions_customer "
+        "ON customer_interactions(customer_id, created_at)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS customer_merges ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "surviving_id INTEGER NOT NULL, "
+        "absorbed_id INTEGER NOT NULL, "
+        "merged_at TEXT NOT NULL"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pending_notifications ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -1713,6 +1765,220 @@ def deactivate_learning(learning_id: int) -> bool:
     conn.commit()
     conn.close()
     return changed
+
+
+# ==================== Brief 166: Cross-channel customer file ====================
+
+def customer_lookup(type_: str, value: str):
+    """Brief 166: look up a customer by an identifier. Returns None if not found."""
+    if not type_ or not value:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT c.id, c.display_name, c.summary, c.notes, c.first_seen, c.last_seen "
+        "FROM customers c "
+        "INNER JOIN customer_identifiers ci ON ci.customer_id = c.id "
+        "WHERE ci.type = ? AND ci.value = ? AND c.active = 1 "
+        "LIMIT 1",
+        (type_, value.strip())
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0], "display_name": row[1] or "", "summary": row[2] or "",
+        "notes": row[3] or "", "first_seen": row[4], "last_seen": row[5],
+    }
+
+
+def customer_lookup_or_create(type_: str, value: str, display_name: str = "") -> dict:
+    """Brief 166: look up a customer by identifier, or create a new row if not found.
+    Idempotent — safe to call on every inbound message."""
+    if not type_ or not value:
+        raise ValueError("type and value required")
+    existing = customer_lookup(type_, value)
+    if existing:
+        if display_name and not existing["display_name"]:
+            conn = _get_conn()
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "UPDATE customers SET display_name = ?, last_seen = ? WHERE id = ?",
+                (display_name, now, existing["id"])
+            )
+            conn.commit()
+            conn.close()
+            existing["display_name"] = display_name
+        return existing
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO customers (display_name, first_seen, last_seen) VALUES (?, ?, ?)",
+            (display_name or "", now, now)
+        )
+        customer_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO customer_identifiers (customer_id, type, value, first_seen) "
+            "VALUES (?, ?, ?, ?)",
+            (customer_id, type_, value.strip(), now)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        existing = customer_lookup(type_, value)
+        if existing:
+            return existing
+        raise
+    conn.close()
+    return {
+        "id": customer_id, "display_name": display_name or "",
+        "summary": "", "notes": "",
+        "first_seen": now, "last_seen": now,
+    }
+
+
+def _customer_choose_merge_survivor(a_id: int, b_id: int):
+    """Brief 166: pick the surviving customer. Earlier first_seen wins (older = canonical)."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, first_seen FROM customers WHERE id IN (?, ?)", (a_id, b_id)
+    ).fetchall()
+    conn.close()
+    if len(rows) != 2:
+        return (a_id, b_id)
+    rows = sorted(rows, key=lambda r: r[1])
+    return (rows[0][0], rows[1][0])
+
+
+def customer_merge(surviving_id: int, absorbed_id: int) -> dict:
+    """Brief 166: merge absorbed_id into surviving_id. Moves identifiers + interactions,
+    writes an audit row, deactivates the absorbed row. Idempotent."""
+    if surviving_id == absorbed_id:
+        return {"action": "noop"}
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    # Remove duplicate identifiers from the absorbed row (UNIQUE constraint would
+    # otherwise block the UPDATE below).
+    conn.execute(
+        "DELETE FROM customer_identifiers WHERE customer_id = ? AND (type, value) IN "
+        "(SELECT type, value FROM customer_identifiers WHERE customer_id = ?)",
+        (absorbed_id, surviving_id)
+    )
+    conn.execute(
+        "UPDATE customer_identifiers SET customer_id = ? WHERE customer_id = ?",
+        (surviving_id, absorbed_id)
+    )
+    conn.execute(
+        "UPDATE customer_interactions SET customer_id = ? WHERE customer_id = ?",
+        (surviving_id, absorbed_id)
+    )
+    # Fold display_name if surviving is empty
+    conn.execute(
+        "UPDATE customers SET display_name = COALESCE(NULLIF(display_name, ''), "
+        "  (SELECT display_name FROM customers WHERE id = ?)), "
+        "last_seen = ? WHERE id = ?",
+        (absorbed_id, now, surviving_id)
+    )
+    conn.execute(
+        "INSERT INTO customer_merges (surviving_id, absorbed_id, merged_at) VALUES (?, ?, ?)",
+        (surviving_id, absorbed_id, now)
+    )
+    conn.execute("UPDATE customers SET active = 0 WHERE id = ?", (absorbed_id,))
+    conn.commit()
+    conn.close()
+    return {"action": "merged", "surviving_id": surviving_id, "absorbed_id": absorbed_id}
+
+
+def customer_add_identifier(customer_id: int, type_: str, value: str) -> dict:
+    """Brief 166: add a new identifier to an existing customer. Handles the cross-channel
+    merge case: if the (type, value) already belongs to a DIFFERENT customer, merge them.
+    Returns {"action": "added" | "merged" | "already_linked" | "noop", "customer_id": int}."""
+    if not customer_id or not type_ or not value:
+        return {"action": "noop", "customer_id": customer_id}
+    value = value.strip()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    existing_row = conn.execute(
+        "SELECT customer_id FROM customer_identifiers WHERE type = ? AND value = ?",
+        (type_, value)
+    ).fetchone()
+    if existing_row:
+        existing_customer_id = existing_row[0]
+        conn.close()
+        if existing_customer_id == customer_id:
+            return {"action": "already_linked", "customer_id": customer_id}
+        surviving, absorbed = _customer_choose_merge_survivor(customer_id, existing_customer_id)
+        customer_merge(surviving, absorbed)
+        return {"action": "merged", "customer_id": surviving}
+    try:
+        conn.execute(
+            "INSERT INTO customer_identifiers (customer_id, type, value, first_seen) "
+            "VALUES (?, ?, ?, ?)",
+            (customer_id, type_, value, now)
+        )
+        conn.execute(
+            "UPDATE customers SET last_seen = ? WHERE id = ?",
+            (now, customer_id)
+        )
+        conn.commit()
+        conn.close()
+        return {"action": "added", "customer_id": customer_id}
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return customer_add_identifier(customer_id, type_, value)
+
+
+def customer_record_interaction(customer_id: int, channel: str, summary: str):
+    """Brief 166: append a one-line interaction summary. Updates last_seen."""
+    if not customer_id or not channel or not summary:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO customer_interactions (customer_id, channel, summary, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (customer_id, channel, summary[:500], now)
+    )
+    conn.execute("UPDATE customers SET last_seen = ? WHERE id = ?", (now, customer_id))
+    conn.commit()
+    conn.close()
+
+
+def customer_get_full(customer_id: int) -> dict:
+    """Brief 166: return the full customer file for marina_agent's prompt block.
+    Caps identifiers to 20 and interactions to 5 (prompt-size safety)."""
+    if not customer_id:
+        return {}
+    conn = _get_conn()
+    c_row = conn.execute(
+        "SELECT id, display_name, summary, notes, first_seen, last_seen "
+        "FROM customers WHERE id = ? AND active = 1",
+        (customer_id,)
+    ).fetchone()
+    if not c_row:
+        conn.close()
+        return {}
+    id_rows = conn.execute(
+        "SELECT type, value, first_seen FROM customer_identifiers "
+        "WHERE customer_id = ? ORDER BY first_seen LIMIT 20",
+        (customer_id,)
+    ).fetchall()
+    int_rows = conn.execute(
+        "SELECT channel, summary, created_at FROM customer_interactions "
+        "WHERE customer_id = ? ORDER BY created_at DESC LIMIT 5",
+        (customer_id,)
+    ).fetchall()
+    conn.close()
+    return {
+        "id": c_row[0], "display_name": c_row[1] or "", "summary": c_row[2] or "",
+        "notes": c_row[3] or "", "first_seen": c_row[4], "last_seen": c_row[5],
+        "identifiers": [{"type": r[0], "value": r[1], "first_seen": r[2]} for r in id_rows],
+        "recent_interactions": [
+            {"channel": r[0], "summary": r[1], "created_at": r[2]} for r in int_rows
+        ],
+    }
 
 
 # Initialise database on module load so the file exists as soon as the module is imported

@@ -810,10 +810,39 @@ def main():
                     if len(_completed) >= _max_bk and th["flags"].get("hold_created"):
                         agent_flags["_max_bookings_reached"] = True
                 action_context = _build_action_context(th)
+
+                # Brief 166: cross-channel customer lookup
+                _cust_row = None
+                _cust_file = None
+                try:
+                    _cust_row = state_registry.customer_lookup_or_create(
+                        "email", from_email, display_name=from_name or ""
+                    )
+                    _cust_file = state_registry.customer_get_full(_cust_row["id"])
+                except Exception as _e:
+                    log(f"customer_lookup_failed email={from_email} err={_e}")
+
                 result = marina_agent.process_message(
                     from_email, subj, body,
                     th.get("fields", {}), agent_flags, action_context,
+                    customer_file=_cust_file,
                 )
+
+                # Brief 166: record interaction + merge any new identifiers Marina extracted
+                if _cust_row and _cust_row.get("id"):
+                    try:
+                        state_registry.customer_record_interaction(
+                            _cust_row["id"], "email", f"Email thread: {subj[:80]}"
+                        )
+                        _new_fields_for_merge = result.get("fields", {}) or {}
+                        for _ftype, _fkey in (("email", "email"), ("phone", "phone")):
+                            _val = _new_fields_for_merge.get(_fkey)
+                            if _val and str(_val).strip() and str(_val).strip().lower() != from_email.lower():
+                                state_registry.customer_add_identifier(
+                                    _cust_row["id"], _ftype, str(_val).strip()
+                                )
+                    except Exception as _e:
+                        log(f"customer_postprocess_failed err={_e}")
 
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 

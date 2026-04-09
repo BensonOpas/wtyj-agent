@@ -162,7 +162,52 @@ def _build_agent_persona_block() -> str:
     return config_loader.get_common_sense_knowledge().get("marina_persona", "")
 
 
-def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
+def _build_customer_file_block(customer_file) -> str:
+    """Brief 166: render the CUSTOMER FILE prompt block from a customer_get_full() dict.
+    Empty/None input returns an empty string (block is omitted). Bounded size:
+    max 20 identifiers, max 5 recent interactions (those caps are enforced upstream
+    in state_registry.customer_get_full)."""
+    if not customer_file or not customer_file.get("id"):
+        return ""
+    lines = [
+        "CUSTOMER FILE — use this context when answering this customer. "
+        "This person may have contacted us before across email, WhatsApp, Instagram, "
+        "Facebook, or X. Use the identifiers and interaction history below to answer "
+        "with continuity; reference past questions or bookings naturally when relevant."
+    ]
+    name = customer_file.get("display_name") or "(no name on file)"
+    lines.append(f"\nDisplay name: {name}")
+    first_seen = customer_file.get("first_seen", "") or ""
+    last_seen = customer_file.get("last_seen", "") or ""
+    if first_seen:
+        lines.append(f"First contact: {first_seen[:10]}  |  Last contact: {last_seen[:10]}")
+    ids = customer_file.get("identifiers") or []
+    if ids:
+        lines.append("\nKnown identifiers (used across channels):")
+        for ident in ids:
+            lines.append(f"  - {ident.get('type', '?')}: {ident.get('value', '')}")
+    recent = customer_file.get("recent_interactions") or []
+    if recent:
+        lines.append("\nRecent interactions (newest first, across all channels):")
+        for r in recent:
+            date = (r.get("created_at") or "")[:10]
+            lines.append(f"  - [{date}] [{r.get('channel', '?')}] {r.get('summary', '')}")
+    summary = customer_file.get("summary") or ""
+    if summary:
+        lines.append(f"\nRolling summary: {summary}")
+    lines.append(
+        "\nCROSS-CHANNEL REFERENCE RULE: if the customer references a channel or interaction "
+        "you do NOT see in the CUSTOMER FILE above (e.g. 'did you get my email?', 'I booked "
+        "last week'), ask ONE short question to link them — 'sure, what's your email or booking "
+        "reference?' — and wait for their next reply. Do NOT claim you have no access to other "
+        "channels; you do. Once they share an identifier you can look up, you will have their "
+        "full history."
+    )
+    return "\n".join(lines)
+
+
+def _build_system_prompt(thread_flags: dict, channel: str = "email",
+                         customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
@@ -312,10 +357,13 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email") -> str:
             f"AGENT SIGNATURE: {signature}"
         )
 
+    _customer_file_block = _build_customer_file_block(customer_file)
     return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block()}
+
+{_customer_file_block}
 
 {writing_style_block}
 
@@ -605,6 +653,7 @@ def process_message(
     action_context: str = "",
     channel: str = "email",
     messages: list = None,
+    customer_file=None,
 ) -> dict:
     signature = config_loader.get_agent_signature()
 
@@ -636,7 +685,7 @@ def process_message(
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        system_prompt = _build_system_prompt(thread_flags, channel=channel)
+        system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
 
