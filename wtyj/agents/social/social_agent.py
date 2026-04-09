@@ -724,6 +724,25 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 flags["hold_created"] = True
                 if flags.get("hold_id"):
                     state_registry.confirm_hold(flags["hold_id"])
+                    # Brief 168: set payment window if the client has configured one
+                    # AND the service requires payment (timing=upfront/deposit).
+                    _raw_for_window = config_loader.get_raw() or {}
+                    _pt_for_window = _raw_for_window.get("payment", {}).get("timing", "upfront")
+                    _hold_hours = _raw_for_window.get("payment", {}).get("hold_duration_hours")
+                    if _pt_for_window in ("upfront", "deposit") and _hold_hours:
+                        try:
+                            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                            _payment_expires_at = (
+                                _dt.now(_tz.utc) + _td(hours=float(_hold_hours))
+                            ).isoformat()
+                            state_registry.set_payment_window(
+                                flags["hold_id"], _payment_expires_at,
+                                customer_phone=str(phone or "")
+                            )
+                            flags["payment_expires_at"] = _payment_expires_at
+                        except Exception as _e:
+                            bm_logger.log("payment_window_set_failed",
+                                          phone=phone, error=str(_e))
                 flags["event_id"] = res.get("eventId")
                 flags["event_link"] = res.get("htmlLink")
                 service_key = fields.get("service_key", "")

@@ -358,6 +358,19 @@ def _get_conn():
         conn.execute("ALTER TABLE service_bookings ADD COLUMN customer_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    # Brief 168: payment hold state machine
+    try:
+        conn.execute("ALTER TABLE service_bookings ADD COLUMN payment_expires_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE service_bookings ADD COLUMN payment_reminder_sent_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE service_bookings ADD COLUMN customer_phone TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn.execute("ALTER TABLE service_bookings ADD COLUMN customer_email TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -1760,6 +1773,110 @@ def deactivate_learning(learning_id: int) -> bool:
     cur = conn.execute(
         "UPDATE content_learnings SET active = 0 WHERE id = ? AND active = 1",
         (learning_id,)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+# ==================== Brief 168: Payment hold state machine ====================
+
+def set_payment_window(hold_id: int, payment_expires_at: str, customer_phone: str = "") -> bool:
+    """Brief 168: set a payment expiry timestamp on a confirmed hold.
+    Called right after confirm_hold() in the orchestrator when payment.timing
+    is upfront/deposit. The reaper (hold_reaper.py) will scan rows where
+    payment_expires_at is set and fire reminders / expirations.
+
+    customer_phone is stored so the reaper can route reminders back to the
+    customer without re-looking-up the thread state.
+    """
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE service_bookings SET payment_expires_at = ?, customer_phone = ? "
+        "WHERE id = ? AND status = 'confirmed'",
+        (payment_expires_at, customer_phone, hold_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_holds_needing_reminder(now_iso: str, reminder_before_minutes: int) -> list:
+    """Brief 168: return confirmed holds where payment_expires_at is within the
+    reminder window AND payment_reminder_sent_at IS NULL. The reaper uses this
+    to decide which holds to remind."""
+    if not reminder_before_minutes or reminder_before_minutes <= 0:
+        return []
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, booking_ref, service_key, date, slot_time, guests, customer_name, "
+        "customer_email, customer_phone, payment_expires_at "
+        "FROM service_bookings "
+        "WHERE status = 'confirmed' "
+        "AND payment_expires_at IS NOT NULL "
+        "AND payment_reminder_sent_at IS NULL "
+        "AND datetime(?) >= datetime(payment_expires_at, ?) "
+        "AND datetime(?) < datetime(payment_expires_at) "
+        "ORDER BY payment_expires_at",
+        (now_iso, f"-{int(reminder_before_minutes)} minutes", now_iso)
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "booking_ref": r[1], "service_key": r[2], "date": r[3],
+         "slot_time": r[4], "guests": r[5], "customer_name": r[6],
+         "customer_email": r[7], "customer_phone": r[8], "payment_expires_at": r[9]}
+        for r in rows
+    ]
+
+
+def get_expired_payment_holds(now_iso: str) -> list:
+    """Brief 168: return confirmed holds where payment_expires_at has passed.
+    The reaper uses this to release slots + mark status."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, booking_ref, service_key, date, slot_time, guests, customer_name, "
+        "customer_email, customer_phone, payment_expires_at "
+        "FROM service_bookings "
+        "WHERE status = 'confirmed' "
+        "AND payment_expires_at IS NOT NULL "
+        "AND datetime(?) >= datetime(payment_expires_at) "
+        "ORDER BY payment_expires_at",
+        (now_iso,)
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "booking_ref": r[1], "service_key": r[2], "date": r[3],
+         "slot_time": r[4], "guests": r[5], "customer_name": r[6],
+         "customer_email": r[7], "customer_phone": r[8], "payment_expires_at": r[9]}
+        for r in rows
+    ]
+
+
+def mark_payment_reminder_sent(hold_id: int) -> bool:
+    """Brief 168: stamp payment_reminder_sent_at for a booking row."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE service_bookings SET payment_reminder_sent_at = ? WHERE id = ?",
+        (now, hold_id)
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def expire_payment_hold(hold_id: int) -> bool:
+    """Brief 168: mark a hold as payment-expired. Also clears payment_expires_at so
+    the reaper stops scanning it. The actual slot release is done by the caller
+    (reaper) via cancel_hold if needed — expire_payment_hold only flips the status."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE service_bookings SET status = 'payment_expired', "
+        "payment_expires_at = NULL WHERE id = ? AND status = 'confirmed'",
+        (hold_id,)
     )
     changed = cur.rowcount > 0
     conn.commit()
