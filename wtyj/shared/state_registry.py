@@ -684,6 +684,26 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     conn.close()
 
 
+def wa_delete_conversation(phone: str) -> int:
+    """Brief 165: hard-delete all messages + booking state for a phone number.
+    Returns the total number of rows deleted across whatsapp_threads and
+    whatsapp_booking_state. Used by the dashboard delete-conversation endpoint.
+    No audit trail — destructive operation meant for removing test pollution
+    and unwanted threads from the Messages view.
+    """
+    conn = _get_conn()
+    total = 0
+    for sql in (
+        "DELETE FROM whatsapp_threads WHERE phone = ?",
+        "DELETE FROM whatsapp_booking_state WHERE phone = ?",
+    ):
+        cur = conn.execute(sql, (phone,))
+        total += cur.rowcount
+    conn.commit()
+    conn.close()
+    return total
+
+
 def wa_list_conversations() -> list:
     """List all WhatsApp conversations with latest message and booking state.
     Returns list of dicts sorted by most recent activity."""

@@ -883,6 +883,15 @@ async def get_conversation(phone: str):
     }
 
 
+@router.delete("/messages/conversations/{phone}", dependencies=[Depends(_check_auth)])
+async def delete_conversation(phone: str):
+    """Brief 165: hard-delete a conversation (all messages + booking state rows).
+    Destructive — no audit trail. Used by the trash button on the Messages page
+    to remove test pollution and unwanted threads."""
+    count = state_registry.wa_delete_conversation(phone)
+    return {"ok": True, "deleted_rows": count, "phone": phone}
+
+
 # ── Escalations ──────────────────────────────────────────────────────────────
 
 @router.get("/escalations", dependencies=[Depends(_check_auth)])
