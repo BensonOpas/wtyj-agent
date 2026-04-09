@@ -103,21 +103,47 @@ def _is_zernio_conversation_id(s: str) -> bool:
         return False
 
 
-def send_whatsapp_message(customer_id: str, text: str) -> bool:
-    """Send a WhatsApp text via Zernio Inbox API (preferred, Brief 143)
-    if customer_id is a Zernio conversation_id, otherwise fall back to the
-    legacy Meta Cloud API. Returns True on success.
+# Brief 173: cache conversation_id → account_id for Zernio social DMs.
+# Populated on first successful send. Cleared only on process restart.
+_zernio_account_cache: dict = {}
 
-    Brief 159: introduced to fix relay reply paths that previously used
-    the legacy Meta API for ALL customers, silently failing for Zernio
-    customers (everyone in production)."""
-    if _is_zernio_conversation_id(customer_id):
-        # Deferred imports to avoid circular dependency with social_publisher
-        from agents.social.zernio_dm_client import send_dm_reply
-        from agents.social import social_publisher
-        account_id = social_publisher.get_account_id("whatsapp")
+
+def send_whatsapp_message(customer_id: str, text: str) -> bool:
+    """Send a DM via Zernio Inbox API if customer_id is a Zernio conversation_id,
+    otherwise fall back to the legacy Meta WhatsApp Cloud API. Returns True on success.
+
+    Brief 173: Zernio conversation_ids are scoped to accounts (whatsapp / facebook /
+    instagram / twitter), so we can't assume a conversation belongs to the WhatsApp
+    account. Try the cached account for this conversation first (if known), then
+    iterate through all active social accounts until one accepts the send. Caches
+    the winning account so repeat sends bypass the fan-out on the fast path.
+    """
+    if not _is_zernio_conversation_id(customer_id):
+        return send_text_message(to=customer_id, text=text)
+
+    # Deferred imports to avoid circular dependency with social_publisher
+    from agents.social.zernio_dm_client import send_dm_reply
+    from agents.social import social_publisher
+
+    # Fast path: cache hit
+    cached = _zernio_account_cache.get(customer_id)
+    if cached:
+        if send_dm_reply(customer_id, cached, text):
+            return True
+        # Cache miss (account may have been reconnected with a new id) — fall through
+        _zernio_account_cache.pop(customer_id, None)
+
+    # Cold path: try each social platform account in order. WhatsApp first because
+    # it's the most common path in production, then the other Meta channels, then X.
+    for platform in ("whatsapp", "facebook", "instagram", "twitter"):
+        account_id = social_publisher.get_account_id(platform)
         if not account_id:
-            log("zernio_send_no_account", conversation_id=customer_id[:20])
-            return False
-        return send_dm_reply(customer_id, account_id, text)
-    return send_text_message(to=customer_id, text=text)
+            continue
+        if send_dm_reply(customer_id, account_id, text):
+            _zernio_account_cache[customer_id] = account_id
+            log("zernio_send_platform_resolved",
+                conversation_id=customer_id[:20], platform=platform)
+            return True
+
+    log("zernio_send_all_platforms_failed", conversation_id=customer_id[:20])
+    return False
