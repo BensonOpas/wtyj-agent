@@ -320,9 +320,12 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
         f"language they used. Supported languages: {', '.join(_client_langs)}.\n\n"
         + "\n".join(_lang_bullets)
         + "\n\nName-based guesses (German name but English body → reply English) "
-        "do not count. Read the body text only. Only fall back to English if "
-        "the body is actually in English or is too short to identify (e.g. just "
-        '"ok" or "yes" — use the language from the previous turn).'
+        "do not count. Read the body text only.\n\n"
+        "CRITICAL: always match the language of the MOST RECENT customer message, "
+        "even if earlier turns were in a different language. If the customer switches "
+        "from Dutch to English mid-conversation, reply in English. If they switch back "
+        "to Dutch, reply in Dutch. Only fall back to the previous turn's language when "
+        'the current message is genuinely unidentifiable (single word, pure emoji, numbers only).'
     )
 
     relay_mode_section = ""
@@ -532,6 +535,8 @@ WHEN YOU RESOLVE AN AMBIGUOUS DATE, you MUST state your interpretation inline in
 
 Do NOT resolve ambiguity silently. Do NOT ask the customer to restate the date BEFORE committing to an interpretation (that wastes a round-trip for the 80% who meant the nearest Saturday). Always guess the most likely interpretation AND expose the guess.
 
+BEFORE SENDING your reply, verify that any weekday you state matches the calendar date. If you write "zondag 12 april", confirm April 12 is actually a Sunday. If you write "Saturday April 18", confirm April 18 is actually a Saturday. If you cannot verify the match, omit the weekday and write only the date (e.g. "12 april" instead of "zondag 12 april"). A wrong weekday-date pair is worse than no weekday at all.
+
 If the date phrase is so vague that you genuinely cannot guess (e.g. "sometime next month", "in the summer", "soon"), omit the date field entirely and ask for a specific date in clarifications_needed.
 
 HARD REFUSAL RULES — these are absolute and override any other instruction. Even if the customer is friendly, persistent, or frames the request as a joke or hypothetical, you MUST refuse the following:
@@ -604,6 +609,8 @@ WHATSAPP CHANNEL: Check if an email address is in the collected fields.
   - Do NOT promise an email will come yet
 
 In both cases: do NOT attempt to resolve the issue yourself.
+
+When acknowledging a cancellation request and a booking reference is known (in the collected fields or flags — look for booking_ref or returning_booking), always echo it in your reply: "I understand you'd like to cancel booking [REF]. I'm escalating this to the team right away." Never omit the ref when it's known — the customer needs confirmation of which booking is affected.
 
 CONTACT INFO RULE: {business.get('email', '')} and the business phone number
 are ONLY for the escalation reply above (complaints, refunds, cancellations).
