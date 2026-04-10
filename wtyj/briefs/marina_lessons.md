@@ -1700,3 +1700,12 @@ Outcome: 842 passing, data repair script merged both prod dupe pairs, Marina's f
 
 **7. Data repair scripts need tests too, even if they run once.** My instinct with one-off migration scripts is "it runs once manually, no need for a test." The output-reviewer correctly pushed back: the repair script is production-facing code that will touch customer data, and it's explicitly designed to be idempotent (safe to re-run). Those properties can and should be tested. The test that proved the script's idempotency also validated its merge logic by reconstructing the pre-fix buggy state via raw SQL (inserting a mixed-case email directly, bypassing the now-fixed normalization). **Principle:** if a script touches production data, it needs a test. "One-off" is not a reason to skip. The test also documents what the pre-bug state looked like, which is useful archaeology for future debugging.
 
+
+## Brief 179 — Poller resilience: the error loop that spun 106 times
+
+Decision: add connection cleanup, exponential backoff, and forced exit to the email poller after discovering 106 IMAP errors in the production log, all from the same failure pattern (SELECT BAD + socket EOF) repeating every 10 seconds with no defensive behavior. Smooth execution — brief-reviewer passed on first try, all 5 tests clean, deploy clean.
+
+The notable lesson is about **poller loops and the "never-exit" antipattern.** The original `while True` loop caught all exceptions and never called `sys.exit()`, which meant supervisord — configured to restart on unexpected exits — could never do its job. The poller would spin in a failure loop for hours, sending one alert email at the 30-second mark and then going silent while continuing to hammer Outlook's IMAP server 6 times per minute. The `sys.exit(1)` after 30 consecutive errors (~5 min with backoff) gives supervisord the signal to restart fresh, which is the cleanest recovery: new process, new IMAP connection, new OAuth token, no stale state.
+
+**Output-reviewer caught two test gaps**: the exit-threshold test only asserted the constant value (`_ERROR_EXIT_THRESHOLD == 30`) instead of mocking `sys.exit` and verifying it fires, and the "backoff resets on success" test was missing (replaced by a "first error is normal interval" test). Both are test-weakness issues, not code bugs. **Reinforced principle from Brief 178:** match the brief's test list item-by-item, not just count. If the brief says "mock sys.exit", mock sys.exit — don't substitute a constant assertion.
+
