@@ -1716,3 +1716,10 @@ Decision: three prompt-text-only insertions (date verification, language matchin
 
 Technique worth noting: the language matching fix was a REPLACEMENT not an addition — the old fallback clause "Only fall back to English if the body is actually in English or is too short to identify" was the source of the loophole. Simply ADDING "match the MOST RECENT message" alongside the old text would have created a contradiction. The fix REPLACES the old text so there's only one interpretation. When tightening prompt rules, check for existing text that contradicts the new instruction — replace, don't just append.
 
+
+## Brief 181 — Customer identity correctness: display_name + escalation contact_type
+
+Decision: two targeted backend fixes after the e2e test showed (A) customer file `display_name` persists the Zernio `sender_name` even when Marina extracts a different name from the conversation, and (B) escalation "phone" field shows hex Zernio conversation IDs instead of readable contact info.
+
+Smooth brief — clean execution. One non-obvious technique: `_infer_contact_type(customer_id)` duplicates the 24-char hex check from `whatsapp_client._is_zernio_conversation_id` to avoid a circular import between state_registry and whatsapp_client. Acceptable duplication for a 7-line function — the alternative (extracting the check to a shared utility module) would add a new file for one function.
+

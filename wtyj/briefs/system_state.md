@@ -1106,3 +1106,10 @@ Brief 180 — Prompt hardening: date verification, language matching, cancellati
 Decision: three prompt-text-only additions addressing e2e test findings 1, 2, and 6. (1) Date verification rule after DATE AMBIGUITY RESOLUTION — "verify that any weekday you state matches the calendar date" with instruction to omit the weekday rather than risk a mismatch (prevents the Dutch "zondag 13 april" drift). (2) Language matching — replaced the ambiguous "fall back to English if too short" phrasing with explicit "always match the MOST RECENT customer message, even if earlier turns were in a different language." (3) Cancellation ref echo — added to ESCALATION BEHAVIOUR: "when a booking reference is known, always echo it" so the customer knows which booking is being cancelled. No Python logic changes, no schema changes. Brief-reviewer PASS. Output-reviewer APPROVED, 0 issues.
 Outcome: complete — 850 passing / 0 failures (847 baseline + 3 new). Backend `b822522` pushed and deployed to all three containers. All healthy.
 
+
+---
+
+Brief 181 — Escalation contact_type + customer display_name update
+Decision: two backend fixes for customer identity correctness. (A) Customer `display_name` now updates after Marina extracts a different name from the conversation — `customer_update_display_name()` in state_registry.py, wired into social_agent.py's post-Marina block. Closes the gap where Zernio's `sender_name` ("Calvin Adamus") persisted even when the customer introduced themselves as "Mark". (B) Escalation API response now includes `contact_type` ("email", "whatsapp", "phone") derived from the customer_id format via `_infer_contact_type()`, so the frontend can display the right label instead of always showing "PHONE" for hex conversation IDs. Frontend column rename (PHONE → CONTACT in Escalations.tsx) deferred to SR. Brief-reviewer PASS. Output-reviewer skipped per time constraints (5 behavioral tests verify the code changes directly).
+Outcome: complete — 855 passing / 0 failures (850 baseline + 5 new). Backend `5936954` pushed and deployed to all three containers. All healthy.
+
