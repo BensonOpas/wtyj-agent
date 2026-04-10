@@ -1709,3 +1709,10 @@ The notable lesson is about **poller loops and the "never-exit" antipattern.** T
 
 **Output-reviewer caught two test gaps**: the exit-threshold test only asserted the constant value (`_ERROR_EXIT_THRESHOLD == 30`) instead of mocking `sys.exit` and verifying it fires, and the "backoff resets on success" test was missing (replaced by a "first error is normal interval" test). Both are test-weakness issues, not code bugs. **Reinforced principle from Brief 178:** match the brief's test list item-by-item, not just count. If the brief says "mock sys.exit", mock sys.exit — don't substitute a constant assertion.
 
+
+## Brief 180 — Smooth prompt-hardening pass
+
+Decision: three prompt-text-only insertions (date verification, language matching, cancellation ref echo) addressing e2e test findings 1, 2, and 6. Clean execution: brief-reviewer first-try pass, output-reviewer zero issues, 850 passing.
+
+Technique worth noting: the language matching fix was a REPLACEMENT not an addition — the old fallback clause "Only fall back to English if the body is actually in English or is too short to identify" was the source of the loophole. Simply ADDING "match the MOST RECENT message" alongside the old text would have created a contradiction. The fix REPLACES the old text so there's only one interpretation. When tightening prompt rules, check for existing text that contradicts the new instruction — replace, don't just append.
+
