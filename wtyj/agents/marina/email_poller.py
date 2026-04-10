@@ -1382,17 +1382,6 @@ def main():
         except Exception as ex:
             _consecutive_errors += 1
             log(f"Error: {ex}")
-            # Brief 179: clean up dead IMAP connection so ghost sockets don't
-            # accumulate and worsen server-side rate limiting.
-            if im is not None:
-                try:
-                    im.close()
-                except Exception:
-                    pass
-                try:
-                    im.logout()
-                except Exception:
-                    pass
             if _consecutive_errors >= _ERROR_ALERT_THRESHOLD and not _error_alert_sent:
                 try:
                     smtp_send(demo_support_email,
@@ -1408,6 +1397,19 @@ def main():
         else:
             _consecutive_errors = 0
             _error_alert_sent = False
+        finally:
+            # Brief 179 fix: ALWAYS close the IMAP connection — on BOTH success
+            # AND failure. Without this, successful polls leak ghost connections
+            # and Outlook rate-limits with "Command Error. 12" after ~10 open sockets.
+            if im is not None:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+                try:
+                    im.logout()
+                except Exception:
+                    pass
 
         # Brief 179: exponential backoff on consecutive errors — 10s, 20s, 40s... cap 300s.
         if _consecutive_errors > 0:
