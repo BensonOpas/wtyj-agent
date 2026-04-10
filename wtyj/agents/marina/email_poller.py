@@ -62,9 +62,12 @@ THREAD_RETENTION_DAYS = 30
 ARCHIVE_PATH = os.path.join(_CONFIG_DIR, "archived_threads.jsonl")
 HEARTBEAT_PATH = os.path.join(_CONFIG_DIR, "heartbeat.txt")
 
-# Error alerting — 3 consecutive errors ≈ 90 seconds of failures (3 × 30s poll).
+# Error alerting — 3 consecutive errors ≈ 30 seconds of failures (3 × 10s poll at default).
 # One-off exceptions are normal (network hiccup); sustained failure warrants alert.
 _ERROR_ALERT_THRESHOLD = 3
+# Brief 179: forced process exit after sustained failure (~5 min with exponential backoff).
+# Supervisord restarts the process fresh (new IMAP connection, new OAuth token, clean state).
+_ERROR_EXIT_THRESHOLD = 30
 
 # Intents that activate the Python booking validation and hold-creation flow.
 # "reschedule" is included because mid-thread date/time changes are booking
@@ -507,6 +510,7 @@ def main():
     state.setdefault("message_id_index", {})
     _consecutive_errors = 0
     _error_alert_sent = False
+    im = None  # Brief 179: pre-initialize so error handler doesn't hit NameError
 
     while True:
         try:
@@ -1378,6 +1382,17 @@ def main():
         except Exception as ex:
             _consecutive_errors += 1
             log(f"Error: {ex}")
+            # Brief 179: clean up dead IMAP connection so ghost sockets don't
+            # accumulate and worsen server-side rate limiting.
+            if im is not None:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+                try:
+                    im.logout()
+                except Exception:
+                    pass
             if _consecutive_errors >= _ERROR_ALERT_THRESHOLD and not _error_alert_sent:
                 try:
                     smtp_send(demo_support_email,
@@ -1386,11 +1401,21 @@ def main():
                     _error_alert_sent = True
                 except Exception:
                     pass
+            # Brief 179: forced exit after sustained failure so supervisord restarts fresh.
+            if _consecutive_errors >= _ERROR_EXIT_THRESHOLD:
+                log(f"FATAL: {_consecutive_errors} consecutive errors. Exiting for supervisord restart.")
+                sys.exit(1)
         else:
             _consecutive_errors = 0
             _error_alert_sent = False
 
-        time.sleep(POLL_INTERVAL)
+        # Brief 179: exponential backoff on consecutive errors — 10s, 20s, 40s... cap 300s.
+        if _consecutive_errors > 0:
+            _backoff = min(POLL_INTERVAL * (2 ** (_consecutive_errors - 1)), 300)
+            log(f"Backing off {_backoff}s (consecutive errors: {_consecutive_errors})")
+            time.sleep(_backoff)
+        else:
+            time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
     main()
