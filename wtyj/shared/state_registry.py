@@ -996,8 +996,26 @@ def create_pending_notification(notification_type: str, channel: str,
     return row_id
 
 
+def _infer_contact_type(customer_id: str) -> str:
+    """Brief 181: infer the type of contact identifier for display purposes.
+    Replicates the 24-char hex check from whatsapp_client._is_zernio_conversation_id
+    (duplicated here to avoid circular import between state_registry and whatsapp_client)."""
+    if not customer_id:
+        return "unknown"
+    if "@" in customer_id:
+        return "email"
+    if len(customer_id) == 24:
+        try:
+            int(customer_id, 16)
+            return "whatsapp"
+        except ValueError:
+            pass
+    return "phone"
+
+
 def get_all_escalations() -> list:
-    """Return all escalation notifications, newest first."""
+    """Return all escalation notifications, newest first.
+    Brief 181: includes contact_type derived from customer_id."""
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
@@ -1007,7 +1025,8 @@ def get_all_escalations() -> list:
     conn.close()
     return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
              "channel": r[3], "customer_id": r[4], "customer_name": r[5],
-             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9]}
+             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
+             "contact_type": _infer_contact_type(r[4] or "")}
             for r in rows]
 
 
@@ -1023,7 +1042,8 @@ def get_pending_notifications(status: str = "pending") -> list:
     conn.close()
     return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
              "channel": r[3], "customer_id": r[4], "customer_name": r[5],
-             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9]}
+             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
+             "contact_type": _infer_contact_type(r[4] or "")}
             for r in rows]
 
 
@@ -2199,6 +2219,20 @@ def customer_record_interaction(customer_id: int, channel: str, summary: str):
         (customer_id, channel, summary[:500], now)
     )
     conn.execute("UPDATE customers SET last_seen = ? WHERE id = ?", (now, customer_id))
+    conn.commit()
+    conn.close()
+
+
+def customer_update_display_name(customer_id: int, display_name: str):
+    """Brief 181: update a customer's display_name when Marina extracts a different
+    name from the conversation than what was set from the webhook sender_name."""
+    if not customer_id or not display_name:
+        return
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE customers SET display_name = ? WHERE id = ?",
+        (display_name.strip(), customer_id)
+    )
     conn.commit()
     conn.close()
 

@@ -323,6 +323,13 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     state_registry.customer_add_identifier(
                         _cust_row["id"], _ftype, str(_val).strip()
                     )
+            # Brief 181: update customer display_name when Marina extracts a
+            # different name from the conversation (e.g. customer says "Hi, Mark
+            # here" but Zernio sender_name was "Calvin Adamus").
+            _extracted_name = (_new_fields_for_merge.get("customer_name") or "").strip()
+            if _extracted_name and _extracted_name != (_cust_row.get("display_name") or ""):
+                state_registry.customer_update_display_name(_cust_row["id"], _extracted_name)
+                _cust_row["display_name"] = _extracted_name
         except Exception as _e:
             bm_logger.log("customer_postprocess_failed", phone=phone, error=str(_e))
 
