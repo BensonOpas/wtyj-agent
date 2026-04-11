@@ -233,6 +233,53 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         esc_reply = esc_result.get("reply", "")
         bm_logger.log("whatsapp_escalated_reply", phone=phone,
                       reply_length=len(esc_reply))
+
+        # Brief 184: even in fully-escalated mode, Marina may flag a relay question
+        # (e.g. wheelchair accessibility) that the operator needs to answer.
+        # semi_escalation and requires_human are TOP-LEVEL keys in the response.
+        if esc_result.get("semi_escalation"):
+            _relay_q = esc_result.get("relay_question", "(no question captured)")
+            _relay_token = uuid.uuid4().hex[:12]
+            _cname = fields.get("customer_name") or from_name or "Unknown"
+            _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
+            _alert_subject = f"[RELAY-{_relay_token}] {_ref} - {_cname}"
+            _alert_body = (
+                f"Customer: {_cname} (WhatsApp: {phone})\n"
+                f"Their question: {_relay_q}\n\n"
+                f"Booking context:\n"
+                f"  Trip: {fields.get('service_key', '')} | "
+                f"Date: {fields.get('date', '')} | "
+                f"Guests: {fields.get('guests', '')}\n"
+                f"  Ref: {_ref}\n\n"
+                f"INSTRUCTIONS: Reply to this email with your answer.\n"
+                f"Marina will relay it to the customer in her own words."
+            )
+            state_registry.create_pending_notification(
+                'relay', 'whatsapp', phone, _cname,
+                _alert_subject, _alert_body, relay_token=_relay_token)
+            flags["awaiting_relay"] = True
+            flags["relay_token"] = _relay_token
+            flags["relay_question"] = _relay_q
+            bm_logger.log("whatsapp_escalated_semi_relay", phone=phone,
+                          relay_question=_relay_q, relay_token=_relay_token)
+            state_registry.wa_store_message(phone, "system",
+                f"Relay question sent to team: {_relay_q}")
+
+        _esc_req_human = esc_result.get("requires_human")
+        if _esc_req_human and not esc_result.get("semi_escalation"):
+            _cname = fields.get("customer_name") or from_name or "Unknown"
+            _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
+            _esc_note = esc_result.get("internal_note", "")
+            state_registry.create_pending_notification(
+                'escalation', 'whatsapp', phone, _cname,
+                f"[ESCALATION] {_ref} - {_cname} (WhatsApp: {phone}) - {_esc_note[:200]}",
+                f"=== RE-ESCALATION (fully_escalated conversation) ===\n"
+                f"Customer: {_cname}\nNew issue: {_esc_note}\n\n"
+                f"=== CHAT LOG ===\n" + "\n".join(
+                    f"[{m.get('role','?').upper()}] {m.get('text','')}" for m in (history or [])
+                ))
+            bm_logger.log("whatsapp_escalated_re_escalation", phone=phone)
+
         # Record reply timestamp + persist (early return bypasses end-of-function persistence)
         if esc_reply:
             _reply_times = flags.get("reply_times", [])
