@@ -1717,6 +1717,15 @@ Decision: three prompt-text-only insertions (date verification, language matchin
 Technique worth noting: the language matching fix was a REPLACEMENT not an addition — the old fallback clause "Only fall back to English if the body is actually in English or is too short to identify" was the source of the loophole. Simply ADDING "match the MOST RECENT message" alongside the old text would have created a contradiction. The fix REPLACES the old text so there's only one interpretation. When tightening prompt rules, check for existing text that contradicts the new instruction — replace, don't just append.
 
 
+## Brief 182 — The fix that stopped 100+ IMAP errors: persistent connections
+
+Decision: switch the email poller from "new IMAP connection every 10 seconds" to "persistent connection with NOOP keepalive." Outlook rate-limits rapid reconnections from the same IP — we were making 6 connection attempts per minute, and ~50% were rejected with "Command Error. 12."
+
+The fix reduced IMAP connections from ~360/hour to ~1.3/hour (one per 45 min token refresh). Post-deploy: zero errors, heartbeat updating every 10s.
+
+**Three-brief arc lesson:** Briefs 179 → finally-fix → 182 tell a story. Brief 179 added backoff + cleanup but left the per-iteration reconnection model. The `finally` fix closed ghost connections but didn't stop the reconnection frequency. Brief 182 removed the root cause (new connection per poll) entirely. Each brief was correct for what it knew at the time — 179 treated the symptoms (no cleanup = ghosts), the finally-fix treated the secondary effect (ghost accumulation), 182 treated the root cause (too many connections). **Principle:** when a fix reduces but doesn't eliminate a problem, the remaining errors tell you the actual root cause. Listen to the residual pattern, don't just celebrate the improvement.
+
+
 ## Brief 181 — Customer identity correctness: display_name + escalation contact_type
 
 Decision: two targeted backend fixes after the e2e test showed (A) customer file `display_name` persists the Zernio `sender_name` even when Marina extracts a different name from the conversation, and (B) escalation "phone" field shows hex Zernio conversation IDs instead of readable contact info.
