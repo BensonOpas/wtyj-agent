@@ -68,6 +68,8 @@ _ERROR_ALERT_THRESHOLD = 3
 # Brief 179: forced process exit after sustained failure (~5 min with exponential backoff).
 # Supervisord restarts the process fresh (new IMAP connection, new OAuth token, clean state).
 _ERROR_EXIT_THRESHOLD = 30
+# Brief 182: reconnect every 45 min to refresh the OAuth token (expires at 60 min).
+_TOKEN_REFRESH_SECONDS = 2700
 
 # Intents that activate the Python booking validation and hold-creation flow.
 # "reschedule" is included because mid-thread date/time changes are booking
@@ -510,13 +512,29 @@ def main():
     state.setdefault("message_id_index", {})
     _consecutive_errors = 0
     _error_alert_sent = False
-    im = None  # Brief 179: pre-initialize so error handler doesn't hit NameError
+    im = None  # Brief 182: persistent connection, reconnect when None
+    _last_connect = 0
 
     while True:
         try:
-            im = imap_connect()
+            now = time.time()
+
+            # Brief 182: reconnect if needed (first run, error recovery, or token refresh)
+            if im is None or (now - _last_connect > _TOKEN_REFRESH_SECONDS):
+                if im is not None:
+                    try:
+                        im.logout()
+                    except Exception:
+                        pass
+                im = imap_connect()
+                im.select(MAILBOX)
+                _last_connect = now
+                log(f"IMAP connected (token refresh in {_TOKEN_REFRESH_SECONDS}s)")
+            else:
+                # Brief 182: keepalive — cheap NOOP to prevent server timeout
+                im.noop()
+
             _cleanup_stale_data(state, int(time.time()))
-            im.select(MAILBOX)
 
             typ, data = im.uid("search", None, "UNSEEN")
             uids = data[0].split() if data and data[0] else []
@@ -1357,7 +1375,7 @@ def main():
                 save_json(THREAD_STATE_PATH, state)
                 log(f"Replied + marked Seen: {from_email}")
 
-            im.logout()
+            # Brief 182: im.logout() REMOVED — connection persists across iterations
 
             # Process pending operator notifications (from WhatsApp)
             _pending = state_registry.get_pending_notifications()
@@ -1382,6 +1400,13 @@ def main():
         except Exception as ex:
             _consecutive_errors += 1
             log(f"Error: {ex}")
+            # Brief 182: kill broken connection — next iteration will reconnect
+            if im is not None:
+                try:
+                    im.logout()
+                except Exception:
+                    pass
+            im = None
             if _consecutive_errors >= _ERROR_ALERT_THRESHOLD and not _error_alert_sent:
                 try:
                     smtp_send(demo_support_email,
@@ -1397,19 +1422,8 @@ def main():
         else:
             _consecutive_errors = 0
             _error_alert_sent = False
-        finally:
-            # Brief 179 fix: ALWAYS close the IMAP connection — on BOTH success
-            # AND failure. Without this, successful polls leak ghost connections
-            # and Outlook rate-limits with "Command Error. 12" after ~10 open sockets.
-            if im is not None:
-                try:
-                    im.close()
-                except Exception:
-                    pass
-                try:
-                    im.logout()
-                except Exception:
-                    pass
+        # Brief 182: NO finally block — connection persists across iterations.
+        # Cleanup is in the except block (on error) and reconnect logic (on token refresh).
 
         # Brief 179: exponential backoff on consecutive errors — 10s, 20s, 40s... cap 300s.
         if _consecutive_errors > 0:
