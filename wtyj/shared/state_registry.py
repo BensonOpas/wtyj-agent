@@ -996,6 +996,50 @@ def create_pending_notification(notification_type: str, channel: str,
     return row_id
 
 
+def _lookup_customer_contact(customer_id: str, contact_type: str) -> dict:
+    """Brief 183: look up the customer's real email and phone from customer_identifiers
+    via the customer_id stored in the escalation. Returns {'email': ..., 'phone': ...}
+    with None for any identifier not found."""
+    if not customer_id:
+        return {"email": None, "phone": None}
+
+    # Determine the identifier type from contact_type
+    id_type = "email" if contact_type == "email" else "wa_conversation_id" if contact_type == "whatsapp" else "phone"
+
+    conn = _get_conn()
+    # Find the customer row via their identifier
+    cust_row = conn.execute(
+        "SELECT customer_id FROM customer_identifiers WHERE type = ? AND value = ? LIMIT 1",
+        (id_type, customer_id)
+    ).fetchone()
+
+    if not cust_row:
+        conn.close()
+        # If customer_id IS an email, return it directly
+        if contact_type == "email":
+            return {"email": customer_id, "phone": None}
+        return {"email": None, "phone": None}
+
+    cust_id = cust_row[0]
+
+    # Get all identifiers for this customer
+    idents = conn.execute(
+        "SELECT type, value FROM customer_identifiers WHERE customer_id = ?",
+        (cust_id,)
+    ).fetchall()
+    conn.close()
+
+    email = None
+    phone = None
+    for ident in idents:
+        if ident[0] == "email" and not email:
+            email = ident[1]
+        elif ident[0] == "phone" and not phone:
+            phone = ident[1]
+
+    return {"email": email, "phone": phone}
+
+
 def _infer_contact_type(customer_id: str) -> str:
     """Brief 181: infer the type of contact identifier for display purposes.
     Replicates the 24-char hex check from whatsapp_client._is_zernio_conversation_id
@@ -1015,7 +1059,7 @@ def _infer_contact_type(customer_id: str) -> str:
 
 def get_all_escalations() -> list:
     """Return all escalation notifications, newest first.
-    Brief 181: includes contact_type derived from customer_id."""
+    Brief 181: contact_type. Brief 183: customer_contact, customer_email, customer_phone."""
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
@@ -1023,15 +1067,26 @@ def get_all_escalations() -> list:
         "FROM pending_notifications ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
-             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
-             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
-             "contact_type": _infer_contact_type(r[4] or "")}
-            for r in rows]
+    result = []
+    for r in rows:
+        ct = _infer_contact_type(r[4] or "")
+        contact = _lookup_customer_contact(r[4] or "", ct)
+        customer_contact = contact["email"] or contact["phone"] or r[4] or ""
+        result.append({
+            "id": r[0], "notification_type": r[1], "relay_token": r[2],
+            "channel": r[3], "customer_id": r[4], "customer_name": r[5],
+            "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
+            "contact_type": ct,
+            "customer_contact": customer_contact,
+            "customer_email": contact["email"],
+            "customer_phone": contact["phone"],
+        })
+    return result
 
 
 def get_pending_notifications(status: str = "pending") -> list:
-    """Return all notifications with the given status."""
+    """Return all notifications with the given status.
+    Brief 183: enriched with customer_contact, customer_email, customer_phone."""
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
@@ -1040,11 +1095,21 @@ def get_pending_notifications(status: str = "pending") -> list:
         (status,)
     ).fetchall()
     conn.close()
-    return [{"id": r[0], "notification_type": r[1], "relay_token": r[2],
-             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
-             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
-             "contact_type": _infer_contact_type(r[4] or "")}
-            for r in rows]
+    result = []
+    for r in rows:
+        ct = _infer_contact_type(r[4] or "")
+        contact = _lookup_customer_contact(r[4] or "", ct)
+        customer_contact = contact["email"] or contact["phone"] or r[4] or ""
+        result.append({
+            "id": r[0], "notification_type": r[1], "relay_token": r[2],
+            "channel": r[3], "customer_id": r[4], "customer_name": r[5],
+            "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
+            "contact_type": ct,
+            "customer_contact": customer_contact,
+            "customer_email": contact["email"],
+            "customer_phone": contact["phone"],
+        })
+    return result
 
 
 def delete_escalation(escalation_id: int) -> bool:
