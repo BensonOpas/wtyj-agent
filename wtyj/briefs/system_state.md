@@ -1120,3 +1120,10 @@ Brief 182 — Persistent IMAP connection for email poller
 Decision: switched from new-IMAP-connection-per-poll (new TCP + OAuth + SELECT every 10s) to persistent connection with NOOP keepalive. Outlook was rate-limiting rapid reconnections with "Command Error. 12" on ~50% of polls. New model: connect once on startup, NOOP keepalive on each iteration, reconnect only on error (im=None) or token refresh (every 45 min before the 60-min OAuth expiry). Removed the `finally` block that was killing the connection every iteration and the explicit `im.logout()` on the success path. Per-UID processing code (lines 524-1358) completely untouched. Brief-reviewer FAIL round 1 (3 issues: tests 2/3/5 were tautological boolean expression checks, `_cleanup_stale_data` reorder undocumented, missing NOOP failure→reconnect test). All three patched and approved round 2.
 Outcome: complete — 860 passing / 0 failures (855 baseline + 5 new). Backend `e4f7d61` pushed and deployed to all three containers. Post-deploy verification: ONE "IMAP connected (token refresh in 2700s)" message, heartbeat updating every 10s, ZERO "Command Error. 12" since persistent connection established. The email poller is stable.
 
+
+---
+
+Brief 183 — Enrich escalation response with real customer contact
+Decision: escalation API responses now include `customer_contact`, `customer_email`, and `customer_phone` by looking up the customer's cross-channel identity from `customer_identifiers` via the `customer_id`. For WhatsApp escalations (Zernio hex IDs), the customer's email/phone is resolved from their customer file. For email escalations, the email is returned directly. Operators now see real contact info instead of hex strings. Frontend column rename (PHONE → CONTACT) deferred to SR.
+Outcome: complete — 864 passing / 0 failures (860 baseline + 4 new). Backend `2a9a77b` pushed and deployed. All containers healthy.
+

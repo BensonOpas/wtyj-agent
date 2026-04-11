@@ -1726,6 +1726,11 @@ The fix reduced IMAP connections from ~360/hour to ~1.3/hour (one per 45 min tok
 **Three-brief arc lesson:** Briefs 179 → finally-fix → 182 tell a story. Brief 179 added backoff + cleanup but left the per-iteration reconnection model. The `finally` fix closed ghost connections but didn't stop the reconnection frequency. Brief 182 removed the root cause (new connection per poll) entirely. Each brief was correct for what it knew at the time — 179 treated the symptoms (no cleanup = ghosts), the finally-fix treated the secondary effect (ghost accumulation), 182 treated the root cause (too many connections). **Principle:** when a fix reduces but doesn't eliminate a problem, the remaining errors tell you the actual root cause. Listen to the residual pattern, don't just celebrate the improvement.
 
 
+## Brief 183 — API enrichment beats frontend guesswork
+
+Decision: enrich the escalation API response with real customer contact info by joining through `customer_identifiers`, instead of forcing the frontend to do its own customer lookup. Smooth brief — reviewer passed first try, 4 behavioral tests, clean deploy. The join through `customer_identifiers` uses the same `_infer_contact_type` from Brief 181 to determine the identifier type for the lookup. One non-obvious detail: for email escalations where no customer file exists yet, the `customer_id` IS the email itself — the helper falls back to returning it directly rather than failing.
+
+
 ## Brief 181 — Customer identity correctness: display_name + escalation contact_type
 
 Decision: two targeted backend fixes after the e2e test showed (A) customer file `display_name` persists the Zernio `sender_name` even when Marina extracts a different name from the conversation, and (B) escalation "phone" field shows hex Zernio conversation IDs instead of readable contact info.
