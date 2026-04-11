@@ -1731,6 +1731,15 @@ The fix reduced IMAP connections from ~360/hour to ~1.3/hour (one per 45 min tok
 Decision: enrich the escalation API response with real customer contact info by joining through `customer_identifiers`, instead of forcing the frontend to do its own customer lookup. Smooth brief — reviewer passed first try, 4 behavioral tests, clean deploy. The join through `customer_identifiers` uses the same `_infer_contact_type` from Brief 181 to determine the identifier type for the lookup. One non-obvious detail: for email escalations where no customer file exists yet, the `customer_id` IS the email itself — the helper falls back to returning it directly rather than failing.
 
 
+## Brief 184 — Early-return guards swallow downstream logic
+
+Decision: fix the fully-escalated guard that silently dropped semi-escalation notifications. A customer asked about wheelchair accessibility, Marina correctly flagged a relay question, but the guard returned the reply without creating a notification — the operator never saw it, the customer waited forever.
+
+**The pattern to watch for:** any `if condition: ... return` guard in a processing pipeline that was written for ONE purpose (skip the booking flow for escalated conversations) will also skip EVERY other pipeline step that comes after it. The semi-escalation code at line 505 was completely unreachable for fully-escalated conversations. When a new feature adds a step to the pipeline (like Brief 162's relay flow), existing early-return guards don't magically learn to include the new step. **Principle:** after adding any new processing step to a pipeline, grep for every early `return` that could bypass it. Each one needs to be evaluated: does this guard also need to handle the new step?
+
+**Reviewer save:** round 1 caught that `requires_human` is a top-level key in marina_agent's response, NOT inside the `flags` dict. My first draft read from `flags.requires_human` which would always be None — the re-escalation block would have been dead code in production. The test also embedded the same mistake by mocking `{"flags": {"requires_human": true}}`. **Reinforced principle:** when reading structured response keys, verify the actual schema (marina_agent.py MARINA_TOOL definition) before writing the extraction code. Don't guess which level a key lives at.
+
+
 ## Brief 181 — Customer identity correctness: display_name + escalation contact_type
 
 Decision: two targeted backend fixes after the e2e test showed (A) customer file `display_name` persists the Zernio `sender_name` even when Marina extracts a different name from the conversation, and (B) escalation "phone" field shows hex Zernio conversation IDs instead of readable contact info.

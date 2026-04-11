@@ -1127,3 +1127,10 @@ Brief 183 — Enrich escalation response with real customer contact
 Decision: escalation API responses now include `customer_contact`, `customer_email`, and `customer_phone` by looking up the customer's cross-channel identity from `customer_identifiers` via the `customer_id`. For WhatsApp escalations (Zernio hex IDs), the customer's email/phone is resolved from their customer file. For email escalations, the email is returned directly. Operators now see real contact info instead of hex strings. Frontend column rename (PHONE → CONTACT) deferred to SR.
 Outcome: complete — 864 passing / 0 failures (860 baseline + 4 new). Backend `2a9a77b` pushed and deployed. All containers healthy.
 
+
+---
+
+Brief 184 — Allow semi-escalation from fully-escalated conversations
+Decision: the fully-escalated guard at `social_agent.py:222-242` short-circuited the entire escalation detection pipeline — when Marina flagged a relay question (wheelchair accessibility) on a conversation that was already `fully_escalated: true`, no notification was created and the operator never saw it. Fix: after `marina_agent.process_message()` in the escalated path, check for `semi_escalation: true` (create relay notification) and `requires_human: true` (create full escalation). Both are top-level keys in the marina_agent response, not inside the `flags` dict. Email poller has the identical bug but is deferred. Brief-reviewer FAIL round 1 (3 issues: `requires_human` read from wrong location, test mock wrong structure, email poller parallel bug not acknowledged). All patched, approved round 2.
+Outcome: complete — 867 passing / 0 failures (864 baseline + 3 new). Backend `e62bcd9` pushed and deployed. All containers healthy.
+
