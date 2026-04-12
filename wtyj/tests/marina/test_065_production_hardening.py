@@ -151,8 +151,11 @@ def test_oauth_saves_refresh_token():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write("old_token")
         token_path = f.name
+    from agents.marina import email_adapter
     orig_path = email_poller.REFRESH_TOKEN_PATH
+    orig_adapter_path = email_adapter.REFRESH_TOKEN_PATH
     email_poller.REFRESH_TOKEN_PATH = token_path
+    email_adapter.REFRESH_TOKEN_PATH = token_path
     try:
         mock_resp = json.dumps({"access_token": "at_123", "refresh_token": "rt_new_456"}).encode()
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -163,6 +166,7 @@ def test_oauth_saves_refresh_token():
             assert f.read() == "rt_new_456"
     finally:
         email_poller.REFRESH_TOKEN_PATH = orig_path
+        email_adapter.REFRESH_TOKEN_PATH = orig_adapter_path
         os.unlink(token_path)
 
 
@@ -173,8 +177,11 @@ def test_oauth_raises_on_missing_access_token():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write("some_token")
         token_path = f.name
+    from agents.marina import email_adapter
     orig_path = email_poller.REFRESH_TOKEN_PATH
+    orig_adapter_path = email_adapter.REFRESH_TOKEN_PATH
     email_poller.REFRESH_TOKEN_PATH = token_path
+    email_adapter.REFRESH_TOKEN_PATH = token_path
     try:
         mock_resp = json.dumps({"error": "invalid_grant", "error_description": "token expired"}).encode()
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -184,6 +191,7 @@ def test_oauth_raises_on_missing_access_token():
             assert "token expired" in str(exc_info.value)
     finally:
         email_poller.REFRESH_TOKEN_PATH = orig_path
+        email_adapter.REFRESH_TOKEN_PATH = orig_adapter_path
         os.unlink(token_path)
 
 
