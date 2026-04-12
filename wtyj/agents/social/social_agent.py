@@ -161,7 +161,7 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
     return True
 
 
-def handle_incoming_whatsapp_message(message: dict) -> str:
+def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -> str:
     """
     Process a WhatsApp message: full booking orchestrator.
     Fetch state + history -> build action_context -> call marina_agent ->
@@ -171,6 +171,9 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     phone = message.get("from", "")
     text = message.get("text", "")
     from_name = message.get("from_name", "")
+
+    _channel_label = {"whatsapp": "WhatsApp", "instagram_dm": "Instagram",
+                      "facebook_dm": "Facebook", "twitter_dm": "X/Twitter"}.get(channel, channel)
 
     # Get existing booking state
     state = state_registry.wa_get_booking_state(phone)
@@ -227,7 +230,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         esc_result = marina_agent.process_message(
             from_email=from_id, subject="", body=text,
             thread_fields=fields, thread_flags=_esc_flags,
-            channel="whatsapp", messages=history,
+            channel=channel, messages=history,
             customer_file=_cust_file,
         )
         esc_reply = esc_result.get("reply", "")
@@ -244,7 +247,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
             _alert_subject = f"[RELAY-{_relay_token}] {_ref} - {_cname}"
             _alert_body = (
-                f"Customer: {_cname} (WhatsApp: {phone})\n"
+                f"Customer: {_cname} ({_channel_label}: {phone})\n"
                 f"Their question: {_relay_q}\n\n"
                 f"Booking context:\n"
                 f"  Trip: {fields.get('service_key', '')} | "
@@ -255,7 +258,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 f"Marina will relay it to the customer in her own words."
             )
             state_registry.create_pending_notification(
-                'relay', 'whatsapp', phone, _cname,
+                'relay', channel, phone, _cname,
                 _alert_subject, _alert_body, relay_token=_relay_token)
             flags["awaiting_relay"] = True
             flags["relay_token"] = _relay_token
@@ -271,8 +274,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
             _esc_note = esc_result.get("internal_note", "")
             state_registry.create_pending_notification(
-                'escalation', 'whatsapp', phone, _cname,
-                f"[ESCALATION] {_ref} - {_cname} (WhatsApp: {phone}) - {_esc_note[:200]}",
+                'escalation', channel, phone, _cname,
+                f"[ESCALATION] {_ref} - {_cname} ({_channel_label}: {phone}) - {_esc_note[:200]}",
                 f"=== RE-ESCALATION (fully_escalated conversation) ===\n"
                 f"Customer: {_cname}\nNew issue: {_esc_note}\n\n"
                 f"=== CHAT LOG ===\n" + "\n".join(
@@ -344,7 +347,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         if len(completed_bookings) >= _max_bk and flags.get("hold_created"):
             agent_flags["_max_bookings_reached"] = True
 
-    # Call marina_agent with channel="whatsapp"
+    # Call marina_agent with actual channel
     result = marina_agent.process_message(
         from_email=from_id,
         subject="",
@@ -352,7 +355,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         thread_fields=fields,
         thread_flags=agent_flags,
         action_context=action_context,
-        channel="whatsapp",
+        channel=channel,
         messages=history,
         customer_file=_cust_file,
     )
@@ -361,7 +364,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
     if _cust_row and _cust_row.get("id"):
         try:
             state_registry.customer_record_interaction(
-                _cust_row["id"], "whatsapp", f"WhatsApp/DM: {text[:80]}"
+                _cust_row["id"], channel, f"{_channel_label}/DM: {text[:80]}"
             )
             _new_fields_for_merge = result.get("fields", {}) or {}
             for _ftype, _fkey in (("email", "email"), ("phone", "phone")):
@@ -487,8 +490,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             flags["awaiting_booking_confirmation"] = False
             _cname = fields.get("customer_name") or from_name or "Unknown"
             state_registry.create_pending_notification(
-                'escalation', 'whatsapp', phone, _cname,
-                f"[LARGE GROUP] {_cname} (WhatsApp: {phone}) — {_ck_guests} guests exceeds {_svc_capacity} capacity",
+                'escalation', channel, phone, _cname,
+                f"[LARGE GROUP] {_cname} ({_channel_label}: {phone}) — {_ck_guests} guests exceeds {_svc_capacity} capacity",
                 (f"=== LARGE GROUP — EXCEEDS CAPACITY ===\n"
                  f"Customer: {_cname}\nPhone: {phone}\n"
                  f"Service: {fields.get('service_name', _ck_svc)}\n"
@@ -574,7 +577,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _cname = fields.get("customer_name") or from_name or "Unknown"
         _alert_subject = f"[RELAY-{relay_token}] {_ref} - {_cname}"
         _alert_body = (
-            f"Customer: {_cname} (WhatsApp: {phone})\n"
+            f"Customer: {_cname} ({_channel_label}: {phone})\n"
             f"Their question: {relay_question}\n\n"
             f"Booking context:\n"
             f"  Trip: {fields.get('service_key', '')} | "
@@ -585,11 +588,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             f"Marina will relay it to the customer in her own words."
         )
         state_registry.create_pending_notification(
-            'relay', 'whatsapp', phone, _cname,
+            'relay', channel, phone, _cname,
             _alert_subject, _alert_body, relay_token=relay_token)
         sheets_writer.log_escalation({
             "email": phone,
-            "subject": "WhatsApp",
+            "subject": _channel_label,
             "customer_name": _cname,
             "intent": "semi_escalation",
             "fields_collected": fields,
@@ -634,7 +637,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _cname = fields.get("customer_name") or from_name or "Unknown"
         sheets_writer.log_escalation({
             "email": phone,
-            "subject": "WhatsApp",
+            "subject": _channel_label,
             "customer_name": _cname,
             "intent": (result.get("intents") or ["unknown"])[0],
             "fields_collected": fields,
@@ -660,11 +663,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
         _esc_summary = _esc_note if _esc_note else _esc_intents
         _esc_subject = (
             f"[ESCALATION] {_esc_ref} - {_cname} "
-            f"(WhatsApp: {phone}) - {_esc_summary}")
+            f"({_channel_label}: {phone}) - {_esc_summary}")
         _customer_email = fields.get("email", "")
         _esc_body = (
             f"=== CUSTOMER ===\n"
-            f"WhatsApp: {phone}\n"
+            f"{_channel_label}: {phone}\n"
             f"Name: {_cname}\n"
             f"Email: {_customer_email or '(not provided)'}\n\n"
             f"=== CHAT LOG ===\n{_esc_chat_log}\n\n"
@@ -674,7 +677,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
             f"{result.get('internal_note', '')}"
         )
         state_registry.create_pending_notification(
-            'escalation', 'whatsapp', phone, _cname,
+            'escalation', channel, phone, _cname,
             _esc_subject, _esc_body)
         _skip_booking = True
 
@@ -695,11 +698,11 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 _esc_note = result.get("internal_note", "")
                 _esc_subject = (
                     f"[BOOKING REQUEST] {_cname} "
-                    f"(WhatsApp: {phone}) - {_esc_note or 'wants to book'}")
+                    f"({_channel_label}: {phone}) - {_esc_note or 'wants to book'}")
                 _esc_body = (
                     f"=== BOOKING REQUEST (booking_flow OFF) ===\n\n"
                     f"=== CUSTOMER ===\n"
-                    f"WhatsApp: {phone}\n"
+                    f"{_channel_label}: {phone}\n"
                     f"Name: {_cname}\n"
                     f"Email: {_customer_email or '(not provided)'}\n\n"
                     f"=== COLLECTED FIELDS ===\n"
@@ -708,7 +711,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     f"=== MARINA'S NOTE ===\n{_esc_note}"
                 )
                 state_registry.create_pending_notification(
-                    'escalation', 'whatsapp', phone, _cname,
+                    'escalation', channel, phone, _cname,
                     _esc_subject, _esc_body)
                 bm_logger.log("booking_flow_off_escalated", phone=phone)
                 _skip_booking = True
@@ -756,8 +759,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     if _retry_count >= 2:
                         _cname = fields.get("customer_name") or from_name or "Unknown"
                         state_registry.create_pending_notification(
-                            'escalation', 'whatsapp', phone, _cname,
-                            f"[SYSTEM] Manifest failure for {_cname} (WhatsApp: {phone})",
+                            'escalation', channel, phone, _cname,
+                            f"[SYSTEM] Manifest failure for {_cname} ({_channel_label}: {phone})",
                             f"Booking failed {_retry_count} times due to API error.\n"
                             f"Error: {_manifest_error[:300]}\n"
                             f"Fields: {json.dumps(fields, indent=2, ensure_ascii=False)}")
@@ -767,7 +770,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                     flags["awaiting_booking_confirmation"] = True
                 reply_text = result.get("reply_hold_failed") or reply_text
                 sheets_writer.log_hold_failed({
-                    "email": phone, "subject": "WhatsApp",
+                    "email": phone, "subject": _channel_label,
                     "service_name": fields.get("service_name"),
                     "date": fields.get("date"),
                     "guests": fields.get("guests"),
@@ -837,7 +840,7 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                 state_registry.wa_store_message(phone, "system", _system_msg)
                 sheets_writer.log_hold_created({
                     "booking_ref": booking_ref,
-                    "email": phone, "subject": "WhatsApp",
+                    "email": phone, "subject": _channel_label,
                     "customer_name": fields.get("customer_name"),
                     "service_name": fields.get("service_name"),
                     "service_key": fields.get("service_key"),
@@ -887,8 +890,8 @@ def handle_incoming_whatsapp_message(message: dict) -> str:
                                 f"{fields.get('service_name', '?')} on {fields.get('date', '?')}. "
                                 f"Ref: {_lg_ref}. Auto-confirmed — operator review recommended.")
                     state_registry.create_pending_notification(
-                        'escalation', 'whatsapp', phone, _lg_name,
-                        f"[LARGE GROUP] {_lg_ref} - {_lg_name} (WhatsApp: {phone}) - {_lg_note}",
+                        'escalation', channel, phone, _lg_name,
+                        f"[LARGE GROUP] {_lg_ref} - {_lg_name} ({_channel_label}: {phone}) - {_lg_note}",
                         (f"=== LARGE GROUP BOOKING ===\n"
                          f"Ref: {_lg_ref}\nGuests: {_lg_guests}\n"
                          f"Trip: {fields.get('service_name', '?')}\n"

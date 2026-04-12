@@ -199,7 +199,7 @@ def _flush_buffer(phone):
                 # Zernio WhatsApp — check booking_flow toggle
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
                 if _booking_flow_on:
-                    reply_text = handle_incoming_whatsapp_message(final_msg)
+                    reply_text = handle_incoming_whatsapp_message(final_msg, channel=_zernio_channel)
                     # Store user message after orchestrator (same ordering as DM path)
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
@@ -336,7 +336,7 @@ def _process_zernio_event(payload: dict):
                     "text": text,
                     "from_name": msg.get("sender_name", ""),
                 }
-                reply_text = handle_incoming_whatsapp_message(orchestrator_msg)
+                reply_text = handle_incoming_whatsapp_message(orchestrator_msg, channel=channel)
                 # Store user message after orchestrator (same as WhatsApp path)
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,

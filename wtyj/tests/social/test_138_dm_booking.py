@@ -285,7 +285,7 @@ def test_dm_user_message_stored_after_orchestrator(mock_orchestrator, mock_typin
     # Track whether dm_store_message was called before the orchestrator
     store_calls_at_orchestrator_time = []
 
-    def _orchestrator_side_effect(msg):
+    def _orchestrator_side_effect(msg, **kwargs):
         # At the time the orchestrator is called, check if the user message
         # is already in the database
         history = state_registry.dm_get_history(conv_id, "instagram_dm", limit=50)
