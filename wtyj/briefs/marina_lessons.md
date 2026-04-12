@@ -1731,6 +1731,17 @@ The fix reduced IMAP connections from ~360/hour to ~1.3/hour (one per 45 min tok
 Decision: enrich the escalation API response with real customer contact info by joining through `customer_identifiers`, instead of forcing the frontend to do its own customer lookup. Smooth brief — reviewer passed first try, 4 behavioral tests, clean deploy. The join through `customer_identifiers` uses the same `_infer_contact_type` from Brief 181 to determine the identifier type for the lookup. One non-obvious detail: for email escalations where no customer file exists yet, the `customer_id` IS the email itself — the helper falls back to returning it directly rather than failing.
 
 
+## Brief 185 — Audit every hardcoded value when generalizing a function
+
+Decision: fix the channel platform field bug where IG/FB/X DMs all showed as "whatsapp" in notifications, Sheets logs, and customer records. Added `channel` parameter to `handle_incoming_whatsapp_message()` with backward-compatible default.
+
+**Three reviewer rounds needed.** Round 1 caught that fixing the structured `channel` parameter in `create_pending_notification()` was only half the fix — the human-readable notification body strings still said "WhatsApp: {phone}" in 10 places. Round 2 caught `sheets_writer.log_escalation()` calls (4 occurrences, not 2 as initially audited). Round 3 caught `customer_record_interaction()` at line 364. Each round found a category of hardcoded values that the previous audit missed.
+
+**Principle:** when generalizing a hardcoded value across a large function, don't just grep for the value and fix matches. Categorize the usage: (A) function parameter, (B) API call argument, (C) human-readable string, (D) logging/analytics, (E) side-effect calls. Each category is a different kind of fix. The first grep catches category A, but categories C-E are easy to miss because they're in string literals not function calls.
+
+**Pre-existing test regression:** `test_138_dm_booking` broke because its mock `side_effect` function only accepted `(msg)` but the real function now takes `(msg, channel=...)`. MagicMock silently swallowed the TypeError. Fix: add `**kwargs` to side_effect functions. Watch for this whenever adding parameters to a function that existing tests mock with `side_effect`.
+
+
 ## Brief 184 — Early-return guards swallow downstream logic
 
 Decision: fix the fully-escalated guard that silently dropped semi-escalation notifications. A customer asked about wheelchair accessibility, Marina correctly flagged a relay question, but the guard returned the reply without creating a notification — the operator never saw it, the customer waited forever.
