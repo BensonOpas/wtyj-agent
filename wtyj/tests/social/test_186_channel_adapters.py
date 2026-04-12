@@ -112,7 +112,7 @@ def test_unknown_channel_falls_back_to_default():
 
 
 # --- Test 5: _process_zernio_event dispatches via the registry end-to-end ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_process_zernio_event_dispatches_via_registry(mock_orch, mock_typing, mock_send):

@@ -18,6 +18,7 @@ from agents.social.social_agent import handle_incoming_whatsapp_message
 from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
 from agents.social.dm_agent import handle_incoming_dm
 from agents.social.channels import ZERNIO_CHANNELS, DEFAULT_ZERNIO_CHANNEL
+from agents.social.senders import send_reply
 
 from contextlib import asynccontextmanager
 
@@ -230,7 +231,7 @@ def _flush_buffer(phone):
                     )
                     reply_text = handle_incoming_dm(_dm_msg)
                 if reply_text:
-                    send_dm_reply(_zernio_conv, _zernio_acct, reply_text)
+                    send_reply(_zernio_channel, _zernio_conv, _zernio_acct, reply_text)
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
                         channel=_zernio_channel,
@@ -348,8 +349,8 @@ def _process_zernio_event(payload: dict):
                 reply_text = handle_incoming_dm(msg)
 
             if reply_text:
-                # Send reply via Zernio
-                send_dm_reply(conversation_id, account_id, reply_text)
+                # Send reply via the sender registry (Brief 187 — dispatched by channel)
+                send_reply(channel, conversation_id, account_id, reply_text)
                 # Store assistant reply
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,

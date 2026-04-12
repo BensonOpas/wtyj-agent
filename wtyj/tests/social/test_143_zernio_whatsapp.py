@@ -86,8 +86,8 @@ def test_zernio_whatsapp_uses_debounce(mock_buffer, mock_typing):
     _cleanup(conv_id)
 
 
-# --- Test 4: Zernio WhatsApp reply goes via send_dm_reply ---
-@patch("agents.social.webhook_server.send_dm_reply")
+# --- Test 4: Zernio WhatsApp reply goes via send_reply ---
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_text_message")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_zernio_whatsapp_reply_via_zernio(mock_orchestrator, mock_meta_send, mock_zernio_send):
@@ -119,13 +119,14 @@ def test_zernio_whatsapp_reply_via_zernio(mock_orchestrator, mock_meta_send, moc
     # Reply via Zernio (not Meta)
     mock_zernio_send.assert_called_once()
     mock_meta_send.assert_not_called()
-    assert mock_zernio_send.call_args[0][0] == conv_id
-    assert mock_zernio_send.call_args[0][2] == "Booking confirmed!"
+    assert mock_zernio_send.call_args[0][0] == "whatsapp"  # channel (Brief 187 — send_reply first arg)
+    assert mock_zernio_send.call_args[0][1] == conv_id
+    assert mock_zernio_send.call_args[0][3] == "Booking confirmed!"
     _cleanup(conv_id)
 
 
 # --- Test 5: Debounce batches multiple messages ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_zernio_whatsapp_debounce_batches(mock_orchestrator, mock_send):
     from agents.social.webhook_server import _flush_buffer, _message_buffers, _buffer_lock
@@ -170,7 +171,7 @@ def test_zernio_whatsapp_debounce_batches(mock_orchestrator, mock_send):
 
 
 # --- Test 6: booking_flow=false routes to DM agent ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.handle_incoming_dm")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_zernio_whatsapp_booking_flow_off_uses_dm_agent(mock_orchestrator, mock_dm, mock_send):

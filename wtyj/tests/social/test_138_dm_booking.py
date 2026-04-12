@@ -53,7 +53,7 @@ def _next_wed():
 
 
 # --- Test 1: DM routes to orchestrator when booking_flow ON ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 @patch("agents.social.webhook_server.handle_incoming_dm")
@@ -85,15 +85,15 @@ def test_dm_routes_to_orchestrator_when_flow_on(mock_dm, mock_orchestrator,
 
         # Reply sent via Zernio
         mock_send.assert_called_once()
-        assert mock_send.call_args[0][0] == conv_id  # conversation_id
-        assert mock_send.call_args[0][2] == "Sure, I can help you book!"  # reply text
+        assert mock_send.call_args[0][1] == conv_id  # conversation_id
+        assert mock_send.call_args[0][3] == "Sure, I can help you book!"  # reply text
     finally:
         raw["features"]["booking_flow"] = original
         _cleanup(conv_id)
 
 
 # --- Test 2: DM routes to Q&A agent when booking_flow OFF ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 @patch("agents.social.webhook_server.handle_incoming_dm")
@@ -132,7 +132,7 @@ def test_dm_routes_to_qa_agent_when_flow_off(mock_dm, mock_orchestrator,
 @patch("agents.social.social_agent.gws_calendar")
 @patch("agents.social.social_agent.marina_agent.process_message")
 @patch("shared.state_registry.create_soft_hold")
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 def test_dm_booking_full_flow(mock_typing, mock_send, mock_create_hold, mock_process,
                                mock_cal, mock_pay, mock_sheets):
@@ -171,7 +171,7 @@ def test_dm_booking_full_flow(mock_typing, mock_send, mock_create_hold, mock_pro
 
         # Reply should contain actual booking ref, not placeholder
         mock_send.assert_called_once()
-        reply_text = mock_send.call_args[0][2]
+        reply_text = mock_send.call_args[0][3]
         assert "[BOOKING_REF]" not in reply_text, "Booking ref placeholder not replaced"
         assert "[PAYMENT_LINK]" not in reply_text, "Payment link placeholder not replaced"
         # Reply should contain a 6-char alphanumeric ref
@@ -189,7 +189,7 @@ def test_dm_booking_full_flow(mock_typing, mock_send, mock_create_hold, mock_pro
 
 
 # --- Test 4: User message stored with correct channel ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_dm_message_stored_with_correct_channel(mock_orchestrator, mock_typing, mock_send):
@@ -218,7 +218,7 @@ def test_dm_message_stored_with_correct_channel(mock_orchestrator, mock_typing, 
 
 
 # --- Test 5: Dedup works ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_dm_dedup_works(mock_orchestrator, mock_typing, mock_send):
@@ -245,7 +245,7 @@ def test_dm_dedup_works(mock_orchestrator, mock_typing, mock_send):
 
 
 # --- Test 6: Reply sent via Zernio, not WhatsApp ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_dm_reply_sent_via_zernio(mock_orchestrator, mock_typing, mock_send):
@@ -262,19 +262,20 @@ def test_dm_reply_sent_via_zernio(mock_orchestrator, mock_typing, mock_send):
         payload = _make_zernio_payload(conv_id, "Book me in")
         _process_zernio_event(payload)
 
-        # send_dm_reply called (Zernio)
+        # send_reply called (Zernio, via sender registry)
         mock_send.assert_called_once()
         args = mock_send.call_args[0]
-        assert args[0] == conv_id  # conversation_id
-        assert args[1] == "acc_123"  # account_id
-        assert args[2] == "Booking reply"  # reply text
+        assert args[0] == "instagram_dm"  # channel (Brief 187 — send_reply first arg)
+        assert args[1] == conv_id  # conversation_id
+        assert args[2] == "acc_123"  # account_id
+        assert args[3] == "Booking reply"  # reply text
     finally:
         raw["features"]["booking_flow"] = original
         _cleanup(conv_id)
 
 
 # --- Test 7: User message stored AFTER orchestrator call (not before) ---
-@patch("agents.social.webhook_server.send_dm_reply")
+@patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_dm_user_message_stored_after_orchestrator(mock_orchestrator, mock_typing, mock_send):
