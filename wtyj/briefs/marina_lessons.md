@@ -1758,6 +1758,15 @@ Decision: two targeted backend fixes after the e2e test showed (A) customer file
 Smooth brief — clean execution. One non-obvious technique: `_infer_contact_type(customer_id)` duplicates the 24-char hex check from `whatsapp_client._is_zernio_conversation_id` to avoid a circular import between state_registry and whatsapp_client. Acceptable duplication for a 7-line function — the alternative (extracting the check to a shared utility module) would add a new file for one function.
 
 
+## Brief 189 — Re-export is backward-compat insurance, but module-level constant assignment doesn't follow re-exports
+
+Decision: extract the email adapter layer (12 functions, 11 constants) from the 1437-line email_poller.py into email_adapter.py. Re-export everything from email_poller.py so 15+ existing test files keep working. Smooth execution except for 2 tests that broke because they assigned `email_poller.REFRESH_TOKEN_PATH = temp_path` — but the moved function reads `email_adapter.REFRESH_TOKEN_PATH`, which wasn't updated.
+
+**The Python `from X import Y` lesson, again.** Brief 187 taught us that `@patch("old_module.function_name")` doesn't follow re-exports. Brief 189 teaches the constant-assignment variant: `module_A.CONST = new_value` only changes the name binding in module_A's namespace. If module_B re-exported CONST from module_A, module_B.CONST is a separate binding pointing at the original value. Changing module_A.CONST doesn't change module_B.CONST. The fix is the same: patch at the SOURCE module (`email_adapter.REFRESH_TOKEN_PATH`), not the re-exporter (`email_poller.REFRESH_TOKEN_PATH`). Or patch both.
+
+**The re-export pattern is still the right call.** Despite this gotcha, re-exporting avoided 15+ test file updates. Only 2 tests (out of 889) needed fixing, and those are the tests that reach inside module internals by reassigning constants. All the tests that do normal `from email_poller import function_name` and call it worked without any changes.
+
+
 ## Brief 188 — One-way flags are design debt, and "atomic" doesn't mean what you think
 
 Decision: add a conversation state machine (pending/open/resolved) alongside existing scattered boolean flags. The core fix: clear `fully_escalated` when the operator resolves, so conversations can return to AI mode. Before this, every resolved conversation was permanently trapped in human-only re-escalation mode — the operator's "resolve" button cleared the notification status but not the conversation flag.
