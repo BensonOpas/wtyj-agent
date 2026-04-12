@@ -1758,6 +1758,17 @@ Decision: two targeted backend fixes after the e2e test showed (A) customer file
 Smooth brief — clean execution. One non-obvious technique: `_infer_contact_type(customer_id)` duplicates the 24-char hex check from `whatsapp_client._is_zernio_conversation_id` to avoid a circular import between state_registry and whatsapp_client. Acceptable duplication for a 7-line function — the alternative (extracting the check to a shared utility module) would add a new file for one function.
 
 
+## Brief 188 — One-way flags are design debt, and "atomic" doesn't mean what you think
+
+Decision: add a conversation state machine (pending/open/resolved) alongside existing scattered boolean flags. The core fix: clear `fully_escalated` when the operator resolves, so conversations can return to AI mode. Before this, every resolved conversation was permanently trapped in human-only re-escalation mode — the operator's "resolve" button cleared the notification status but not the conversation flag.
+
+**Why the one-way flag was wrong from the start.** `fully_escalated` was introduced as a safety mechanism: "if Marina can't handle it, never let her try again." But the blueprint's state machine has `resolved → pending` as a CORE transition. The safety was actually a cage — operators had no way to give a conversation back to the AI after resolving. Every future message created another re-escalation notification, flooding the queue with repeat entries.
+
+**The `json_set` lesson.** I initially claimed that SQLite's `json_set()` provided "atomic" protection against concurrent message processing threads. The reviewer caught the misleading claim: `json_set` avoids a read-modify-write race WITHIN the resolve handler, but does NOT protect against a concurrent `wa_save_booking_state(INSERT OR REPLACE)` from a message thread that already loaded the old flags into a Python dict. The race is low-severity (one extra re-escalation, second resolve clears it) but the claim was wrong. **Principle: "atomic SQL" only helps if ALL writers use the same SQL pattern. If one writer uses `json_set` but another uses `INSERT OR REPLACE` with a full dict, the latter wins.** Proper fix: per-conversation lock shared between webhook handler and dashboard API — deferred.
+
+**Parallel field approach worked again (3rd time).** Briefs 186, 187, and 188 all followed the same incremental migration: add the new pattern (adapters, registry, status field) alongside the old one, don't remove the old one yet. This keeps the blast radius small and lets each brief ship independently. The `fully_escalated` flag still exists and still drives orchestrator routing — the state machine just clears it at the right moment. A follow-up brief can migrate the orchestrator check from `flags.get("fully_escalated")` to `get_conversation_status() == "open"` once the status field has been running in production.
+
+
 ## Brief 187 — Mock what your code actually calls, not what it used to call
 
 Decision: introduce sender-side registry dispatch (`senders/` package + `send_reply()` function), symmetric to Brief 186's parser-side adapters. Small brief — one adapter class wrapping `send_dm_reply`, one registry, two call sites swapped. Reviewer caught a critical problem in round 1 that would have caused 11 silent test regressions.
