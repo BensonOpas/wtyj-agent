@@ -219,7 +219,7 @@ As of 2026-04-11 evening, SR consolidated three previously separate frontends in
 | Item | Value |
 |------|-------|
 | Active Replit project | `wetakeyourjob.com` (under Calvin's Replit account) |
-| Active GitHub repo | `BensonOpas/wetakeyourjob` (private, default branch `main`, connected 2026-04-11) |
+| Active GitHub repo | `BensonOpas/wtyj-frontend` (private, default branch `main`, connected 2026-04-11; renamed from `wetakeyourjob` on 2026-04-12 for symmetry with `wtyj-agent`) |
 | Stack | React 19 + Vite 7 + Tailwind 4 + shadcn/ui + TanStack Query, pnpm workspace (`@replit` plugins, single React Router) |
 | Workspace layout | `artifacts/wetakeyourjob/` is the React app (with `src/pages/`, `src/dashboard/`, `src/demo/` for the three sites). `artifacts/api-server/` is the Replit-side API (separate from our VPS backend). `lib/` has shared `api-client-react`, `api-spec`, `api-zod`, `db`. |
 | Backend API (operator dashboard) | `https://api.wetakeyourjob.com/{tenant}/dashboard/api/` (multi-tenant path-prefix routing — see nginx section) |
