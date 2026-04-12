@@ -94,7 +94,7 @@ Loaded by docker-compose's `env_file:` directive at container start.
 | `ZERNIO_WEBHOOK_SECRET` | Zernio | HMAC-SHA256 secret for DM webhook signature verification |
 | `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth2 | Dashboard Google Drive integration |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth2 | Dashboard Google Drive integration |
-| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token). **Current value: `123`** ⚠️ insecure, change before any public exposure of the dashboard. |
+| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token). Per-client: BlueMarlin=`123`, Adamus=`456`, Roberto=`789`. ⚠️ Change before public exposure. |
 | `OPENAI_API` | OpenAI | Optional: DALL-E image generation for content pipeline |
 | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | gws CLI | Set at runtime to path of service account key |
 | `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default in source: `28e94343-2f77-444c-ac32-58b7bed33b65` (the WTYJ Azure app, shared across all clients on the wetakeyourjob.com Microsoft 365 tenant). |
@@ -132,38 +132,38 @@ GoDaddy email plan currently has 2 seats total.
 
 ## Services (Docker — post Brief 152)
 
-Two containers, one shared image. Multi-client architecture proven and isolated as of Brief 152.
+Three containers, one shared image. Multi-client architecture proven and isolated as of Brief 152. Roberto added Brief 177.
 
 | Client | Container name | Port | Compose file | Runtime dir |
 |--------|----------------|------|--------------|-------------|
 | BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
 | Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
+| Roberto Psychology (demo #3) | `wtyj-roberto` | 8003 | `/root/clients/roberto/docker-compose.yml` | `/root/clients/roberto/` |
 
-Both containers use the same image `wtyj-agent:latest` (built from `Dockerfile` at `/root/Dockerfile`). Adamus uses `image: wtyj-agent` directly — no rebuild on Adamus deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus's email-poller exits cleanly on startup (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token).
+All containers use the same image `wtyj-agent:latest` (built from `Dockerfile` at `/root/Dockerfile`). Adamus and Roberto use `image: wtyj-agent` directly — no rebuild on their deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus/Roberto email-pollers exit cleanly on startup (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token). Roberto runs with `booking_flow: false` (filter/buffer mode).
 
 Runtime isolation: Brief 148 added `.dockerignore` exclusion of `wtyj/config/`, `wtyj/data/`, `wtyj/logs/`, `clients/`, plus directory mounts in both compose files. Each container's `/app/config/` is populated entirely from its own host directory at runtime — zero cross-tenant leakage at the image layer.
 
-### Deploy commands (post-Brief-152)
+### Deploy commands (post-Brief-177)
 
 ```bash
-# Standard deploy: pull, rebuild image, restart both containers
+# Standard deploy: pull, rebuild image, restart all containers
 ssh root@108.61.192.52 "
-  cd /root/clients/bluemarlin && docker compose down
-  cd /root/clients/adamus && docker compose down
   cd /root && git pull
-  cd /root/clients/bluemarlin && docker compose build && docker compose up -d
-  cd /root/clients/adamus && docker compose up -d
+  cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
+  cd /root/clients/adamus && docker compose down && docker compose up -d
+  cd /root/clients/roberto && docker compose down && docker compose up -d
 "
 
-# Health check both
-ssh root@108.61.192.52 "curl -s http://localhost:8001/health && echo && curl -s http://localhost:8002/health"
+# Health check all
+ssh root@108.61.192.52 "for p in 8001 8002 8003; do echo -n \":\$p \"; curl -s http://localhost:\$p/health; echo; done"
 
 # Inspect running containers
 ssh root@108.61.192.52 "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
-# Expected: wtyj-bluemarlin and wtyj-adamus, both running wtyj-agent image
+# Expected: wtyj-bluemarlin, wtyj-adamus, wtyj-roberto, all running wtyj-agent image
 ```
 
-The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus's compose references `image: wtyj-agent` directly and pulls the just-built image — no separate build step. To rebuild only (no restart), use `docker compose build` from `/root/clients/bluemarlin/` alone.
+The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus and Roberto reference `image: wtyj-agent` directly — no separate build step.
 
 ---
 
@@ -201,31 +201,59 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 | Public domain | `api.wetakeyourjob.com` |
 | SSL cert | Let's Encrypt via certbot (auto-renew) |
 | SSL expiry | 2026-06-09 |
-| Proxies to | `http://127.0.0.1:8001` |
-| Health check | `curl -s https://api.wetakeyourjob.com/health` |
+| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/roberto/` → 8003, `/` → 8001 (backward compat) |
+| Health check | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
 
 ---
 
-## Dashboard
+## Frontend (wetakeyourjob.com — merged 3 sites in one Replit project)
+
+As of 2026-04-11 evening, SR consolidated three previously separate frontends into a single Replit project served at `wetakeyourjob.com`. One React Router app, three CSS-isolated sub-trees:
+
+| Path | Site | Purpose |
+|------|------|---------|
+| `https://wetakeyourjob.com/` | Marketing site | Apple-style landing, Inter font, white/slate. Pages: Home, Services, About, Contact. |
+| `https://wetakeyourjob.com/dashboard` | Operator dashboard | Login-protected (multi-tenant dropdown: BlueMarlin / Adamus / Roberto), dark navy theme, ~12 pages. Same React app as the marketing site, gated by the Login screen. |
+| `https://wetakeyourjob.com/demo/bluemarlin/` | Booking demo | BlueMarlin Tours Curaçao charter booking site, teal Caribbean theme, 5 trip packages. |
 
 | Item | Value |
 |------|-------|
-| Frontend repo | `BensonOpas/wetakeyourjob-dashboard` (GitHub, private) |
-| Local path | `~/Projects/wetakeyourjob-dashboard/` |
-| Hosted URL | `https://bluemarlindashboard.replit.app/` |
-| Stack | React 19 + Vite + Tailwind + shadcn/ui + TanStack Query |
-| Backend API | `https://api.wetakeyourjob.com/dashboard/api/` |
-| Auth | Password → session token → Bearer header |
+| Active Replit project | `wetakeyourjob.com` (under Calvin's Replit account) |
+| Active GitHub repo | `BensonOpas/wetakeyourjob` (private, default branch `main`, connected 2026-04-11) |
+| Stack | React 19 + Vite 7 + Tailwind 4 + shadcn/ui + TanStack Query, pnpm workspace (`@replit` plugins, single React Router) |
+| Workspace layout | `artifacts/wetakeyourjob/` is the React app (with `src/pages/`, `src/dashboard/`, `src/demo/` for the three sites). `artifacts/api-server/` is the Replit-side API (separate from our VPS backend). `lib/` has shared `api-client-react`, `api-spec`, `api-zod`, `db`. |
+| Backend API (operator dashboard) | `https://api.wetakeyourjob.com/{tenant}/dashboard/api/` (multi-tenant path-prefix routing — see nginx section) |
+| Auth | Password → session token (`wtyj_token_{tenant}`) → Bearer header. Tenant selection persists in `localStorage.wtyj_client`. |
+| Default tenant passwords | BlueMarlin=`123`, Adamus=`456`, Roberto=`789`. ⚠️ Change before public launch. |
+
+### Legacy / superseded (do not use for new work)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `BensonOpas/wetakeyourjob-dashboard` (GitHub repo) | **PENDING ARCHIVE** | Old dashboard-only repo. Last commit `4023e54` (2026-04-11 18:29 UTC) was the final dashboard-only push before the merge. Archive on GitHub Settings → Danger Zone once the new merged project is fully verified. The history will remain read-only forever. |
+| `~/Projects/wetakeyourjob-dashboard/` (local clone) | Outdated | Mirrors the soon-to-be-archived repo. Don't push from here. |
+| `https://bluemarlindashboard.replit.app/` | Superseded | Was the old hosted URL for the dashboard-only Replit. Replaced by `wetakeyourjob.com/dashboard`. |
+| `https://bmdashboard.wetakeyourjob.com/` | Leftover deployment | Served from a separate "Client Overview Dashboard" Replit project (visible in SR's project list). Still alive because it's covered by the `*.wetakeyourjob.com` CORS regex, but it's a parallel deploy to the canonical merged version. **Should be killed** by archiving the "Client Overview Dashboard" Replit project and removing the `bmdashboard` DNS record from the DNS provider. |
+| ARCHIVE - WTYJ Operator Dashboard (Replit) | Archived by SR | The old operator dashboard's Replit project (was connected to `wetakeyourjob-dashboard` GitHub repo). |
+| ARCHIVE - BlueMarlin Demo Site (Replit) | Archived by SR | The old standalone booking demo project. Now lives at `/demo/bluemarlin/` inside the merged project. |
+
+### Known repo cleanup todo
+
+- `wetakeyourjob-full-reference.zip` is committed to the new repo at the root (~46.5 MB binary). This was an export SR created on 2026-04-12 02:16 UTC ("Add a downloadable zip file containing the full project reference documentation"). It bloats every clone and lingers in git history forever. Recommendation: remove it from the latest commit (`git rm wetakeyourjob-full-reference.zip && git commit && git push`) and add `*.zip` to `.gitignore`. The matching `wetakeyourjob-full-reference.tar.gz` (6 KB) is fine to keep.
 
 ### CORS allowed origins
 ```
 http://localhost:5173          # Vite dev
 http://localhost:3000          # Dev fallback
 https://api.wetakeyourjob.com  # VPS API
+https://wetakeyourjob.com      # Bare apex (added 2026-04-11, commit d910d4d, after the merged Replit project went live)
 https://bluemarlindashboard.replit.app
 https://wtyj-dashboard.replit.app
-https://*.replit.dev|app       # Regex for all Replit domains
+https://*.replit.dev|app       # Regex for all Replit domains (allow_origin_regex)
+https://*.wetakeyourjob.com    # All WTYJ subdomains (added Brief 184 session, allow_origin_regex)
 ```
+
+**Note on the bare apex fix:** the regex `https://.*\.wetakeyourjob\.com$` requires a subdomain prefix (`.something.wetakeyourjob.com`), so it does NOT match the bare apex `https://wetakeyourjob.com`. The apex had to be added to the explicit `allow_origins` list, otherwise the merged dashboard at `wetakeyourjob.com/dashboard/login` failed CORS preflight and SR's catch handler displayed a misleading "Invalid access key" error. Source: `wtyj/agents/social/webhook_server.py:35`.
 
 ---
 
