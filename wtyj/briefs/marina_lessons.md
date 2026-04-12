@@ -1758,6 +1758,11 @@ Decision: two targeted backend fixes after the e2e test showed (A) customer file
 Smooth brief — clean execution. One non-obvious technique: `_infer_contact_type(customer_id)` duplicates the 24-char hex check from `whatsapp_client._is_zernio_conversation_id` to avoid a circular import between state_registry and whatsapp_client. Acceptable duplication for a 7-line function — the alternative (extracting the check to a shared utility module) would add a new file for one function.
 
 
+## Brief 190 — Feature gates beat code deletion for archival
+
+Decision: archive the content pipeline by wrapping `start_scheduler()` in a feature flag check. Default `false`. Smooth brief — one `if` statement, 2 tests, clean deploy. The scheduler, content_agent, graphics_engine, and publisher modules stay intact. Set the flag to `true` to reactivate. Principle: when archiving a feature, gate it at the narrowest entry point (the scheduler start call) rather than deleting files or disabling endpoints. This preserves the option to reactivate with a single config change.
+
+
 ## Brief 189 — Re-export is backward-compat insurance, but module-level constant assignment doesn't follow re-exports
 
 Decision: extract the email adapter layer (12 functions, 11 constants) from the 1437-line email_poller.py into email_adapter.py. Re-export everything from email_poller.py so 15+ existing test files keep working. Smooth execution except for 2 tests that broke because they assigned `email_poller.REFRESH_TOKEN_PATH = temp_path` — but the moved function reads `email_adapter.REFRESH_TOKEN_PATH`, which wasn't updated.

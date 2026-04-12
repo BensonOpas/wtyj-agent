@@ -1169,3 +1169,10 @@ Brief 189 — Email poller split: extract adapter layer from 1437-line monolith
 Decision: extracted 12 I/O/parsing functions (`imap_connect`, `oauth_token`, `smtp_send`, `extract_text`, `strip_quotes`, `normalize_subject`, `resolve_thread_key`, `_is_new_email`, etc.) and 11 constants from `email_poller.py` into a new `email_adapter.py`. All names re-exported from `email_poller.py` for backward compat — zero existing test changes needed (except 2 tests in `test_065` that directly assign `REFRESH_TOKEN_PATH`, which needed to also patch the `email_adapter` module's copy). The integration modules (gws_calendar, sheets_writer, payment_stub) already lived in separate files — the adapter extraction was the remaining piece needed to separate "talk to the email platform" from "run the business logic." Brief-reviewer FAIL round 1 (`_MODULE_DIR`/`_CONFIG_DIR` missing from re-exports would cause NameError for staying constants; test used substring assertions). Both patched, PASS round 2. email_poller.py dropped from 1437 → 1298 lines; main() untouched.
 Outcome: complete — 889 passing / 0 failures (886 baseline + 3 new). Backend `d99eafa` pushed and deployed. All containers healthy.
 
+
+---
+
+Brief 190 — Content pipeline archival: feature-gate the scheduler
+Decision: wrapped `start_scheduler()` in the webhook_server lifespan handler with a `features.content_pipeline` feature flag check (default `false`). No client.json has this key, so the auto-posting scheduler stops running on all three containers. Zero code deletion — the content pipeline modules (scheduler, content_agent, graphics_engine, auto_poster, social_publisher) stay intact for future reactivation. Set `features.content_pipeline: true` in any client's client.json to re-enable. Smooth brief — reviewer caught the async context manager test pattern issue (lifespan is `@asynccontextmanager`, must be entered with `async with`, not called directly), patched, PASS round 2.
+Outcome: complete — 891 passing / 0 failures (889 baseline + 2 new). Backend `ad70328` pushed and deployed. All containers healthy. Scheduler confirmed not running via `docker logs`.
+
