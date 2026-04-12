@@ -233,6 +233,14 @@ def _get_conn():
         ")"
     )
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS conversation_status ("
+        "conversation_id TEXT PRIMARY KEY, "
+        "channel TEXT NOT NULL DEFAULT 'whatsapp', "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS content_drafts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "content_class TEXT NOT NULL, "
@@ -993,7 +1001,77 @@ def create_pending_notification(notification_type: str, channel: str,
     row_id = cur.lastrowid
     conn.commit()
     conn.close()
+    # Brief 188: escalation/relay created → conversation is now "open"
+    set_conversation_status(customer_id, "open", channel)
     return row_id
+
+
+def set_conversation_status(conversation_id: str, status: str,
+                            channel: str = "whatsapp") -> None:
+    """Set or update the conversation status (pending/open/resolved).
+    Uses UPSERT so the first call creates the row and subsequent calls update it."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET status = excluded.status, "
+        "channel = excluded.channel, updated_at = excluded.updated_at",
+        (conversation_id, channel, status,
+         datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_conversation_status(conversation_id: str) -> str:
+    """Get the current conversation status. Returns 'pending' if no record exists."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT status FROM conversation_status WHERE conversation_id = ?",
+        (conversation_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else "pending"
+
+
+def resolve_conversation_from_escalation(escalation_id: int) -> None:
+    """Brief 188: when operator resolves an escalation, set conversation status
+    to 'resolved' AND clear fully_escalated from booking state flags so the
+    conversation returns to AI mode on the next customer message.
+
+    Uses json_set() to avoid a read-modify-write cycle within this function.
+    Note: a concurrent message thread that already loaded flags before this call
+    may overwrite the clear via wa_save_booking_state — low severity, see brief."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
+        (escalation_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+    customer_id, esc_channel = row
+
+    # Set conversation status to resolved
+    conn.execute(
+        "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
+        "VALUES (?, ?, 'resolved', ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET status = 'resolved', "
+        "updated_at = excluded.updated_at",
+        (customer_id, esc_channel or "whatsapp",
+         datetime.now(timezone.utc).isoformat())
+    )
+
+    # Atomically clear fully_escalated in booking state flags
+    conn.execute(
+        "UPDATE whatsapp_booking_state "
+        "SET flags_json = json_set(COALESCE(flags_json, '{}'), '$.fully_escalated', json('false')) "
+        "WHERE phone = ?",
+        (customer_id,)
+    )
+
+    conn.commit()
+    conn.close()
 
 
 def _lookup_customer_contact(customer_id: str, contact_type: str) -> dict:
@@ -1059,7 +1137,7 @@ def _infer_contact_type(customer_id: str) -> str:
 
 def get_all_escalations() -> list:
     """Return all escalation notifications, newest first.
-    Brief 181: contact_type. Brief 183: customer_contact, customer_email, customer_phone."""
+    Brief 181: contact_type. Brief 183: customer_contact. Brief 188: conversation_status."""
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
@@ -1080,6 +1158,7 @@ def get_all_escalations() -> list:
             "customer_contact": customer_contact,
             "customer_email": contact["email"],
             "customer_phone": contact["phone"],
+            "conversation_status": get_conversation_status(r[4]),
         })
     return result
 

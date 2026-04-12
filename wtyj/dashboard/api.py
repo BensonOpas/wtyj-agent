@@ -940,10 +940,12 @@ async def get_escalation(escalation_id: int):
 
 @router.post("/escalations/{escalation_id}/resolve", dependencies=[Depends(_check_auth)])
 async def resolve_escalation(escalation_id: int):
-    """Mark an escalation as resolved."""
+    """Mark an escalation as resolved and return conversation to AI."""
     ok = state_registry.update_notification_status(escalation_id, "resolved")
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
+    # Brief 188: clear fully_escalated + set conversation status to resolved
+    state_registry.resolve_conversation_from_escalation(escalation_id)
     return {"ok": True}
 
 

@@ -291,6 +291,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return esc_reply
 
+    # Brief 188: conversation is being handled by AI → status "pending"
+    state_registry.set_conversation_status(phone, "pending", channel)
+
     # Step 1: Build action context
     action_context = _build_action_context(flags)
 
