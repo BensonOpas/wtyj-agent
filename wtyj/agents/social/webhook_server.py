@@ -17,6 +17,7 @@ from agents.social.whatsapp_client import parse_webhook_payload, send_text_messa
 from agents.social.social_agent import handle_incoming_whatsapp_message
 from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
 from agents.social.dm_agent import handle_incoming_dm
+from agents.social.channels import ZERNIO_CHANNELS, DEFAULT_ZERNIO_CHANNEL
 
 from contextlib import asynccontextmanager
 
@@ -299,16 +300,8 @@ def _process_zernio_event(payload: dict):
 
         # WhatsApp via Zernio: debounce like Meta WhatsApp
         if msg["platform"] == "whatsapp":
-            _wa_msg = {
-                "from": conversation_id,
-                "text": text,
-                "from_name": msg.get("sender_name", ""),
-                "message_id": msg["message_id"],
-                "_zernio_conversation_id": conversation_id,
-                "_zernio_account_id": account_id,
-                "_zernio_channel": channel,
-                "_zernio_sender_name": msg.get("sender_name", ""),
-            }
+            adapter_cls = ZERNIO_CHANNELS.get(channel, DEFAULT_ZERNIO_CHANNEL)
+            _wa_msg = adapter_cls.from_zernio(msg)
             send_typing_indicator(conversation_id, account_id)
             _buffer_message(_wa_msg)
             return
@@ -331,11 +324,8 @@ def _process_zernio_event(payload: dict):
                 # If we store before, Marina sees the message twice (once in history,
                 # once as the current inbound). This matches the WhatsApp _flush_buffer
                 # pattern which also stores after the call.
-                orchestrator_msg = {
-                    "from": conversation_id,
-                    "text": text,
-                    "from_name": msg.get("sender_name", ""),
-                }
+                adapter_cls = ZERNIO_CHANNELS.get(channel, DEFAULT_ZERNIO_CHANNEL)
+                orchestrator_msg = adapter_cls.from_zernio(msg)
                 reply_text = handle_incoming_whatsapp_message(orchestrator_msg, channel=channel)
                 # Store user message after orchestrator (same as WhatsApp path)
                 state_registry.dm_store_message(
