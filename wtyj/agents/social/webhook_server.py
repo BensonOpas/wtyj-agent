@@ -24,8 +24,10 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
-    from agents.social.scheduler import start_scheduler
-    start_scheduler()
+    # Brief 190: content pipeline archived — scheduler only starts when explicitly enabled
+    if config_loader.get_raw().get("features", {}).get("content_pipeline", False):
+        from agents.social.scheduler import start_scheduler
+        start_scheduler()
     yield
 
 app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None, lifespan=lifespan)
