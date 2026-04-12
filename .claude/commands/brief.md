@@ -11,7 +11,7 @@ NOT from cutting substance or skipping safety gates.
 
 ## Writing the brief
 
-1. Read CLAUDE.md, briefs/system_state.md, briefs/infra.md, briefs/roadmap.md
+1. Read CLAUDE.md, briefs/system_state.md, briefs/infra.md, briefs/roadmap.md, tools/control-panel/data/tasks.json
 2. Read every file you will reference or modify. "Read" = open the file
    and read the relevant section. Grep output or stale memory are NOT
    substitutes for reading the current source before editing it.
@@ -120,7 +120,7 @@ Commit SHA(s). "Both containers healthy post-deploy."
        it picks up the newly-built image (both clients use the same
        image — only one `build` is needed):
        ```
-       ssh root@108.61.192.52 "cd /root && git pull && cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d && cd /root/clients/adamus && docker compose down && docker compose up -d"
+       ssh root@108.61.192.52 "cd /root && git pull && cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d && cd /root/clients/adamus && docker compose down && docker compose up -d && cd /root/clients/roberto && docker compose down && docker compose up -d"
        ```
     c. Update system_state.md (append entry). **Size:** one descriptive
        paragraph, max ~200 words. Decision in 2-3 sentences, outcome in
@@ -138,22 +138,35 @@ Commit SHA(s). "Both containers healthy post-deploy."
          outcome + one line of what made it smooth. The entry IS the
          chronological index of how the project evolved — routine ≠
          skippable.
-    e. If new credentials, env vars, services, or URLs were added:
-       update briefs/infra.md.
-    f. **Verify deploy succeeded BEFORE committing post-exec docs.**
+    e. **Control panel sync (run as background subagent while deploy
+       is in flight).** If the brief built, removed, or changed the
+       status of a channel, capability, or escalation route: spawn a
+       subagent to update the system map nodes/edges in
+       `tools/control-panel/src/pages/SystemMap.tsx` and the client
+       cards in `tools/control-panel/src/pages/Clients.tsx`. If the
+       brief completed a task or subtask on the board, update
+       `tools/control-panel/data/tasks.json` (mark subtask done, move
+       task to inProgress/done, etc). This runs in parallel with the
+       deploy — do not block on it.
+    f. **Doc maintenance checkpoint:**
+       - If new credentials, env vars, services, ports, containers,
+         or URLs were added: update `briefs/infra.md`.
+       - If the brief shifts a phase milestone: update `briefs/roadmap.md`
+         (rare — only on major directional changes).
+    g. **Verify deploy succeeded BEFORE committing post-exec docs.**
        Check the background job's output via BashOutput. If the job is
        still running (deploy hasn't finished yet because c/d/e went
        faster than 90s), wait for it — do NOT commit while the deploy
        is in flight. Once the job completes, verify health with a
        separate (foreground) curl:
        ```
-       ssh root@108.61.192.52 "curl -s http://localhost:8001/health && curl -s http://localhost:8002/health"
+       ssh root@108.61.192.52 "curl -s http://localhost:8001/health && curl -s http://localhost:8002/health && curl -s http://localhost:8003/health"
        ```
-       Both should return `{"status":"ok"}`. If the build failed, a
+       All should return `{"status":"ok"}`. If the build failed, a
        container won't start, or health check returns non-OK: STOP.
        Fix the deploy, re-run. Do NOT commit post-exec docs claiming
        success while the deploy is on fire.
-    g. Commit and push post-exec docs:
+    h. Commit and push post-exec docs:
        ```
        git add wtyj/briefs/marina_output_XXX.md wtyj/briefs/system_state.md wtyj/briefs/marina_lessons.md [wtyj/briefs/infra.md]
        git commit -m "Brief XXX post-execution: output + system_state + lessons"
