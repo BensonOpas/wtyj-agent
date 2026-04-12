@@ -1758,6 +1758,17 @@ Decision: two targeted backend fixes after the e2e test showed (A) customer file
 Smooth brief — clean execution. One non-obvious technique: `_infer_contact_type(customer_id)` duplicates the 24-char hex check from `whatsapp_client._is_zernio_conversation_id` to avoid a circular import between state_registry and whatsapp_client. Acceptable duplication for a 7-line function — the alternative (extracting the check to a shared utility module) would add a new file for one function.
 
 
+## Brief 187 — Mock what your code actually calls, not what it used to call
+
+Decision: introduce sender-side registry dispatch (`senders/` package + `send_reply()` function), symmetric to Brief 186's parser-side adapters. Small brief — one adapter class wrapping `send_dm_reply`, one registry, two call sites swapped. Reviewer caught a critical problem in round 1 that would have caused 11 silent test regressions.
+
+**The catch: existing tests mocked the wrong thing after the refactor.** Eleven tests across three files patched `agents.social.webhook_server.send_dm_reply` — which was correct BEFORE the brief, but after the brief the code calls `send_reply` not `send_dm_reply`. Python's `@patch` replaces a name in a module's namespace. If the code no longer references that name, the patch connects to nothing and the real function fires unpatched via `ZernioSender.send → send_dm_reply` in the zernio module (a different namespace the tests weren't patching). Net result: every test silently makes real Zernio API calls during the test run, AND 6 tests that assert `mock_send.assert_called_once()` fail because the mock was never called.
+
+**Principle: when refactoring a function that existing tests mock, grep for `@patch(".*<function_name>")` across the entire test suite BEFORE writing the brief.** Each patch site is a contract — "I'm testing that the code calls THIS function." If the refactor changes which function the code calls, every patch site needs updating. This is the inverse of Brief 185's lesson (where a mock `side_effect` didn't accept new kwargs). Same root cause: mocks create implicit couplings to the exact function signature and call chain. Any refactor that changes the chain must update the mocks.
+
+**Mechanical fix was simple once identified:** `@patch("...send_dm_reply")` → `@patch("...send_reply")` + shift positional arg indices by +1 (new `channel` first arg). 11 decorators + 8 index shifts. The reviewer saved production by catching it before execution.
+
+
 ## Brief 186 — Channel adapter refactor: the buffer round-trip is what makes WhatsApp special
 
 Decision: introduce `wtyj/agents/social/channels/` package with a `Channel` ABC and dispatch via a `ZERNIO_CHANNELS` registry, replacing the two inline platform-specific dict literals in `webhook_server.py:_process_zernio_event`. First subtask of the Modular architecture work (Pattern 1 from `the_blueprint.md`). Tight scope on purpose: parsing layer only, Zernio-routed channels only, brain/buffer/lock/email-poller untouched.
