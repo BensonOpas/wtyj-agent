@@ -94,7 +94,7 @@ Loaded by docker-compose's `env_file:` directive at container start.
 | `ZERNIO_WEBHOOK_SECRET` | Zernio | HMAC-SHA256 secret for DM webhook signature verification |
 | `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth2 | Dashboard Google Drive integration |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth2 | Dashboard Google Drive integration |
-| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token). Per-client: BlueMarlin=`123`, Adamus=`456`, Roberto=`789`. ⚠️ Change before public exposure. |
+| `DASHBOARD_PASSWORD` | Dashboard | Operator login password (generates in-memory session token). Per-client: BlueMarlin=`123`, Adamus=`456`, Consulta Despertares=`789`. ⚠️ Change before public exposure. |
 | `OPENAI_API` | OpenAI | Optional: DALL-E image generation for content pipeline |
 | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | gws CLI | Set at runtime to path of service account key |
 | `AZURE_CLIENT_ID` | Email poller | Microsoft Azure app client ID. Default in source: `28e94343-2f77-444c-ac32-58b7bed33b65` (the WTYJ Azure app, shared across all clients on the wetakeyourjob.com Microsoft 365 tenant). |
@@ -138,7 +138,7 @@ Three containers, one shared image. Multi-client architecture proven and isolate
 |--------|----------------|------|--------------|-------------|
 | BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
 | Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
-| Roberto Psychology (demo #3) | `wtyj-roberto` | 8003 | `/root/clients/roberto/docker-compose.yml` | `/root/clients/roberto/` |
+| Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
 
 All containers use the same image `wtyj-agent:latest` (built from `Dockerfile` at `/root/Dockerfile`). Adamus and Roberto use `image: wtyj-agent` directly — no rebuild on their deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus/Roberto email-pollers exit cleanly on startup (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token). Roberto runs with `booking_flow: false` (filter/buffer mode).
 
@@ -160,7 +160,7 @@ ssh root@108.61.192.52 "for p in 8001 8002 8003; do echo -n \":\$p \"; curl -s h
 
 # Inspect running containers
 ssh root@108.61.192.52 "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
-# Expected: wtyj-bluemarlin, wtyj-adamus, wtyj-roberto, all running wtyj-agent image
+# Expected: wtyj-bluemarlin, wtyj-adamus, wtyj-consultadespertares, all running wtyj-agent image
 ```
 
 The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus and Roberto reference `image: wtyj-agent` directly — no separate build step.
@@ -201,7 +201,7 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 | Public domain | `api.wetakeyourjob.com` |
 | SSL cert | Let's Encrypt via certbot (auto-renew) |
 | SSL expiry | 2026-06-09 |
-| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/roberto/` → 8003, `/` → 8001 (backward compat) |
+| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/` → 8001 (backward compat) |
 | Health check | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
 
 ---
@@ -224,7 +224,7 @@ As of 2026-04-11 evening, SR consolidated three previously separate frontends in
 | Workspace layout | `artifacts/wetakeyourjob/` is the React app (with `src/pages/`, `src/dashboard/`, `src/demo/` for the three sites). `artifacts/api-server/` is the Replit-side API (separate from our VPS backend). `lib/` has shared `api-client-react`, `api-spec`, `api-zod`, `db`. |
 | Backend API (operator dashboard) | `https://api.wetakeyourjob.com/{tenant}/dashboard/api/` (multi-tenant path-prefix routing — see nginx section) |
 | Auth | Password → session token (`wtyj_token_{tenant}`) → Bearer header. Tenant selection persists in `localStorage.wtyj_client`. |
-| Default tenant passwords | BlueMarlin=`123`, Adamus=`456`, Roberto=`789`. ⚠️ Change before public launch. |
+| Default tenant passwords | BlueMarlin=`123`, Adamus=`456`, Consulta Despertares=`789`. ⚠️ Change before public launch. |
 
 ### Legacy / superseded (do not use for new work)
 

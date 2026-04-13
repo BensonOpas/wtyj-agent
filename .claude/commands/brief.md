@@ -120,7 +120,7 @@ Commit SHA(s). "Both containers healthy post-deploy."
        it picks up the newly-built image (both clients use the same
        image — only one `build` is needed):
        ```
-       ssh root@108.61.192.52 "cd /root && git pull && cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d && cd /root/clients/adamus && docker compose down && docker compose up -d && cd /root/clients/roberto && docker compose down && docker compose up -d"
+       ssh root@108.61.192.52 "cd /root && git pull && cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d && cd /root/clients/adamus && docker compose down && docker compose up -d && cd /root/clients/consultadespertares && docker compose down && docker compose up -d"
        ```
     c. Update system_state.md (append entry). **Size:** one descriptive
        paragraph, max ~200 words. Decision in 2-3 sentences, outcome in
