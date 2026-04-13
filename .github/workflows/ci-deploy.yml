@@ -2,7 +2,7 @@ name: CI/CD — Test + Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
     branches: [main]
 
@@ -34,12 +34,35 @@ jobs:
           CLIENT_CONFIG_PATH: "clients/bluemarlin/config/client.json"
         run: python -m pytest wtyj/tests/ -q --tb=short
 
-  deploy:
+  deploy-staging:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    steps:
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /root/staging-code && git pull
+            docker build -t wtyj-agent:staging -f Dockerfile .
+            cd /root/staging && docker compose down && docker compose up -d
+            sleep 3
+            STATUS=$(curl -sf http://localhost:9001/health | grep -o '"ok"')
+            if [ -z "$STATUS" ]; then
+              echo "STAGING HEALTH CHECK FAILED"
+              exit 1
+            fi
+            echo "Staging deployed and healthy"
+
+  deploy-production:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - name: Deploy to VPS
+      - name: Deploy to production
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -50,7 +73,7 @@ jobs:
             cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
             cd /root/clients/adamus && docker compose down && docker compose up -d
             cd /root/clients/consultadespertares && docker compose down && docker compose up -d
-            # Health check
+            # Health check all production containers
             for p in 8001 8002 8003; do
               STATUS=$(curl -sf http://localhost:$p/health | grep -o '"ok"')
               if [ -z "$STATUS" ]; then
@@ -58,4 +81,4 @@ jobs:
                 exit 1
               fi
             done
-            echo "All containers healthy"
+            echo "All production containers healthy"
