@@ -625,6 +625,53 @@ def main():
                         from_email, subj, body,
                         th.get("fields", {}), _esc_flags
                     )
+
+                    # Brief 192: even in fully-escalated mode, Marina may flag
+                    # a relay question or re-escalation (same fix as Brief 184
+                    # for social_agent.py).
+                    if result.get("semi_escalation"):
+                        _relay_q = result.get("relay_question", "(no question captured)")
+                        _relay_token = uuid.uuid4().hex[:12]
+                        _cname = th["fields"].get("customer_name") or from_email
+                        _ref = _resolve_booking_ref(th)
+                        th["flags"]["awaiting_relay"] = True
+                        th["flags"]["relay_token"] = _relay_token
+                        th["flags"]["relay_question"] = _relay_q
+                        th["flags"]["relay_customer_email"] = from_email
+                        th["flags"]["relay_reply_subject"] = "Re: " + subj
+                        _relay_alert = (
+                            f"Customer: {_cname} <{from_email}>\n"
+                            f"Their question: {_relay_q}\n\n"
+                            f"Booking context:\n"
+                            f"  Trip: {th['fields'].get('service_key', '')} | "
+                            f"Date: {th['fields'].get('date', '')} | "
+                            f"Guests: {th['fields'].get('guests', '')}\n"
+                            f"  Ref: {_ref}\n\n"
+                            f"INSTRUCTIONS: Reply to this email with your answer.\n"
+                            f"Marina will relay it to the customer in her own words."
+                        )
+                        state_registry.create_pending_notification(
+                            'relay', 'email', from_email, _cname,
+                            f"[RELAY-{_relay_token}] {_ref} - {_cname}",
+                            _relay_alert, relay_token=_relay_token)
+                        log(f"Escalated semi-relay: {from_email} re: {_relay_q[:60]}")
+
+                    if result.get("requires_human") and not result.get("semi_escalation"):
+                        _cname = th["fields"].get("customer_name") or from_email
+                        _ref = _resolve_booking_ref(th)
+                        _esc_note = result.get("internal_note", "")
+                        _chat_lines = []
+                        for _m in th.get("messages", []):
+                            _chat_lines.append(f"[{_m.get('role','?').upper()}] {_m.get('body','')}")
+                        state_registry.create_pending_notification(
+                            'escalation', 'email', from_email, _cname,
+                            f"[ESCALATION] {_ref} - {_cname} ({from_email}) - {_esc_note[:200]}",
+                            f"=== RE-ESCALATION (fully_escalated email) ===\n"
+                            f"Customer: {_cname} <{from_email}>\n"
+                            f"New issue: {_esc_note}\n\n"
+                            f"=== CHAT LOG ===\n" + "\n".join(_chat_lines))
+                        log(f"Escalated re-escalation: {from_email}")
+
                     smtp_send(from_email, "Re: " + subj, result["reply"],
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
                     th["messages"].append({
