@@ -1,0 +1,61 @@
+name: CI/CD — Test + Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run test suite
+        env:
+          ANTHROPIC_API_KEY: "test-key"
+          DASHBOARD_PASSWORD: "testpass"
+          WHATSAPP_VERIFY_TOKEN: "test"
+          WHATSAPP_PHONE_NUMBER_ID: "test"
+          META_ACCESS_TOKEN: "test"
+          LATE_API_KEY: "test"
+          ZERNIO_WEBHOOK_SECRET: "test"
+          CLIENT_CONFIG_PATH: "clients/bluemarlin/config/client.json"
+        run: python -m pytest wtyj/tests/ -q --tb=short
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /root && git pull
+            cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
+            cd /root/clients/adamus && docker compose down && docker compose up -d
+            cd /root/clients/consultadespertares && docker compose down && docker compose up -d
+            # Health check
+            for p in 8001 8002 8003; do
+              STATUS=$(curl -sf http://localhost:$p/health | grep -o '"ok"')
+              if [ -z "$STATUS" ]; then
+                echo "HEALTH CHECK FAILED on port $p"
+                exit 1
+              fi
+            done
+            echo "All containers healthy"
