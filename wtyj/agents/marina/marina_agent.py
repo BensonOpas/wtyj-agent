@@ -737,7 +737,7 @@ def _build_user_prompt(
         if messages:
             history_lines = []
             for m in messages:
-                role_label = "Customer" if m.get("role") == "user" else config_loader.get_business().get("agent_name", "Marina")
+                role_label = "Customer" if m.get("role") == "user" else config_loader.get_business().get("agent_name", "CSA")
                 history_lines.append(f"  {role_label}: {m.get('text', '')}")
             history_section = (
                 "CONVERSATION HISTORY (recent messages):\n"

@@ -1277,7 +1277,7 @@ def main():
                     else:
                         smtp_send(demo_support_email,
                         f"[ALERT] Marina poller: {_consecutive_errors} consecutive errors",
-                        f"Latest error: {ex}\n\nCheck journalctl -u bluemarlin")
+                        f"Latest error: {ex}\n\nCheck docker logs for this container")
                     _error_alert_sent = True
                 except Exception:
                     pass
