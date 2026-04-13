@@ -1025,7 +1025,7 @@ async def suggest_reply(req: SuggestReplyRequest):
     # Format conversation
     thread_lines = []
     for msg in messages:
-        label = "Customer" if msg["role"] == "user" else "Marina"
+        label = "Customer" if msg["role"] == "user" else config_loader.get_business().get("agent_name", "Marina")
         thread_lines.append(f"{label}: {msg['text']}")
     thread_text = "\n\n".join(thread_lines)
 

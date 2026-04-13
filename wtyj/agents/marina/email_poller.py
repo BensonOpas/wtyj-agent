@@ -365,7 +365,7 @@ def main():
     demo_support_email = (
         config_loader.get_business().get("support_email")
         or config_loader.get_business().get("demo_support_email")
-        or "butlerbensonagent@gmail.com"
+        or ""
     )
 
     state = load_json(THREAD_STATE_PATH, {"threads": {}, "message_id_index": {}})

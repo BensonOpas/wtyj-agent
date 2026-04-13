@@ -98,7 +98,7 @@ def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
     if messages:
         history_lines = []
         for m in messages:
-            role_label = "Customer" if m.get("role") == "user" else "Marina"
+            role_label = "Customer" if m.get("role") == "user" else business.get("agent_name", "Marina")
             history_lines.append(f"  {role_label}: {m.get('text', '')}")
         history_section = (
             "CONVERSATION HISTORY (recent messages):\n"
