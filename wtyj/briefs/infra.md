@@ -204,6 +204,36 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 | Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/` → 8001 (backward compat) |
 | Health check | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
 
+## Monitoring + Backups
+
+### UptimeRobot (uptime monitoring)
+
+| Item | Value |
+|------|-------|
+| Service | UptimeRobot (free tier, 5-min checks) |
+| Account 1 | `butlerbensonagent@gmail.com` (Mac mini / backup) |
+| Account 2 | `calvinadamusjr@gmail.com` (Benson personal / primary) |
+| Status page | `stats.uptimerobot.com` (public, customizable) |
+
+| Monitor | URL |
+|---|---|
+| BlueMarlin Health | `https://api.wetakeyourjob.com/bluemarlin/health` |
+| Adamus Health | `https://api.wetakeyourjob.com/adamus/health` |
+| Consulta Despertares Health | `https://api.wetakeyourjob.com/consultadespertares/health` |
+
+Both accounts monitor the same 3 endpoints. Alerts via email + UptimeRobot app push notifications. Health endpoints support GET and HEAD (Brief 192 session).
+
+### Automated backups (daily cron)
+
+| Item | Value |
+|------|-------|
+| Script | `/root/backups/daily_backup.sh` |
+| Schedule | Daily at 3:00 AM UTC via cron |
+| Backup dir | `/root/backups/` |
+| Retention | 30 days (auto-cleanup) |
+| What's backed up | `state_registry.db` + `email_thread_state.json` for ALL clients (auto-discovers `/root/clients/*/`) |
+| Log | `/root/backups/backup.log` |
+
 ---
 
 ## Frontend (wetakeyourjob.com — merged 3 sites in one Replit project)
