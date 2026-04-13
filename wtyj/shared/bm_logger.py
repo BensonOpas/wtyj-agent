@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = os.path.normpath(os.path.join(_BASE_DIR, "..", "logs", "bluemarlin.log"))
+LOG_PATH = os.path.normpath(os.path.join(_BASE_DIR, "..", "logs", "agent.log"))
 
 def log(event: str, **fields):
     """

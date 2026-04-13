@@ -23,11 +23,13 @@ def _get_spreadsheet_id() -> str:
     sid = os.environ.get('SPREADSHEET_ID', '')
     if sid:
         return sid
-    return '1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I'
+    return ''
 
 
 def _append(tab_name: str, row: list) -> None:
     spreadsheet_id = _get_spreadsheet_id()
+    if not spreadsheet_id:
+        return
     params = json.dumps({
         'spreadsheetId': spreadsheet_id,
         'range': f'{tab_name}!A:A',

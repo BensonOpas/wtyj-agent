@@ -761,11 +761,12 @@ def _get_email_state_path() -> str:
     """Brief 171: resolve the email_thread_state.json path the email_poller uses."""
     # email_poller stores it at /app/config/email_thread_state.json inside the container.
     # Fall back to the source-tree clients/bluemarlin path for local dev.
+    _cfg = os.environ.get("CLIENT_CONFIG_PATH", "")
     candidates = [
         "/app/config/email_thread_state.json",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-                     "clients", "bluemarlin", "config", "email_thread_state.json"),
     ]
+    if _cfg:
+        candidates.insert(0, os.path.join(os.path.dirname(_cfg), "email_thread_state.json"))
     for p in candidates:
         if os.path.exists(p):
             return p

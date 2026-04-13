@@ -449,7 +449,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
         )
 
     _customer_file_block = _build_customer_file_block(customer_file)
-    return f"""You are {business.get('agent_name', 'Marina')}, the booking agent for {business.get('name', 'the business')}.
+    return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block()}

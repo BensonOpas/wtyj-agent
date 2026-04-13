@@ -30,13 +30,13 @@ async def lifespan(app):
         start_scheduler()
     yield
 
-app = FastAPI(title="BlueMarlin Social Webhook", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="WTYJ Agent", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://wetakeyourjob.com", "https://bluemarlindashboard.replit.app", "https://wtyj-dashboard.replit.app"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://wetakeyourjob.com", "https://wtyj-dashboard.replit.app"],
     allow_origin_regex=r"https://.*\.(replit\.(dev|app)|wetakeyourjob\.com)$",
     allow_credentials=True,
     allow_methods=["*"],

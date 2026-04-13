@@ -1131,7 +1131,7 @@ def main():
                                 price_usd = (config_loader.get_service(service_key).get("price", 0)
                                              if service_key else 0)
                                 pay = payment_stub.generate_payment_link(booking_ref, price_usd)
-                                pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                                pay_link = f"https://demo.pay/{pay['payment_id']}"
                                 th["flags"]["payment_id"] = pay.get("payment_id")
                                 th["flags"]["payment_link"] = pay_link
                                 th["flags"]["payment_status"] = pay.get("status")
@@ -1241,6 +1241,9 @@ def main():
             _pending = state_registry.get_pending_notifications()
             for _pn in _pending:
                 try:
+                    if not demo_support_email:
+                        log(f"Skipping notification id={_pn['id']} — no support_email configured")
+                        continue
                     smtp_send(demo_support_email, _pn["subject"], _pn["body"],
                               reply_to=EMAIL_ADDR)
                     state_registry.update_notification_status(_pn["id"], "sent")
@@ -1269,7 +1272,10 @@ def main():
             im = None
             if _consecutive_errors >= _ERROR_ALERT_THRESHOLD and not _error_alert_sent:
                 try:
-                    smtp_send(demo_support_email,
+                    if not demo_support_email:
+                        pass
+                    else:
+                        smtp_send(demo_support_email,
                         f"[ALERT] Marina poller: {_consecutive_errors} consecutive errors",
                         f"Latest error: {ex}\n\nCheck journalctl -u bluemarlin")
                     _error_alert_sent = True

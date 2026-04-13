@@ -35,7 +35,7 @@ def generate_payment_link(booking_ref: str, amount_usd: int) -> dict:
     raw = f"{booking_ref}|{amount_usd}"
     payment_id = hashlib.sha256(raw.encode()).hexdigest()[:12]
 
-    link = f"https://demo.pay/bluemarlin/{payment_id}"
+    link = f"https://demo.pay/{payment_id}"
 
     payment_record = {
         "payment_id": payment_id,

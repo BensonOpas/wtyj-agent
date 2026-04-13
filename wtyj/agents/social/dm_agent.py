@@ -22,7 +22,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     trips = config_loader.get_services()
     faq = config_loader.get_faq()
 
-    agent_name = business.get("agent_name", "Marina")
+    agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
     wa_number = business.get("whatsapp", "")
     wa_link = wa_number.replace("+", "").replace(" ", "")
@@ -98,7 +98,7 @@ def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
     if messages:
         history_lines = []
         for m in messages:
-            role_label = "Customer" if m.get("role") == "user" else business.get("agent_name", "Marina")
+            role_label = "Customer" if m.get("role") == "user" else business.get("agent_name", "CSA")
             history_lines.append(f"  {role_label}: {m.get('text', '')}")
         history_section = (
             "CONVERSATION HISTORY (recent messages):\n"

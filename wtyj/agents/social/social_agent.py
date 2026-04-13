@@ -814,7 +814,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                 _payment_timing = config_loader.get_raw().get("payment", {}).get("timing", "upfront")
                 if _payment_timing in ("upfront", "deposit"):
                     pay = payment_stub.generate_payment_link(booking_ref, price_usd)
-                    pay_link = f"https://demo.pay/bluemarlin/{pay['payment_id']}"
+                    pay_link = f"https://demo.pay/{pay['payment_id']}"
                     flags["payment_id"] = pay.get("payment_id")
                     flags["payment_link"] = pay_link
                     flags["payment_status"] = pay.get("status")

@@ -1025,7 +1025,7 @@ async def suggest_reply(req: SuggestReplyRequest):
     # Format conversation
     thread_lines = []
     for msg in messages:
-        label = "Customer" if msg["role"] == "user" else config_loader.get_business().get("agent_name", "Marina")
+        label = "Customer" if msg["role"] == "user" else config_loader.get_business().get("agent_name", "CSA")
         thread_lines.append(f"{label}: {msg['text']}")
     thread_text = "\n\n".join(thread_lines)
 
@@ -1046,7 +1046,7 @@ async def suggest_reply(req: SuggestReplyRequest):
         price = data.get("price_pp", "")
         trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
 
-    agent_name = business.get("agent_name", "Marina")
+    agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
     persona_block = marina_agent._build_agent_persona_block()
 
