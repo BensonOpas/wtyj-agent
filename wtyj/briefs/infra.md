@@ -132,15 +132,18 @@ GoDaddy email plan currently has 2 seats total.
 
 ## Services (Docker — post Brief 152)
 
-Three containers, one shared image. Multi-client architecture proven and isolated as of Brief 152. Roberto added Brief 177.
+Four containers (3 production + 1 staging). Production uses `wtyj-agent:latest`, staging uses `wtyj-agent:staging` (separate image tag, never overwrites production).
 
 | Client | Container name | Port | Compose file | Runtime dir |
 |--------|----------------|------|--------------|-------------|
 | BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
 | Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
 | Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
+| **Staging** | `wtyj-staging` | 9001 | `/root/staging/docker-compose.yml` | `/root/staging/` |
 
-All containers use the same image `wtyj-agent:latest` (built from `Dockerfile` at `/root/Dockerfile`). Adamus and Roberto use `image: wtyj-agent` directly — no rebuild on their deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus/Roberto email-pollers exit cleanly on startup (Brief 146 graceful-exit path: no EMAIL_ADDRESS, no refresh token). Roberto runs with `booking_flow: false` (filter/buffer mode).
+**Production** containers use `wtyj-agent:latest`. **Staging** uses `wtyj-agent:staging` (separate image tag — building staging never overwrites production). Staging code lives in a git worktree at `/root/staging-code` (tracks the `staging` branch, independent from the main checkout at `/root/`). Staging has dummy API keys: only the Claude key is real; Zernio, WhatsApp, and email keys are empty or dummy, preventing staging from sending real messages. Staging dashboard password: `staging`.
+
+All production containers use `image: wtyj-agent` directly — no rebuild on their deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus/Consulta Despertares email-pollers exit cleanly on startup (no EMAIL_ADDRESS, no refresh token). Consulta Despertares runs with `booking_flow: false` (filter/buffer mode).
 
 Runtime isolation: Brief 148 added `.dockerignore` exclusion of `wtyj/config/`, `wtyj/data/`, `wtyj/logs/`, `clients/`, plus directory mounts in both compose files. Each container's `/app/config/` is populated entirely from its own host directory at runtime — zero cross-tenant leakage at the image layer.
 
