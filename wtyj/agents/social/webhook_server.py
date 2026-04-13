@@ -364,7 +364,7 @@ def _process_zernio_event(payload: dict):
         log("webhook_process_error", source="zernio", error=str(e))
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    """Health check for monitoring."""
+    """Health check for monitoring. Supports HEAD for UptimeRobot."""
     return {"status": "ok"}
