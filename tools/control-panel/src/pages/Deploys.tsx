@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react'
+import Markdown from 'react-markdown'
+
+const EXPLANATION_FALLBACK = 'No explanation available (brief predates Brief 197).'
 
 interface QueuedEntry {
   sha: string; short_sha: string; brief: number | null; subject: string; queued_at: string
@@ -42,12 +45,39 @@ export default function Deploys() {
   const [state, setState] = useState<DeployState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [triggering, setTriggering] = useState(false)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const [explanations, setExplanations] = useState<Record<string, string>>({})
 
   const fetchState = () => {
     fetch('/api/deploys/state')
       .then(r => r.json())
       .then(d => { setState(d); setError(null) })
       .catch(e => setError(String(e)))
+  }
+
+  const toggleExpand = (rowKey: string, brief: number | null) => {
+    if (expandedKey === rowKey) {
+      setExpandedKey(null)
+      return
+    }
+    setExpandedKey(rowKey)
+    if (brief == null) {
+      setExplanations(prev => ({ ...prev, [rowKey]: EXPLANATION_FALLBACK }))
+      return
+    }
+    if (explanations[rowKey]) return
+    const path = `wtyj/briefs/marina_explanation_${brief}.md`
+    fetch(`/api/docs/read?path=${encodeURIComponent(path)}`)
+      .then(r => (r.ok ? r.text() : ''))
+      .then(text => {
+        setExplanations(prev => ({
+          ...prev,
+          [rowKey]: text && text.trim() ? text : EXPLANATION_FALLBACK,
+        }))
+      })
+      .catch(() => {
+        setExplanations(prev => ({ ...prev, [rowKey]: EXPLANATION_FALLBACK }))
+      })
   }
 
   useEffect(() => {
@@ -114,15 +144,35 @@ export default function Deploys() {
           <div className="dp-empty">No deploys yet</div>
         ) : (
           <div className="dp-list">
-            {state.history.map((h, i) => (
-              <div key={`${h.sha}-${i}`} className={`dp-row dp-${h.status}`}>
-                <span className="dp-brief">Brief {h.brief ?? '—'}</span>
-                <span className="dp-sha">{h.short_sha}</span>
-                <span className="dp-subject">{h.subject}</span>
-                <span className={`dp-status dp-status-${h.status}`}>{h.status}</span>
-                <span className="dp-time">{timeAgo(h.deployed_at)} ({h.duration_s}s)</span>
-              </div>
-            ))}
+            {state.history.map((h, i) => {
+              const rowKey = `${h.sha}-${i}`
+              const isExpanded = expandedKey === rowKey
+              return (
+                <div key={rowKey}>
+                  <div
+                    className={`dp-row dp-${h.status} dp-clickable ${isExpanded ? 'dp-expanded' : ''}`}
+                    onClick={() => toggleExpand(rowKey, h.brief)}
+                  >
+                    <span className="dp-brief">Brief {h.brief ?? '—'}</span>
+                    <span className="dp-sha">{h.short_sha}</span>
+                    <span className="dp-subject">{h.subject}</span>
+                    <span className={`dp-status dp-status-${h.status}`}>{h.status}</span>
+                    <span className="dp-time">{timeAgo(h.deployed_at)} ({h.duration_s}s)</span>
+                  </div>
+                  {isExpanded && (
+                    <div className="dp-explanation">
+                      {explanations[rowKey] === undefined ? (
+                        <div className="dp-explanation-empty">Loading…</div>
+                      ) : explanations[rowKey] === EXPLANATION_FALLBACK ? (
+                        <div className="dp-explanation-empty">{EXPLANATION_FALLBACK}</div>
+                      ) : (
+                        <Markdown>{explanations[rowKey]}</Markdown>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </section>

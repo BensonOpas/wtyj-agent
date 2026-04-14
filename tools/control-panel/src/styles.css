@@ -1338,3 +1338,35 @@ body {
 .dp-status { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
 .dp-status-success { color: var(--green); }
 .dp-status-failed { color: var(--red); }
+
+/* ── Deploys — explanation expand ── */
+.dp-row.dp-clickable { cursor: pointer; }
+.dp-row.dp-clickable:hover { background: var(--bg); }
+.dp-row.dp-expanded { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.dp-explanation {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 16px 20px;
+  margin-top: -4px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.dp-explanation h1 { font-size: 16px; font-weight: 700; margin: 0 0 10px; }
+.dp-explanation h2 {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-secondary);
+  margin: 16px 0 6px;
+}
+.dp-explanation h3 { font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+.dp-explanation p { margin: 0 0 10px; }
+.dp-explanation ul, .dp-explanation ol { margin: 0 0 10px 20px; }
+.dp-explanation strong { font-weight: 600; }
+.dp-explanation code {
+  background: var(--bg); padding: 1px 5px; border-radius: 3px;
+  font-family: 'SF Mono', Menlo, monospace; font-size: 12px;
+}
+.dp-explanation-empty { color: var(--text-muted); font-style: italic; }

@@ -50,6 +50,11 @@ marina_lessons.md) even though the agent name may change per-client via
 client.json. The prefix is a historical project convention, not a
 per-client label.
 
+**`marina_explanation_XXX.md` is auto-generated — do not list it or write it manually.**
+The executor produces it via the `code-explainer` agent in post-execution
+step `g`. It should NOT appear in the brief's Files header. It should NOT
+be manually written. It gets committed as part of post-exec step `i`.
+
 ## Review cycle (ALWAYS RUNS — never skip)
 
 5. Invoke the `brief-reviewer` agent automatically (defined at
@@ -103,10 +108,10 @@ Commit SHA(s). "Both containers healthy post-deploy."
 16. If approved:
     a. **Commit and push source changes first.** Stage and commit the
        brief file, test file(s), and any modified source files (NOT
-       output.md, system_state.md, lessons.md, or infra.md — those come
-       later in step f). Push immediately. This MUST happen before the
-       deploy because the VPS deploy runs `git pull` and needs the new
-       commit on origin.
+       output.md, system_state.md, lessons.md, explanation.md, or
+       infra.md — those come later in step i). Push immediately. This
+       MUST happen before the deploy because the VPS deploy runs
+       `git pull` and needs the new commit on origin.
        ```
        git add wtyj/briefs/marina_brief_XXX*.md wtyj/tests/... <source files>
        git commit -m "Brief XXX: <title>"
@@ -153,7 +158,18 @@ Commit SHA(s). "Both containers healthy post-deploy."
          or URLs were added: update `briefs/infra.md`.
        - If the brief shifts a phase milestone: update `briefs/roadmap.md`
          (rare — only on major directional changes).
-    g. **Verify deploy succeeded BEFORE committing post-exec docs.**
+    g. **Generate plain-English code explanation (foreground subagent).**
+       Invoke the `code-explainer` agent synchronously — wait for it to
+       finish before moving to step h. Invocation:
+       `code-explainer: explain commit <SOURCE_SHA> for Brief <NNN>`
+       where SOURCE_SHA is the commit created in step a. The agent reads
+       the diff and writes `wtyj/briefs/marina_explanation_<NNN>.md`
+       (zero-padded brief number). This runs concurrently with the
+       background deploy from step b — adds no wall-clock time to the
+       critical path because the deploy is still in flight. By the time
+       step h (verify deploy) runs, the explanation file is guaranteed
+       to exist. No race.
+    h. **Verify deploy succeeded BEFORE committing post-exec docs.**
        Check the background job's output via BashOutput. If the job is
        still running (deploy hasn't finished yet because c/d/e went
        faster than 90s), wait for it — do NOT commit while the deploy
@@ -166,10 +182,13 @@ Commit SHA(s). "Both containers healthy post-deploy."
        container won't start, or health check returns non-OK: STOP.
        Fix the deploy, re-run. Do NOT commit post-exec docs claiming
        success while the deploy is on fire.
-    h. Commit and push post-exec docs:
+    i. Commit and push post-exec docs (including the explanation file
+       generated in step g):
        ```
-       git add wtyj/briefs/marina_output_XXX.md wtyj/briefs/system_state.md wtyj/briefs/marina_lessons.md [wtyj/briefs/infra.md]
-       git commit -m "Brief XXX post-execution: output + system_state + lessons"
+       git add wtyj/briefs/marina_output_XXX.md wtyj/briefs/system_state.md \
+               wtyj/briefs/marina_lessons.md wtyj/briefs/marina_explanation_XXX.md \
+               [wtyj/briefs/infra.md]
+       git commit -m "Brief XXX post-execution: output + system_state + lessons + explanation"
        git push origin main
        ```
 
