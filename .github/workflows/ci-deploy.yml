@@ -50,12 +50,19 @@ jobs:
             cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
             cd /root/clients/adamus && docker compose down && docker compose up -d
             cd /root/clients/consultadespertares && docker compose down && docker compose up -d
-            # Health check all production containers
+            # Containers take ~3-5s to bind to their port after "up -d"
+            # Retry health check up to 12 times (60s total) before giving up
             for p in 8001 8002 8003; do
-              STATUS=$(curl -sf http://localhost:$p/health | grep -o '"ok"')
-              if [ -z "$STATUS" ]; then
-                echo "HEALTH CHECK FAILED on port $p"
-                exit 1
-              fi
+              for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                if curl -sf -m 3 http://localhost:$p/health | grep -q '"ok"'; then
+                  echo "port $p healthy (attempt $attempt)"
+                  break
+                fi
+                if [ "$attempt" = "12" ]; then
+                  echo "HEALTH CHECK FAILED on port $p after 60s"
+                  exit 1
+                fi
+                sleep 5
+              done
             done
             echo "All production containers healthy"
