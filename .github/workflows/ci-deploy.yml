@@ -66,48 +66,14 @@ jobs:
               exit 1
             fi
 
-  off-hours-decide:
+  # off-hours-decide: DEACTIVATED — demo mode, paying-client protection not
+  # needed yet. deploy-production runs straight after deploy-canary. Revert
+  # this commit to restore the off-hours gate before HD Azure onboards.
+
+  deploy-production:
     needs: deploy-canary
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    outputs:
-      action: ${{ steps.check.outputs.action }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - id: check
-        name: Decide deploy or queue
-        run: |
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          if python3 wtyj/scripts/off_hours_check.py --commit-message "$COMMIT_MSG"; then
-            echo "action=deploy" >> "$GITHUB_OUTPUT"
-            echo "Off-hours — proceeding with production deploy"
-          else
-            echo "action=queue" >> "$GITHUB_OUTPUT"
-            echo "Business hours — queuing for off-hours deploy"
-          fi
-      - name: Enqueue when blocked
-        if: steps.check.outputs.action == 'queue'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            export DEPLOY_QUEUE_PATH=/root/wtyj_deploy_queue.json
-            cd /root && git pull
-            FULL_SHA=$(git rev-parse HEAD)
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            SUBJECT_B64=$(git log -1 --pretty=%s | base64 -w0)
-            python3 /root/wtyj/scripts/queue_enqueue.py \
-              --sha "$FULL_SHA" --short-sha "$SHORT_SHA" --subject-b64 "$SUBJECT_B64"
-
-  deploy-production:
-    needs: off-hours-decide
-    runs-on: ubuntu-latest
-    if: needs.off-hours-decide.outputs.action == 'deploy' && github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Snapshot DBs + deploy paying clients + record history
         uses: appleboy/ssh-action@v1.2.0

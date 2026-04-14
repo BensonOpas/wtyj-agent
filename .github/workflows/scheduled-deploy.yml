@@ -1,8 +1,13 @@
 name: Scheduled production deploy (drains queue at off-hours)
 
 on:
-  schedule:
-    - cron: '0,30 * * * *'   # every 30 min, every day
+  # DEACTIVATED — demo mode, off-hours gate no longer engaged, queue stays
+  # empty so scheduled draining is pointless. workflow_dispatch kept so the
+  # control panel's "Deploy queued now" button is still wired (no-ops when
+  # queue is empty, which is always now). Revert to restore cron before
+  # HD Azure onboards.
+  # schedule:
+  #   - cron: '0,30 * * * *'   # every 30 min, every day
   workflow_dispatch:
     inputs:
       force:
