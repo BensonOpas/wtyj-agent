@@ -149,26 +149,41 @@ All production containers use `image: wtyj-agent` directly — no rebuild on the
 
 Runtime isolation: Brief 148 added `.dockerignore` exclusion of `wtyj/config/`, `wtyj/data/`, `wtyj/logs/`, `clients/`, plus directory mounts in both compose files. Each container's `/app/config/` is populated entirely from its own host directory at runtime — zero cross-tenant leakage at the image layer.
 
-### Deploy commands (post-Brief-177)
+### Deploy pipeline (post-Brief-195)
+
+Deploys are now driven by `.github/workflows/ci-deploy.yml` — push to main triggers the pipeline. Four jobs in sequence:
+
+1. **test** — pytest runs all 899 tests on Ubuntu Python 3.12 with stub env vars.
+2. **off-hours-check** — `wtyj/scripts/off_hours_check.py` blocks production deploys during EITHER Curaçao business hours (05:30-20:00 AST, no DST) OR Madrid business hours (09:00-18:00 local, DST-aware). Bypass: include `[HOTFIX]` in commit message. Allowed window when both timezones are off: 00:00-07:00 UTC daily.
+3. **deploy-canary** — SSH to VPS. Pulls main, retags `wtyj-agent:latest` → `wtyj-agent:previous`, builds new image, archive-tags as `wtyj-agent:<short-sha>`, retags as `wtyj-agent:staging`. Deploys staging container (port 9001) with retry health check, then BlueMarlin canary (port 8001) with retry health check, then runs `wtyj/scripts/e2e_canary_test.sh` (10 system-wide checks). Any failure triggers `wtyj/scripts/rollback.sh`.
+4. **deploy-production** — SSH to VPS. Runs `wtyj/scripts/pre_deploy_snapshot.sh <sha>` (timestamped DB snapshots in `/root/backups/pre_deploy/<ts>_<sha>/`, 7-day retention), then deploys Adamus + Consulta Despertares (no rebuild, same image as canary) with retry health checks. Failure triggers full rollback.
+
+**Image versioning:** every build produces `wtyj-agent:latest` + `wtyj-agent:<short-sha>` archive + saves prior `:latest` as `:previous`. Rollback (`wtyj/scripts/rollback.sh [target]`) retags `:previous` → `:latest` + `:staging` and restarts containers — seconds to recover.
+
+**E2E sentinel data:** the canary's E2E test creates rows in 6 tables (customer_identifiers, customers, whatsapp_threads, whatsapp_booking_state, whatsapp_processed, conversation_status) with `e2etest`-prefixed keys, then sweeps via `WHERE LIKE 'e2etest%'` in the cleanup block. No persistent test data after a successful canary.
+
+**First-run gap:** the very first deploy with this workflow has no `wtyj-agent:previous` image yet. If that canary fails, `rollback.sh` exits 1 and BlueMarlin stays on the failing image. Manual recovery: `git revert <bad-sha> && git push`. Acceptable trade-off; subsequent deploys always have `:previous` available.
 
 ```bash
-# Standard deploy: pull, rebuild image, restart all containers
+# Manual emergency deploy (bypassing CI):
 ssh root@108.61.192.52 "
   cd /root && git pull
   cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
   cd /root/clients/adamus && docker compose down && docker compose up -d
-  cd /root/clients/roberto && docker compose down && docker compose up -d
+  cd /root/clients/consultadespertares && docker compose down && docker compose up -d
 "
 
+# Manual rollback
+ssh root@108.61.192.52 "bash /root/wtyj/scripts/rollback.sh all"
+
 # Health check all
-ssh root@108.61.192.52 "for p in 8001 8002 8003; do echo -n \":\$p \"; curl -s http://localhost:\$p/health; echo; done"
+ssh root@108.61.192.52 'for p in 8001 8002 8003 9001; do echo -n "port $p: "; curl -sf -m 3 http://localhost:$p/health; echo; done'
 
 # Inspect running containers
 ssh root@108.61.192.52 "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
-# Expected: wtyj-bluemarlin, wtyj-adamus, wtyj-consultadespertares, all running wtyj-agent image
 ```
 
-The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus and Roberto reference `image: wtyj-agent` directly — no separate build step.
+The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker compose build`. Adamus and Consulta Despertares reference `image: wtyj-agent` directly — no separate build step. Staging uses `wtyj-agent:staging` (retagged from `:latest` during canary deploy).
 
 ---
 
