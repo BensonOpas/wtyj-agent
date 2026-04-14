@@ -160,7 +160,7 @@ Deploys are driven by `.github/workflows/ci-deploy.yml` — push to main trigger
 
 **Queue file:** `/root/wtyj_deploy_queue.json` on VPS (system-wide deploy state, not client-specific). Managed by `wtyj/shared/deploy_queue.py` with `fcntl.flock` sidecar lock. Schema: `{queued: [entries], in_progress: {deploy_sha, acknowledged_briefs, started_at} | null, history: [last 30 deploys]}`.
 
-**Scheduled drain:** `.github/workflows/scheduled-deploy.yml` runs every 30 min (cron `0,30 * * * *`). Calls `process_deploy_queue.sh` — no-ops when business hours, queue empty, or another deploy is in-flight. Also triggerable manually via `gh workflow run scheduled-deploy.yml` or the control panel's "Deploy queued now" button.
+**Scheduled drain:** `.github/workflows/scheduled-deploy.yml` runs every 30 min (cron `0,30 * * * *`). Calls `process_deploy_queue.sh` — no-ops when business hours, queue empty, or another deploy is in-flight. Also triggerable via `workflow_dispatch` from the control panel's "Deploy queued now" button or `gh workflow run scheduled-deploy.yml -f force=true`. The `force` input (default false) sets `SKIP_OFF_HOURS_CHECK=1` so manual UI triggers act as emergency overrides — same semantics as `[HOTFIX]` in commit subject. Cron-triggered runs never set `force` and always respect off-hours.
 
 **Control panel:** the `Deploys` tab (localhost:4000) polls `/api/deploys/state` every 30s, which SSHes to VPS and reads the queue JSON. Shows currently-deploying + queue + last 10 deploys in history.
 
