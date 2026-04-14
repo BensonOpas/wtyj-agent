@@ -1854,3 +1854,32 @@ Decision: introduce `wtyj/agents/social/channels/` package with a `Channel` ABC 
 **Output-reviewer caught a real issue.** Leftover duplicate "Image versioning" bullet in infra.md from the update — I didn't de-duplicate when inserting the new Brief-196 section. Fixed pre-commit. Lesson: when updating a docs section, don't just append — read the surrounding context and prune stale bullets that say the same thing.
 
 **Happy side effect of the subject-line fix:** the Brief 195 bypass-by-accident can never happen again. Brief 196's commit message contains the word "HOTFIX" multiple times in the body describing the fix, but the subject line `"Brief 196: deploy queue + canary-always + off-hours production gate + control panel Deploys tab"` does NOT contain `[HOTFIX]`, so the pipeline correctly exercises the new queue path instead of bypassing. The fix validates itself on its own commit.
+
+
+---
+
+## Brief 197 — Plain-English code explainer as post-execution step (2026-04-14)
+
+**Problem brief.** Brief-reviewer FAIL round 1 with 5 issues, FAIL round 2 with 2 residual issues. User chose "fix and ship" (Option A) rather than blocking on a third round. Output-reviewer APPROVED after round-2 patches.
+
+**What happened.** Benson asked to make every brief auto-generate a plain-English translation for operators who don't read code. Added a new `code-explainer` subagent persona and restructured the `/brief` post-execution sequence to invoke it between the control-panel/docs steps and the deploy-verify step. Control panel's Deploys tab gained click-to-expand so operators can read the translation for any past deploy. Zero Python source changes.
+
+**The 5 issues round 1.**
+
+*Timing claim vs invocation contradiction.* I wrote the brief assuming the `code-explainer` would run as a *background* subagent parallel to the deploy (saves ~90s of wall clock), but also had the post-exec commit step wait for the explanation file. That's contradictory: if the subagent is backgrounded, the commit can race past it. Fix: foreground invocation. Adds ~30s to wall clock but is deterministic. Brief reviewer caught this — I'd written "runs in the background" at three places in the brief while the step ordering required foreground. Lesson: when a design has a concurrency claim, trace every consumer of the produced artifact and verify the ordering actually holds.
+
+*Unverified docs-API assumption.* First draft said "control panel fetches the explanation via the existing docs-read endpoint" — I hadn't actually verified that endpoint exists. It does (`/api/docs/read` in server.js), but the brief had no path:line reference. Reviewer rightly flagged: "assumed but unverified" is a trap because if the endpoint doesn't exist, the whole UI half of the brief needs a new backend route. Lesson: any brief that says "uses the existing X" must cite `path:line` proving X exists.
+
+*Canonical fallback string mismatch.* I had two places defining the "no explanation available" string — the Deploys.tsx component and the instruction block telling Claude what to write when a brief predates 197. They drifted by one character. Fix: single `EXPLANATION_FALLBACK` constant in Deploys.tsx, referenced everywhere else as "the canonical fallback."
+
+*Explanation-file ordering in git add.* The step `i` git-add listed the new file at the end of a line that got truncated in my draft. Meant the explanation file was easy to forget when copy-pasting the command. Fix: multi-line git add with explicit line continuation and the explanation file on its own line for visibility.
+
+*Missing explicit ban on hand-authored explanation files.* Future brief writers could look at the explanation files lying around in `wtyj/briefs/` and think "I should list marina_explanation_XXX.md in my brief's Files header and write it alongside the brief." That defeats the whole point. Fix: explicit ban in `.claude/commands/brief.md` that the file is auto-generated and must NOT appear in the brief's file list or be written by hand.
+
+**Round 2 residuals.** Reviewer caught two items that slipped through my round-1 patch: (1) the "Success Condition" section still said "background" even though I'd fixed every instruction block. Visual drift across sections when you patch one at a time. (2) Two fallback strings still existed — I'd made Deploys.tsx use the constant, but the code-explainer agent file's instructions embedded the literal string too, and they differed in punctuation. Standardized to the Deploys.tsx constant: `No explanation available (brief predates Brief 197).`
+
+**The principle.** Two review rounds happened because my first patch was hasty. When a reviewer finds 5 issues, the right response is to read every section that even tangentially references the flagged concept, not just patch the specific lines called out. Round 2 would not have happened if I'd grepped for "background" and "No explanation" after my round-1 fixes.
+
+**The bootstrap wrinkle.** Claude Code discovers agent personas (from `.claude/agents/*.md`) at session start, not dynamically. That means Brief 197 defines the `code-explainer` agent AND is the first brief whose post-execution wants to use it — impossible in one session. Handled by writing `marina_explanation_197.md` by hand as a one-time bootstrap. Future briefs auto-generate. This is a known, acceptable limitation of any self-deploying meta-infrastructure (c.f. Brief 195's own `[HOTFIX]` bypass accidentally deploying itself — the same class of "brief introduces the mechanism it needs to ship").
+
+**What to watch for.** The explanation file gets committed in step `i` alongside output/system_state/lessons. If the `code-explainer` agent fails or produces nothing, the commit will fail (git add references a non-existent path). Acceptable — loud failure beats silent omission. If this becomes annoying in practice, fall back to writing a stub explanation file with just the canonical-fallback text, but for now the hard failure is the right default: it forces the operator to see the problem immediately.
