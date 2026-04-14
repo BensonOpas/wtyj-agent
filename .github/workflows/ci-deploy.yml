@@ -2,7 +2,7 @@ name: CI/CD — Test + Deploy
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -33,29 +33,6 @@ jobs:
           ZERNIO_WEBHOOK_SECRET: "test"
           CLIENT_CONFIG_PATH: "clients/bluemarlin/config/client.json"
         run: python -m pytest wtyj/tests/ -q --tb=short
-
-  deploy-staging:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
-    steps:
-      - name: Deploy to staging
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            cd /root/staging-code && git pull
-            docker build -t wtyj-agent:staging -f Dockerfile .
-            cd /root/staging && docker compose down && docker compose up -d
-            sleep 3
-            STATUS=$(curl -sf http://localhost:9001/health | grep -o '"ok"')
-            if [ -z "$STATUS" ]; then
-              echo "STAGING HEALTH CHECK FAILED"
-              exit 1
-            fi
-            echo "Staging deployed and healthy"
 
   deploy-production:
     needs: test

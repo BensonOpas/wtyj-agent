@@ -141,7 +141,9 @@ Four containers (3 production + 1 staging). Production uses `wtyj-agent:latest`,
 | Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
 | **Staging** | `wtyj-staging` | 9001 | `/root/staging/docker-compose.yml` | `/root/staging/` |
 
-**Production** containers use `wtyj-agent:latest`. **Staging** uses `wtyj-agent:staging` (separate image tag — building staging never overwrites production). Staging code lives in a git worktree at `/root/staging-code` (tracks the `staging` branch, independent from the main checkout at `/root/`). Staging has dummy API keys: only the Claude key is real; Zernio, WhatsApp, and email keys are empty or dummy, preventing staging from sending real messages. Staging dashboard password: `staging`.
+**Production** containers use `wtyj-agent:latest`. **Staging** uses `wtyj-agent:staging` (separate image tag — building staging never overwrites production). Staging has dummy API keys: only the Claude key is real; Zernio, WhatsApp, and email keys are empty or dummy, preventing staging from sending real messages. Staging dashboard password: `staging`.
+
+**2026-04-14 update:** the `staging` branch + `/root/staging-code` worktree were deleted. Decided model per `wtyj/docs/project_live_preparations.md` is: code flows through `main` only, staging is a deploy TARGET (container at port 9001) not a branch. Canary pipeline brief (pending) will wire the staging container into the main-push flow as the first deploy stage. Until then, the staging container runs whatever image was last built and is not auto-updated.
 
 All production containers use `image: wtyj-agent` directly — no rebuild on their deploy. Inside each: `email-poller` + `webhook-server` via supervisord. Adamus/Consulta Despertares email-pollers exit cleanly on startup (no EMAIL_ADDRESS, no refresh token). Consulta Despertares runs with `booking_flow: false` (filter/buffer mode).
 

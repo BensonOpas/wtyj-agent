@@ -84,12 +84,43 @@ function RoadmapCard({ data }: NodeProps) {
   )
 }
 
+function DeployStageNode({ data }: NodeProps) {
+  const items = data.items as string[]
+  const gate = data.gate as string | undefined
+  return (
+    <div className={`deploy-stage ${data.stage as string}`}>
+      <Handle type="target" position={Position.Top} />
+      <div className="ds-label">{data.label as string}</div>
+      <div className="ds-subtitle">{data.subtitle as string}</div>
+      <div className="ds-items">
+        {items.map((item, i) => (
+          <div key={i} className="ds-item">{item}</div>
+        ))}
+      </div>
+      {gate && <div className="ds-gate">{gate}</div>}
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  )
+}
+
+function DeployGateNode({ data }: NodeProps) {
+  return (
+    <div className="deploy-gate">
+      <Handle type="target" position={Position.Top} />
+      {data.label as string}
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  )
+}
+
 const nodeTypes: NodeTypes = {
   brain: BrainNode,
   category: CategoryNode,
   feature: FeatureNode,
   dashboard: DashboardNode,
   roadmapCard: RoadmapCard,
+  deployStage: DeployStageNode,
+  deployGate: DeployGateNode,
 }
 
 /* ── Layout ── */
@@ -121,7 +152,7 @@ const nodes: Node[] = [
   // Level 3 — Escalation
   { id: 'esc-dashboard', type: 'feature', position: { x: 1420, y: 460 }, data: { label: 'Dashboard Alert', status: 'built', statusLabel: 'Built' } },
   { id: 'esc-whatsapp', type: 'feature', position: { x: 1570, y: 460 }, data: { label: 'Owner WhatsApp', status: 'missing', statusLabel: 'Needed' } },
-  { id: 'esc-email', type: 'feature', position: { x: 1720, y: 460 }, data: { label: 'Owner Email', status: 'missing', statusLabel: 'Needed' } },
+  { id: 'esc-email', type: 'feature', position: { x: 1720, y: 460 }, data: { label: 'Owner Email', status: 'built', statusLabel: 'Built' } },
 
   // Level 4 — Meta channels
   { id: 'ch-whatsapp', type: 'feature', position: { x: 0, y: 620 }, data: { label: 'WhatsApp', status: 'built', statusLabel: 'Built' } },
@@ -157,13 +188,20 @@ const nodes: Node[] = [
       { text: 'Email poller adapter extraction', done: true, sub: 'B189' },
       { text: 'Content pipeline archived (feature-gated)', done: true, sub: 'B190' },
       { text: 'HD Azure Realty — first paying client', done: false, active: true, sub: 'Milestone H' },
-      { text: 'CI/CD pipeline (GitHub Actions)', done: false, sub: 'Milestone G' },
-      { text: 'Staging environment (ports 9001–9003)', done: false, sub: 'Milestone G' },
-      { text: 'Automated backups (VPS + SQLite)', done: false, sub: 'Milestone G' },
-      { text: 'Uptime monitoring (UptimeRobot)', done: false, sub: 'Milestone G' },
-      { text: 'Owner WhatsApp escalation route', done: false, sub: 'Consulta Despertares + HD Azure' },
-      { text: 'Owner email escalation route', done: false, sub: 'all clients' },
-      { text: 'Dashboard reply-from-dashboard', done: false, sub: 'replace Gmail' },
+      { text: 'CI/CD pipeline (GitHub Actions)', done: true, sub: 'this session' },
+      { text: 'Staging container + git worktree', done: true, sub: 'B194' },
+      { text: 'Automated daily backups (30d retention)', done: true, sub: 'cron' },
+      { text: 'UptimeRobot monitoring (2 accounts)', done: true, sub: 'live' },
+      { text: 'Source code agnostic sweep', done: true, sub: 'B191' },
+      { text: 'Email escalated guard fix', done: true, sub: 'B192' },
+      { text: 'Canary deploy (School→Playground→Street)', done: false, active: true, sub: 'planned' },
+      { text: 'System-wide E2E canary test (10 checks)', done: false, active: true, sub: 'planned' },
+      { text: 'E2E playground sandbox (test Sheet/Cal/email)', done: false, sub: 'roadmap' },
+      { text: 'Plain-English code explainer', done: false, sub: 'roadmap' },
+      { text: 'Deploy status in control panel', done: false, sub: 'roadmap' },
+      { text: 'Owner SMS escalation (Twilio)', done: false, sub: 'roadmap' },
+      { text: 'Dashboard reply-from-dashboard', done: false, sub: 's20' },
+      { text: 'Dashboard filter escalations', done: false, sub: 's21' },
       { text: 'Dashboard UX (setup wizard + theme)', done: false, active: true, sub: 'operator UX' },
     ],
   }},
@@ -189,6 +227,40 @@ const nodes: Node[] = [
       { text: 'Content pipeline reactivation', done: false, sub: 'social media posting' },
       { text: 'Open-window availability model', done: false, sub: 'salons, clinics' },
       { text: 'White-label per-client branding', done: false, sub: 'dashboard + emails' },
+    ],
+  }},
+
+  // ── Deploy Model (right side of canvas) ──
+  { id: 'dm-school', type: 'deployStage', position: { x: 2300, y: 0 }, data: {
+    label: 'SCHOOL', subtitle: 'Your Mac', stage: 'school',
+    items: [
+      'Brief reviewer (AI #2) checks the plan',
+      'Output reviewer (AI #3) checks the code',
+      '893+ tests run locally — zero failures',
+      'Read-before-edit hook enforces reads',
+      'Security hook blocks dangerous commands',
+    ],
+    gate: 'All tests pass → code pushed to main',
+  }},
+  { id: 'dm-gate1', type: 'deployGate', position: { x: 2390, y: 240 }, data: { label: 'tests pass' } },
+  { id: 'dm-playground', type: 'deployStage', position: { x: 2300, y: 300 }, data: {
+    label: 'PLAYGROUND', subtitle: 'Staging + BlueMarlin canary', stage: 'playground',
+    items: [
+      'Staging (port 9001) — dummy keys, isolated',
+      'BlueMarlin canary (port 8001) — real keys, demo only',
+      'System-wide E2E test — 10 checks',
+      '5-min soak — error count before vs after',
+    ],
+    gate: 'Health + E2E pass → deploy to street',
+  }},
+  { id: 'dm-gate2', type: 'deployGate', position: { x: 2390, y: 535 }, data: { label: 'health + E2E pass' } },
+  { id: 'dm-street', type: 'deployStage', position: { x: 2300, y: 595 }, data: {
+    label: 'STREET', subtitle: 'Paying clients', stage: 'street',
+    items: [
+      'Adamus, Consulta Despertares, HD Azure',
+      'Only gets code that survived the playground',
+      'Health check each container after deploy',
+      'Auto-rollback on failure + notification',
     ],
   }},
 ]
@@ -227,6 +299,12 @@ const edges: Edge[] = [
   { id: 'e-s1', source: 'escalation', target: 'esc-dashboard', type: 'smoothstep' },
   { id: 'e-s2', source: 'escalation', target: 'esc-whatsapp', type: 'smoothstep' },
   { id: 'e-s3', source: 'escalation', target: 'esc-email', type: 'smoothstep' },
+
+  // Deploy Model flow
+  { id: 'e-dm1', source: 'dm-school', target: 'dm-gate1', type: 'smoothstep' },
+  { id: 'e-dm2', source: 'dm-gate1', target: 'dm-playground', type: 'smoothstep' },
+  { id: 'e-dm3', source: 'dm-playground', target: 'dm-gate2', type: 'smoothstep' },
+  { id: 'e-dm4', source: 'dm-gate2', target: 'dm-street', type: 'smoothstep' },
 ]
 
 /* ── Component ── */
