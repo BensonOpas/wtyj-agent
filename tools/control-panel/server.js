@@ -104,12 +104,13 @@ app.get('/api/deploys/state', (_req, res) => {
 
 app.post('/api/deploys/trigger', (_req, res) => {
   const { exec } = require('child_process')
+  // Manual trigger = emergency bypass. Passes force=true to skip off-hours check.
   exec(
-    'gh workflow run scheduled-deploy.yml -R BensonOpas/wtyj-agent',
+    'gh workflow run scheduled-deploy.yml -R BensonOpas/wtyj-agent -f force=true',
     { timeout: 8000 },
     (err, stdout, stderr) => {
       if (err) return res.status(500).json({ error: err.message, stderr })
-      res.json({ ok: true, message: 'Triggered scheduled-deploy workflow' })
+      res.json({ ok: true, message: 'Triggered emergency deploy — bypasses off-hours check' })
     }
   )
 })

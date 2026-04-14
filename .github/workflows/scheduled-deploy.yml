@@ -3,7 +3,12 @@ name: Scheduled production deploy (drains queue at off-hours)
 on:
   schedule:
     - cron: '0,30 * * * *'   # every 30 min, every day
-  workflow_dispatch:           # manual trigger from control panel "deploy now"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Skip off-hours check (emergency deploy)'
+        type: boolean
+        default: false
 
 jobs:
   drain-queue:
@@ -11,12 +16,19 @@ jobs:
     steps:
       - name: Process queue if off-hours and queue non-empty
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: FORCE
           command_timeout: 10m
           script: |
             export DEPLOY_QUEUE_PATH=/root/wtyj_deploy_queue.json
+            if [ "$FORCE" = "true" ]; then
+              export SKIP_OFF_HOURS_CHECK=1
+              echo "Emergency deploy — skipping off-hours check"
+            fi
             chmod +x /root/wtyj/scripts/*.sh
             bash /root/wtyj/scripts/process_deploy_queue.sh
