@@ -251,6 +251,8 @@ Both accounts monitor the same 3 endpoints. Alerts via email + UptimeRobot app p
 
 ### Automated backups (daily cron)
 
+**Local snapshot (stage 1 — 3:00 AM UTC):**
+
 | Item | Value |
 |------|-------|
 | Script | `/root/backups/daily_backup.sh` |
@@ -259,6 +261,21 @@ Both accounts monitor the same 3 endpoints. Alerts via email + UptimeRobot app p
 | Retention | 30 days (auto-cleanup) |
 | What's backed up | `state_registry.db` + `email_thread_state.json` for ALL clients (auto-discovers `/root/clients/*/`) |
 | Log | `/root/backups/backup.log` |
+
+**Off-site sync to Google Drive (stage 2 — 3:30 AM UTC):**
+
+| Item | Value |
+|------|-------|
+| Script | `/root/backups/gdrive_sync.sh` |
+| Schedule | Daily at 3:30 AM UTC (30 min after stage 1 finishes) |
+| Remote | `gdrive:wtyj-backups/` (configured via `rclone config` on VPS) |
+| Google account | `butlerbensonagent@gmail.com` |
+| Scope | `drive` (full) — rclone writes to `My Drive/wtyj-backups/` |
+| What's synced | All of `/root/backups/` EXCEPT `pre_deploy/` (too churn-heavy) and `*.log` |
+| Mode | `rclone sync` (mirrors — deletes in GDrive what's deleted locally after 30-day retention) |
+| Log | `/root/backups/gdrive_sync.log` |
+
+Recovery flow: if VPS dies, spin up a new VPS, `rclone config` against the same Google account, `rclone copy gdrive:wtyj-backups/ /root/backups/`, then restore any client DB from `/root/backups/<client>_<date>.db`.
 
 ---
 
