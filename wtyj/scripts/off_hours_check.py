@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Off-hours enforcement for production deploys.
-Blocks deploys during EITHER Curaçao business hours (05:30-20:00 AST, no DST)
-OR Madrid business hours (09:00-18:00 local, DST-aware).
-Bypass by including [HOTFIX] in the commit message.
+Blocks deploys during Curaçao business hours (05:30-20:00 AST, no DST).
+Bypass: include [HOTFIX] in the commit SUBJECT LINE (first line only).
 Exits 0 when deploy is allowed, 1 when blocked (reason printed to stdout).
 """
 from __future__ import annotations
@@ -12,49 +11,29 @@ from zoneinfo import ZoneInfo
 
 
 CURACAO = ZoneInfo("America/Curacao")
-MADRID = ZoneInfo("Europe/Madrid")
-
-# Minute-of-day boundaries
 CURACAO_START = 5 * 60 + 30   # 05:30
 CURACAO_END   = 20 * 60       # 20:00 (exclusive)
-MADRID_START  = 9 * 60        # 09:00
-MADRID_END    = 18 * 60       # 18:00 (exclusive)
 
 
-def _in_business_hours(local_dt: datetime, start: int, end: int) -> bool:
-    mod = local_dt.hour * 60 + local_dt.minute
-    return start <= mod < end
+def _hotfix_in_subject(commit_message: str) -> bool:
+    """Only the first line (subject) counts. Body text mentions don't bypass."""
+    subject = commit_message.split("\n", 1)[0]
+    return "[HOTFIX]" in subject
 
 
 def is_deploy_blocked(now_utc: datetime, commit_message: str) -> tuple[bool, str]:
-    """Return (blocked, reason). blocked=True means refuse deploy."""
-    if "[HOTFIX]" in commit_message:
+    """Return (blocked, reason). blocked=True means refuse production deploy."""
+    if _hotfix_in_subject(commit_message):
         return (False, "HOTFIX bypass — proceeding during business hours")
-
-    cura_local = now_utc.astimezone(CURACAO)
-    madrid_local = now_utc.astimezone(MADRID)
-    cura_blocked = _in_business_hours(cura_local, CURACAO_START, CURACAO_END)
-    madrid_blocked = _in_business_hours(madrid_local, MADRID_START, MADRID_END)
-
-    if cura_blocked and madrid_blocked:
-        return (True,
-                f"Blocked: both timezones in business hours "
-                f"(Curaçao {cura_local.strftime('%H:%M')} AST, "
-                f"Madrid {madrid_local.strftime('%H:%M')} local). "
-                f"Emergency bypass: include [HOTFIX] in commit message.")
-    if cura_blocked:
+    cura = now_utc.astimezone(CURACAO)
+    mod = cura.hour * 60 + cura.minute
+    if CURACAO_START <= mod < CURACAO_END:
         return (True,
                 f"Blocked: Curaçao business hours "
-                f"({cura_local.strftime('%H:%M')} AST). "
-                f"Bypass: [HOTFIX] in commit message.")
-    if madrid_blocked:
-        return (True,
-                f"Blocked: Madrid business hours "
-                f"({madrid_local.strftime('%H:%M')} local). "
-                f"Bypass: [HOTFIX] in commit message.")
+                f"({cura.strftime('%H:%M')} AST). "
+                f"Bypass: [HOTFIX] in commit subject line.")
     return (False,
-            f"Off-hours (Curaçao {cura_local.strftime('%H:%M')}, "
-            f"Madrid {madrid_local.strftime('%H:%M')}) — proceeding")
+            f"Off-hours (Curaçao {cura.strftime('%H:%M')}) — proceeding")
 
 
 def main():

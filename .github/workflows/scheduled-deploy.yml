@@ -1,0 +1,22 @@
+name: Scheduled production deploy (drains queue at off-hours)
+
+on:
+  schedule:
+    - cron: '0,30 * * * *'   # every 30 min, every day
+  workflow_dispatch:           # manual trigger from control panel "deploy now"
+
+jobs:
+  drain-queue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process queue if off-hours and queue non-empty
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            export DEPLOY_QUEUE_PATH=/root/wtyj_deploy_queue.json
+            chmod +x /root/wtyj/scripts/*.sh
+            bash /root/wtyj/scripts/process_deploy_queue.sh
