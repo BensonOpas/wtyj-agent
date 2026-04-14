@@ -143,16 +143,21 @@ Commit SHA(s). "Both containers healthy post-deploy."
          outcome + one line of what made it smooth. The entry IS the
          chronological index of how the project evolved — routine ≠
          skippable.
-    e. **Control panel sync (run as background subagent while deploy
-       is in flight).** If the brief built, removed, or changed the
-       status of a channel, capability, or escalation route: spawn a
-       subagent to update the system map nodes/edges in
-       `tools/control-panel/src/pages/SystemMap.tsx` and the client
-       cards in `tools/control-panel/src/pages/Clients.tsx`. If the
-       brief completed a task or subtask on the board, update
-       `tools/control-panel/data/tasks.json` (mark subtask done, move
-       task to inProgress/done, etc). This runs in parallel with the
-       deploy — do not block on it.
+    e. **Control panel sync.**
+       - **ALWAYS run `task-sync` subagent.** Invoke synchronously:
+         `task-sync: update tasks for Brief <NNN>`. The agent reads the
+         brief + tasks.json + commit diff, marks any matching subtasks
+         done, and moves fully-done tasks from inProgress → done. Runs
+         concurrently with the background deploy from step `b`; the
+         JSON edit is local-only (file is gitignored) so no commit
+         follows. If the agent reports no match, that's fine — move on.
+       - **IF the brief built, removed, or changed the status of a
+         channel, capability, or escalation route:** spawn a background
+         subagent to update the system map nodes/edges in
+         `tools/control-panel/src/pages/SystemMap.tsx` and the client
+         cards in `tools/control-panel/src/pages/Clients.tsx`. This is
+         fire-and-forget — runs in parallel with the deploy, do not
+         block on it.
     f. **Doc maintenance checkpoint:**
        - If new credentials, env vars, services, ports, containers,
          or URLs were added: update `briefs/infra.md`.
