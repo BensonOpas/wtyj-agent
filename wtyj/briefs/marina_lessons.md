@@ -1827,3 +1827,30 @@ Decision: introduce `wtyj/agents/social/channels/` package with a `Channel` ABC 
 **What to watch for.** Canary pipelines have a classic chicken-and-egg: the pipeline can't deploy itself the first time because its own off-hours gate (which is the RIGHT behavior) blocks the deploy. I shipped during Curaçao+Madrid business hours (13:16 UTC on April 14) and the off-hours check correctly blocked. VPS stays on `db7f72d` until the next off-hours window (00:00-07:00 UTC daily, about 11 hours after commit). This is feature, not bug — but a gotcha to document. If urgent, `[HOTFIX]` bypass is the escape valve.
 
 **Output-reviewer notes accepted.** Two cosmetic warnings: I used `OK` in E2E success echoes instead of the `✓` checkmark the brief literally specified, and substituted ASCII `-` for em-dashes in helper-script comments. Both are documentation-level; behavior is identical to spec. Noted for next time — when a brief's Success Condition literally quotes a string, the implementation should match byte-for-byte or the post-deploy verification grep breaks.
+
+
+---
+
+## Brief 196 — Deploy queue + canary-always + production-only gate (2026-04-14)
+
+**Problem brief.** Brief-reviewer FAIL round 1 with 7 issues, all patched round 2. Output-reviewer 1 warning (doc hygiene).
+
+**What happened.** Two design holes from Brief 195 needed fixing, plus Benson asked for a queue + visualization. Consolidated into one brief rather than two because off-hours change + queue are tightly coupled through the workflow.
+
+**The 7 issues.**
+
+*Path mismatch (critical):* I defined `QUEUE_PATH` default via `os.path.join(...)` relative to the module file, but forgot that callers (workflow steps, bash script) would need the env var set explicitly OR the file would be written to the wrong location. Symptom: control panel reads `/root/clients/bluemarlin/data/...` but Python writes `/root/wtyj/data/...`. Fix: simplified to a single hardcoded path `/root/wtyj_deploy_queue.json` (system-wide, not client-specific), set as env var in all callers for belt-and-suspenders.
+
+*Race conditions (critical):* first draft had two bugs. (A) `claim_for_deploy()` and concurrent `enqueue()` could interleave read-modify-write and one could lose state. Fix: `fcntl.flock` on a sidecar lock file around every RMW. (B) `complete_deploy()` cleared `state["queued"]` but `queued` could have grown new entries AFTER claim — those would be silently marked deployed. Fix: snapshot acknowledged entries at claim time into `in_progress.acknowledged_briefs`, clear `queued` at claim, `complete_deploy` only writes history for acknowledged entries and does NOT touch `queued`.
+
+*Subject shell quoting:* `git log -1 --pretty=%s` output passed through `"$SUBJECT"` breaks on quotes/backticks/dollar signs. Fix: `base64 -w0` in the shell, `base64.b64decode(...).decode("utf-8")` in Python. Bulletproof.
+
+*Laxness inherited from Brief 195:* the `[HOTFIX]` bypass substring-matched anywhere, so Brief 195's own commit body literally had `[HOTFIX]` while explaining the feature and bypassed. Fix: only check the first line (subject).
+
+**The principle.** When a brief has lots of moving pieces that share state (workflow + Python + shell scripts + JSON file + UI), the brief-reviewer pays for itself triple-fold. My first draft had 7 issues — one path mismatch, two race conditions, one shell-quoting bug, one doc-level laxness inherited from the previous brief, plus test count math and security flag notes. These are subtle and interconnected. Read-first and explicit-assumptions discipline helps, but a fresh pair of eyes that walks through each state transition catches more. Two review rounds costs ~6 min; a race condition that silently drops a push in production costs hours.
+
+**What to watch for.** The `DEPLOY_QUEUE_PATH` env var is now explicit in every caller (workflow steps set it, bash script sets a default, Python reads env). If a future caller forgets to set it, they'll write to the wrong path. Consider centralizing the path in a single bash-sourced config file or promoting it into the Python default if the default would be correct in all contexts. For now the explicit env var in every caller is fine.
+
+**Output-reviewer caught a real issue.** Leftover duplicate "Image versioning" bullet in infra.md from the update — I didn't de-duplicate when inserting the new Brief-196 section. Fixed pre-commit. Lesson: when updating a docs section, don't just append — read the surrounding context and prune stale bullets that say the same thing.
+
+**Happy side effect of the subject-line fix:** the Brief 195 bypass-by-accident can never happen again. Brief 196's commit message contains the word "HOTFIX" multiple times in the body describing the fix, but the subject line `"Brief 196: deploy queue + canary-always + off-hours production gate + control panel Deploys tab"` does NOT contain `[HOTFIX]`, so the pipeline correctly exercises the new queue path instead of bypassing. The fix validates itself on its own commit.
