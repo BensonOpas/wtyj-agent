@@ -1,4 +1,4 @@
-name: CI/CD — Test + Deploy
+name: CI/CD — Test + Canary Deploy
 
 on:
   push:
@@ -34,34 +34,113 @@ jobs:
           CLIENT_CONFIG_PATH: "clients/bluemarlin/config/client.json"
         run: python -m pytest wtyj/tests/ -q --tb=short
 
-  deploy-production:
+  off-hours-check:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - name: Deploy to production
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Block production deploy during Curacao/Madrid business hours
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          python3 wtyj/scripts/off_hours_check.py --commit-message "$COMMIT_MSG"
+
+  deploy-canary:
+    needs: off-hours-check
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Deploy to staging + BlueMarlin canary + E2E
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
           script: |
+            set -e
             cd /root && git pull
-            cd /root/clients/bluemarlin && docker compose down && docker compose build && docker compose up -d
-            cd /root/clients/adamus && docker compose down && docker compose up -d
-            cd /root/clients/consultadespertares && docker compose down && docker compose up -d
-            # Containers take ~3-5s to bind to their port after "up -d"
-            # Retry health check up to 12 times (60s total) before giving up
-            for p in 8001 8002 8003; do
+            SHA=$(git rev-parse --short HEAD)
+            chmod +x wtyj/scripts/*.sh
+
+            # Save current image as :previous before rebuilding (graceful on first run)
+            docker tag wtyj-agent:latest wtyj-agent:previous 2>/dev/null || \
+              echo "No previous wtyj-agent:latest to tag (first run - rollback unavailable this deploy)"
+
+            # Build new image + archive-tag with SHA
+            cd /root/clients/bluemarlin && docker compose build
+            docker tag wtyj-agent:latest wtyj-agent:$SHA
+
+            # Retag :latest -> :staging so staging container picks up new code on restart
+            docker tag wtyj-agent:latest wtyj-agent:staging
+
+            # Deploy staging (port 9001) with retry health check
+            cd /root/staging && docker compose down && docker compose up -d
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if curl -sf -m 3 http://localhost:9001/health | grep -q '"ok"'; then
+                echo "staging healthy (attempt $attempt)"; break
+              fi
+              [ "$attempt" = "12" ] && { echo "STAGING HEALTH FAILED"; exit 1; }
+              sleep 5
+            done
+
+            # Deploy BlueMarlin canary (port 8001) with retry health check
+            cd /root/clients/bluemarlin && docker compose down && docker compose up -d
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if curl -sf -m 3 http://localhost:8001/health | grep -q '"ok"'; then
+                echo "bluemarlin healthy (attempt $attempt)"; break
+              fi
+              [ "$attempt" = "12" ] && {
+                echo "BLUEMARLIN HEALTH FAILED - attempting rollback";
+                bash /root/wtyj/scripts/rollback.sh bluemarlin || true; exit 1; }
+              sleep 5
+            done
+
+            # System-wide E2E test (10 checks on BlueMarlin)
+            if ! bash /root/wtyj/scripts/e2e_canary_test.sh; then
+              echo "E2E FAILED - attempting rollback"
+              bash /root/wtyj/scripts/rollback.sh bluemarlin || true
+              exit 1
+            fi
+
+  deploy-production:
+    needs: deploy-canary
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Snapshot DBs + deploy paying clients
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -e
+            SHA=$(cd /root && git rev-parse --short HEAD)
+            chmod +x /root/wtyj/scripts/*.sh
+
+            bash /root/wtyj/scripts/pre_deploy_snapshot.sh $SHA
+
+            # Deploy paying clients (no rebuild - same image as canary)
+            for client in adamus consultadespertares; do
+              cd /root/clients/$client
+              docker compose down && docker compose up -d
+            done
+
+            # Health check paying clients with retry
+            for p in 8002 8003; do
               for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
                 if curl -sf -m 3 http://localhost:$p/health | grep -q '"ok"'; then
-                  echo "port $p healthy (attempt $attempt)"
-                  break
+                  echo "port $p healthy (attempt $attempt)"; break
                 fi
-                if [ "$attempt" = "12" ]; then
-                  echo "HEALTH CHECK FAILED on port $p after 60s"
-                  exit 1
-                fi
+                [ "$attempt" = "12" ] && {
+                  echo "PORT $p HEALTH FAILED - attempting rollback all";
+                  bash /root/wtyj/scripts/rollback.sh all || true; exit 1; }
                 sleep 5
               done
             done
