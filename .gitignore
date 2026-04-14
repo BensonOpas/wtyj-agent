@@ -11,10 +11,23 @@ social_state.json
 email_thread_state.json
 bluemarlin/data/*
 !bluemarlin/data/.gitkeep
+wtyj/data/*
+!wtyj/data/.gitkeep
+wtyj/config/*
+!wtyj/config/.gitkeep
+
+# Historical snapshots (contain customer data — never track)
+wtyj/backups/
+.backups/
+
+# Safety net: any state_registry.db anywhere
+**/state_registry.db
 
 # Logs
 *.log
 bluemarlin/logs/
+wtyj/logs/*
+!wtyj/logs/.gitkeep
 
 # Python
 __pycache__/
@@ -60,3 +73,8 @@ clients/*/logs/
 _archive_old_system/
 bluemarlin/src/node_modules/
 bluemarlin/src/package-lock.json
+
+# Control panel runtime
+tools/control-panel/node_modules/
+tools/control-panel/data/
+tools/control-panel/package-lock.json
