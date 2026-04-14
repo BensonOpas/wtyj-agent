@@ -104,13 +104,38 @@ app.get('/api/deploys/state', (_req, res) => {
 
 app.post('/api/deploys/trigger', (_req, res) => {
   const { exec } = require('child_process')
-  // Manual trigger = emergency bypass. Passes force=true to skip off-hours check.
+  // Fires the full CI pipeline (test + canary + production) against current main.
+  // In demo mode the queue-drain workflow is a no-op; this actually runs a deploy.
   exec(
-    'gh workflow run scheduled-deploy.yml -R BensonOpas/wtyj-agent -f force=true',
+    'gh workflow run ci-deploy.yml -R BensonOpas/wtyj-agent',
     { timeout: 8000 },
-    (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ error: err.message, stderr })
-      res.json({ ok: true, message: 'Triggered emergency deploy — bypasses off-hours check' })
+    (err, _stdout, stderr) => {
+      if (err) return res.status(500).json({ ok: false, error: err.message, stderr })
+      // Poll briefly for the new run to show up so we can return its URL.
+      setTimeout(() => {
+        exec(
+          'gh run list --workflow=ci-deploy.yml -R BensonOpas/wtyj-agent --limit 1 --json url,databaseId,status',
+          { timeout: 5000 },
+          (err2, out) => {
+            const fallback = {
+              ok: true,
+              message: 'Deploy triggered — runner assigning (total ~90s)',
+              workflow_run_url: 'https://github.com/BensonOpas/wtyj-agent/actions/workflows/ci-deploy.yml',
+            }
+            if (err2 || !out) return res.json(fallback)
+            try {
+              const run = JSON.parse(out)[0]
+              res.json({
+                ok: true,
+                message: `Deploy triggered (run #${run.databaseId}) — runner assigning`,
+                workflow_run_url: run.url,
+              })
+            } catch (_e) {
+              res.json(fallback)
+            }
+          }
+        )
+      }, 2500)
     }
   )
 })

@@ -41,12 +41,15 @@ function nextOffHoursWindow(): string {
   return `${hrs}h ${mins}m`
 }
 
+interface Toast { message: string; url?: string; kind: 'ok' | 'error' }
+
 export default function Deploys() {
   const [state, setState] = useState<DeployState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [triggering, setTriggering] = useState(false)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [explanations, setExplanations] = useState<Record<string, string>>({})
+  const [toast, setToast] = useState<Toast | null>(null)
 
   const fetchState = () => {
     fetch('/api/deploys/state')
@@ -88,9 +91,28 @@ export default function Deploys() {
 
   const triggerDeploy = () => {
     setTriggering(true)
+    setToast(null)
     fetch('/api/deploys/trigger', { method: 'POST' })
       .then(r => r.json())
-      .then(() => setTimeout(fetchState, 2000))
+      .then(data => {
+        if (data.ok) {
+          setToast({
+            kind: 'ok',
+            message: data.message || 'Deploy triggered',
+            url: data.workflow_run_url,
+          })
+          // Poll every 5s for 2 min so the UI reflects the deploy moving through
+          // canary → production without waiting for the 30s idle interval.
+          const start = Date.now()
+          const fast = setInterval(() => {
+            if (Date.now() - start > 120000) { clearInterval(fast); return }
+            fetchState()
+          }, 5000)
+        } else {
+          setToast({ kind: 'error', message: `Trigger failed: ${data.error || 'unknown'}` })
+        }
+      })
+      .catch(e => setToast({ kind: 'error', message: `Trigger failed: ${e}` }))
       .finally(() => setTriggering(false))
   }
 
@@ -102,9 +124,19 @@ export default function Deploys() {
       <div className="dp-header">
         <h2>Deploys</h2>
         <button className="dp-trigger" onClick={triggerDeploy} disabled={triggering}>
-          {triggering ? 'Triggering...' : 'Deploy queued now'}
+          {triggering ? 'Triggering...' : 'Trigger deploy'}
         </button>
       </div>
+
+      {toast && (
+        <div className={`dp-toast dp-toast-${toast.kind}`}>
+          <span>{toast.message}</span>
+          {toast.url && (
+            <a href={toast.url} target="_blank" rel="noreferrer">View run ↗</a>
+          )}
+          <button className="dp-toast-close" onClick={() => setToast(null)}>×</button>
+        </div>
+      )}
 
       <section className="dp-section">
         <h3>Currently deploying</h3>

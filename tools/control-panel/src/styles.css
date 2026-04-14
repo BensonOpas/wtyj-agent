@@ -1370,3 +1370,19 @@ body {
   font-family: 'SF Mono', Menlo, monospace; font-size: 12px;
 }
 .dp-explanation-empty { color: var(--text-muted); font-style: italic; }
+
+.dp-toast {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; margin-bottom: 16px;
+  border-radius: 8px; font-size: 13px;
+  border-left: 3px solid var(--green);
+  background: var(--bg);
+}
+.dp-toast-error { border-left-color: var(--red); }
+.dp-toast span { flex: 1; }
+.dp-toast a { color: var(--blue, #3b82f6); text-decoration: none; font-weight: 600; }
+.dp-toast a:hover { text-decoration: underline; }
+.dp-toast-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 18px; padding: 0 4px; line-height: 1;
+}
