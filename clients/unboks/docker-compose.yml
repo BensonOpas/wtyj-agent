@@ -1,0 +1,15 @@
+services:
+  agent:
+    image: wtyj-agent
+    container_name: wtyj-unboks
+    restart: unless-stopped
+    ports:
+      - "8004:8001"
+    env_file:
+      - ./config/platform.env
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+    volumes:
+      - ./config:/app/config:rw
+      - ./data:/app/data
+      - ./logs:/app/logs

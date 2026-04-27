@@ -1,0 +1,39 @@
+{
+  "business": {
+    "name": "Unboks Test",
+    "email": "",
+    "booking_email": "",
+    "phone": "NA",
+    "whatsapp": "NA",
+    "location": "NA",
+    "languages": ["English"],
+    "operating_days": "NA",
+    "support_email": "butlerbensonagent@gmail.com",
+    "spreadsheet_id": ""
+  },
+  "payment": {
+    "timing": "none",
+    "methods": [],
+    "cancellation_policy": "NA"
+  },
+  "features": {
+    "booking_flow": false
+  },
+  "terminology": {
+    "service_label": "session",
+    "party_size_label": "people",
+    "slot_label": "appointment"
+  },
+  "booking_rules": {
+    "required_fields": [],
+    "hold_duration_hours": 0,
+    "group_threshold_requires_human": 0,
+    "max_bookings_per_thread": 0
+  },
+  "services": {},
+  "service_aliases": {},
+  "faq": {},
+  "common_sense_knowledge": {
+    "marina_persona": "Internal test sandbox for SR. No real customers, no real channels connected. Filter/buffer mode: receive any incoming message, escalate everything, do not attempt to book or respond substantively."
+  }
+}
