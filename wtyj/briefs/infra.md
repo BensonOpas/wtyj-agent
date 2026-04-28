@@ -139,6 +139,7 @@ Four containers (3 production + 1 staging). Production uses `wtyj-agent:latest`,
 | BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
 | Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
 | Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
+| Unboks (internal sandbox) | `wtyj-unboks` | 8004 | `/root/clients/unboks/docker-compose.yml` | `/root/clients/unboks/` |
 | **Staging** | `wtyj-staging` | 9001 | `/root/staging/docker-compose.yml` | `/root/staging/` |
 
 **Production** containers use `wtyj-agent:latest`. **Staging** uses `wtyj-agent:staging` (separate image tag — building staging never overwrites production). Staging has dummy API keys: only the Claude key is real; Zernio, WhatsApp, and email keys are empty or dummy, preventing staging from sending real messages. Staging dashboard password: `staging`.
@@ -227,7 +228,7 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 | Public domain | `api.wetakeyourjob.com` |
 | SSL cert | Let's Encrypt via certbot (auto-renew) |
 | SSL expiry | 2026-06-09 |
-| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/` → 8001 (backward compat) |
+| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/unboks/` → 8004, `/` → 8001 (backward compat) |
 | Health check | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
 
 ## Monitoring + Backups
