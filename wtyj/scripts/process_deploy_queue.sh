@@ -38,9 +38,11 @@ START=$(date +%s)
 # Pre-deploy snapshot
 bash /root/wtyj/scripts/pre_deploy_snapshot.sh "$SHA"
 
-# Deploy paying clients (image already built by canary, just restart)
+# Deploy paying clients + internal sandbox (image already built by canary,
+# just restart). unboks is the SR-facing test sandbox; deploys with the
+# others so its container always runs the latest image.
 STATUS="success"
-for client in adamus consultadespertares; do
+for client in adamus consultadespertares unboks; do
   cd /root/clients/$client
   if ! (docker compose down && docker compose up -d); then
     STATUS="failed"
@@ -50,7 +52,7 @@ done
 
 # Health check with retry
 if [ "$STATUS" = "success" ]; then
-  for p in 8002 8003; do
+  for p in 8002 8003 8004; do
     OK=0
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
       if curl -sf -m 3 http://localhost:$p/health | grep -q '"ok"'; then
