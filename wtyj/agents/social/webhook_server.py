@@ -36,8 +36,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://wetakeyourjob.com", "https://wtyj-dashboard.replit.app"],
-    allow_origin_regex=r"https://.*\.(replit\.(dev|app)|wetakeyourjob\.com)$",
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://wetakeyourjob.com", "https://wtyj-dashboard.replit.app", "https://unboks.org"],
+    allow_origin_regex=r"https://.*\.(replit\.(dev|app)|wetakeyourjob\.com|unboks\.org)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
