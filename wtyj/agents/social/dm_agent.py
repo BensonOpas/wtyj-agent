@@ -93,6 +93,7 @@ Reply with ONLY your message text. No JSON. No code fences. No metadata. Just th
 def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
     """Build the user prompt with conversation history and inbound message."""
     today = datetime.now(timezone(offset=__import__('datetime').timedelta(hours=-4))).strftime("%Y-%m-%d")
+    business = config_loader.get_business()
 
     history_section = ""
     if messages:
