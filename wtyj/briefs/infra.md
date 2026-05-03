@@ -139,8 +139,10 @@ Four containers (3 production + 1 staging). Production uses `wtyj-agent:latest`,
 | BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
 | Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
 | Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
-| Unboks (internal sandbox) | `wtyj-unboks` | 8004 | `/root/clients/unboks/docker-compose.yml` | `/root/clients/unboks/` |
+| Unboks (own product, customer-facing) | `wtyj-unboks` | 8004 | `/root/clients/unboks/docker-compose.yml` | `/root/clients/unboks/` |
 | **Staging** | `wtyj-staging` | 9001 | `/root/staging/docker-compose.yml` | `/root/staging/` |
+
+**2026-05-03 update (Brief 199):** WhatsApp/Zernio/Meta/Late credentials moved from `bluemarlin/config/platform.env` to `unboks/config/platform.env`. The number `+599 968 81585` (Calvin's WhatsApp, used for Unboks's FB-group promo) now routes to the `wtyj-unboks` tenant where the AI is configured as "Calvin" answering questions about Unboks itself. The `wtyj-bluemarlin` tenant retains zero channel credentials and runs as a code-only demo (no live channels). Webhook URL on Meta/Zernio side must be repointed from `/bluemarlin/webhook/whatsapp` → `/unboks/webhook/whatsapp` for the routing to take effect — Calvin/SR's manual operation outside this brief.
 
 **Production** containers use `wtyj-agent:latest`. **Staging** uses `wtyj-agent:staging` (separate image tag — building staging never overwrites production). Staging has dummy API keys: only the Claude key is real; Zernio, WhatsApp, and email keys are empty or dummy, preventing staging from sending real messages. Staging dashboard password: `staging`.
 
