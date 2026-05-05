@@ -884,11 +884,18 @@ async def list_conversations():
 @router.get("/messages/conversations/{phone:path}", dependencies=[Depends(_check_auth)])
 async def get_conversation(phone: str):
     """Get full conversation thread + booking state. Brief 171: routes to the
-    email helper when phone starts with 'email::'."""
+    email helper when phone starts with 'email::'. Brief 201: each message dict
+    is enriched with `content` (alias of text) and `timestamp` (alias of
+    created_at) so SR's dashboard frontend can read them directly. Original
+    `text`/`created_at` keys preserved for backward compat."""
     if phone.startswith("email::"):
         thread_key = phone[len("email::"):]
         return state_registry.email_get_conversation(thread_key)
     messages = state_registry.wa_get_full_history(phone, limit=200)
+    # Brief 201: add frontend-friendly field aliases without removing originals.
+    for m in messages:
+        m["content"] = m.get("text", "")
+        m["timestamp"] = m.get("created_at", "")
     booking_state = state_registry.wa_get_booking_state(phone)
     return {
         "phone": phone,

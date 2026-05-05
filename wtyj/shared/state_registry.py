@@ -929,15 +929,17 @@ def wa_list_conversations() -> list:
 
 
 def wa_get_full_history(phone: str, limit: int = 100) -> list:
-    """Get full conversation history for a phone number (no 24h cutoff). Oldest first."""
+    """Get full conversation history for a phone number (no 24h cutoff). Oldest first.
+    Brief 201: also returns row id (SQLite autoincrement) so frontends can use it
+    as a stable React key."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT role, text, created_at FROM whatsapp_threads "
+        "SELECT id, role, text, created_at FROM whatsapp_threads "
         "WHERE phone = ? ORDER BY created_at ASC LIMIT ?",
         (phone, limit)
     ).fetchall()
     conn.close()
-    return [{"role": r[0], "text": r[1], "created_at": r[2]} for r in rows]
+    return [{"id": r[0], "role": r[1], "text": r[2], "created_at": r[3]} for r in rows]
 
 
 def wa_cleanup_stale_data() -> dict:

@@ -167,6 +167,9 @@ def handle_incoming_dm(message: dict) -> str:
 
         # Safety net: strip unreplaced booking placeholders
         reply = reply.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
+        # Brief 201: strip em-dashes (Claude ignores brand_voice_rules on this).
+        # Em-dash only — en-dashes and hyphens left alone.
+        reply = reply.replace("—", ",")
         # Strip markdown code fences if present
         reply = re.sub(r"^```(?:json)?\s*", "", reply)
         reply = re.sub(r"\s*```$", "", reply.strip())

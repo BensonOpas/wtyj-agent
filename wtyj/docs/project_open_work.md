@@ -2,6 +2,45 @@
 
 Captured 2026-04-28 during system-plan reframe. Calvin shipped a formal product spec ("SOT spec" — Source of Truth) that defines what Unboks is and how it behaves. Backend (`wtyj-agent`) needs to extend `client.json` and code to match. Not yet started.
 
+## HIGH PRIORITY — Google Workspace email support (added 2026-05-05)
+
+`hello@unboks.org` is the new public contact email for the unboks tenant — calvin-csa needs to poll it and reply via the email channel. Mailbox is on **Google Workspace**, not Microsoft 365. Our `wtyj/agents/marina/email_poller.py` only knows Microsoft Azure OAuth + Outlook IMAP today (BlueMarlin and Adamus both run on Microsoft 365 via GoDaddy).
+
+**Why this is high priority:** Benson's stated preference is Google email going forward — every future client onboarded after unboks will likely be Google Workspace. Microsoft was the historical accident (GoDaddy bundled it with the wetakeyourjob.com domain). Building Google support now unblocks unboks AND every client after.
+
+**Approach (Option A from 2026-05-05 discussion):** add provider abstraction to `email_poller.py`. Env-var switch:
+- `EMAIL_PROVIDER=microsoft` (default for backward compat) → existing Azure OAuth + outlook.office365.com IMAP path
+- `EMAIL_PROVIDER=google` → new Google OAuth + imap.gmail.com:993 path
+
+What needs building:
+1. Google Cloud OAuth client (one-time, in our existing Google Cloud project per `reference_google_cloud.md`) — scopes: `https://mail.google.com/`
+2. Interactive OAuth bootstrap script (mirrors the Microsoft `bootstrap_outlook_token.py` pattern) → writes refresh token to `/root/clients/unboks/config/google_refresh_token.txt`
+3. Token-refresh helper: trade refresh token for access token via Google's token endpoint (`https://oauth2.googleapis.com/token`)
+4. IMAP path that uses Gmail's XOAUTH2 SASL mechanism (different from Microsoft's XOAUTH2 — same name, different format)
+5. Provider switch at the top of `email_poller.py` based on `os.environ["EMAIL_PROVIDER"]`
+6. Tests: provider switch + token-refresh logic; live IMAP test against the real mailbox is manual
+
+**Rejected alternatives:**
+- App Password auth — Google deprecated/restricted; fragile
+- Gmail API REST instead of IMAP — different code path entirely, more refactor
+
+**Blocks:** unboks email channel going live. Until this ships, calvin-csa can only handle WhatsApp/IG/FB DMs for the unboks tenant.
+
+**Estimated:** half-day brief. Single file (`email_poller.py`) + new `bootstrap_google_token.py` script + tests.
+
+## Marina is not a template (added 2026-05-05)
+
+Marina (`wtyj/agents/marina/marina_agent.py`) was fine-tuned specifically for BlueMarlin Charters during Phase 1. She has BlueMarlin-specific prompt scaffolding, BlueMarlin-specific extraction fields, BlueMarlin-specific booking flow, and BlueMarlin-specific tone defaults. **Do NOT use Marina as the template for new agents.** When we surface a pattern that needs to be shared between agents (e.g., em-dash strip, brand-voice enforcement, escalation triggers), the right move is to extract it into a shared helper or modular agent base — NOT to "copy what Marina does."
+
+Action: when we need our second-or-later cross-agent shared behavior, design a real reusable template at `wtyj/agents/_shared/` or similar. Marina becomes a thin tenant-specialized layer over the base, not the canonical reference. Out of scope for any single brief; flagging as the principle going forward.
+
+## Frontend-side follow-ups from Brief 200 cutover (added 2026-05-05)
+
+After the api.unboks.org cutover, two frontend-handling issues emerged. Both are SR's territory (frontend repo `calvin835/unboks-dashboard-api/artifacts/unboks/`); flagging here so the next session knows:
+
+- **JWT expiration handling.** Our `_check_auth` dependency rejects expired tokens with 401. Frontend doesn't refresh tokens or redirect-on-401, so users see broken UI after idle. Fix on frontend: detect 401 in axios/fetch interceptor, clear stored token, redirect to login.
+- **Detail view defensiveness.** `Inbox.tsx` line 64 reads `msg.content` directly with no fallback to `msg.text`. Brief 201 worked around by adding aliases backend-side. Frontend should mirror the `safePreview` defensive-read pattern in `MessageBubble` to handle backend shape variation gracefully going forward.
+
 ## The SOT spec (Calvin, paraphrased — full text in chat history)
 
 - Core value: AI answers routine, escalates important.
