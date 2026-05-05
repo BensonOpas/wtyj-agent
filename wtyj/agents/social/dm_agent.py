@@ -16,11 +16,19 @@ _REPLY_WINDOW_SECONDS = 3600
 
 
 def _build_dm_system_prompt(channel: str) -> str:
-    """Build a Q&A-focused system prompt for DM channels. No booking logic."""
+    """Build a Q&A-focused system prompt for DM channels. No booking logic.
+    Brief 203: when client.json's agent_persona.freeform_notes is set, the
+    master prompt block replaces the hardcoded WRITING STYLE / AVOID blocks.
+    The structural pieces (services, FAQ, booking redirect, language) stay in
+    both modes."""
     business = config_loader.get_business()
     csk = config_loader.get_common_sense_knowledge()
     trips = config_loader.get_services()
     faq = config_loader.get_faq()
+    # Brief 203: agent_persona pulled from raw client.json (config_loader has no
+    # dedicated getter today — get_raw is the consistent escape hatch used elsewhere).
+    persona = config_loader.get_raw().get("agent_persona", {})
+    master_prompt = (persona.get("freeform_notes") or "").strip()
 
     agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
@@ -54,40 +62,66 @@ def _build_dm_system_prompt(channel: str) -> str:
     for q, a in faq.items():
         faq_lines.append(f"Q: {q.replace('_', ' ').title()}\nA: {a}")
 
-    return f"""You are {agent_name}, answering {platform_name} DMs for {company_name}.
+    # Common structural blocks (data injection, not voice).
+    # Empty services/faq lists render as bare "SERVICES:\n" / "FAQ:\n" — same as
+    # existing behavior (chr(10).join on an empty list = ""). No empty-state change.
+    intro = f"You are {agent_name}, answering {platform_name} DMs for {company_name}."
+    qa_role_short = f"You are a Q&A helper. You answer questions about {service_label}s, pricing, availability, and general info."
+    qa_role_full = qa_role_short + " You are friendly, casual, and human."
+    services_block = f"{service_label.upper()}S:\n{chr(10).join(service_lines)}"
+    faq_block = f"FAQ:\n{chr(10).join(faq_lines)}"
+    booking_redirect_block = f"""BOOKING REDIRECT — CRITICAL:
+You CANNOT process {service_label} bookings in DMs. When someone wants to book, asks about availability for a specific date, or provides booking details (date, guests, time):
+- Do NOT ask for their date, number of guests, time, name, or any booking details
+- Do NOT confirm any booking or mention booking references
+- Redirect them: "For bookings, message us on WhatsApp at wa.me/{wa_link} or email {booking_email} — we handle all bookings there!"
+- You may answer a general question about the service first, then redirect
+- If they insist on booking here, repeat the redirect once more. Do not cave."""
+    language_block = f"LANGUAGE: Reply in the same language the customer writes in. Supported: {languages}. Default to English if unclear."
+    emoji_block = "Emojis: sparingly, only if the customer used them first."
+    output_rule = "Reply with ONLY your message text. No JSON. No code fences. No metadata. Just the reply."
 
-You are a Q&A helper. You answer questions about {service_label}s, pricing, availability, and general info. You are friendly, casual, and human.
+    if master_prompt:
+        # Brief 203: master prompt mode. Drop the "friendly, casual, and human"
+        # tone tail (qa_role_short, not qa_role_full) so master prompt's own
+        # Tone block is sole tone source. Inject master prompt as standalone
+        # paragraph (no wrapper — it has its own internal section headers).
+        return (
+            intro + "\n\n"
+            + qa_role_short + "\n\n"
+            + master_prompt + "\n\n"
+            + services_block + "\n\n"
+            + faq_block + "\n\n"
+            + booking_redirect_block + "\n\n"
+            + language_block + "\n\n"
+            + emoji_block + "\n\n"
+            + output_rule
+        )
 
-{service_label.upper()}S:
-{chr(10).join(service_lines)}
-
-FAQ:
-{chr(10).join(faq_lines)}
-
-WRITING STYLE:
+    # Fallback: no master prompt set — use hardcoded WRITING STYLE / AVOID blocks.
+    # Byte-equivalent backward-compat path.
+    writing_style_block = f"""WRITING STYLE:
 - Short replies. Under 60 words for simple questions, under 100 for detailed ones.
 - Sound like a real person texting from work. Not a chatbot.
 - Use line breaks between thoughts. No walls of text.
 - No sign-offs, no signatures, no "Hope that helps!"
 - Use contractions. Match the sender's energy.
 - Greet ONLY on the very first message. If CONVERSATION HISTORY shows you already replied, skip the greeting entirely.
-- When listing {service_label}s, give names and brief descriptions. Only include prices if asked.
+- When listing {service_label}s, give names and brief descriptions. Only include prices if asked."""
+    avoid_block = "AVOID: em dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\", \"Nice choice\", \"Amazing\", \"Absolutely\", \"certainly\", \"wonderful\", \"fantastic\", forced enthusiasm, reasoning out loud."
 
-BOOKING REDIRECT — CRITICAL:
-You CANNOT process {service_label} bookings in DMs. When someone wants to book, asks about availability for a specific date, or provides booking details (date, guests, time):
-- Do NOT ask for their date, number of guests, time, name, or any booking details
-- Do NOT confirm any booking or mention booking references
-- Redirect them: "For bookings, message us on WhatsApp at wa.me/{wa_link} or email {booking_email} — we handle all bookings there!"
-- You may answer a general question about the service first, then redirect
-- If they insist on booking here, repeat the redirect once more. Do not cave.
-
-LANGUAGE: Reply in the same language the customer writes in. Supported: {languages}. Default to English if unclear.
-
-AVOID: em dashes, "Shall I", "I'd be happy to", "Great choice", "Nice choice", "Amazing", "Absolutely", "certainly", "wonderful", "fantastic", forced enthusiasm, reasoning out loud.
-
-Emojis: sparingly, only if the customer used them first.
-
-Reply with ONLY your message text. No JSON. No code fences. No metadata. Just the reply."""
+    return (
+        intro + "\n\n"
+        + qa_role_full + "\n\n"
+        + services_block + "\n\n"
+        + faq_block + "\n\n"
+        + writing_style_block + "\n\n"
+        + booking_redirect_block + "\n\n"
+        + language_block + "\n\n"
+        + avoid_block + "\n\n"
+        + emoji_block + "\n\n"
+        + output_rule
+    )
 
 
 def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
