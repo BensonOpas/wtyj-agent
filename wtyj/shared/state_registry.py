@@ -907,7 +907,23 @@ def wa_list_conversations() -> list:
         ).fetchone()
         fields = json.loads(state_row[0] or "{}") if state_row else {}
         flags = json.loads(state_row[1] or "{}") if state_row else {}
-        name = fields.get("customer_name") or fields.get("name") or phone
+        # Brief 202: when booking_state has no customer_name (the dm_agent path
+        # for booking_flow:false tenants like unboks doesn't populate it), fall
+        # back to the most recent user-role sender_name from whatsapp_threads.
+        # Marina's path (booking_flow:true) is unaffected — booking_state's
+        # customer_name takes priority.
+        name = fields.get("customer_name") or fields.get("name") or ""
+        if not name:
+            sender_row = conn.execute(
+                "SELECT sender_name FROM whatsapp_threads "
+                "WHERE phone = ? AND role = 'user' AND sender_name != '' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (phone,)
+            ).fetchone()
+            if sender_row and sender_row[0]:
+                name = sender_row[0]
+        if not name:
+            name = phone  # final fallback to hex/phone if no name source at all
         status = "escalated" if flags.get("fully_escalated") else "active"
         # Count messages
         count_row = conn.execute(
