@@ -226,12 +226,16 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 
 | Item | Value |
 |------|-------|
-| nginx config | `/etc/nginx/sites-available/api-wetakeyourjob` |
-| Public domain | `api.wetakeyourjob.com` |
-| SSL cert | Let's Encrypt via certbot (auto-renew) |
-| SSL expiry | 2026-06-09 |
-| Routing | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/unboks/` → 8004, `/` → 8001 (backward compat) |
-| Health check | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
+| nginx config (legacy) | `/etc/nginx/sites-available/api-wetakeyourjob` |
+| nginx config (canonical, post Brief 200) | `/etc/nginx/sites-available/api-unboks` |
+| Public domains | `api.wetakeyourjob.com` (legacy alias) + `api.unboks.org` (canonical, post-rebrand) |
+| SSL cert (legacy) | Let's Encrypt via certbot (auto-renew), expires 2026-06-09 |
+| SSL cert (canonical) | Pending Phase B of Brief 200 — issued by certbot once SR points `api.unboks.org` DNS at `108.61.192.52` |
+| Routing (legacy) | Path-prefix: `/bluemarlin/` → 8001, `/adamus/` → 8002, `/consultadespertares/` → 8003, `/unboks/` → 8004, `/` → 8001 (backward compat) |
+| Routing (canonical) | `api.unboks.org/api/{tenant}/...` — strips both `/api/` AND `/{tenant}/` prefixes via `proxy_pass` trailing-slash. Plus `/api/healthz` → BlueMarlin's `/health`. Unknown paths return 404. |
+| Brief 200 status | Phase A complete — config pre-positioned, validated via `nginx -t`, dormant until DNS flips. Phase B (cert + cutover) runs via `bash wtyj/scripts/cutover_unboks_domain.sh` after SR's DNS change. |
+| Health check (legacy) | `curl -s https://api.wetakeyourjob.com/bluemarlin/health` |
+| Health check (canonical, post Phase B) | `curl -s https://api.unboks.org/api/healthz` |
 
 ## Monitoring + Backups
 
