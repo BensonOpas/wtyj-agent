@@ -28,11 +28,15 @@ What needs building:
 
 **Estimated:** half-day brief. Single file (`email_poller.py`) + new `bootstrap_google_token.py` script + tests.
 
-## Marina is not a template (added 2026-05-05)
+## Marina IS the template — but content stays per-tenant (clarified 2026-05-05)
 
-Marina (`wtyj/agents/marina/marina_agent.py`) was fine-tuned specifically for BlueMarlin Charters during Phase 1. She has BlueMarlin-specific prompt scaffolding, BlueMarlin-specific extraction fields, BlueMarlin-specific booking flow, and BlueMarlin-specific tone defaults. **Do NOT use Marina as the template for new agents.** When we surface a pattern that needs to be shared between agents (e.g., em-dash strip, brand-voice enforcement, escalation triggers), the right move is to extract it into a shared helper or modular agent base — NOT to "copy what Marina does."
+**Marina (`wtyj/agents/marina/marina_agent.py`) IS the canonical template** — for code patterns: em-dash strip, escalation flags, customer record creation, language matching, prompt scaffolding shape, etc. Copy from Marina freely.
 
-Action: when we need our second-or-later cross-agent shared behavior, design a real reusable template at `wtyj/agents/_shared/` or similar. Marina becomes a thin tenant-specialized layer over the base, not the canonical reference. Out of scope for any single brief; flagging as the principle going forward.
+**What does NOT come along with the code copy: BlueMarlin's domain content.** The boat-charter language (trips, prices, FAQ, brand voice) lives in `clients/bluemarlin/config/client.json`, NOT in `marina_agent.py`. The code reads from `client.json` at call time — it is content-agnostic by design. So calvin-csa, sofia, etc. can use Marina's code patterns without inheriting boat terms; their content comes from THEIR own `client.json`.
+
+The earlier "Marina is not a template" framing in this doc was wrong (Brief 201 wrote it). Corrected: Marina is the template. The thing to avoid is **bleeding BlueMarlin's content into other agents' configs** — which is already prevented by the per-tenant client.json architecture and doesn't need a new principle.
+
+When refactoring a Marina pattern into a shared helper (e.g., later when the third agent also needs em-dash strip), it's still fine — that's just normal code factoring. But the default move is "copy from Marina," not "design a new base from scratch."
 
 ## Frontend-side follow-ups from Brief 200 cutover (added 2026-05-05)
 
