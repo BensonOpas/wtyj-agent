@@ -277,6 +277,23 @@ async def receive_zernio_webhook(request: Request, background_tasks: BackgroundT
     return PlainTextResponse(content="OK", status_code=200)
 
 
+def _normalize_phone_digits(phone: str) -> str:
+    """Brief 208: collapse a phone-like string to ASCII digits only.
+    Strips Unicode digits (fullwidth ５９９ etc.), separators, plus signs,
+    and the 'ext'/'x'/'#' suffix that some clients add for extensions."""
+    if not phone:
+        return ""
+    s = str(phone)
+    # Strip extension suffix and everything after it
+    for marker in (" ext ", " x ", "#"):
+        idx = s.lower().find(marker)
+        if idx >= 0:
+            s = s[:idx]
+            break
+    import re
+    return re.sub(r"[^0-9]", "", s)
+
+
 def _process_zernio_event(payload: dict):
     """Background task: parse Zernio webhook, dedup, route DM to booking or Q&A."""
     try:
@@ -290,6 +307,18 @@ def _process_zernio_event(payload: dict):
             log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
             return
         state_registry.wa_mark_as_processed(message_id)
+
+        # Brief 208: per-tenant ignored_phones list. Drop messages from
+        # configured numbers BEFORE any reply-generation path runs.
+        _ignored = config_loader.get_raw().get("features", {}).get("ignored_phones", [])
+        if _ignored:
+            sender_digits = _normalize_phone_digits(msg.get("sender_id", ""))
+            for ignored in _ignored:
+                if sender_digits and sender_digits == _normalize_phone_digits(str(ignored)):
+                    log("zernio_dm_ignored_phone",
+                        sender=sender_digits,
+                        message_id=message_id)
+                    return
 
         text = msg.get("text", "")
         if not text:

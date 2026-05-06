@@ -2,6 +2,22 @@
 
 Captured 2026-04-28 during system-plan reframe. Calvin shipped a formal product spec ("SOT spec" — Source of Truth) that defines what Unboks is and how it behaves. Backend (`wtyj-agent`) needs to extend `client.json` and code to match. Not yet started.
 
+## URGENT (added 2026-05-06) — calvin-csa replies to SR's friend Excluir
+
+unboks container is currently STOPPED (manually via `docker compose down`) to prevent calvin-csa from replying to ANY messages while we ship the proper fix. Block target: phone `+599 9 513 3333` (SR's contact "Excluir"). Cost of current outage: dashboard.unboks.org/api/unboks/* returns 502, email polling for hello@unboks.org offline, Tasks page (Brief 207) inaccessible.
+
+**Fix needed:** add `features.ignored_phones` to unboks `client.json` + check at webhook ingestion in `webhook_server.py:_process_zernio_event`. Use `re.sub(r'[^0-9]', '', s)` for digit normalization (NOT `str.isdigit()` — Unicode-digit bypass per Brief 205 audit). Strip `ext`/`x`/`#` suffixes before comparing. Then restart unboks container.
+
+~15 lines code + 2-3 tests. Can ship as a tight brief OR quick-fix path (since the change is contained + well-understood).
+
+## URGENT (added 2026-05-06) — Login timeouts on dashboard.unboks.org
+
+SR re-logs in after every deploy because container restart resets `_SESSION_TOKEN = secrets.token_hex(32)` (api.py:30 — generated fresh at module import). No TTL bug; pure restart-token-reset.
+
+**Fix needed:** persist the random token to disk on first generation (`/app/data/session_token`), read on subsequent starts. Survives restarts automatically; rotates if file is deleted. ~10 lines.
+
+(Brief 205's env-var approach was an alternative but disk-persisted random is simpler — no manual VPS config step. Audit-recommended path.)
+
 ## HIGH PRIORITY — Google Workspace email support (added 2026-05-05)
 
 `hello@unboks.org` is the new public contact email for the unboks tenant — calvin-csa needs to poll it and reply via the email channel. Mailbox is on **Google Workspace**, not Microsoft 365. Our `wtyj/agents/marina/email_poller.py` only knows Microsoft Azure OAuth + Outlook IMAP today (BlueMarlin and Adamus both run on Microsoft 365 via GoDaddy).

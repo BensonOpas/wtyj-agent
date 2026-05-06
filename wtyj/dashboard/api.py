@@ -27,7 +27,34 @@ _GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 _GOOGLE_REDIRECT_URI = "https://api.wetakeyourjob.com/dashboard/api/google/callback"
 _GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.readonly"
 
-_SESSION_TOKEN = secrets.token_hex(32)
+# Brief 208: persist session token to disk so it survives container restarts.
+# Path lives in /app/data/ which is mounted from the per-tenant data volume,
+# so it persists across `docker compose down/up`. File perms 0600 (it's a
+# credential). Delete the file to force token rotation.
+def _init_session_token() -> str:
+    token_path = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "data", "session_token"
+    ))
+    if os.path.exists(token_path):
+        try:
+            with open(token_path, "r") as f:
+                existing = f.read().strip()
+            if existing:
+                return existing
+        except OSError:
+            pass  # fall through to regenerate
+    new_token = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(token_path), exist_ok=True)
+        with open(token_path, "w") as f:
+            f.write(new_token)
+        os.chmod(token_path, 0o600)
+    except OSError:
+        pass  # ephemeral fallback if disk write fails (won't survive restart)
+    return new_token
+
+
+_SESSION_TOKEN = _init_session_token()
 
 
 def _check_auth(authorization: str = Header(default="")):
