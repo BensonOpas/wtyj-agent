@@ -29,6 +29,10 @@ def _build_dm_system_prompt(channel: str) -> str:
     # dedicated getter today — get_raw is the consistent escape hatch used elsewhere).
     persona = config_loader.get_raw().get("agent_persona", {})
     master_prompt = (persona.get("freeform_notes") or "").strip()
+    # Brief 206: booking_flow gate so the BOOKING REDIRECT block doesn't inject
+    # for non-booking tenants (unboks etc.) where it would render a recursive
+    # wa.me/<same-number-the-customer-is-on> redirect.
+    booking_flow = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 
     agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
@@ -86,17 +90,13 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         # tone tail (qa_role_short, not qa_role_full) so master prompt's own
         # Tone block is sole tone source. Inject master prompt as standalone
         # paragraph (no wrapper — it has its own internal section headers).
-        return (
-            intro + "\n\n"
-            + qa_role_short + "\n\n"
-            + master_prompt + "\n\n"
-            + services_block + "\n\n"
-            + faq_block + "\n\n"
-            + booking_redirect_block + "\n\n"
-            + language_block + "\n\n"
-            + emoji_block + "\n\n"
-            + output_rule
-        )
+        # Brief 206: only include BOOKING REDIRECT block when booking_flow is
+        # true. Non-booking tenants don't have bookings to redirect to.
+        parts = [intro, qa_role_short, master_prompt, services_block, faq_block]
+        if booking_flow:
+            parts.append(booking_redirect_block)
+        parts.extend([language_block, emoji_block, output_rule])
+        return "\n\n".join(parts)
 
     # Fallback: no master prompt set — use hardcoded WRITING STYLE / AVOID blocks.
     # Byte-equivalent backward-compat path.
@@ -211,6 +211,38 @@ def handle_incoming_dm(message: dict) -> str:
         while "  " in reply:
             reply = reply.replace("  ", " ")
         reply = reply.strip()
+
+        # Brief 206: detect [ESCALATE] sentinel from master prompt's ESCALATION
+        # SCRIPT. If present, strip it from the visible reply AND create a
+        # pending_notifications row so the escalation surfaces in the operator
+        # dashboard. The visible reply is unchanged (sans sentinel line).
+        escalate_requested = "[ESCALATE]" in reply
+        if escalate_requested:
+            reply = reply.replace("[ESCALATE]", "").rstrip()
+            try:
+                _company = config_loader.get_business().get("name", "the business")
+                _agent = config_loader.get_business().get("agent_name", "CSA")
+                state_registry.create_pending_notification(
+                    notification_type="escalation",
+                    channel=channel,
+                    customer_id=conversation_id,
+                    customer_name=sender_name or "Unknown contact",
+                    subject=f"{_agent} escalated a {channel} conversation",
+                    body=(
+                        f"Customer message:\n{text}\n\n"
+                        f"{_agent}'s reply:\n{reply}\n\n"
+                        f"({_company} — auto-escalated by {_agent} based on "
+                        f"conversation context.)"
+                    ),
+                )
+                bm_logger.log("dm_escalation_created",
+                               conversation_id=conversation_id[:20],
+                               channel=channel)
+            except Exception as e:
+                bm_logger.log("dm_escalation_create_failed",
+                               conversation_id=conversation_id[:20],
+                               channel=channel,
+                               error=str(e)[:200])
 
         if not reply:
             bm_logger.log("dm_empty_reply", conversation_id=conversation_id[:20],
