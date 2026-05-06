@@ -240,6 +240,34 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Brief 207: tasks shared between Calvin and Jr (operator-side workflow,
+    # not customer-facing). Per-tenant SQLite isolation matches existing tables.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tasks ("
+        "id TEXT PRIMARY KEY, "
+        "body_html TEXT NOT NULL DEFAULT '', "
+        "body_text TEXT NOT NULL DEFAULT '', "
+        "created_by TEXT NOT NULL, "
+        "assigned_to TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'open', "
+        "completed_at TEXT, "
+        "completed_by TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS task_attachments ("
+        "id TEXT PRIMARY KEY, "
+        "task_id TEXT NOT NULL, "
+        "file_name TEXT NOT NULL, "
+        "mime_type TEXT NOT NULL, "
+        "size_bytes INTEGER NOT NULL, "
+        "stored_filename TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS content_drafts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -2432,6 +2460,110 @@ def customer_get_full(customer_id: int) -> dict:
         "recent_interactions": [
             {"channel": r[0], "summary": r[1], "created_at": r[2]} for r in int_rows
         ],
+    }
+
+
+# ── Brief 207: Tasks helpers (operator-side workflow) ──────────────────────
+
+def tasks_create(task_id: str, body_html: str, body_text: str,
+                 created_by: str, assigned_to: str) -> dict:
+    """Insert a new task. Returns the task dict (with empty attachments)."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO tasks (id, body_html, body_text, created_by, assigned_to, "
+        "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+        (task_id, body_html, body_text, created_by, assigned_to, now, now)
+    )
+    conn.commit()
+    conn.close()
+    return tasks_get(task_id)
+
+
+def tasks_get(task_id: str):
+    """Fetch a single task with its attachments. Returns None if not found."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, body_html, body_text, created_by, assigned_to, status, "
+        "completed_at, completed_by, created_at, updated_at "
+        "FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    attachments = conn.execute(
+        "SELECT id, file_name, mime_type, size_bytes, stored_filename, created_at "
+        "FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC",
+        (task_id,)
+    ).fetchall()
+    conn.close()
+    return {
+        "id": row[0], "body_html": row[1], "body_text": row[2],
+        "created_by": row[3], "assigned_to": row[4], "status": row[5],
+        "completed_at": row[6], "completed_by": row[7],
+        "created_at": row[8], "updated_at": row[9],
+        "attachments": [
+            {"id": a[0], "file_name": a[1], "mime_type": a[2],
+             "size_bytes": a[3], "stored_filename": a[4], "created_at": a[5]}
+            for a in attachments
+        ],
+    }
+
+
+def tasks_list() -> list:
+    """List all tasks newest first, with attachments."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id FROM tasks ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [tasks_get(r[0]) for r in rows]
+
+
+def tasks_update_status(task_id: str, status: str,
+                        completed_by: str = None):
+    """Update task status. status='done' sets completed_at + completed_by;
+    status='open' clears them. Returns updated task or None if not found."""
+    if status not in ("open", "done"):
+        raise ValueError(f"Invalid status: {status}")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    if status == "done":
+        conn.execute(
+            "UPDATE tasks SET status = 'done', completed_at = ?, "
+            "completed_by = ?, updated_at = ? WHERE id = ?",
+            (now, completed_by, now, task_id)
+        )
+    else:
+        conn.execute(
+            "UPDATE tasks SET status = 'open', completed_at = NULL, "
+            "completed_by = NULL, updated_at = ? WHERE id = ?",
+            (now, task_id)
+        )
+    conn.commit()
+    conn.close()
+    return tasks_get(task_id)
+
+
+def tasks_add_attachment(task_id: str, attachment_id: str, file_name: str,
+                         mime_type: str, size_bytes: int,
+                         stored_filename: str) -> dict:
+    """Insert an attachment row for an existing task. Bumps task's updated_at."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO task_attachments (id, task_id, file_name, mime_type, "
+        "size_bytes, stored_filename, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (attachment_id, task_id, file_name, mime_type, size_bytes,
+         stored_filename, now)
+    )
+    conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
+    conn.commit()
+    conn.close()
+    return {
+        "id": attachment_id, "file_name": file_name, "mime_type": mime_type,
+        "size_bytes": size_bytes, "stored_filename": stored_filename,
+        "created_at": now,
     }
 
 

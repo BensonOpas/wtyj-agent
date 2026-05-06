@@ -46,6 +46,11 @@ app.add_middleware(
 from dashboard.api import router as dashboard_router
 app.include_router(dashboard_router)
 
+# Brief 207: Tasks API mounted at root level (/tasks/*) so SR's frontend's
+# /api/unboks/tasks calls (after nginx prefix-strip → /tasks) hit it directly.
+from dashboard.tasks_api import router as tasks_router
+app.include_router(tasks_router)
+
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
 
