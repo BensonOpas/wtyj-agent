@@ -355,10 +355,16 @@ def _post_validate(th, result, service):
 def main():
     # Email-disabled path for clients that don't use email.
     # Exit 0 cleanly; supervisord is configured not to restart on clean exits.
-    if not EMAIL_ADDR or not os.path.exists(REFRESH_TOKEN_PATH):
+    # Brief 204: also accept EMAIL_PASSWORD as a valid auth signal (Gmail app
+    # password mode). Disabled iff EMAIL_ADDRESS empty, OR neither auth method
+    # is configured (no refresh_token AND no app password).
+    _has_password = bool(os.environ.get("EMAIL_PASSWORD", ""))
+    _has_refresh_token = os.path.exists(REFRESH_TOKEN_PATH)
+    if not EMAIL_ADDR or (not _has_refresh_token and not _has_password):
         log(f"Email polling disabled for this client "
             f"(EMAIL_ADDRESS={'set' if EMAIL_ADDR else 'empty'}, "
-            f"refresh_token={'present' if os.path.exists(REFRESH_TOKEN_PATH) else 'missing'}). "
+            f"refresh_token={'present' if _has_refresh_token else 'missing'}, "
+            f"app_password={'set' if _has_password else 'empty'}). "
             f"Exiting cleanly.")
         return
     log("Email poller started. UNSEEN-based AUTO-REPLY mode (marina_agent unified call).")
