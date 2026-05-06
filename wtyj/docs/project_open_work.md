@@ -38,6 +38,14 @@ The earlier "Marina is not a template" framing in this doc was wrong (Brief 201 
 
 When refactoring a Marina pattern into a shared helper (e.g., later when the third agent also needs em-dash strip), it's still fine — that's just normal code factoring. But the default move is "copy from Marina," not "design a new base from scratch."
 
+## SMTP "From" header hardcoded as Marina (added 2026-05-05, post Brief 204)
+
+`wtyj/agents/marina/email_adapter.py:smtp_send()` builds the "From" header as `"Marina <{EMAIL_ADDR}>"` — hardcoded "Marina" string. This means when calvin-csa replies to emails on `hello@unboks.org`, the reply's From header says "Marina <hello@unboks.org>" instead of "Calvin <hello@unboks.org>".
+
+**Fix:** read the agent name from `client.json` (`business.agent_name` or `agent_persona.name`) and use it in the From header. ~3 lines, no new tests strictly needed (or 1 test asserting From header includes the configured agent_name).
+
+Tiny brief or quick-fix path. Low priority — recipient sees a slightly off display name but reply works correctly. Cosmetic UX.
+
 ## Frontend-side follow-ups from Brief 200 cutover (added 2026-05-05)
 
 After the api.unboks.org cutover, two frontend-handling issues emerged. Both are SR's territory (frontend repo `calvin835/unboks-dashboard-api/artifacts/unboks/`); flagging here so the next session knows:
