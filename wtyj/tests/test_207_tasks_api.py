@@ -93,8 +93,9 @@ def test_patch_open_clears_completed_fields():
 
 
 def test_upload_attachment_returns_metadata_and_persists_file():
-    """POST /tasks/uploads accepts a PNG, returns metadata with URL, and the
-    file is retrievable via GET /tasks/uploads/{filename}."""
+    """POST /tasks/uploads accepts a PNG under field name 'files' (matching
+    SR's frontend FormData shape), returns {attachments: [...]} wrapper,
+    and the file is retrievable via GET /tasks/uploads/{filename}."""
     client, headers = _client_and_token()
     # Minimal valid PNG bytes (1x1 transparent)
     png_bytes = bytes.fromhex(
@@ -102,10 +103,13 @@ def test_upload_attachment_returns_metadata_and_persists_file():
         "890000000d4944415478da636001000000050001a5f3e2240000000049454e44ae426082"
     )
     resp = client.post("/tasks/uploads",
-                       files={"file": ("test.png", io.BytesIO(png_bytes), "image/png")},
+                       files=[("files", ("test.png", io.BytesIO(png_bytes), "image/png"))],
                        headers=headers)
     assert resp.status_code == 200, resp.text
-    att = resp.json()
+    body = resp.json()
+    assert "attachments" in body
+    assert len(body["attachments"]) == 1
+    att = body["attachments"][0]
     assert att["mimeType"] == "image/png"
     assert att["sizeBytes"] == len(png_bytes)
     assert att["url"].startswith("/tasks/uploads/")
@@ -116,12 +120,33 @@ def test_upload_attachment_returns_metadata_and_persists_file():
     assert get_resp.content == png_bytes
 
 
+def test_upload_multiple_files_returns_one_attachment_per_file():
+    """POST /tasks/uploads accepts multiple files in a single request
+    (frontend's FormData appends multiple under 'files' field)."""
+    client, headers = _client_and_token()
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000d4944415478da636001000000050001a5f3e2240000000049454e44ae426082"
+    )
+    resp = client.post("/tasks/uploads",
+                       files=[
+                           ("files", ("a.png", io.BytesIO(png_bytes), "image/png")),
+                           ("files", ("b.png", io.BytesIO(png_bytes), "image/png")),
+                       ],
+                       headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["attachments"]) == 2
+    names = {a["fileName"] for a in body["attachments"]}
+    assert names == {"a.png", "b.png"}
+
+
 def test_upload_rejects_disallowed_mime_type():
     """POST /tasks/uploads rejects non-image/non-allowed mime types."""
     client, headers = _client_and_token()
     resp = client.post("/tasks/uploads",
-                       files={"file": ("doc.pdf", io.BytesIO(b"fake-pdf"),
-                                       "application/pdf")},
+                       files=[("files", ("doc.pdf", io.BytesIO(b"fake-pdf"),
+                                         "application/pdf"))],
                        headers=headers)
     assert resp.status_code == 400
     assert "Unsupported mime type" in resp.json()["detail"]

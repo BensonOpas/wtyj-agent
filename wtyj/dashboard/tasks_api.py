@@ -116,34 +116,40 @@ async def update_task(task_id: str, req: UpdateStatusRequest):
 
 
 @router.post("/uploads", dependencies=[Depends(_check_auth)])
-async def upload_attachment(file: UploadFile = File(...)):
-    if file.content_type not in _ALLOWED_IMAGE_MIMES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported mime type {file.content_type}. "
-                   f"Allowed: {sorted(_ALLOWED_IMAGE_MIMES)}",
-        )
-    contents = await file.read()
-    if len(contents) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large ({len(contents)} bytes; max {_MAX_UPLOAD_BYTES})",
-        )
+async def upload_attachments(files: list[UploadFile] = File(...)):
+    """Upload one or more image files. Frontend sends multipart/form-data
+    with field name 'files' (plural, can repeat). Returns {attachments: [...]}
+    wrapping the array — matches SR's frontend at tasks-api.ts:115-119."""
     ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
-    ext = ext_map[file.content_type]
-    stored_filename = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(6)}.{ext}"
-    path = os.path.join(_TASK_UPLOADS_DIR, stored_filename)
-    with open(path, "wb") as f:
-        f.write(contents)
-    return {
-        "id": secrets.token_hex(8),
-        "fileName": file.filename or stored_filename,
-        "mimeType": file.content_type,
-        "sizeBytes": len(contents),
-        "storedFilename": stored_filename,
-        "url": f"/tasks/uploads/{stored_filename}",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
+    attachments = []
+    for f in files:
+        if f.content_type not in _ALLOWED_IMAGE_MIMES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported mime type {f.content_type} for {f.filename}. "
+                       f"Allowed: {sorted(_ALLOWED_IMAGE_MIMES)}",
+            )
+        contents = await f.read()
+        if len(contents) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large for {f.filename} ({len(contents)} bytes; max {_MAX_UPLOAD_BYTES})",
+            )
+        ext = ext_map[f.content_type]
+        stored_filename = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(6)}.{ext}"
+        path = os.path.join(_TASK_UPLOADS_DIR, stored_filename)
+        with open(path, "wb") as fh:
+            fh.write(contents)
+        attachments.append({
+            "id": secrets.token_hex(8),
+            "fileName": f.filename or stored_filename,
+            "mimeType": f.content_type,
+            "sizeBytes": len(contents),
+            "storedFilename": stored_filename,
+            "url": f"/tasks/uploads/{stored_filename}",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        })
+    return {"attachments": attachments}
 
 
 @router.get("/uploads/{filename}")
