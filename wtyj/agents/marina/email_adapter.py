@@ -23,6 +23,7 @@ from email.utils import make_msgid
 CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "28e94343-2f77-444c-ac32-58b7bed33b65")
 TENANT_ID = os.environ.get("AZURE_TENANT_ID", "caac06b5-1420-4223-9dcc-ba4a670ec26a")
 EMAIL_ADDR = os.environ.get("EMAIL_ADDRESS", "")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")  # Brief 204: Gmail app password (presence = Gmail mode)
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.normpath(os.path.join(_MODULE_DIR, "..", "..", "config"))
@@ -33,6 +34,10 @@ IMAP_HOST = "outlook.office365.com"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.office365.com"
 SMTP_PORT = 587
+
+# Brief 204: Gmail hosts — used when EMAIL_PASSWORD is set (Gmail app password mode)
+GMAIL_IMAP_HOST = "imap.gmail.com"
+GMAIL_SMTP_HOST = "smtp.gmail.com"
 
 
 # ========= UTILITIES =========
@@ -97,6 +102,16 @@ def oauth_token(scope: str) -> str:
 
 
 def imap_connect():
+    """Brief 204: Gmail app password mode when EMAIL_PASSWORD is set; else
+    Microsoft OAuth XOAUTH2 (existing path)."""
+    if EMAIL_PASSWORD:
+        # Gmail app password — basic LOGIN auth. Strip whitespace because Google
+        # formats app passwords as 4 groups of 4 chars separated by spaces.
+        password = EMAIL_PASSWORD.replace(" ", "")
+        im = imaplib.IMAP4_SSL(GMAIL_IMAP_HOST, IMAP_PORT)
+        im.login(EMAIL_ADDR, password)
+        return im
+    # Existing Microsoft OAuth path
     token = oauth_token("offline_access https://outlook.office.com/IMAP.AccessAsUser.All")
     auth_string = f"user={EMAIL_ADDR}\x01auth=Bearer {token}\x01\x01".encode("utf-8")
     im = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
@@ -106,10 +121,8 @@ def imap_connect():
 
 # ========= SENDING =========
 def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None):
-    token = oauth_token("offline_access https://outlook.office.com/SMTP.Send")
-    auth_string = f"user={EMAIL_ADDR}\x01auth=Bearer {token}\x01\x01"
-    auth_b64 = base64.b64encode(auth_string.encode("ascii")).decode("ascii")
-
+    """Brief 204: Gmail app password mode when EMAIL_PASSWORD is set; else
+    Microsoft OAuth XOAUTH2 (existing path)."""
     msg = MIMEMultipart()
     msg["From"] = "Marina <{}>".format(EMAIL_ADDR)
     msg["To"] = to_addr
@@ -123,6 +136,20 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
         msg["Reply-To"] = reply_to
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
+    if EMAIL_PASSWORD:
+        # Gmail app password — basic LOGIN auth via STARTTLS.
+        password = EMAIL_PASSWORD.replace(" ", "")
+        s = smtplib.SMTP(GMAIL_SMTP_HOST, SMTP_PORT, timeout=30)
+        s.ehlo(); s.starttls(); s.ehlo()
+        s.login(EMAIL_ADDR, password)
+        s.sendmail(EMAIL_ADDR, [to_addr], msg.as_string())
+        s.quit()
+        return
+
+    # Existing Microsoft OAuth XOAUTH2 path
+    token = oauth_token("offline_access https://outlook.office.com/SMTP.Send")
+    auth_string = f"user={EMAIL_ADDR}\x01auth=Bearer {token}\x01\x01"
+    auth_b64 = base64.b64encode(auth_string.encode("ascii")).decode("ascii")
     s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
     s.ehlo(); s.starttls(); s.ehlo()
     code, resp = s.docmd("AUTH", "XOAUTH2 " + auth_b64)
