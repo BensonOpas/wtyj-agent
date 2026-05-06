@@ -204,6 +204,28 @@ The shared image `wtyj-agent` is built when BlueMarlin's compose runs `docker co
 | Zernio DMs | `https://api.wetakeyourjob.com/webhooks/zernio` | HMAC-SHA256 (`ZERNIO_WEBHOOK_SECRET`) | Inbound Instagram/Facebook DMs |
 | Zernio webhook ID | `69cd4d126860f0b4e9738a85` | — | Registered 2026-04-01, events: `message.received` |
 
+### Tasks API endpoints (Brief 207, hotfix `58027e8`)
+
+Mounted at FastAPI app root (NOT under `/dashboard/api/`) so SR's frontend's `/api/unboks/tasks` URL hits them after nginx prefix-strip.
+
+| Method | Path | Body / Returns | Notes |
+|---|---|---|---|
+| GET | `/tasks` | Returns list of `Task` objects | Auth required (Bearer) |
+| POST | `/tasks` | Body: `{assignedTo, createdBy, bodyHtml, bodyText, attachments[]}` | Auth required |
+| PATCH | `/tasks/:id` | Body: `{status: "open"\|"done", completedBy?}` | Auth required |
+| POST | `/tasks/uploads` | multipart/form-data field name `files` (plural, multi-file). Returns `{attachments: [...]}` | Auth required, PNG/JPEG/WebP only, 10MB cap |
+| GET | `/tasks/uploads/:filename` | Returns file bytes | NO auth (so `<img>` tags render) |
+
+Storage: SQLite tables `tasks` + `task_attachments` in per-tenant `state_registry.db`. Files in per-tenant `/app/data/task_uploads/`.
+
+### Per-tenant data files (post Brief 207 + 208)
+
+`/app/data/` (mounted from `/root/clients/<tenant>/data/` on VPS):
+- `state_registry.db` — main SQLite WAL DB (all tables)
+- `session_token` — Brief 208's persistent dashboard auth token, file perms 0600. Survives container restart. Delete to force-rotate.
+- `task_uploads/` — Brief 207's uploaded screenshots (PNG/JPEG/WebP)
+- `azure_refresh_token.txt` — Microsoft OAuth refresh token (where applicable)
+
 ---
 
 ## External APIs
