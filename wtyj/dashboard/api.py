@@ -20,6 +20,7 @@ from shared import state_registry, config_loader, bm_logger
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
+from agents.marina.email_adapter import smtp_send
 from agents.social.content_agent import _build_seasonal_context
 
 _GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
@@ -1212,5 +1213,37 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         state_registry.update_notification_status(escalation_id, "replied")
 
         return {"ok": True, "reply": relay_reply}
+
+    elif channel == "email":
+        # Brief 210: hard-escalation email reply path. Operator's text is sent
+        # verbatim (no Marina reformulation) — for hard escalations the operator
+        # IS the author. Reformulation belongs to relay-mode (semi escalations).
+        if not customer_id or "@" not in customer_id:
+            raise HTTPException(status_code=400,
+                detail="Email escalation missing valid email address")
+
+        operator_reply = req.answer.strip()
+        subject = esc.get("subject") or "Re: Unboks"
+        if not subject.lower().startswith("re:"):
+            subject = "Re: " + subject
+
+        try:
+            smtp_send(customer_id, subject, operator_reply)
+        except Exception as exc:
+            bm_logger.log("dashboard_email_reply_send_failed",
+                          email=customer_id, escalation_id=escalation_id,
+                          error=str(exc)[:200])
+            raise HTTPException(status_code=500,
+                detail=f"Failed to send email reply: {str(exc)[:120]}")
+
+        thread_key = state_registry.email_append_assistant_message(
+            customer_id, operator_reply)
+        bm_logger.log("dashboard_email_reply_sent",
+                      email=customer_id, escalation_id=escalation_id,
+                      thread_key=thread_key or "(no thread match)")
+
+        state_registry.update_notification_status(escalation_id, "replied")
+        return {"ok": True, "reply": operator_reply, "channel": "email"}
+
     else:
         raise HTTPException(status_code=400, detail=f"Channel '{channel}' reply not supported from dashboard")

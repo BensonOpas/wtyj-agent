@@ -890,6 +890,54 @@ def email_get_conversation(thread_key: str) -> dict:
     }
 
 
+def email_append_assistant_message(customer_email: str, body: str):
+    """Brief 210: append an operator-authored reply to the email thread state
+    so the dashboard conversation view shows it. Mirrors what
+    email_poller.py:596-601 does on the relay-receive path. Returns the
+    matched thread_key string, or None if no thread exists for this email
+    yet (caller still sends the email; the missing thread record is logged
+    but non-fatal)."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return None
+
+    threads = state.get("threads", {})
+    matched_key = None
+    if customer_email:
+        needle = customer_email.lower()
+        for thread_key in threads.keys():
+            if needle in thread_key.lower():
+                matched_key = thread_key
+                break
+
+    if not matched_key:
+        return None
+
+    th = threads[matched_key]
+    th.setdefault("messages", []).append({
+        "role": "marina",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "body": body,
+    })
+    th["last_activity"] = datetime.now(timezone.utc).isoformat()
+    state["threads"][matched_key] = th
+
+    try:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except OSError:
+        return None
+
+    return matched_key
+
+
 def wa_delete_conversation(phone: str) -> int:
     """Brief 165: hard-delete all messages + booking state for a phone number.
     Returns the total number of rows deleted across whatsapp_threads and
