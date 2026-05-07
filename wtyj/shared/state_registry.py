@@ -2612,6 +2612,27 @@ def get_learning_status_for_conversation(conversation_id: str) -> str:
     return "none"
 
 
+def get_approved_learnings_for_prompt(channel: str, limit: int = 20) -> list:
+    """Brief 219: return the N most-recent approved escalation learnings
+    that Marina is allowed to use automatically. Filters: channel match,
+    status IN ('approved', 'saved'), ai_may_use_automatically=1.
+    Returns newest first. Used by marina_agent._build_system_prompt to
+    inject an APPROVED ANSWERS block when the tenant opts in via
+    client.json::features.approved_learnings_in_prompt."""
+    if not channel or limit <= 0:
+        return []
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT source_question, human_answer FROM escalation_learnings "
+        "WHERE channel = ? "
+        "AND status IN ('approved', 'saved') "
+        "AND ai_may_use_automatically = 1 "
+        "ORDER BY created_at DESC LIMIT ?",
+        (channel, limit)).fetchall()
+    conn.close()
+    return [{"question": r[0] or "", "answer": r[1] or ""} for r in rows]
+
+
 def _last_customer_message_for(conversation_id: str, channel: str) -> str:
     """Brief 215: look up the most recent customer-role message text for
     this conversation, used as `source_question` when auto-creating a

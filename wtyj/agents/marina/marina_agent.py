@@ -294,6 +294,46 @@ def _build_customer_file_block(customer_file) -> str:
     return "\n".join(lines)
 
 
+def _build_approved_answers_block(channel: str) -> str:
+    """Brief 219: return an APPROVED ANSWERS prompt block listing recent
+    operator-curated learnings for this channel, or '' when the tenant
+    hasn't opted in or no learnings match. When non-empty the return
+    starts with '\\n\\n' so the f-string interpolation keeps a clean
+    blank-line break before the block; when empty the f-string adjacent
+    spacing collapses cleanly. Tenant opt-in via
+    client.json::features.approved_learnings_in_prompt (default false)."""
+    features = config_loader.get_raw().get("features", {}) or {}
+    if not features.get("approved_learnings_in_prompt"):
+        return ""
+    try:
+        from shared import state_registry
+        rows = state_registry.get_approved_learnings_for_prompt(channel, limit=20)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    pairs = []
+    for r in rows:
+        q = (r.get("question") or "").strip()
+        a = (r.get("answer") or "").strip()
+        if not a:
+            continue
+        if q:
+            pairs.append(f"Q: {q}\nA: {a}")
+        else:
+            pairs.append(f"A: {a}")
+    if not pairs:
+        return ""
+    return (
+        "\n\nAPPROVED ANSWERS (operator-curated knowledge):\n"
+        "The team has previously answered similar customer questions on this "
+        "channel. Use these as authoritative context, they reflect how the "
+        "human team wants you to handle these situations going forward. Match "
+        "the spirit; do not copy verbatim if the customer phrasing differs.\n\n"
+        + "\n\n".join(pairs)
+    )
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -449,12 +489,13 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
         )
 
     _customer_file_block = _build_customer_file_block(customer_file)
+    _approved_answers_block = _build_approved_answers_block(channel)
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block()}
 
-{_customer_file_block}
+{_customer_file_block}{_approved_answers_block}
 
 {writing_style_block}
 
