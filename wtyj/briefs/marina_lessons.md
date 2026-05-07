@@ -2073,3 +2073,16 @@ The deliberate contract break of Brief 212's alias was OK because Brief 212's te
 Hook safety pattern: try/except wrap every learning-write at the 4 hook sites + structured `learning_write_failed` log on exception. The customer reply is the primary action; learning capture is a side effect. A DB error during a learning write should NEVER block the customer's reply from going out. This is the same durability pattern Brief 213 uses for the `[ESCALATE]` sentinel write (Brief 206) — established convention.
 
 Marina-actually-reads-approved-learnings is deferred. Was tempting to bundle but: marina_agent._build_system_prompt is the most sensitive code in the project, prompt drift causes silent quality regressions, and the read+inject path deserves focused review separate from the write path. Storage half ships now (so entries accumulate); read half ships later (when there's a corpus to read from anyway).
+
+---
+
+## Brief 218 — Email forward + delete actions
+**Date:** 2026-05-07
+
+Smooth additive endpoints. PASS round 1 with advisory notes only. Two non-obvious techniques worth recording:
+
+The `:path` URL converter on the conversation_id path param is REQUIRED on the new email routes because email conversation_ids are encoded as `email::subj:foo@bar.com:thread-name` and the colons would otherwise get parsed as path segments. Existing `/messages/conversations/{phone:path}` already uses this convention; the new email subroutes must match. FastAPI/Starlette accepts `:path` even on nested routes — verified by the test that posts to `/messages/conversations/email::subj:test218-fwd@example.com:test218/email/forward` and reaches the handler intact.
+
+Provider-side cleanup deferral is the right call when storage hasn't been designed for it yet. Today the email thread state stores `Message-ID` (in `mid_index`) but not the original IMAP UID. UID is folder-scoped, which means the delete handler would have to open IMAP, search by Message-ID header, then MOVE — fiddly + slow + risk of blocking the delete UX if IMAP is unreachable. Hide-from-dashboard is a real operator-facing UX improvement on its own; provider cleanup is nice-to-have. Brief documents the design (Gmail `[Gmail]/Trash`, Outlook `Deleted Items`, EMAIL_PASSWORD env detection) so the v1.5 follow-up has clear scaffolding.
+
+Test #6 brittle-string lesson: I asserted `"trash only" in detail.lower()` but the actual error string was `"v1 supports deletemode='trash' only..."` — the apostrophes around `trash` broke the substring match. Output-reviewer flagged. Lesson: when asserting on error-detail content, prefer multi-token assertions (`"trash" in detail and "only" in detail`) over single-substring matches that lock in to a specific phrasing.
