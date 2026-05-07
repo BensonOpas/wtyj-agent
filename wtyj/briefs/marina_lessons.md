@@ -2012,3 +2012,12 @@ This is the same pattern as Brief 200's diagnosis: when the user (or another AI)
 3. **2FA can be disabled later, which auto-revokes all app passwords.** If 2FA gets turned off after a password is generated, that password silently stops working. No notification. Symptom: IMAP returns "Invalid credentials" even though everything looks correct. Lesson: 2FA needs to STAY on for app passwords to keep working.
 
 **What to watch for.** When integrating any new email/IMAP source: (1) verify IMAP is enabled at workspace level (admin.google.com), (2) verify 2FA is on at user level (myaccount.google.com/security), (3) generate password while signed in as the EXACT target user (verify avatar), (4) test login from the command line before wiring it into the backend, (5) audit existing graceful-exit guards for the new credential variable name. Five-step checklist for every new email source.
+
+---
+
+## Brief 211 — Dashboard contract fields
+**Date:** 2026-05-06
+
+Smooth additive brief — derived 4 fields from an existing table + lifted a 6-line substring lookup into a shared helper. Non-obvious technique: when a frontend gates rendering on fields you don't yet have storage for (here `escalationMode` / `aiMuted` for soft/hard mode), default them to **honest sentinel values** that take a known-safe code path on the frontend, NOT to a "convenient" default that fakes the feature. Returning `escalationMode: null` made SR's UI render the LegacyActionPanel branch (`mode === null` in `Inbox.tsx:302`), which is a real working UX. Returning `escalationMode: "hard"` would have made the hard-reply composer render but every operator action would silently mismatch the (nonexistent) backing soft/hard state. Always pick the default that picks a real code path, not the one that produces visible UI.
+
+Live-E2E-as-design-tool was the unlock. Could not have predicted the `showBanner = detail.escalated && !detail.escalationResolved` gate from staring at SR's `interface ConversationDetail` definition alone — only opening the dashboard, clicking the escalation, and watching the empty pane render exposed it. When a feature ships and the user reports "nothing happens," open the browser before diffing types.
