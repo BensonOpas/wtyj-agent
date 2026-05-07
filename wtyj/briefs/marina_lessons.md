@@ -2116,3 +2116,16 @@ Smooth brief. Three thoughts worth keeping.
 **Per-action model selection is the cheapest way to bend the cost curve.** No new endpoint, no new env var, no provider swap, no contract change. One ternary inside the existing handler. The diff is 7 lines. The savings compound at SR-scale (operator translates 50-200 messages/day across tenants × 75% per-call discount). Reach for this before reaching for Google Translate / DeepL or other provider integrations — those are right when Haiku quality fails, but failure should be measured, not assumed.
 
 **Logging the model in the success line saves a future debugging session.** `bm_logger.log("ai_editor_used", ..., model=model_id)` is a 1-token addition that lets us answer "did SR's slow translation happen on Haiku or Sonnet?" without redeploying. Cheap insurance on a behavior change that creates a routing branch — log the branch, don't make future-me grep code to figure out which side of the branch fired.
+
+---
+
+## Brief 222 — Conversation detail extras: humanTakeoverAt + learningStatus
+**Date:** 2026-05-07
+
+Smooth brief. Three thoughts worth keeping.
+
+**Explicit null > missing key for "we know about this field, no storage yet."** SR's TypeScript `ConversationDetail` interface marks `humanGuidance`, `humanResponder`, `humanRespondedAt` as optional. We could have left those keys absent from the response and the frontend would still render correctly. Chose explicit `null` instead. Reason: explicit null says "the backend acknowledges the contract field, the value is null because no storage exists today." A future brief that flips null to a real value is a one-line diff with no key-shape change — caller code that reads `body.humanGuidance` doesn't need a defensive `body.humanGuidance ?? null` shim. Missing keys leak the implementation gap into the contract.
+
+**Precedence sets > priority columns for "what's the worst/best of these states?"** `learningStatus` could be either: (a) a single column on `conversation_status` updated by every `escalation_learnings` write, OR (b) a derived value computed from the underlying rows on read. Picked (b). Reason: (a) requires bookkeeping at every write site (4 escalation-answer hooks + 3 frontend-driven status flips + the resolve-with-saveAsLearning path), and any miss creates silent drift. (b) reads N rows where N is small (per-conversation, usually <5) and is correct by construction. The query "highest of these statuses, skipping deleted" is a 5-line set-membership check. Cheaper to maintain than the column-with-bookkeeping path.
+
+**The "extend an existing helper" path beats "add a new endpoint" path nearly every time.** Brief 211 created `_conversation_status_fields(customer_id)` as a single-source-of-truth derivation point used by both the WhatsApp branch and the email branch of `get_conversation`. Brief 222 added 5 keys to that helper's return dict. Both branches automatically picked them up via the existing `result.update(_conversation_status_fields(...))` calls. Zero new wiring, zero risk of "the email branch forgot the new field," instant test coverage. When you build a derivation helper that fans out to multiple call sites, future additions are nearly free.
