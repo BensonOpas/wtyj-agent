@@ -890,13 +890,14 @@ def email_get_conversation(thread_key: str) -> dict:
     }
 
 
-def email_append_assistant_message(customer_email: str, body: str):
-    """Brief 210: append an operator-authored reply to the email thread state
-    so the dashboard conversation view shows it. Mirrors what
-    email_poller.py:596-601 does on the relay-receive path. Returns the
-    matched thread_key string, or None if no thread exists for this email
-    yet (caller still sends the email; the missing thread record is logged
-    but non-fatal)."""
+def _find_email_thread_key_for(customer_email: str):
+    """Brief 211: locate the email_thread_state.json thread_key for a given
+    customer email. Used by /escalations to expose a routable conversation
+    key for email rows, and by email_append_assistant_message to find the
+    thread for an outbound reply. Returns the thread_key string or None
+    if no thread exists yet for this customer."""
+    if not customer_email:
+        return None
     path = _get_email_state_path()
     if not os.path.exists(path):
         return None
@@ -905,20 +906,32 @@ def email_append_assistant_message(customer_email: str, body: str):
             state = json.load(f)
     except Exception:
         return None
+    needle = customer_email.lower()
+    for thread_key in (state.get("threads") or {}).keys():
+        if needle in thread_key.lower():
+            return thread_key
+    return None
 
-    threads = state.get("threads", {})
-    matched_key = None
-    if customer_email:
-        needle = customer_email.lower()
-        for thread_key in threads.keys():
-            if needle in thread_key.lower():
-                matched_key = thread_key
-                break
 
+def email_append_assistant_message(customer_email: str, body: str):
+    """Brief 210: append an operator-authored reply to the email thread state
+    so the dashboard conversation view shows it. Mirrors what
+    email_poller.py:596-601 does on the relay-receive path. Returns the
+    matched thread_key string, or None if no thread exists for this email
+    yet (caller still sends the email; the missing thread record is logged
+    but non-fatal). Brief 211: lookup logic extracted to _find_email_thread_key_for."""
+    matched_key = _find_email_thread_key_for(customer_email)
     if not matched_key:
         return None
 
-    th = threads[matched_key]
+    path = _get_email_state_path()
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return None
+
+    th = state["threads"][matched_key]
     th.setdefault("messages", []).append({
         "role": "marina",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -1245,6 +1258,19 @@ def get_all_escalations() -> list:
         ct = _infer_contact_type(r[4] or "")
         contact = _lookup_customer_contact(r[4] or "", ct)
         customer_contact = contact["email"] or contact["phone"] or r[4] or ""
+        # Brief 211: expose a routable conversation key as `phone` so SR's
+        # frontend mapper (pickStr "phone","external_id","conversation_id"...)
+        # can build a working /messages/conversations/:phone link. For email
+        # rows we look up the thread_key from email_thread_state.json. For
+        # whatsapp/dm the customer_id IS the routing key. For email rows
+        # with no thread yet we fall back to customer_id (the email) — the
+        # detail call returns empty messages, same as the prior `esc:1`
+        # fallback, no regression.
+        if r[3] == "email":
+            _email_thread_key = _find_email_thread_key_for(r[4])
+            _phone_routing_key = f"email::{_email_thread_key}" if _email_thread_key else (r[4] or "")
+        else:
+            _phone_routing_key = r[4] or ""
         result.append({
             "id": r[0], "notification_type": r[1], "relay_token": r[2],
             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
@@ -1254,6 +1280,7 @@ def get_all_escalations() -> list:
             "customer_email": contact["email"],
             "customer_phone": contact["phone"],
             "conversation_status": get_conversation_status(r[4]),
+            "phone": _phone_routing_key,
         })
     return result
 

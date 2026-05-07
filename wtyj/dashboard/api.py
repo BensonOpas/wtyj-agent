@@ -909,27 +909,53 @@ async def list_conversations():
     return merged
 
 
+def _conversation_status_fields(customer_id: str) -> dict:
+    """Brief 211: derive escalation-state fields the SR frontend reads on
+    /messages/conversations/:phone to gate its EscalationReplyComposer.
+    `escalationMode` and `aiMuted` are placeholders (Tier 2) — null/false
+    means SR's UI renders the LegacyActionPanel branch, which is the
+    legacy action buttons. Honest "no soft/hard mode set" beats lying
+    with a default of "hard"."""
+    status = state_registry.get_conversation_status(customer_id or "")
+    return {
+        "escalated": status == "open",
+        "escalationResolved": status == "resolved",
+        "escalationMode": None,
+        "aiMuted": False,
+    }
+
+
 @router.get("/messages/conversations/{phone:path}", dependencies=[Depends(_check_auth)])
 async def get_conversation(phone: str):
     """Get full conversation thread + booking state. Brief 171: routes to the
     email helper when phone starts with 'email::'. Brief 201: each message dict
     is enriched with `content` (alias of text) and `timestamp` (alias of
     created_at) so SR's dashboard frontend can read them directly. Original
-    `text`/`created_at` keys preserved for backward compat."""
+    `text`/`created_at` keys preserved for backward compat. Brief 211: response
+    is enriched with escalated/escalationResolved/escalationMode/aiMuted
+    fields so SR's EscalationReplyComposer can decide whether to render."""
     if phone.startswith("email::"):
         thread_key = phone[len("email::"):]
-        return state_registry.email_get_conversation(thread_key)
+        result = state_registry.email_get_conversation(thread_key)
+        # Email customer_id lives in the middle of the thread_key:
+        # "subj:calvin@gaimin.io:testing" → "calvin@gaimin.io"
+        parts = thread_key.split(":", 2)
+        email_id = parts[1] if len(parts) >= 2 else ""
+        result.update(_conversation_status_fields(email_id))
+        return result
     messages = state_registry.wa_get_full_history(phone, limit=200)
     # Brief 201: add frontend-friendly field aliases without removing originals.
     for m in messages:
         m["content"] = m.get("text", "")
         m["timestamp"] = m.get("created_at", "")
     booking_state = state_registry.wa_get_booking_state(phone)
-    return {
+    response = {
         "phone": phone,
         "messages": messages,
         "booking_state": booking_state,
     }
+    response.update(_conversation_status_fields(phone))
+    return response
 
 
 @router.delete("/messages/conversations/{phone}", dependencies=[Depends(_check_auth)])
