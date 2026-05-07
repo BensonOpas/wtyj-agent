@@ -1349,6 +1349,22 @@ def get_active_escalation_mode(conversation_id: str):
     return row[0] if row and row[0] else None
 
 
+def get_human_takeover_at(conversation_id: str):
+    """Brief 222: ISO timestamp of when the operator took over this
+    conversation, or None if no active takeover. Reads
+    conversation_status.human_takeover_at (set by set_ai_muted(..., True)
+    in Brief 213's takeover flow, cleared to NULL on handback)."""
+    if not conversation_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT human_takeover_at FROM conversation_status "
+        "WHERE conversation_id = ?",
+        (conversation_id,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
 # ── Brief 217: Alert settings + delivery audit ──
 
 def get_alert_settings(default_email_destination: str = "") -> dict:
@@ -2550,6 +2566,26 @@ def delete_escalation_learning(learning_id: int) -> bool:
     conn.commit()
     conn.close()
     return deleted
+
+
+def get_learning_status_for_conversation(conversation_id: str) -> str:
+    """Brief 222: highest-precedence escalation_learning status for this
+    conversation. Powers the `learningStatus` field on the conversation
+    detail response. Precedence: saved > approved > suggested > none.
+    Skip deleted rows."""
+    if not conversation_id:
+        return "none"
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT status FROM escalation_learnings "
+        "WHERE conversation_id = ? AND status != 'deleted'",
+        (conversation_id,)).fetchall()
+    conn.close()
+    statuses = {r[0] for r in rows}
+    for s in ("saved", "approved", "suggested"):
+        if s in statuses:
+            return s
+    return "none"
 
 
 def _last_customer_message_for(conversation_id: str, channel: str) -> str:

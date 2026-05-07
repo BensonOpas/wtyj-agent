@@ -983,7 +983,10 @@ def _conversation_status_fields(customer_id: str) -> dict:
     """Brief 211: derive escalation-state fields the SR frontend reads on
     /messages/conversations/:phone to gate its EscalationReplyComposer.
     Brief 213: escalationMode + aiMuted now backed by real storage
-    (pending_notifications.mode + conversation_status.ai_muted)."""
+    (pending_notifications.mode + conversation_status.ai_muted).
+    Brief 222: humanTakeoverAt + learningStatus added (real storage);
+    humanGuidance + humanResponder + humanRespondedAt return null
+    placeholders pending an operator-identity model."""
     cid = customer_id or ""
     status = state_registry.get_conversation_status(cid)
     return {
@@ -991,6 +994,13 @@ def _conversation_status_fields(customer_id: str) -> dict:
         "escalationResolved": status == "resolved",
         "escalationMode": state_registry.get_active_escalation_mode(cid),
         "aiMuted": state_registry.get_ai_muted(cid),
+        "humanTakeoverAt": state_registry.get_human_takeover_at(cid),
+        "learningStatus": state_registry.get_learning_status_for_conversation(cid),
+        # Brief 222: placeholders — no storage for these today. A later
+        # brief tied to operator-identity work will populate them.
+        "humanGuidance": None,
+        "humanResponder": None,
+        "humanRespondedAt": None,
     }
 
 
