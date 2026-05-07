@@ -2049,3 +2049,12 @@ Problem brief — brief-reviewer FAILed round 1, output-reviewer APPROVED-WITH-N
 **Surprise during regression — wrong cleanup tables (twice).** Two of my test cleanups targeted non-existent tables (`dm_messages` instead of `whatsapp_threads`, `processed_hashes` instead of `whatsapp_processed`). The dedup-table mistake was more painful — when test 9 failed for the assertion gap above, its bad cleanup left a `whatsapp_processed` row that short-circuited dedup on the next run. Cascading "database is locked" errors. Lesson: cleanup helpers should grep the actual production code for the table names, not guess from the function name. Also: add pre-test cleanup at the start of integration tests that mutate dedup state, not just post-test cleanup, so a single failed run doesn't poison repeats.
 
 **What made it eventually smooth despite all that:** brief-reviewer + output-reviewer worked exactly as designed. Round-1 review caught both blockers before any code shipped. Round-2 review caught the test-strength gap. The cost of the back-and-forth (~20 min total review time) is much less than the cost of shipping a soft/hard mode where takeover silently doesn't mute the dominant traffic channel.
+
+---
+
+## Brief 214 — POST /escalations/:id/guidance
+**Date:** 2026-05-07
+
+Smooth additive endpoint completing the soft-escalation half of SR's product contract (Brief 213 did the hard half). PASS round 1 with zero blockers because the brief was tight: identified the existing precedents (api.py:1306-1343 for WhatsApp relay; email_poller.py:588-612 for email relay), reused them line-for-line in the new branches, and explicitly named the central correctness point (use Marina's reply for both smtp_send AND email_append, never the operator's coaching text). Output-reviewer flagged that point as the key thing to verify — and it did. Tests asserted the actual values rather than just "non-None" — Test 2's mock distinguished operator-coaching text from Marina's reply text and asserted Marina's reply showed up at both send sites.
+
+The non-obvious technique that made it clean: `awaiting_relay=True` is set EXPLICITLY in /guidance even though /reply WhatsApp inherits it from existing booking state. The explicit set means /guidance works for fresh escalations that have never been in relay mode before — without it the soft flow would silently send Marina's normal (non-relay) reply on first use. Cost: one extra line. Benefit: works on day one, no "flow only fires after a different code path has been triggered" gotcha.
