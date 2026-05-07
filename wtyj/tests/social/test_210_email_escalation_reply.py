@@ -122,7 +122,53 @@ def test_email_reply_returns_500_on_smtp_failure(mock_smtp):
     _cleanup(esc_id, customer_email)
 
 
-# --- Test 4: Unknown channel still 400 (regression guard) ---
+# --- Test 4: SR's frontend field name {message} accepted ---
+@patch("dashboard.api.state_registry.email_append_assistant_message",
+       return_value="subj:test-sr-message@example.com:abc")
+@patch("dashboard.api.smtp_send")
+def test_email_reply_accepts_message_field_from_sr_frontend(mock_smtp, mock_append):
+    """SR's unboks frontend posts {message: ...} not {answer: ...}.
+    Backend must accept both field names so the new reply composer works."""
+    from shared import state_registry
+    customer_email = "test210-sr-message@example.com"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=customer_email, customer_name="Test",
+        subject="[ESCALATION]", body="x",
+    )
+
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                     json={"message": "Reply via SR's {message} field"},
+                     headers=_auth(token))
+    assert r.status_code == 200, r.text
+    args, _ = mock_smtp.call_args
+    assert args[2] == "Reply via SR's {message} field"
+
+    _cleanup(esc_id, customer_email)
+
+
+# --- Test 5: Empty body returns 400 with clear error ---
+def test_empty_body_returns_400():
+    """Both fields missing/empty -> 400 with a message naming both fields."""
+    from shared import state_registry
+    customer_email = "test210-empty@example.com"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=customer_email, customer_name="Test",
+        subject="[ESCALATION]", body="x",
+    )
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                     json={"message": "   "},
+                     headers=_auth(token))
+    assert r.status_code == 400
+    detail = r.json()["detail"].lower()
+    assert "message" in detail and "answer" in detail
+    _cleanup(esc_id, customer_email)
+
+
+# --- Test 6: Unknown channel still 400 (regression guard) ---
 def test_unknown_channel_still_400():
     from shared import state_registry
     customer_id = "test210-ig-handle"

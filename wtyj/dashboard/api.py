@@ -1159,13 +1159,22 @@ Write an email reply from {agent_name} to this customer. Address open questions,
 # ── Escalation Reply ─────────────────────────────────────────────────────────
 
 class EscalationReplyRequest(BaseModel):
-    answer: str
+    # Brief 210 hotfix: SR's unboks frontend posts `{message}`, legacy
+    # WhatsApp callers (Brief 159) post `{answer}`. Accept both, prefer
+    # `message`. Both default to "" so Pydantic doesn't 422 when only
+    # one is sent.
+    answer: str = ""
+    message: str = ""
+
+    @property
+    def text(self) -> str:
+        return (self.message or self.answer or "").strip()
 
 @router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
 async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     """Reply to a semi escalation. Marina reformulates and sends to customer."""
-    if not req.answer.strip():
-        raise HTTPException(status_code=400, detail="Answer text required")
+    if not req.text:
+        raise HTTPException(status_code=400, detail="Reply text required (field: 'message' or 'answer')")
 
     all_esc = state_registry.get_all_escalations()
     esc = next((e for e in all_esc if e["id"] == escalation_id), None)
@@ -1189,7 +1198,7 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
             agent_flags.pop(rk, None)
 
         relay_result = marina_agent.process_message(
-            customer_id, "", req.answer.strip(),
+            customer_id, "", req.text,
             wa_fields, agent_flags,
             channel="whatsapp", messages=wa_history,
         )
@@ -1222,7 +1231,7 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
             raise HTTPException(status_code=400,
                 detail="Email escalation missing valid email address")
 
-        operator_reply = req.answer.strip()
+        operator_reply = req.text
         subject = esc.get("subject") or "Re: Unboks"
         if not subject.lower().startswith("re:"):
             subject = "Re: " + subject
