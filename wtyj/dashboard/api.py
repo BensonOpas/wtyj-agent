@@ -959,17 +959,25 @@ async def get_customer_by_identifier(type_: str, value: str):
 
 @router.get("/escalations", dependencies=[Depends(_check_auth)])
 async def list_escalations():
-    """List all escalation notifications."""
-    return state_registry.get_all_escalations()
+    """List all escalation notifications.
+    Brief 210 hotfix: SR's frontend mapper (conversation-mapper.ts:pickStr)
+    requires `typeof id === "string"`. Stringify id at the response layer
+    so internal callers (state_registry, tests) keep using ints, but the
+    HTTP boundary always emits a string."""
+    rows = state_registry.get_all_escalations()
+    for r in rows:
+        r["id"] = str(r["id"])
+    return rows
 
 
 @router.get("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
 async def get_escalation(escalation_id: int):
-    """Get a single escalation by ID."""
+    """Get a single escalation by ID. Returns id as string (see list_escalations)."""
     all_esc = state_registry.get_all_escalations()
     esc = next((e for e in all_esc if e["id"] == escalation_id), None)
     if not esc:
         raise HTTPException(status_code=404, detail="Escalation not found")
+    esc["id"] = str(esc["id"])
     return esc
 
 
