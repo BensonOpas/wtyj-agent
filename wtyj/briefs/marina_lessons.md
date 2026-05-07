@@ -2103,3 +2103,16 @@ Problem brief — brief-reviewer FAILed twice, output-reviewer flagged scope cre
 **Two non-blocker patterns worth keeping:**
 1. Pluggable callbacks for circular-import avoidance — `_alert_dispatcher = None` + `set_alert_dispatcher(fn)` in state_registry, registered from dashboard.api. Clean. Reusable for any "the storage layer needs to call back into the application layer" situation.
 2. INSERT OR REPLACE on a fixed `id=1` row for singleton tables — atomic upsert without a DELETE-then-INSERT race window. Cleaner than UPSERT/ON CONFLICT for SQLite when there's only ever one row.
+
+---
+
+## Brief 221 — Haiku for /ai-editor translate path
+**Date:** 2026-05-07
+
+Smooth brief. Three thoughts worth keeping.
+
+**Cost shift on a shared endpoint when a new caller appears.** Brief 212 picked Sonnet for `/ai-editor` because the only caller was the escalation reply composer's translate-the-draft / restyle-the-draft / fix-the-draft buttons — low-volume, brand-voice-sensitive, Sonnet was right. SR's commit `9538527` ("Add language selection to message translation feature") today wired a SECOND caller into the same endpoint via `lib/api.ts:583`'s `translateMessage()` — operator clicks Translate on any inbound bubble and reads it in English. The endpoint shape didn't change; the COST PROFILE did. Lesson: when a frontend adds a new caller to an existing backend endpoint, audit the caller-volume assumptions baked into the original model/timeout/rate-limit choices. The model that was right for one caller may be wrong for both.
+
+**Per-action model selection is the cheapest way to bend the cost curve.** No new endpoint, no new env var, no provider swap, no contract change. One ternary inside the existing handler. The diff is 7 lines. The savings compound at SR-scale (operator translates 50-200 messages/day across tenants × 75% per-call discount). Reach for this before reaching for Google Translate / DeepL or other provider integrations — those are right when Haiku quality fails, but failure should be measured, not assumed.
+
+**Logging the model in the success line saves a future debugging session.** `bm_logger.log("ai_editor_used", ..., model=model_id)` is a 1-token addition that lets us answer "did SR's slow translation happen on Haiku or Sonnet?" without redeploying. Cheap insurance on a behavior change that creates a routing branch — log the branch, don't make future-me grep code to figure out which side of the branch fired.
