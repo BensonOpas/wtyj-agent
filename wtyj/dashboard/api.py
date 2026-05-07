@@ -1443,16 +1443,19 @@ Write an email reply from {agent_name} to this customer. Address open questions,
 # ── Escalation Reply ─────────────────────────────────────────────────────────
 
 class EscalationReplyRequest(BaseModel):
-    # Brief 210 hotfix: SR's unboks frontend posts `{message}`, legacy
-    # WhatsApp callers (Brief 159) post `{answer}`. Accept both, prefer
-    # `message`. Both default to "" so Pydantic doesn't 422 when only
-    # one is sent.
+    # Brief 210 hotfix + post-Brief-214 fix: SR's frontend sends three
+    # different field names depending on the action:
+    #   /reply  (hard mode)       → {message: ...}
+    #   /guidance (soft mode)     → {guidance: ...}   (lib/api.ts:GuidancePayload)
+    #   legacy WhatsApp (Brief 159) → {answer: ...}
+    # Accept all three; precedence: guidance > message > answer.
     answer: str = ""
     message: str = ""
+    guidance: str = ""
 
     @property
     def text(self) -> str:
-        return (self.message or self.answer or "").strip()
+        return (self.guidance or self.message or self.answer or "").strip()
 
 @router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
 async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):

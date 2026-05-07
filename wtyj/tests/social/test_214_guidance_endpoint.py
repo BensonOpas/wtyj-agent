@@ -50,6 +50,45 @@ def _cleanup(esc_id, customer_id):
     conn.close()
 
 
+# --- Test 0 (post-fix): /guidance accepts SR's {guidance} field name
+@patch("dashboard.api.send_whatsapp_message", return_value=True)
+@patch("dashboard.api.marina_agent")
+def test_guidance_accepts_guidance_field_name_from_frontend(mock_marina, mock_wa_send):
+    """SR's frontend posts {guidance: "..."} per lib/api.ts GuidancePayload.
+    Backend must accept it (alongside message/answer)."""
+    from shared import state_registry
+    customer_id = "214_guidance_field_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation", channel="whatsapp",
+        customer_id=customer_id, customer_name="Test",
+        subject="[ESCALATION]", body="x")
+    state_registry.set_escalation_mode(esc_id, "soft")
+
+    mock_marina.process_message.return_value = {
+        "reply": "Yes, all good.", "fields": {}, "flags": {},
+        "intents": [], "confidence": "high", "requires_human": False,
+    }
+
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/guidance",
+                     json={"guidance": "Yes, everything is fine."},
+                     headers=_auth(token))
+    assert r.status_code == 200, r.text
+    # Marina was called with the guidance text as the third positional arg
+    call = mock_marina.process_message.call_args
+    assert call.args[2] == "Yes, everything is fine."
+
+    # Cleanup
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM pending_notifications WHERE id = ?", (esc_id,))
+    conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (customer_id,))
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (customer_id,))
+    conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (customer_id,))
+    conn.execute("DELETE FROM escalation_learnings WHERE conversation_id = ?", (customer_id,))
+    conn.commit()
+    conn.close()
+
+
 # --- Test 1: WhatsApp soft-mode relay happy path
 @patch("dashboard.api.send_whatsapp_message", return_value=True)
 @patch("dashboard.api.marina_agent")
