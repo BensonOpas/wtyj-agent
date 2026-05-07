@@ -2058,3 +2058,18 @@ Problem brief — brief-reviewer FAILed round 1, output-reviewer APPROVED-WITH-N
 Smooth additive endpoint completing the soft-escalation half of SR's product contract (Brief 213 did the hard half). PASS round 1 with zero blockers because the brief was tight: identified the existing precedents (api.py:1306-1343 for WhatsApp relay; email_poller.py:588-612 for email relay), reused them line-for-line in the new branches, and explicitly named the central correctness point (use Marina's reply for both smtp_send AND email_append, never the operator's coaching text). Output-reviewer flagged that point as the key thing to verify — and it did. Tests asserted the actual values rather than just "non-None" — Test 2's mock distinguished operator-coaching text from Marina's reply text and asserted Marina's reply showed up at both send sites.
 
 The non-obvious technique that made it clean: `awaiting_relay=True` is set EXPLICITLY in /guidance even though /reply WhatsApp inherits it from existing booking state. The explicit set means /guidance works for fresh escalations that have never been in relay mode before — without it the soft flow would silently send Marina's normal (non-relay) reply on first use. Cost: one extra line. Benefit: works on day one, no "flow only fires after a different code path has been triggered" gotcha.
+
+---
+
+## Brief 215 — Operator-answer-as-approved-learning
+**Date:** 2026-05-07
+
+Smooth larger brief — 10 tests, 5 source files, 4 hook points, 1 contract break (Brief 212's /learning alias deliberately repointed). PASS round 1, output-reviewer APPROVED zero issues.
+
+The non-obvious decision: a NEW table `escalation_learnings` instead of extending `content_learnings`. The two domains shared a name (Brief 212 aliased /learning → /learnings) but had unrelated shapes (`rule + source_draft_ids` vs `source_question + human_answer + status + conversation_id`). Forcing them into one table would have meant a wide table with many NULLable columns and `WHERE domain='X'` filters everywhere. Two distinct tables = zero query-time conflation, zero migration of existing content_learnings rows, zero NULLable bloat.
+
+The deliberate contract break of Brief 212's alias was OK because Brief 212's tests asserted equality between /learning and /learnings — meaning they specifically EXPECTED them to be the same domain. The right migration is to update those tests in place to assert the new contract (status field present, escalation domain), not to keep the alias and have two paths to the same domain. Tests rewritten in same commit, count math holds.
+
+Hook safety pattern: try/except wrap every learning-write at the 4 hook sites + structured `learning_write_failed` log on exception. The customer reply is the primary action; learning capture is a side effect. A DB error during a learning write should NEVER block the customer's reply from going out. This is the same durability pattern Brief 213 uses for the `[ESCALATE]` sentinel write (Brief 206) — established convention.
+
+Marina-actually-reads-approved-learnings is deferred. Was tempting to bundle but: marina_agent._build_system_prompt is the most sensitive code in the project, prompt drift causes silent quality regressions, and the read+inject path deserves focused review separate from the write path. Storage half ships now (so entries accumulate); read half ships later (when there's a corpus to read from anyway).
