@@ -872,6 +872,10 @@ def email_list_conversations() -> list:
             parts = thread_key.split(":", 2)
             if len(parts) >= 2:
                 customer_name = parts[1]
+        # Brief 218: skip threads marked deleted (the dashboard hides them
+        # from the active inbox; provider-side cleanup is a follow-up).
+        if flags.get("deleted"):
+            continue
         status = "escalated" if flags.get("fully_escalated") or flags.get("awaiting_relay") else "active"
         result.append({
             "phone": f"email::{thread_key}",
@@ -944,6 +948,57 @@ def _find_email_thread_key_for(customer_email: str):
         if needle in thread_key.lower():
             return thread_key
     return None
+
+
+def email_mark_deleted(thread_key: str) -> bool:
+    """Brief 218: mark an email thread as deleted in our local state.
+    The thread is filtered out of email_list_conversations. Provider-side
+    IMAP MOVE to trash is deferred — local-state only for v1.
+    Returns True on success, False if no such thread."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return False
+    threads = state.get("threads", {})
+    if thread_key not in threads:
+        return False
+    th = threads[thread_key]
+    th.setdefault("flags", {})["deleted"] = True
+    th["last_activity"] = datetime.now(timezone.utc).isoformat()
+    state["threads"][thread_key] = th
+    try:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except OSError:
+        return False
+    return True
+
+
+def email_get_latest_customer_message(thread_key: str) -> dict:
+    """Brief 218: return the most recent customer-role message in this
+    email thread, or empty dict if none. Used by /forward to pick what
+    to forward when the frontend doesn't specify a message id."""
+    if not thread_key:
+        return {}
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return {}
+    th = state.get("threads", {}).get(thread_key, {}) or {}
+    for m in reversed(th.get("messages", []) or []):
+        if m.get("role") == "customer":
+            return m
+    return {}
 
 
 def email_append_assistant_message(customer_email: str, body: str):

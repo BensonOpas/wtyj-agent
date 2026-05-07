@@ -1006,6 +1006,127 @@ async def delete_conversation(phone: str):
     return {"ok": True, "deleted_rows": count, "phone": phone}
 
 
+# ── Email Forward + Delete (Brief 218) ──────────────────────────────────────
+# Two operator-facing email actions on a conversation. Forward re-sends the
+# latest customer message (text-only in v1; attachments aren't stored). Delete
+# marks the thread deleted in local state so the dashboard hides it.
+# Provider-side IMAP MOVE to trash is deferred to a follow-up.
+
+class EmailForwardRequest(BaseModel):
+    to: list[str]
+    cc: list[str] = []
+    bcc: list[str] = []
+    note: str = ""
+    includeAttachments: bool = False  # ignored in v1
+
+
+@router.post("/messages/conversations/{conversation_id:path}/email/forward",
+             dependencies=[Depends(_check_auth)])
+async def forward_email(conversation_id: str, req: EmailForwardRequest):
+    """Brief 218: forward the most recent customer message in this email
+    thread to a new recipient list, with an optional operator note prepended.
+    Attachments are NOT forwarded in v1 (response includes
+    `attachments_included: false` so the frontend can display a caveat)."""
+    if not req.to:
+        raise HTTPException(status_code=400, detail="`to` recipient list is required")
+
+    thread_key = conversation_id
+    if thread_key.startswith("email::"):
+        thread_key = thread_key[len("email::"):]
+    if "@" in thread_key and ":" not in thread_key:
+        thread_key = state_registry._find_email_thread_key_for(thread_key) or ""
+
+    latest_msg = state_registry.email_get_latest_customer_message(thread_key)
+    if not latest_msg:
+        raise HTTPException(status_code=404,
+            detail="No customer message found to forward in this conversation")
+
+    parts = thread_key.split(":", 2) if thread_key else []
+    original_email = parts[1] if len(parts) >= 2 else ""
+    fwd_subject = "Fwd: from " + (original_email or "customer")
+
+    original_body = latest_msg.get("body") or latest_msg.get("text") or ""
+    forward_body_parts = []
+    if req.note.strip():
+        forward_body_parts.append(req.note.strip())
+        forward_body_parts.append("")
+    forward_body_parts.append("---------- Forwarded message ----------")
+    if original_email:
+        forward_body_parts.append(f"From: {original_email}")
+    forward_body_parts.append("")
+    forward_body_parts.append(original_body)
+    forward_body = "\n".join(forward_body_parts)
+
+    # cc/bcc are flattened into per-recipient sends in v1 (each recipient gets
+    # an email addressed only to themselves — no shared cc list visible).
+    all_recipients = list(req.to) + list(req.cc) + list(req.bcc)
+    if len(all_recipients) > 20:
+        raise HTTPException(status_code=400,
+            detail="Too many recipients (max 20)")
+
+    sent_to = []
+    for rcpt in all_recipients:
+        try:
+            smtp_send(rcpt, fwd_subject, forward_body)
+            sent_to.append(rcpt)
+        except Exception as exc:
+            bm_logger.log("email_forward_send_failed",
+                          rcpt=rcpt[:60], error=str(exc)[:200])
+
+    bm_logger.log("email_forwarded",
+                  thread_key=thread_key[:60],
+                  recipient_count=len(sent_to))
+
+    return {
+        "ok": True,
+        "forwarded_to": sent_to,
+        "failed": [r for r in all_recipients if r not in sent_to],
+        "attachments_included": False,
+    }
+
+
+class EmailDeleteRequest(BaseModel):
+    deleteMode: str = "trash"  # v1 only accepts "trash"
+
+
+@router.post("/messages/conversations/{conversation_id:path}/email/delete",
+             dependencies=[Depends(_check_auth)])
+async def delete_email_conversation(conversation_id: str, req: EmailDeleteRequest):
+    """Brief 218: mark an email conversation deleted in local state so it
+    disappears from the dashboard inbox. v1 = trash mode only.
+
+    Provider-side IMAP MOVE is deferred. When implemented, branch on
+    EMAIL_PASSWORD env var presence:
+      - Gmail (unboks):  folder = "[Gmail]/Trash"
+      - Outlook (BlueMarlin/Adamus/Consulta): folder = "Deleted Items"
+    Then UID SEARCH HEADER Message-ID per stored mid → MOVE to trash folder.
+    """
+    if req.deleteMode != "trash":
+        raise HTTPException(status_code=400,
+            detail=f"v1 supports deleteMode='trash' only (got {req.deleteMode!r}). "
+                   f"'archive' and 'permanent' are deferred.")
+
+    thread_key = conversation_id
+    if thread_key.startswith("email::"):
+        thread_key = thread_key[len("email::"):]
+    if "@" in thread_key and ":" not in thread_key:
+        thread_key = state_registry._find_email_thread_key_for(thread_key) or ""
+
+    if not thread_key:
+        raise HTTPException(status_code=404,
+            detail="Email conversation not found")
+
+    ok = state_registry.email_mark_deleted(thread_key)
+    if not ok:
+        raise HTTPException(status_code=404,
+            detail="Email conversation not found")
+
+    # TODO: provider-side IMAP MOVE to trash folder (see docstring).
+    bm_logger.log("email_conversation_deleted",
+                  thread_key=thread_key[:60], mode="trash")
+    return {"ok": True, "deleteMode": "trash", "thread_key": thread_key}
+
+
 # ── Customers (Brief 166/167) ────────────────────────────────────────────────
 
 @router.get("/customers/by-identifier/{type_}/{value}", dependencies=[Depends(_check_auth)])
