@@ -410,22 +410,39 @@ async def deactivate_learning(learning_id: int):
     return {"ok": True}
 
 
-# Brief 212: /learning singular aliases for SR's frontend.
-# (Frontend at unboks-org/unboks-dashboard-api calls the singular path;
-# our backend has historically served plural at /learnings. Keeping
-# both paths registered avoids any forced rename.)
+# Brief 215: /learning (singular) is now the SR-domain endpoint backed by
+# escalation_learnings — operator answers from /reply and /guidance, with a
+# status field per row. /learnings (plural) still serves content_learnings
+# unchanged for content_agent backward compat (different domain).
+# This deliberately changes Brief 212's contract for the singular path.
 
 @router.get("/learning", dependencies=[Depends(_check_auth)])
-async def list_learning_alias():
-    return state_registry.get_active_learnings()
+async def list_escalation_learning_endpoint(status: str = None):
+    return state_registry.list_escalation_learnings(status=status)
 
 
 @router.delete("/learning/{learning_id}", dependencies=[Depends(_check_auth)])
-async def deactivate_learning_alias(learning_id: int):
-    ok = state_registry.deactivate_learning(learning_id)
+async def delete_escalation_learning_endpoint(learning_id: int):
+    ok = state_registry.delete_escalation_learning(learning_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="Learning not found or already inactive")
+        raise HTTPException(status_code=404, detail="Learning not found")
     return {"ok": True}
+
+
+@router.post("/learning/{learning_id}/approve", dependencies=[Depends(_check_auth)])
+async def approve_learning(learning_id: int):
+    ok = state_registry.update_escalation_learning_status(learning_id, "approved")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    return {"ok": True, "id": learning_id, "status": "approved"}
+
+
+@router.post("/learning/{learning_id}/save", dependencies=[Depends(_check_auth)])
+async def save_learning(learning_id: int):
+    ok = state_registry.update_escalation_learning_status(learning_id, "saved")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    return {"ok": True, "id": learning_id, "status": "saved"}
 
 
 # --- Data ---
@@ -1029,15 +1046,42 @@ async def get_escalation(escalation_id: int):
     return esc
 
 
+class ResolveRequest(BaseModel):
+    resolutionNote: str = ""
+    saveAsLearning: bool = False
+    autoUseNextTime: bool = True
+    category: str = ""
+
+
 @router.post("/escalations/{escalation_id}/resolve", dependencies=[Depends(_check_auth)])
-async def resolve_escalation(escalation_id: int):
-    """Mark an escalation as resolved and return conversation to AI."""
+async def resolve_escalation(escalation_id: int, req: ResolveRequest = None):
+    """Brief 213 + 215: mark resolved. Optionally save the operator's
+    resolutionNote as an approved escalation_learnings row."""
     ok = state_registry.update_notification_status(escalation_id, "resolved")
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
-    # Brief 188: clear fully_escalated + set conversation status to resolved
     state_registry.resolve_conversation_from_escalation(escalation_id)
-    return {"ok": True}
+
+    body = req or ResolveRequest()
+    learning_entry_id = None
+    if body.saveAsLearning and body.resolutionNote.strip():
+        esc = next((e for e in state_registry.get_all_escalations()
+                    if e["id"] == escalation_id), None)
+        if esc:
+            try:
+                learning_entry_id = state_registry.save_escalation_learning(
+                    conversation_id=esc["customer_id"],
+                    channel=esc.get("channel", "whatsapp"),
+                    source_question=state_registry._last_customer_message_for(
+                        esc["customer_id"], esc.get("channel", "whatsapp")),
+                    human_answer=body.resolutionNote.strip(),
+                    status="approved",
+                    ai_may_use=body.autoUseNextTime,
+                    category=body.category or None)
+            except Exception as _learn_exc:
+                bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                              escalation_id=escalation_id, source="resolve")
+    return {"ok": True, "learningEntryId": learning_entry_id}
 
 
 @router.delete("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
@@ -1340,6 +1384,19 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
 
         state_registry.update_notification_status(escalation_id, "replied")
 
+        # Brief 215: auto-create approved learning entry from operator answer.
+        # Wrapped in try/except — never block the customer reply on a write
+        # failure here.
+        try:
+            state_registry.save_escalation_learning(
+                conversation_id=customer_id, channel="whatsapp",
+                source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
+                human_answer=req.text,
+                status="approved", ai_may_use=True)
+        except Exception as _learn_exc:
+            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                          escalation_id=escalation_id, source="reply_whatsapp")
+
         return {"ok": True, "reply": relay_reply}
 
     elif channel == "email":
@@ -1371,6 +1428,18 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
                       thread_key=thread_key or "(no thread match)")
 
         state_registry.update_notification_status(escalation_id, "replied")
+
+        # Brief 215: auto-create approved learning entry from operator answer.
+        try:
+            state_registry.save_escalation_learning(
+                conversation_id=customer_id, channel="email",
+                source_question=state_registry._last_customer_message_for(customer_id, "email"),
+                human_answer=operator_reply,
+                status="approved", ai_may_use=True)
+        except Exception as _learn_exc:
+            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                          escalation_id=escalation_id, source="reply_email")
+
         return {"ok": True, "reply": operator_reply, "channel": "email"}
 
     else:
@@ -1446,6 +1515,18 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
             wa_state.get("completed_bookings", []))
 
         state_registry.update_notification_status(escalation_id, "replied")
+
+        # Brief 215: auto-create approved learning entry from operator's coaching.
+        try:
+            state_registry.save_escalation_learning(
+                conversation_id=customer_id, channel="whatsapp",
+                source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
+                human_answer=req.text,
+                status="approved", ai_may_use=True)
+        except Exception as _learn_exc:
+            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                          escalation_id=escalation_id, source="guidance_whatsapp")
+
         return {"ok": True, "reply": relay_reply, "channel": "whatsapp"}
 
     elif channel == "email":
@@ -1506,6 +1587,18 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
                       thread_key=appended_thread_key or "(no thread match)")
 
         state_registry.update_notification_status(escalation_id, "replied")
+
+        # Brief 215: auto-create approved learning entry from operator's coaching.
+        try:
+            state_registry.save_escalation_learning(
+                conversation_id=customer_id, channel="email",
+                source_question=state_registry._last_customer_message_for(customer_id, "email"),
+                human_answer=req.text,
+                status="approved", ai_may_use=True)
+        except Exception as _learn_exc:
+            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                          escalation_id=escalation_id, source="guidance_email")
+
         return {"ok": True, "reply": relay_reply, "channel": "email"}
 
     else:

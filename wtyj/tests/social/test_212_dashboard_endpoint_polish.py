@@ -39,42 +39,45 @@ def _cleanup_learning(learning_id):
     conn.close()
 
 
-# --- Test 1: GET /learning (singular) returns same data as /learnings (plural)
+# --- Test 1: GET /learning returns escalation_learnings shape (Brief 215 repointed
+# the singular path away from content_learnings; /learnings still serves content).
 def test_learning_singular_alias_get_returns_same_as_plural():
     from shared import state_registry
-    learning_id = state_registry.save_content_learning(
-        "Brief 212 alias test rule", source_draft_ids=[])
+    # Seed an escalation_learning row (the new domain for /learning singular)
+    el_id = state_registry.save_escalation_learning(
+        conversation_id="212_alias_get_phone", channel="whatsapp",
+        source_question="?", human_answer="Brief 212/215 alias test")
 
     token = _login()
     r_singular = client.get("/dashboard/api/learning", headers=_auth(token))
-    r_plural = client.get("/dashboard/api/learnings", headers=_auth(token))
     assert r_singular.status_code == 200, r_singular.text
-    assert r_plural.status_code == 200, r_plural.text
-    assert r_singular.json() == r_plural.json()
-    # Verify the seeded row is in there
-    ids = [item["id"] for item in r_singular.json()]
-    assert learning_id in ids
+    payload = r_singular.json()
+    assert isinstance(payload, list)
+    matched = next((row for row in payload if row.get("id") == el_id), None)
+    assert matched is not None, f"seeded escalation_learning {el_id} not in /learning response"
+    # SR-domain shape requires `status` field per row
+    assert "status" in matched
+    assert matched["status"] == "approved"
 
-    _cleanup_learning(learning_id)
+    state_registry.delete_escalation_learning(el_id)
 
 
-# --- Test 2: DELETE /learning/:id (singular) deactivates the row
+# --- Test 2: DELETE /learning/:id removes an escalation_learning row.
 def test_learning_singular_alias_delete_works():
     from shared import state_registry
-    learning_id = state_registry.save_content_learning(
-        "Brief 212 alias delete test", source_draft_ids=[])
+    el_id = state_registry.save_escalation_learning(
+        conversation_id="212_alias_delete_phone", channel="whatsapp",
+        source_question="?", human_answer="Brief 212/215 alias delete test")
 
     token = _login()
-    r = client.delete(f"/dashboard/api/learning/{learning_id}",
+    r = client.delete(f"/dashboard/api/learning/{el_id}",
                        headers=_auth(token))
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
 
-    # Row should no longer be active
-    actives = state_registry.get_active_learnings()
-    assert all(item["id"] != learning_id for item in actives)
-
-    _cleanup_learning(learning_id)
+    # Row should no longer be in the list
+    rows = state_registry.list_escalation_learnings()
+    assert all(item["id"] != el_id for item in rows)
 
 
 # --- Test 3: PUT /schedule/slots accepts raw array body

@@ -309,6 +309,24 @@ def _get_conn():
         "created_at TEXT NOT NULL"
         ")"
     )
+    # Brief 215: escalation-derived learning entries (operator answers stored
+    # as approved knowledge for Marina to reuse in future similar replies).
+    # Distinct from content_learnings (content_agent's draft rules).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS escalation_learnings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "conversation_id TEXT NOT NULL, "
+        "channel TEXT NOT NULL, "
+        "source_question TEXT NOT NULL DEFAULT '', "
+        "human_answer TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'approved', "
+        "ai_may_use_automatically INTEGER NOT NULL DEFAULT 1, "
+        "category TEXT, "
+        "created_by TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS photo_library ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -2263,6 +2281,107 @@ def deactivate_learning(learning_id: int) -> bool:
     conn.commit()
     conn.close()
     return changed
+
+
+# ── Brief 215: Escalation learnings (operator answers as approved knowledge) ──
+
+def save_escalation_learning(conversation_id: str, channel: str,
+                              source_question: str, human_answer: str,
+                              status: str = "approved",
+                              ai_may_use: bool = True,
+                              category: str = None,
+                              created_by: str = None) -> int:
+    """Brief 215: persist an operator answer as an approved learning entry.
+    Default status='approved' + ai_may_use=True per SR's contract Section 3.
+    Returns the new row id."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO escalation_learnings "
+        "(conversation_id, channel, source_question, human_answer, status, "
+        "ai_may_use_automatically, category, created_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (conversation_id, channel, source_question or "", human_answer,
+         status, 1 if ai_may_use else 0, category, created_by, now, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def list_escalation_learnings(status: str = None) -> list:
+    """Brief 215: return escalation learning entries newest-first.
+    Skip rows with status='deleted'. Optional status filter."""
+    conn = _get_conn()
+    if status:
+        rows = conn.execute(
+            "SELECT id, conversation_id, channel, source_question, human_answer, "
+            "status, ai_may_use_automatically, category, created_by, "
+            "created_at, updated_at FROM escalation_learnings "
+            "WHERE status = ? ORDER BY created_at DESC",
+            (status,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, conversation_id, channel, source_question, human_answer, "
+            "status, ai_may_use_automatically, category, created_by, "
+            "created_at, updated_at FROM escalation_learnings "
+            "WHERE status != 'deleted' ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [{
+        "id": r[0], "conversationId": r[1], "channel": r[2],
+        "sourceQuestion": r[3], "humanAnswer": r[4],
+        "status": r[5], "aiMayUseAutomatically": bool(r[6]),
+        "category": r[7], "createdBy": r[8],
+        "createdAt": r[9], "updatedAt": r[10],
+    } for r in rows]
+
+
+def update_escalation_learning_status(learning_id: int, new_status: str) -> bool:
+    """Brief 215: flip status. Allowed: suggested|approved|saved|deleted."""
+    if new_status not in ("suggested", "approved", "saved", "deleted"):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE escalation_learnings SET status = ?, updated_at = ? WHERE id = ?",
+        (new_status, now, learning_id))
+    updated = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def delete_escalation_learning(learning_id: int) -> bool:
+    """Brief 215: hard-delete an escalation learning row."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "DELETE FROM escalation_learnings WHERE id = ?", (learning_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def _last_customer_message_for(conversation_id: str, channel: str) -> str:
+    """Brief 215: look up the most recent customer-role message text for
+    this conversation, used as `source_question` when auto-creating a
+    learning entry from an operator answer. Returns '' on miss."""
+    if not conversation_id:
+        return ""
+    if channel == "email":
+        thread_key = _find_email_thread_key_for(conversation_id)
+        if not thread_key:
+            return ""
+        conv = email_get_conversation(thread_key)
+        for m in reversed(conv.get("messages", []) or []):
+            if m.get("role") in ("user", "customer"):
+                return (m.get("text") or m.get("body") or "")[:1000]
+        return ""
+    history = wa_get_full_history(conversation_id, limit=10)
+    for m in reversed(history):
+        if m.get("role") == "user":
+            return (m.get("text") or "")[:1000]
+    return ""
 
 
 # ==================== Brief 168: Payment hold state machine ====================
