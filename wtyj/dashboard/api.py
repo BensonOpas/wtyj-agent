@@ -1377,6 +1377,142 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         raise HTTPException(status_code=400, detail=f"Channel '{channel}' reply not supported from dashboard")
 
 
+# ── Soft-mode guidance (Brief 214) ───────────────────────────────────────────
+# Operator coaches Marina; Marina reformulates into a customer-facing reply
+# in her own voice and sends it. Counterpart to /reply (which is hard-mode
+# verbatim send for email). For WhatsApp, this duplicates /reply WhatsApp's
+# legacy soft-relay behavior — the existing /reply WhatsApp branch is kept
+# unchanged for backwards compatibility (Brief 159 callers).
+
+@router.post("/escalations/{escalation_id}/guidance", dependencies=[Depends(_check_auth)])
+async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
+    """Brief 214: soft-mode escalation. Operator writes guidance for Marina;
+    Marina reformulates into a customer-facing reply in her own voice and
+    sends it. Mirrors the relay pattern in /reply WhatsApp + email_poller
+    relay-receive at email_poller.py:588-612."""
+    if not req.text:
+        raise HTTPException(status_code=400, detail="Guidance text required (field: 'message' or 'answer')")
+
+    esc = next((e for e in state_registry.get_all_escalations()
+                if e["id"] == escalation_id), None)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+
+    if esc.get("mode") == "hard":
+        raise HTTPException(status_code=409,
+            detail="Escalation is in hard mode (human takeover). Use /reply for direct customer reply, or /handback to return to AI control.")
+
+    channel = esc.get("channel", "whatsapp")
+    customer_id = esc.get("customer_id", "")
+
+    if channel == "whatsapp" and customer_id:
+        wa_state = state_registry.wa_get_booking_state(customer_id)
+        wa_fields = wa_state.get("fields", {})
+        wa_flags = wa_state.get("flags", {})
+        wa_history = state_registry.wa_get_history(customer_id, limit=10)
+
+        # Mirror /reply's relay-mode flag setup: explicitly set awaiting_relay
+        # so Marina enters RELAY MODE; clear ephemeral token/timing keys so
+        # the prompt doesn't see stale relay metadata.
+        agent_flags = dict(wa_flags)
+        agent_flags["awaiting_relay"] = True
+        for rk in ("relay_token", "reply_times"):
+            agent_flags.pop(rk, None)
+
+        relay_result = marina_agent.process_message(
+            customer_id, "", req.text,
+            wa_fields, agent_flags,
+            channel="whatsapp", messages=wa_history,
+        )
+        relay_reply = relay_result.get("reply", "")
+        if not relay_reply:
+            raise HTTPException(status_code=500, detail="Marina returned empty reply")
+
+        sent_ok = send_whatsapp_message(customer_id, relay_reply)
+        if not sent_ok:
+            raise HTTPException(status_code=500,
+                detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
+
+        state_registry.wa_store_message(customer_id, "assistant", relay_reply)
+        bm_logger.log("dashboard_guidance_sent_whatsapp",
+                      phone=customer_id, escalation_id=escalation_id)
+
+        # Clear relay flags from persistent state (one guidance = one relay)
+        wa_flags.pop("awaiting_relay", None)
+        wa_flags.pop("relay_token", None)
+        wa_flags.pop("relay_question", None)
+        state_registry.wa_save_booking_state(
+            customer_id, wa_fields, wa_flags,
+            wa_state.get("completed_bookings", []))
+
+        state_registry.update_notification_status(escalation_id, "replied")
+        return {"ok": True, "reply": relay_reply, "channel": "whatsapp"}
+
+    elif channel == "email":
+        if not customer_id or "@" not in customer_id:
+            raise HTTPException(status_code=400,
+                detail="Email escalation missing valid email address")
+
+        # Load thread context (fields + flags) so Marina has booking history
+        thread_key = state_registry._find_email_thread_key_for(customer_id)
+        if thread_key:
+            email_conv = state_registry.email_get_conversation(thread_key)
+            email_state = email_conv.get("booking_state", {}) or {}
+            email_fields = email_state.get("fields", {}) or {}
+            email_flags = dict(email_state.get("flags", {}) or {})
+        else:
+            email_fields = {}
+            email_flags = {}
+
+        email_flags["awaiting_relay"] = True
+        for rk in ("relay_token", "reply_times"):
+            email_flags.pop(rk, None)
+
+        subject = esc.get("subject") or "Re: Unboks"
+        if not subject.lower().startswith("re:"):
+            subject = "Re: " + subject
+
+        try:
+            relay_result = marina_agent.process_message(
+                customer_id, subject, req.text,
+                email_fields, email_flags,
+            )
+        except Exception as exc:
+            bm_logger.log("dashboard_guidance_marina_failed",
+                          email=customer_id, escalation_id=escalation_id,
+                          error=str(exc)[:200])
+            raise HTTPException(status_code=500,
+                detail=f"Marina relay failed: {str(exc)[:120]}")
+
+        relay_reply = relay_result.get("reply", "")
+        if not relay_reply:
+            raise HTTPException(status_code=500, detail="Marina returned empty reply")
+
+        try:
+            smtp_send(customer_id, subject, relay_reply)
+        except Exception as exc:
+            bm_logger.log("dashboard_guidance_send_failed",
+                          email=customer_id, escalation_id=escalation_id,
+                          error=str(exc)[:200])
+            raise HTTPException(status_code=500,
+                detail=f"Failed to send email reply: {str(exc)[:120]}")
+
+        # Append Marina's REFORMULATED reply to thread (NOT the operator's
+        # coaching). Dashboard view should show what the customer actually saw.
+        appended_thread_key = state_registry.email_append_assistant_message(
+            customer_id, relay_reply)
+        bm_logger.log("dashboard_guidance_sent_email",
+                      email=customer_id, escalation_id=escalation_id,
+                      thread_key=appended_thread_key or "(no thread match)")
+
+        state_registry.update_notification_status(escalation_id, "replied")
+        return {"ok": True, "reply": relay_reply, "channel": "email"}
+
+    else:
+        raise HTTPException(status_code=501,
+            detail=f"Channel '{channel}' guidance flow not yet implemented (frontend will show graceful fallback)")
+
+
 # ── AI Editor (Brief 212) ────────────────────────────────────────────────────
 # Operator-facing tool: translate, restyle, or fix grammar of an operator's
 # draft text in the reply composer. NOT in the customer-message reply path
