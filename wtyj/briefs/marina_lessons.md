@@ -2021,3 +2021,14 @@ This is the same pattern as Brief 200's diagnosis: when the user (or another AI)
 Smooth additive brief — derived 4 fields from an existing table + lifted a 6-line substring lookup into a shared helper. Non-obvious technique: when a frontend gates rendering on fields you don't yet have storage for (here `escalationMode` / `aiMuted` for soft/hard mode), default them to **honest sentinel values** that take a known-safe code path on the frontend, NOT to a "convenient" default that fakes the feature. Returning `escalationMode: null` made SR's UI render the LegacyActionPanel branch (`mode === null` in `Inbox.tsx:302`), which is a real working UX. Returning `escalationMode: "hard"` would have made the hard-reply composer render but every operator action would silently mismatch the (nonexistent) backing soft/hard state. Always pick the default that picks a real code path, not the one that produces visible UI.
 
 Live-E2E-as-design-tool was the unlock. Could not have predicted the `showBanner = detail.escalated && !detail.escalationResolved` gate from staring at SR's `interface ConversationDetail` definition alone — only opening the dashboard, clicking the escalation, and watching the empty pane render exposed it. When a feature ships and the user reports "nothing happens," open the browser before diffing types.
+
+---
+
+## Brief 212 — Dashboard endpoint polish
+**Date:** 2026-05-07
+
+Three small additive endpoints (two aliases + one new Claude proxy + one body-shape fix). The non-obvious technique: when audit-listing "missing endpoints," **separate aliases from features**. The earlier audit lumped `POST /learning/:id/approve` together with `GET /learning` as Tier 3 polish — but `approve` writes new state with a state machine I don't have a spec for, while `GET /learning` is literally the same handler at a different path. Pruning approve/save out of this brief and routing them to a Tier 2 brief avoided shipping a learning-entry feature with guessed semantics. Lesson: when "polish" includes anything that mutates new state, it is not polish — it is a feature, demote it.
+
+Brief-reviewer caught three real issues: model-ID typo (`4-5` not `4-6`), missing `Body` import, and `path:line` references that drifted by ~30 lines. None were blockers but all would have produced a flawed first attempt. Worth running the reviewer even on tight briefs.
+
+Brief's "no internal regression risk" claim for `PUT /schedule/slots` body-shape change was wrong — `test_111_scheduling.py::test_api_schedule_slots` was a stale internal caller of the old wrapper. Caught by full regression, not by my grep. Lesson when changing a wire shape: grep BOTH `apiFetch` (frontend) and `client.put` / `_client.put` (test callers) before claiming no impact. The grep I ran covered the frontend; I never grepped the backend test directory for HTTP callers of the endpoint.
