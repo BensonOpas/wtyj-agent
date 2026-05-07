@@ -155,11 +155,15 @@ def test_api_unschedule_draft():
 
 
 def test_api_schedule_slots():
+    # Brief 212: PUT /schedule/slots now accepts the raw JSON array directly
+    # (matches SR's frontend lib/api.ts:saveScheduleSlots which posts a
+    # ScheduleSlot[] without a wrapper). The old {slots: [...]} body shape
+    # is no longer accepted by the endpoint.
     token = _login()
     resp = _client.put(
         "/dashboard/api/schedule/slots",
         headers={"Authorization": f"Bearer {token}"},
-        json={"slots": [{"day_of_week": "Saturday", "time_utc": "10:00"}]},
+        json=[{"day_of_week": "Saturday", "time_utc": "10:00"}],
     )
     assert resp.status_code == 200
     slots = resp.json()["slots"]

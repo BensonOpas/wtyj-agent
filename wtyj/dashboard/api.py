@@ -11,7 +11,7 @@ import secrets
 import urllib.parse
 import anthropic
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from PIL import Image
@@ -410,6 +410,24 @@ async def deactivate_learning(learning_id: int):
     return {"ok": True}
 
 
+# Brief 212: /learning singular aliases for SR's frontend.
+# (Frontend at unboks-org/unboks-dashboard-api calls the singular path;
+# our backend has historically served plural at /learnings. Keeping
+# both paths registered avoids any forced rename.)
+
+@router.get("/learning", dependencies=[Depends(_check_auth)])
+async def list_learning_alias():
+    return state_registry.get_active_learnings()
+
+
+@router.delete("/learning/{learning_id}", dependencies=[Depends(_check_auth)])
+async def deactivate_learning_alias(learning_id: int):
+    ok = state_registry.deactivate_learning(learning_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Learning not found or already inactive")
+    return {"ok": True}
+
+
 # --- Data ---
 
 @router.get("/availability", dependencies=[Depends(_check_auth)])
@@ -745,8 +763,13 @@ async def get_schedule_slots():
 
 
 @router.put("/schedule/slots", dependencies=[Depends(_check_auth)])
-async def update_schedule_slots(req: ScheduleSlotsRequest):
-    state_registry.save_schedule_slots(req.slots)
+async def update_schedule_slots(slots: list = Body(...)):
+    """Brief 212: accept the raw JSON array body that SR's frontend sends
+    (lib/api.ts:saveScheduleSlots posts a `ScheduleSlot[]` directly, not
+    wrapped in `{slots: ...}`). The legacy ScheduleSlotsRequest model is
+    no longer used here; kept defined for any internal caller that still
+    constructs it."""
+    state_registry.save_schedule_slots(slots)
     return {"ok": True, "slots": state_registry.get_schedule_slots()}
 
 
@@ -1290,3 +1313,93 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
 
     else:
         raise HTTPException(status_code=400, detail=f"Channel '{channel}' reply not supported from dashboard")
+
+
+# ── AI Editor (Brief 212) ────────────────────────────────────────────────────
+# Operator-facing tool: translate, restyle, or fix grammar of an operator's
+# draft text in the reply composer. NOT in the customer-message reply path
+# (Rule 1 protects `marina_agent.process_message()` for inbound customer
+# messages — this endpoint runs on operator-authored drafts that the operator
+# reviews before sending). Same architectural shape as /messages/suggest-reply
+# above, which already makes Claude calls outside marina_agent for operator
+# workflows.
+
+class AIEditorRequest(BaseModel):
+    action: str  # "translate" | "style" | "fix"
+    text: str
+    targetLanguage: str = ""  # required for "translate"
+    style: str = ""  # required for "style"
+    context: dict = {}  # optional metadata: conversationId, escalationMode, channel
+
+
+_AI_EDITOR_VALID_ACTIONS = {"translate", "style", "fix"}
+_AI_EDITOR_VALID_LANGUAGES = {"English", "Dutch", "Spanish", "Papiamento", "Swedish", "Portuguese"}
+_AI_EDITOR_VALID_STYLES = {"professional", "warmer", "shorter", "friendlier", "direct"}
+
+
+def _build_ai_editor_prompt(action: str, text: str, target_language: str, style: str) -> str:
+    """Brief 212: assemble the action-specific user prompt for /ai-editor.
+    Instructions are crisp so the model returns rewritten text only — no
+    preamble, no quotation marks, no explanation. Keep instructions tight
+    so we don't have to strip wrappers from the response."""
+    if action == "fix":
+        return (
+            "Rewrite the following text to fix any grammar, spelling, or "
+            "punctuation issues. Do not change the meaning, tone, or "
+            "language. Return only the rewritten text — no preamble, no "
+            "quotation marks, no explanation.\n\n"
+            f"Text:\n{text}"
+        )
+    if action == "translate":
+        return (
+            f"Translate the following text into {target_language}. Preserve "
+            "the tone, register, and any names. Return only the translation "
+            "— no preamble, no quotation marks, no explanation.\n\n"
+            f"Text:\n{text}"
+        )
+    if action == "style":
+        return (
+            f"Rewrite the following text in a more {style} style. Keep the "
+            "same language, factual content, and any names. Return only "
+            "the rewritten text — no preamble, no quotation marks, no "
+            "explanation.\n\n"
+            f"Text:\n{text}"
+        )
+    raise ValueError(f"unknown action: {action}")
+
+
+@router.post("/ai-editor", dependencies=[Depends(_check_auth)])
+async def ai_editor(req: AIEditorRequest):
+    """Operator-facing AI tool: translate / restyle / fix grammar on a draft.
+    Brief 212. Bounded action+language+style enums constrain user input so
+    operator-supplied `text` is the only free-form field."""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text is required")
+    if req.action not in _AI_EDITOR_VALID_ACTIONS:
+        raise HTTPException(status_code=400, detail=f"invalid action: {req.action}")
+    if req.action == "translate":
+        if not req.targetLanguage or req.targetLanguage not in _AI_EDITOR_VALID_LANGUAGES:
+            raise HTTPException(status_code=400, detail="targetLanguage required for translate")
+    if req.action == "style":
+        if not req.style or req.style not in _AI_EDITOR_VALID_STYLES:
+            raise HTTPException(status_code=400, detail="style required for style action")
+
+    prompt = _build_ai_editor_prompt(req.action, req.text.strip(),
+                                     req.targetLanguage, req.style)
+    try:
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        rewritten = (resp.content[0].text if resp.content else "").strip()
+    except Exception as exc:
+        bm_logger.log("ai_editor_error", error=str(exc)[:200], action=req.action)
+        raise HTTPException(status_code=500, detail=f"AI editor failed: {str(exc)[:120]}")
+
+    if not rewritten:
+        raise HTTPException(status_code=500, detail="AI editor returned empty result")
+
+    bm_logger.log("ai_editor_used", action=req.action, length=len(req.text))
+    return {"text": rewritten}
