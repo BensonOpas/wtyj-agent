@@ -205,6 +205,13 @@ def _flush_buffer(phone):
             _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
             _zernio_sender = final_msg.get("_zernio_sender_name", "")
             if _zernio_conv:
+                # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
+                if state_registry.get_ai_muted(_zernio_conv):
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv, channel=_zernio_channel,
+                        role="user", text=combined_text, sender_name=_zernio_sender)
+                    log("whatsapp_zernio_ai_muted", conversation_id=_zernio_conv[:20])
+                    return  # exits the with _phone_lock block; _flush_buffer returns
                 # Zernio WhatsApp — check booking_flow toggle
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
                 if _booking_flow_on:
@@ -246,6 +253,11 @@ def _flush_buffer(phone):
                         text=reply_text,
                     )
             else:
+                # Brief 213: ai_muted check for Meta legacy WhatsApp.
+                if state_registry.get_ai_muted(phone):
+                    state_registry.wa_store_message(phone, "user", combined_text)
+                    log("whatsapp_meta_ai_muted", phone=phone[:20])
+                    return  # exits the with _phone_lock block; _flush_buffer returns
                 # Meta WhatsApp (legacy) — original path
                 reply_text = handle_incoming_whatsapp_message(final_msg)
                 state_registry.wa_store_message(phone, "user", combined_text)
@@ -351,6 +363,18 @@ def _process_zernio_event(payload: dict):
         # Zernio webhooks for the same conversation cannot race on state.
         _dm_lock = _get_phone_lock(conversation_id)
         with _dm_lock:
+            # Brief 213: respect ai_muted (operator-takeover state). When a
+            # conversation has been muted via /escalations/:id/takeover,
+            # store the inbound in the dashboard thread so the operator
+            # sees it, but do NOT call the reply handler.
+            if state_registry.get_ai_muted(conversation_id):
+                state_registry.dm_store_message(
+                    conversation_id=conversation_id, channel=channel,
+                    role="user", text=text, sender_name=msg["sender_name"])
+                log("zernio_dm_ai_muted",
+                    conversation_id=conversation_id[:20], channel=channel)
+                return
+
             # Route based on booking_flow toggle
             _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 

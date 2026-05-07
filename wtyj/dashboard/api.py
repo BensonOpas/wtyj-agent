@@ -935,16 +935,15 @@ async def list_conversations():
 def _conversation_status_fields(customer_id: str) -> dict:
     """Brief 211: derive escalation-state fields the SR frontend reads on
     /messages/conversations/:phone to gate its EscalationReplyComposer.
-    `escalationMode` and `aiMuted` are placeholders (Tier 2) — null/false
-    means SR's UI renders the LegacyActionPanel branch, which is the
-    legacy action buttons. Honest "no soft/hard mode set" beats lying
-    with a default of "hard"."""
-    status = state_registry.get_conversation_status(customer_id or "")
+    Brief 213: escalationMode + aiMuted now backed by real storage
+    (pending_notifications.mode + conversation_status.ai_muted)."""
+    cid = customer_id or ""
+    status = state_registry.get_conversation_status(cid)
     return {
         "escalated": status == "open",
         "escalationResolved": status == "resolved",
-        "escalationMode": None,
-        "aiMuted": False,
+        "escalationMode": state_registry.get_active_escalation_mode(cid),
+        "aiMuted": state_registry.get_ai_muted(cid),
     }
 
 
@@ -1007,15 +1006,15 @@ async def get_customer_by_identifier(type_: str, value: str):
 # ── Escalations ──────────────────────────────────────────────────────────────
 
 @router.get("/escalations", dependencies=[Depends(_check_auth)])
-async def list_escalations():
+async def list_escalations(mode: str = None):
     """List all escalation notifications.
-    Brief 210 hotfix: SR's frontend mapper (conversation-mapper.ts:pickStr)
-    requires `typeof id === "string"`. Stringify id at the response layer
-    so internal callers (state_registry, tests) keep using ints, but the
-    HTTP boundary always emits a string."""
+    Brief 210 hotfix: SR's frontend mapper requires string ids.
+    Brief 213: support ?mode=soft|hard|all (all = no filter)."""
     rows = state_registry.get_all_escalations()
     for r in rows:
         r["id"] = str(r["id"])
+    if mode in ("soft", "hard"):
+        rows = [r for r in rows if r.get("mode") == mode]
     return rows
 
 
@@ -1050,6 +1049,69 @@ async def delete_escalation_endpoint(escalation_id: int):
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
     return {"ok": True, "id": escalation_id}
+
+
+# Brief 213: escalation mode + takeover/handback. SR's product contract
+# requires real soft/hard mode + AI-muted state per conversation.
+# Storage: pending_notifications.mode (per escalation) and
+# conversation_status.ai_muted + human_takeover_at (per conversation).
+
+class EscalationModeRequest(BaseModel):
+    mode: str  # "soft" | "hard"
+
+
+def _refresh_and_stringify_escalation(escalation_id: int):
+    """Brief 213 helper: fetch the canonical row post-update, with id
+    stringified to match the GET /escalations response contract.
+    Returns the row dict or None if not found."""
+    for e in state_registry.get_all_escalations():
+        if e["id"] == escalation_id:  # int-int (storage compare)
+            e["id"] = str(e["id"])
+            return e
+    return None
+
+
+@router.post("/escalations/{escalation_id}/mode", dependencies=[Depends(_check_auth)])
+async def set_escalation_mode_endpoint(escalation_id: int, req: EscalationModeRequest):
+    if req.mode not in ("soft", "hard"):
+        raise HTTPException(status_code=400, detail=f"invalid mode: {req.mode!r} (must be 'soft' or 'hard')")
+    ok = state_registry.set_escalation_mode(escalation_id, req.mode)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    refreshed = _refresh_and_stringify_escalation(escalation_id)
+    return refreshed or {"ok": True, "mode": req.mode}
+
+
+@router.post("/escalations/{escalation_id}/takeover", dependencies=[Depends(_check_auth)])
+async def takeover_escalation(escalation_id: int):
+    """Brief 213: hard takeover. Sets escalation mode=hard, conversation
+    ai_muted=true, stamps human_takeover_at."""
+    esc = next((e for e in state_registry.get_all_escalations()
+                if e["id"] == escalation_id), None)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    state_registry.set_escalation_mode(escalation_id, "hard")
+    state_registry.set_ai_muted(esc["customer_id"], True, esc.get("channel", "whatsapp"))
+    bm_logger.log("escalation_takeover", escalation_id=escalation_id,
+                  customer_id=(esc["customer_id"] or "")[:30],
+                  channel=esc.get("channel"))
+    refreshed = _refresh_and_stringify_escalation(escalation_id)
+    return refreshed or {"ok": True}
+
+
+@router.post("/escalations/{escalation_id}/handback", dependencies=[Depends(_check_auth)])
+async def handback_escalation(escalation_id: int):
+    """Brief 213: release a hard takeover — clear ai_muted, set mode=soft."""
+    esc = next((e for e in state_registry.get_all_escalations()
+                if e["id"] == escalation_id), None)
+    if not esc:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    state_registry.set_escalation_mode(escalation_id, "soft")
+    state_registry.set_ai_muted(esc["customer_id"], False, esc.get("channel", "whatsapp"))
+    bm_logger.log("escalation_handback", escalation_id=escalation_id,
+                  customer_id=(esc["customer_id"] or "")[:30])
+    refreshed = _refresh_and_stringify_escalation(escalation_id)
+    return refreshed or {"ok": True}
 
 
 # ── Manual Draft Creation ────────────────────────────────────────────────────

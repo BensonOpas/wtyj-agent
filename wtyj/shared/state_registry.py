@@ -240,6 +240,21 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Brief 213: pending_notifications.mode (per-escalation soft/hard)
+    try:
+        conn.execute("ALTER TABLE pending_notifications ADD COLUMN mode TEXT")
+    except sqlite3.OperationalError:
+        pass
+    # Brief 213: conversation_status.ai_muted (per-conversation human takeover flag)
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN ai_muted INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    # Brief 213: conversation_status.human_takeover_at (ISO timestamp when muted)
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN human_takeover_at TEXT")
+    except sqlite3.OperationalError:
+        pass
     # Brief 207: tasks shared between Calvin and Jr (operator-side workflow,
     # not customer-facing). Per-tenant SQLite isolation matches existing tables.
     conn.execute(
@@ -1142,6 +1157,73 @@ def get_conversation_status(conversation_id: str) -> str:
     return row[0] if row else "pending"
 
 
+def set_escalation_mode(escalation_id: int, mode: str) -> bool:
+    """Brief 213: set the mode of a pending_notifications row. `mode` must
+    be 'soft' or 'hard' (caller validates). Returns True if a row was
+    updated, False if no row matched."""
+    if mode not in ("soft", "hard"):
+        return False
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE pending_notifications SET mode = ? WHERE id = ?",
+        (mode, escalation_id))
+    updated = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def get_ai_muted(conversation_id: str) -> bool:
+    """Brief 213: read the ai_muted flag from conversation_status. Returns
+    False when no row exists for the conversation (default behavior is
+    not muted)."""
+    if not conversation_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT ai_muted FROM conversation_status WHERE conversation_id = ?",
+        (conversation_id,)).fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+def set_ai_muted(conversation_id: str, muted: bool, channel: str = "whatsapp") -> None:
+    """Brief 213: takeover/handback. UPSERTs conversation_status with
+    ai_muted set, and stamps human_takeover_at when muting (NULL when
+    unmuting). Preserves whatever `status` value the row already had —
+    escalation status is independent from mute state."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    takeover_at = now if muted else None
+    conn.execute(
+        "INSERT INTO conversation_status "
+        "(conversation_id, channel, status, ai_muted, human_takeover_at, updated_at) "
+        "VALUES (?, ?, 'pending', ?, ?, ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET "
+        "ai_muted = excluded.ai_muted, "
+        "human_takeover_at = excluded.human_takeover_at, "
+        "updated_at = excluded.updated_at",
+        (conversation_id, channel, 1 if muted else 0, takeover_at, now))
+    conn.commit()
+    conn.close()
+
+
+def get_active_escalation_mode(conversation_id: str):
+    """Brief 213: return the mode ('soft' / 'hard') of the most recent
+    non-resolved escalation for this conversation, or None if none exist
+    or the most recent has no mode set (legacy rows)."""
+    if not conversation_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT mode FROM pending_notifications "
+        "WHERE customer_id = ? AND status != 'resolved' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (conversation_id,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
 def resolve_conversation_from_escalation(escalation_id: int) -> None:
     """Brief 188: when operator resolves an escalation, set conversation status
     to 'resolved' AND clear fully_escalated from booking state flags so the
@@ -1249,7 +1331,7 @@ def get_all_escalations() -> list:
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, notification_type, relay_token, channel, customer_id, "
-        "customer_name, subject, body, status, created_at "
+        "customer_name, subject, body, status, created_at, mode "
         "FROM pending_notifications ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
@@ -1275,6 +1357,7 @@ def get_all_escalations() -> list:
             "id": r[0], "notification_type": r[1], "relay_token": r[2],
             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
+            "mode": r[10],  # Brief 213: per-escalation soft/hard mode
             "contact_type": ct,
             "customer_contact": customer_contact,
             "customer_email": contact["email"],

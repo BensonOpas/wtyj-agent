@@ -277,6 +277,14 @@ def _day_matches(day_name, days_available):
     return day_name.lower() in days_available.lower()
 
 
+def _should_skip_marina_for_mute(from_email: str) -> bool:
+    """Brief 213: testable wrapper around the per-conversation mute check
+    used inside the for-uid loop. Returns True when this email's
+    conversation has been muted via operator takeover; the loop should
+    log + persist + mark seen + continue without calling marina_agent."""
+    return state_registry.get_ai_muted(from_email or "")
+
+
 def _build_action_context(th):
     """Build action_context string for the Claude prompt based on thread state."""
     flags = th.get("flags", {})
@@ -620,6 +628,17 @@ def main():
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "body": body,
                 })
+
+                # Brief 213: ai_muted gate. Inbound is now in th["messages"]
+                # so the operator sees the message; we skip Marina's reply
+                # (skips both fully_escalated and the normal Marina paths).
+                if _should_skip_marina_for_mute(from_email):
+                    log(f"email_ai_muted from={from_email[:40]} subj={subj[:40]}")
+                    th["last_activity"] = now
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    continue
 
                 # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
                 if th["flags"].get("fully_escalated"):
