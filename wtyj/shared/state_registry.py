@@ -299,6 +299,30 @@ def _get_conn():
         "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE"
         ")"
     )
+    # Brief 223: tasks.task_number (per-workspace stable integer for the
+    # TASK-### badge SR's frontend displays). Idempotent ALTER + backfill
+    # of pre-existing rows in chronological order so the oldest task is
+    # TASK-001. Placed AFTER the CREATE TABLE tasks block so the ALTER
+    # has a target on first init. Backfill runs on every _get_conn() call
+    # (matching the existing per-connection schema-init pattern); after
+    # the first run the SELECT returns zero rows and the if-guard
+    # short-circuits.
+    try:
+        conn.execute("ALTER TABLE tasks ADD COLUMN task_number INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    to_backfill = conn.execute(
+        "SELECT id FROM tasks WHERE task_number IS NULL ORDER BY created_at ASC"
+    ).fetchall()
+    if to_backfill:
+        cur_max = conn.execute(
+            "SELECT COALESCE(MAX(task_number), 0) FROM tasks"
+        ).fetchone()[0]
+        for offset, (row_id,) in enumerate(to_backfill, start=1):
+            conn.execute(
+                "UPDATE tasks SET task_number = ? WHERE id = ?",
+                (cur_max + offset, row_id))
+        conn.commit()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS content_drafts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -2970,13 +2994,19 @@ def customer_get_full(customer_id: int) -> dict:
 
 def tasks_create(task_id: str, body_html: str, body_text: str,
                  created_by: str, assigned_to: str) -> dict:
-    """Insert a new task. Returns the task dict (with empty attachments)."""
+    """Insert a new task. Returns the task dict (with empty attachments).
+    Brief 223: also allocates the next per-workspace task_number."""
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
+    next_num = conn.execute(
+        "SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks"
+    ).fetchone()[0]
     conn.execute(
         "INSERT INTO tasks (id, body_html, body_text, created_by, assigned_to, "
-        "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
-        (task_id, body_html, body_text, created_by, assigned_to, now, now)
+        "status, task_number, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+        (task_id, body_html, body_text, created_by, assigned_to,
+         next_num, now, now)
     )
     conn.commit()
     conn.close()
@@ -2984,11 +3014,12 @@ def tasks_create(task_id: str, body_html: str, body_text: str,
 
 
 def tasks_get(task_id: str):
-    """Fetch a single task with its attachments. Returns None if not found."""
+    """Fetch a single task with its attachments. Returns None if not found.
+    Brief 223: response includes task_number."""
     conn = _get_conn()
     row = conn.execute(
         "SELECT id, body_html, body_text, created_by, assigned_to, status, "
-        "completed_at, completed_by, created_at, updated_at "
+        "completed_at, completed_by, task_number, created_at, updated_at "
         "FROM tasks WHERE id = ?", (task_id,)
     ).fetchone()
     if not row:
@@ -3004,7 +3035,8 @@ def tasks_get(task_id: str):
         "id": row[0], "body_html": row[1], "body_text": row[2],
         "created_by": row[3], "assigned_to": row[4], "status": row[5],
         "completed_at": row[6], "completed_by": row[7],
-        "created_at": row[8], "updated_at": row[9],
+        "task_number": row[8],
+        "created_at": row[9], "updated_at": row[10],
         "attachments": [
             {"id": a[0], "file_name": a[1], "mime_type": a[2],
              "size_bytes": a[3], "stored_filename": a[4], "created_at": a[5]}

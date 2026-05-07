@@ -41,7 +41,9 @@ class UpdateStatusRequest(BaseModel):
 
 def _format_task(task):
     """Convert state_registry's snake_case task dict to the camelCase shape
-    SR's frontend expects, including attachment URLs."""
+    SR's frontend expects, including attachment URLs. Brief 223: now
+    includes the taskNumber field so the frontend overlay defers to the
+    backend-allocated number instead of localStorage."""
     if not task:
         return None
     return {
@@ -51,6 +53,7 @@ def _format_task(task):
         "createdBy": task["created_by"],
         "assignedTo": task["assigned_to"],
         "status": task["status"],
+        "taskNumber": task.get("task_number"),
         "createdAt": task["created_at"],
         "updatedAt": task["updated_at"],
         "completedAt": task["completed_at"],
