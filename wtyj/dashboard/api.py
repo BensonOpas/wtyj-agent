@@ -743,6 +743,36 @@ async def toggle_dry_run():
     return {"dry_run": not current}
 
 
+# --- Brief 217: Escalation alert settings ---
+
+class AlertChannelConfig(BaseModel):
+    enabled: bool = False
+    destination: str = ""
+
+
+class AlertSettingsRequest(BaseModel):
+    channels: dict[str, AlertChannelConfig]
+
+
+def _resolved_default_email() -> str:
+    biz = config_loader.get_business() or {}
+    return biz.get("support_email", "") or biz.get("email", "")
+
+
+@router.get("/settings/escalation-alerts", dependencies=[Depends(_check_auth)])
+async def get_alert_settings_endpoint():
+    return state_registry.get_alert_settings(
+        default_email_destination=_resolved_default_email())
+
+
+@router.put("/settings/escalation-alerts", dependencies=[Depends(_check_auth)])
+async def put_alert_settings_endpoint(req: AlertSettingsRequest):
+    channels_dict = {k: v.model_dump() for k, v in req.channels.items()}
+    state_registry.save_alert_settings(channels_dict)
+    return state_registry.get_alert_settings(
+        default_email_destination=_resolved_default_email())
+
+
 # --- Scheduling ---
 
 class ScheduleRequest(BaseModel):
@@ -1139,6 +1169,93 @@ async def get_customer_by_identifier(type_: str, value: str):
     if not cust:
         return None
     return state_registry.customer_get_full(cust["id"])
+
+
+# ── Brief 217: Escalation alert dispatcher ──────────────────────────────────
+# Hooked into state_registry.create_pending_notification (for escalation rows
+# only — relay rows are gated out). Best-effort: failure on any one channel
+# is recorded in alert_deliveries but does NOT raise — escalation row insert
+# always succeeds.
+
+def _fire_escalation_alerts(escalation_id: int, customer_name: str,
+                             channel: str, summary: str,
+                             mode: str = None) -> None:
+    """Brief 217: build the alert message, dispatch to enabled channels,
+    record delivery status per attempt. Never raises."""
+    try:
+        biz = config_loader.get_business() or {}
+        client_name = biz.get("name", "Unboks")
+        default_email = biz.get("support_email", "") or biz.get("email", "")
+    except Exception:
+        client_name = "Unboks"
+        default_email = ""
+
+    settings = state_registry.get_alert_settings(default_email_destination=default_email)
+    channels_cfg = settings.get("channels", {})
+
+    safe_summary = (summary or "")[:200]
+    mode_text = mode if mode in ("soft", "hard") else "(unset)"
+    alert_text = (
+        f"New escalation in {client_name}\n\n"
+        f"Customer: {customer_name or '(unknown)'}\n"
+        f"Channel: {channel or '(unknown)'}\n"
+        f"Mode: {mode_text}\n"
+        f"Summary: {safe_summary}\n"
+        f"Action: Open dashboard to review."
+    )
+
+    em = channels_cfg.get("email", {})
+    if em.get("enabled"):
+        dest = em.get("destination", "")
+        if dest in ("", "default"):
+            dest = default_email
+        if dest:
+            try:
+                smtp_send(dest, f"New escalation: {customer_name or 'customer'}", alert_text)
+                state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
+            except Exception as exc:
+                state_registry.record_alert_delivery(
+                    escalation_id, "email", dest, "failed", str(exc)[:200])
+        else:
+            state_registry.record_alert_delivery(
+                escalation_id, "email", "", "skipped",
+                "no email destination configured")
+
+    wa = channels_cfg.get("whatsapp", {})
+    if wa.get("enabled"):
+        dest = wa.get("destination", "")
+        if dest:
+            try:
+                ok = send_whatsapp_message(dest, alert_text)
+                if ok:
+                    state_registry.record_alert_delivery(escalation_id, "whatsapp", dest, "sent")
+                else:
+                    state_registry.record_alert_delivery(
+                        escalation_id, "whatsapp", dest, "failed",
+                        "send_whatsapp_message returned False")
+            except Exception as exc:
+                state_registry.record_alert_delivery(
+                    escalation_id, "whatsapp", dest, "failed", str(exc)[:200])
+        else:
+            state_registry.record_alert_delivery(
+                escalation_id, "whatsapp", "", "skipped",
+                "no whatsapp destination configured")
+
+    if channels_cfg.get("telegram", {}).get("enabled"):
+        state_registry.record_alert_delivery(
+            escalation_id, "telegram",
+            channels_cfg["telegram"].get("destination", ""),
+            "skipped", "telegram provider not configured")
+    if channels_cfg.get("messenger", {}).get("enabled"):
+        state_registry.record_alert_delivery(
+            escalation_id, "messenger",
+            channels_cfg["messenger"].get("destination", ""),
+            "skipped", "messenger provider not configured")
+
+
+# Brief 217: register the dispatcher with state_registry. Placed directly
+# after the function definition so the name resolves at module-load time.
+state_registry.set_alert_dispatcher(_fire_escalation_alerts)
 
 
 # ── Escalations ──────────────────────────────────────────────────────────────

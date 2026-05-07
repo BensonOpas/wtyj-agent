@@ -12,6 +12,22 @@ DB_PATH = os.path.join(
     "..", "data", "state_registry.db"
 )
 
+# Brief 217: optional callback set by dashboard.api at module-import time.
+# `dashboard.api` registers `_fire_escalation_alerts` here so that
+# create_pending_notification can fire alerts WITHOUT state_registry
+# having to import dashboard.api (would create a circular import).
+# When None, alert dispatch is silently skipped (e.g., state_registry
+# helper unit tests that don't load the dashboard router).
+_alert_dispatcher = None
+
+
+def set_alert_dispatcher(fn):
+    """Brief 217: dashboard.api registers _fire_escalation_alerts here at
+    import time. Decoupled callback so state_registry doesn't import
+    dashboard."""
+    global _alert_dispatcher
+    _alert_dispatcher = fn
+
 
 def _get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -325,6 +341,33 @@ def _get_conn():
         "created_by TEXT, "
         "created_at TEXT NOT NULL, "
         "updated_at TEXT NOT NULL"
+        ")"
+    )
+    # Brief 217: per-tenant alert settings (singleton row, fixed id=1).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS alert_settings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "email_enabled INTEGER NOT NULL DEFAULT 1, "
+        "email_destination TEXT NOT NULL DEFAULT '', "
+        "whatsapp_enabled INTEGER NOT NULL DEFAULT 0, "
+        "whatsapp_destination TEXT NOT NULL DEFAULT '', "
+        "telegram_enabled INTEGER NOT NULL DEFAULT 0, "
+        "telegram_destination TEXT NOT NULL DEFAULT '', "
+        "messenger_enabled INTEGER NOT NULL DEFAULT 0, "
+        "messenger_destination TEXT NOT NULL DEFAULT '', "
+        "updated_at TEXT NOT NULL DEFAULT ''"
+        ")"
+    )
+    # Brief 217: append-only audit log of alert delivery attempts.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS alert_deliveries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "escalation_id INTEGER, "
+        "channel TEXT NOT NULL, "
+        "destination TEXT NOT NULL DEFAULT '', "
+        "status TEXT NOT NULL, "
+        "error TEXT, "
+        "sent_at TEXT NOT NULL"
         ")"
     )
     conn.execute(
@@ -1199,6 +1242,15 @@ def create_pending_notification(notification_type: str, channel: str,
     conn.close()
     # Brief 188: escalation/relay created → conversation is now "open"
     set_conversation_status(customer_id, "open", channel)
+    # Brief 217: best-effort alert dispatch. Gated on notification_type ==
+    # 'escalation' so relay rows (Marina's "ask the team a question" flow)
+    # don't ping the operator. Wrapped in try/except so a dispatcher
+    # failure NEVER blocks the escalation row from being saved.
+    if notification_type == "escalation" and _alert_dispatcher is not None:
+        try:
+            _alert_dispatcher(row_id, customer_name, channel, subject)
+        except Exception:
+            pass
     return row_id
 
 
@@ -1295,6 +1347,89 @@ def get_active_escalation_mode(conversation_id: str):
         (conversation_id,)).fetchone()
     conn.close()
     return row[0] if row and row[0] else None
+
+
+# ── Brief 217: Alert settings + delivery audit ──
+
+def get_alert_settings(default_email_destination: str = "") -> dict:
+    """Brief 217: return the alert config in SR's frontend shape. If no
+    row exists yet, synthesize a default with email enabled + the given
+    default destination (typically business.support_email from
+    client.json). Caller passes the default; we don't reach into config
+    from here to keep state_registry agnostic.
+
+    The `"default"` sentinel is RESOLVED in the response — i.e., GET
+    returns the actual support_email value, not the literal string
+    "default" — so the frontend renders the real destination."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT email_enabled, email_destination, whatsapp_enabled, "
+        "whatsapp_destination, telegram_enabled, telegram_destination, "
+        "messenger_enabled, messenger_destination FROM alert_settings "
+        "WHERE id = 1").fetchone()
+    conn.close()
+    if not row:
+        return {
+            "channels": {
+                "email":     {"enabled": True,  "destination": default_email_destination or ""},
+                "whatsapp":  {"enabled": False, "destination": ""},
+                "telegram":  {"enabled": False, "destination": ""},
+                "messenger": {"enabled": False, "destination": ""},
+            }
+        }
+    # Resolve "default" sentinel for email destination
+    email_dest = row[1] or ""
+    if email_dest in ("", "default"):
+        email_dest = default_email_destination or ""
+    return {
+        "channels": {
+            "email":     {"enabled": bool(row[0]), "destination": email_dest},
+            "whatsapp":  {"enabled": bool(row[2]), "destination": row[3] or ""},
+            "telegram":  {"enabled": bool(row[4]), "destination": row[5] or ""},
+            "messenger": {"enabled": bool(row[6]), "destination": row[7] or ""},
+        }
+    }
+
+
+def save_alert_settings(channels: dict) -> None:
+    """Brief 217: upsert the singleton alert_settings row using
+    INSERT OR REPLACE on a fixed id=1. Atomic — no DELETE-then-INSERT
+    race window where a partial failure could leave the table empty."""
+    now = datetime.now(timezone.utc).isoformat()
+    em = channels.get("email", {}) or {}
+    wa = channels.get("whatsapp", {}) or {}
+    tg = channels.get("telegram", {}) or {}
+    ms = channels.get("messenger", {}) or {}
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO alert_settings "
+        "(id, email_enabled, email_destination, whatsapp_enabled, whatsapp_destination, "
+        "telegram_enabled, telegram_destination, messenger_enabled, messenger_destination, "
+        "updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (1 if em.get("enabled") else 0, em.get("destination", ""),
+         1 if wa.get("enabled") else 0, wa.get("destination", ""),
+         1 if tg.get("enabled") else 0, tg.get("destination", ""),
+         1 if ms.get("enabled") else 0, ms.get("destination", ""),
+         now))
+    conn.commit()
+    conn.close()
+
+
+def record_alert_delivery(escalation_id, channel: str, destination: str,
+                           status: str, error: str = None) -> int:
+    """Brief 217: append a row to alert_deliveries. status one of
+    'sent', 'failed', 'skipped'. Returns row id."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO alert_deliveries "
+        "(escalation_id, channel, destination, status, error, sent_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (escalation_id, channel, destination or "", status, error, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
 
 
 def resolve_conversation_from_escalation(escalation_id: int) -> None:
