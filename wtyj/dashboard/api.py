@@ -1918,10 +1918,19 @@ async def ai_editor(req: AIEditorRequest):
 
     prompt = _build_ai_editor_prompt(req.action, req.text.strip(),
                                      req.targetLanguage, req.style)
+    # Brief 221: translate uses Haiku for cost (used heavily by operator
+    # message-read translation; quality is more than adequate for decoding
+    # intent across the 6 v1 languages). Style + fix stay on Sonnet because
+    # they touch operator-authored drafts where brand voice matters.
+    model_id = (
+        "claude-haiku-4-5-20251001"
+        if req.action == "translate"
+        else "claude-sonnet-4-6"
+    )
     try:
         client = anthropic.Anthropic()
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model_id,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1933,5 +1942,5 @@ async def ai_editor(req: AIEditorRequest):
     if not rewritten:
         raise HTTPException(status_code=500, detail="AI editor returned empty result")
 
-    bm_logger.log("ai_editor_used", action=req.action, length=len(req.text))
+    bm_logger.log("ai_editor_used", action=req.action, length=len(req.text), model=model_id)
     return {"text": rewritten}
