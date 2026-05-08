@@ -484,6 +484,24 @@ def _get_conn():
         "updated_at TEXT NOT NULL DEFAULT ''"
         ")"
     )
+    # Brief 230: knowledge files (uploaded reference docs Marina reads when
+    # features.knowledge_files_in_prompt is true). One row per file. Text is
+    # extracted synchronously at upload time and stored here; the actual
+    # uploaded file lives on disk under wtyj/data/knowledge/.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS knowledge_files ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "filename TEXT NOT NULL, "
+        "stored_filename TEXT NOT NULL, "
+        "mime_type TEXT NOT NULL DEFAULT '', "
+        "size_bytes INTEGER NOT NULL DEFAULT 0, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "extracted_text TEXT NOT NULL DEFAULT '', "
+        "failure_reason TEXT NOT NULL DEFAULT '', "
+        "uploaded_at TEXT NOT NULL, "
+        "last_used_at TEXT"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS photo_library ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -1974,6 +1992,80 @@ def save_data_retention_settings(active_inbox_archive_after_days,
          audit_log_retention_months, now))
     conn.commit()
     conn.close()
+
+
+def knowledge_file_create(filename: str, stored_filename: str, mime_type: str,
+                           size_bytes: int, status: str, extracted_text: str,
+                           failure_reason: str = "") -> int:
+    """Brief 230: insert a knowledge_files row at upload time. Returns id."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO knowledge_files "
+        "(filename, stored_filename, mime_type, size_bytes, status, "
+        "extracted_text, failure_reason, uploaded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (filename, stored_filename, mime_type, size_bytes, status,
+         extracted_text, failure_reason, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def knowledge_files_list() -> list:
+    """Brief 230: return all knowledge files in SR's frontend shape
+    (camelCase, ISO timestamps). extracted_text + failure_reason are NOT
+    surfaced — operator UI doesn't need to render them."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, filename, mime_type, size_bytes, status, uploaded_at, "
+        "last_used_at FROM knowledge_files ORDER BY uploaded_at DESC"
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "id": str(r[0]),
+            "filename": r[1],
+            "mimeType": r[2] or "",
+            "sizeBytes": r[3],
+            "status": r[4],
+            "uploadedAt": r[5],
+            "lastUsedAt": r[6],
+        })
+    return out
+
+
+def knowledge_file_delete(file_id: int) -> Optional[str]:
+    """Brief 230: hard-delete a knowledge_files row. Returns the
+    stored_filename so the caller can also unlink the file from disk
+    (registry stays disk-agnostic). Returns None if the id doesn't exist."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT stored_filename FROM knowledge_files WHERE id = ?",
+        (file_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    stored = row[0]
+    conn.execute("DELETE FROM knowledge_files WHERE id = ?", (file_id,))
+    conn.commit()
+    conn.close()
+    return stored
+
+
+def get_knowledge_files_for_prompt(limit: int = 5) -> list:
+    """Brief 230: return up to `limit` ready knowledge files with their
+    extracted text, newest first. Used by Marina's _build_knowledge_files_block."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT filename, extracted_text FROM knowledge_files "
+        "WHERE status = 'ready' AND extracted_text != '' "
+        "ORDER BY uploaded_at DESC LIMIT ?",
+        (limit,)).fetchall()
+    conn.close()
+    return [{"filename": r[0], "text": r[1]} for r in rows]
 
 
 def get_pending_notifications(status: str = "pending") -> list:

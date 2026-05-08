@@ -942,6 +942,89 @@ async def data_retention_delete_customer():
                 "in a follow-up brief alongside cleanup automation."))
 
 
+# --- Brief 230: AI knowledge files Phase 1 ---
+# Upload + text extraction for PDF/DOCX/TXT. Files stored under
+# wtyj/data/knowledge/. Marina reads the extracted text via
+# features.knowledge_files_in_prompt (default OFF).
+
+_KNOWLEDGE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge")
+os.makedirs(_KNOWLEDGE_DIR, exist_ok=True)
+
+_KNOWLEDGE_MAX_BYTES = 25 * 1024 * 1024  # match SR's frontend cap
+
+
+@router.post("/knowledge/files", dependencies=[Depends(_check_auth)])
+async def upload_knowledge_file(file: UploadFile = File(...)):
+    """Brief 230: accept a file upload, store on disk, extract text
+    synchronously, return SR's KnowledgeFile shape."""
+    data = await file.read()
+    if len(data) > _KNOWLEDGE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {_KNOWLEDGE_MAX_BYTES // (1024*1024)} MB.")
+
+    from dashboard.knowledge_extract import extract
+    text, reason = extract(file.filename or "", file.content_type or "", data)
+    status = "ready" if text else "failed"
+
+    safe_ext = (os.path.splitext(file.filename or "")[1] or "").lower()
+    placeholder = f"knowledge_pending_{secrets.token_hex(8)}{safe_ext}"
+    tmp_path = os.path.join(_KNOWLEDGE_DIR, placeholder)
+    with open(tmp_path, "wb") as fh:
+        fh.write(data)
+
+    row_id = state_registry.knowledge_file_create(
+        filename=file.filename or "unknown",
+        stored_filename=placeholder,
+        mime_type=file.content_type or "",
+        size_bytes=len(data),
+        status=status,
+        extracted_text=text or "",
+        failure_reason=reason,
+    )
+
+    final_name = f"knowledge_{row_id}_{secrets.token_hex(4)}{safe_ext}"
+    final_path = os.path.join(_KNOWLEDGE_DIR, final_name)
+    os.rename(tmp_path, final_path)
+    conn = state_registry._get_conn()
+    conn.execute(
+        "UPDATE knowledge_files SET stored_filename = ? WHERE id = ?",
+        (final_name, row_id))
+    conn.commit()
+    conn.close()
+
+    bm_logger.log("knowledge_file_uploaded",
+                  file_id=row_id,
+                  status=status,
+                  size_bytes=len(data),
+                  filename=(file.filename or "")[:120])
+
+    files = state_registry.knowledge_files_list()
+    matching = next((f for f in files if f["id"] == str(row_id)), None)
+    return matching
+
+
+@router.get("/knowledge/files", dependencies=[Depends(_check_auth)])
+async def list_knowledge_files():
+    """Brief 230: return all knowledge files in SR's KnowledgeFile shape."""
+    return state_registry.knowledge_files_list()
+
+
+@router.delete("/knowledge/files/{file_id}",
+               dependencies=[Depends(_check_auth)])
+async def delete_knowledge_file(file_id: int):
+    """Brief 230: hard-delete a knowledge file (DB row + disk file)."""
+    stored = state_registry.knowledge_file_delete(file_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Knowledge file not found")
+    try:
+        os.remove(os.path.join(_KNOWLEDGE_DIR, stored))
+    except OSError:
+        pass
+    return {"ok": True, "id": file_id}
+
+
 # --- Scheduling ---
 
 class ScheduleRequest(BaseModel):

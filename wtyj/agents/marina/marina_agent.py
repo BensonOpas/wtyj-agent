@@ -395,6 +395,31 @@ def _build_info_updates_block() -> str:
     )
 
 
+def _build_knowledge_files_block() -> str:
+    """Brief 230: when features.knowledge_files_in_prompt is true and at
+    least one knowledge file has status='ready', inject the extracted
+    text as a KNOWLEDGE FILES section. Same leading-`\n\n` pattern as
+    Brief 219 / Brief 216 blocks so f-string spacing collapses cleanly
+    when off."""
+    features = config_loader.get_raw().get("features", {}) or {}
+    if not features.get("knowledge_files_in_prompt"):
+        return ""
+    try:
+        from shared import state_registry
+        files = state_registry.get_knowledge_files_for_prompt(limit=5)
+    except Exception:
+        return ""
+    if not files:
+        return ""
+    parts = ["KNOWLEDGE FILES (uploaded reference documents — use these as "
+             "factual context when answering customer questions):"]
+    for f in files:
+        parts.append(f"\n--- {f['filename']} ---")
+        text = (f.get("text") or "")[:3000]
+        parts.append(text)
+    return "\n\n" + "\n".join(parts)
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -552,12 +577,13 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _customer_file_block = _build_customer_file_block(customer_file)
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
+    _knowledge_files_block = _build_knowledge_files_block()
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block()}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}
 
 {writing_style_block}
 
