@@ -407,6 +407,16 @@ def _get_conn():
         "updated_at TEXT NOT NULL DEFAULT ''"
         ")"
     )
+    # Brief 226: alternative email destination for escalation alerts. Optional
+    # second recipient that receives a copy of every email alert. ALTER instead
+    # of expanding CREATE TABLE so existing tenant DBs migrate without a drop.
+    try:
+        conn.execute(
+            "ALTER TABLE alert_settings "
+            "ADD COLUMN email_alternative_destination TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Brief 217: append-only audit log of alert delivery attempts.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS alert_deliveries ("
@@ -1466,11 +1476,11 @@ def get_human_takeover_at(conversation_id: str):
 # ── Brief 217: Alert settings + delivery audit ──
 
 def get_alert_settings(default_email_destination: str = "") -> dict:
-    """Brief 217: return the alert config in SR's frontend shape. If no
-    row exists yet, synthesize a default with email enabled + the given
-    default destination (typically business.support_email from
-    client.json). Caller passes the default; we don't reach into config
-    from here to keep state_registry agnostic.
+    """Brief 217 + 226: return the alert config in SR's frontend shape.
+    Channels.email always carries an `alternativeDestination` field (empty
+    string when not configured). If no row exists yet, synthesize a default
+    with email enabled + the given default destination (typically
+    business.support_email from client.json).
 
     The `"default"` sentinel is RESOLVED in the response — i.e., GET
     returns the actual support_email value, not the literal string
@@ -1479,25 +1489,30 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
     row = conn.execute(
         "SELECT email_enabled, email_destination, whatsapp_enabled, "
         "whatsapp_destination, telegram_enabled, telegram_destination, "
-        "messenger_enabled, messenger_destination FROM alert_settings "
+        "messenger_enabled, messenger_destination, "
+        "email_alternative_destination FROM alert_settings "
         "WHERE id = 1").fetchone()
     conn.close()
     if not row:
         return {
             "channels": {
-                "email":     {"enabled": True,  "destination": default_email_destination or ""},
+                "email":     {"enabled": True,  "destination": default_email_destination or "",
+                              "alternativeDestination": ""},
                 "whatsapp":  {"enabled": False, "destination": ""},
                 "telegram":  {"enabled": False, "destination": ""},
                 "messenger": {"enabled": False, "destination": ""},
             }
         }
-    # Resolve "default" sentinel for email destination
     email_dest = row[1] or ""
     if email_dest in ("", "default"):
         email_dest = default_email_destination or ""
     return {
         "channels": {
-            "email":     {"enabled": bool(row[0]), "destination": email_dest},
+            "email":     {
+                "enabled": bool(row[0]),
+                "destination": email_dest,
+                "alternativeDestination": row[8] or "",
+            },
             "whatsapp":  {"enabled": bool(row[2]), "destination": row[3] or ""},
             "telegram":  {"enabled": bool(row[4]), "destination": row[5] or ""},
             "messenger": {"enabled": bool(row[6]), "destination": row[7] or ""},
@@ -1506,9 +1521,11 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
 
 
 def save_alert_settings(channels: dict) -> None:
-    """Brief 217: upsert the singleton alert_settings row using
+    """Brief 217 + 226: upsert the singleton alert_settings row using
     INSERT OR REPLACE on a fixed id=1. Atomic — no DELETE-then-INSERT
-    race window where a partial failure could leave the table empty."""
+    race window where a partial failure could leave the table empty.
+    channels.email.alternativeDestination persists in
+    email_alternative_destination column."""
     now = datetime.now(timezone.utc).isoformat()
     em = channels.get("email", {}) or {}
     wa = channels.get("whatsapp", {}) or {}
@@ -1519,11 +1536,13 @@ def save_alert_settings(channels: dict) -> None:
         "INSERT OR REPLACE INTO alert_settings "
         "(id, email_enabled, email_destination, whatsapp_enabled, whatsapp_destination, "
         "telegram_enabled, telegram_destination, messenger_enabled, messenger_destination, "
-        "updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "email_alternative_destination, updated_at) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (1 if em.get("enabled") else 0, em.get("destination", ""),
          1 if wa.get("enabled") else 0, wa.get("destination", ""),
          1 if tg.get("enabled") else 0, tg.get("destination", ""),
          1 if ms.get("enabled") else 0, ms.get("destination", ""),
+         em.get("alternativeDestination", "") or "",
          now))
     conn.commit()
     conn.close()

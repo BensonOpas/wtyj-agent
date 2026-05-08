@@ -13,7 +13,7 @@ import anthropic
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
@@ -748,6 +748,22 @@ async def toggle_dry_run():
 class AlertChannelConfig(BaseModel):
     enabled: bool = False
     destination: str = ""
+    # Brief 226: alternative email destination. Only used by the email channel;
+    # ignored on whatsapp/telegram/messenger. Empty string = not configured.
+    alternativeDestination: str = ""
+
+    @field_validator("alternativeDestination")
+    @classmethod
+    def _validate_alternative(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return ""
+        if "@" not in v:
+            raise ValueError("alternativeDestination must be a valid email address")
+        local, _, domain = v.partition("@")
+        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+            raise ValueError("alternativeDestination must be a valid email address")
+        return v
 
 
 class AlertSettingsRequest(BaseModel):
@@ -1368,20 +1384,31 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
 
     em = channels_cfg.get("email", {})
     if em.get("enabled"):
-        dest = em.get("destination", "")
-        if dest in ("", "default"):
-            dest = default_email
-        if dest:
-            try:
-                smtp_send(dest, f"New escalation: {customer_name or 'customer'}", alert_text)
-                state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
-            except Exception as exc:
-                state_registry.record_alert_delivery(
-                    escalation_id, "email", dest, "failed", str(exc)[:200])
-        else:
+        primary = em.get("destination", "")
+        if primary in ("", "default"):
+            primary = default_email
+        alternative = (em.get("alternativeDestination") or "").strip()
+
+        # Brief 226: build recipient list — primary first, then alternative if
+        # set. Each recipient gets its own delivery row (best-effort independent).
+        recipients = []
+        if primary:
+            recipients.append(primary)
+        if alternative and alternative != primary:
+            recipients.append(alternative)
+
+        if not recipients:
             state_registry.record_alert_delivery(
                 escalation_id, "email", "", "skipped",
                 "no email destination configured")
+        else:
+            for dest in recipients:
+                try:
+                    smtp_send(dest, f"New escalation: {customer_name or 'customer'}", alert_text)
+                    state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
+                except Exception as exc:
+                    state_registry.record_alert_delivery(
+                        escalation_id, "email", dest, "failed", str(exc)[:200])
 
     wa = channels_cfg.get("whatsapp", {})
     if wa.get("enabled"):
