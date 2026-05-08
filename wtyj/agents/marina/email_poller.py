@@ -128,7 +128,7 @@ def _cleanup_stale_data(state, now):
     threads = state.get("threads", {})
     to_delete = []
     for tk, th in threads.items():
-        last = th.get("last_activity") or 0
+        last_raw = th.get("last_activity") or 0
         flags = th.get("flags", {})
         # Brief 162: skip if any protection flag is set
         if flags.get("hold_created"):
@@ -136,8 +136,20 @@ def _cleanup_stale_data(state, now):
         if flags.get("awaiting_relay"):
             continue
         # Brief 162: missing or zero last_activity => unknown, don't archive
-        if not last:
+        if not last_raw:
             continue
+        # Brief 231: dashboard write paths (email_append_assistant_message,
+        # email_mark_deleted) store last_activity as an ISO 8601 string;
+        # the legacy email_poller paths store a numeric epoch. Accept both.
+        # Malformed strings fall through to "don't archive" per Brief 162's
+        # defensive principle (treat unknown as unknown, not as ancient).
+        if isinstance(last_raw, str):
+            try:
+                last = datetime.fromisoformat(last_raw).timestamp()
+            except (ValueError, TypeError):
+                continue
+        else:
+            last = last_raw
         if last < cutoff:
             to_delete.append(tk)
     if to_delete:
