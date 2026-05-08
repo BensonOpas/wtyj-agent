@@ -115,6 +115,24 @@ def save_json(path, obj):
 
 # sha, normalize_subject — moved to email_adapter.py (Brief 189)
 
+def _un_archive_thread_if_deleted(th: dict) -> bool:
+    """Brief 232: when a fresh inbound message arrives on a thread that was
+    previously archived (flags.deleted=true via Brief 218's dashboard delete
+    button), pop the flag so email_list_conversations stops filtering it out.
+    Returns True if the flag was cleared (i.e., this thread was un-archived),
+    False otherwise.
+
+    Caller must have already short-circuited blocked conversations — block
+    always wins per SR's spec (task 93328e8039e1). This function is
+    block-agnostic; it only handles the deleted-flag transition.
+    """
+    flags = th.setdefault("flags", {})
+    if flags.get("deleted"):
+        flags.pop("deleted", None)
+        return True
+    return False
+
+
 def _cleanup_stale_data(state, now):
     """Prune threads >30d old (no active hold, no pending relay) and trim processed_hashes.
 
@@ -645,6 +663,15 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     continue
+
+                # Brief 232: archive auto-restore. If this thread was
+                # archived (flags.deleted=true via dashboard delete button,
+                # Brief 218), a fresh inbound message from the customer
+                # restores it to active. Block check above has already
+                # short-circuited blocked conversations, so this only runs
+                # on non-blocked threads — block always wins per SR's spec.
+                if _un_archive_thread_if_deleted(th):
+                    log(f"email_thread_restored from={from_email[:50]} thread={thread_key[:60]}")
 
                 # Append inbound message to chat log
                 th.setdefault("messages", [])
