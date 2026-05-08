@@ -477,3 +477,7 @@ Never say "run this command" without specifying which machine.
 7. **Config caching** — `config_loader.get_raw()` returns a mutable dict. Modifying it in tests leaks between tests.
 8. **CLIENT_CONFIG_PATH env var** — set in conftest.py for Mac dev tests so config_loader finds the moved client.json. Inside the container, the legacy default still resolves correctly.
 9. **Use `trash` not `rm`** — macOS has `/usr/bin/trash`. Always use it for file deletions.
+
+### Brief 230 dependency
+- `pypdf==4.3.1` added to requirements.txt (production rebuild needed once; subsequent deploys reuse the cached layer).
+- Knowledge files persist under `/root/clients/{tenant}/data/knowledge/` on the VPS via the existing data volume mount.
