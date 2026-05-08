@@ -874,6 +874,74 @@ async def delete_info_update_endpoint(update_id: int):
     return {"ok": True, "id": update_id}
 
 
+# --- Brief 229: Data retention settings ---
+# Storage + GET/PUT only this brief. Cleanup automation (archive-now,
+# export, delete-customer-data) returns 501 — implementation lives in
+# a future brief that handles actual data destruction safely.
+
+from typing import Literal
+
+
+class DataRetentionUpdate(BaseModel):
+    activeInboxArchiveAfterDays: Literal[30, 60, 90, 180, None] = 90
+    archiveRetentionMonths: Literal[12, 24, 36, 60, None] = 24
+    endOfRetentionAction: Literal["anonymize", "delete", "keep"] = "anonymize"
+    keepApprovedLearnings: bool = True
+    auditLogRetentionMonths: Literal[12, 24, 36, 60] = 24
+
+
+@router.get("/settings/data-retention", dependencies=[Depends(_check_auth)])
+async def get_data_retention():
+    """Brief 229: return retention settings in SR's expected shape."""
+    return state_registry.get_data_retention_settings()
+
+
+@router.put("/settings/data-retention", dependencies=[Depends(_check_auth)])
+async def put_data_retention(req: DataRetentionUpdate):
+    """Brief 229: persist retention settings. Pydantic Literal types
+    enforce discrete value sets — invalid values return 422."""
+    state_registry.save_data_retention_settings(
+        active_inbox_archive_after_days=req.activeInboxArchiveAfterDays,
+        archive_retention_months=req.archiveRetentionMonths,
+        end_of_retention_action=req.endOfRetentionAction,
+        keep_approved_learnings=req.keepApprovedLearnings,
+        audit_log_retention_months=req.auditLogRetentionMonths,
+    )
+    return state_registry.get_data_retention_settings()
+
+
+@router.post("/data-retention/archive-now",
+             dependencies=[Depends(_check_auth)])
+async def data_retention_archive_now():
+    """Brief 229: not implemented yet — cleanup automation lives in a
+    future brief. Honest 501 per SR's 'No fake success' rule."""
+    raise HTTPException(
+        status_code=501,
+        detail=("Cleanup automation not implemented yet. Settings are "
+                "stored. Archive will run when the cleanup job ships in "
+                "a follow-up brief."))
+
+
+@router.post("/data-retention/export",
+             dependencies=[Depends(_check_auth)])
+async def data_retention_export():
+    """Brief 229: not implemented yet."""
+    raise HTTPException(
+        status_code=501,
+        detail=("Data export not implemented yet. Will ship in a "
+                "follow-up brief alongside cleanup automation."))
+
+
+@router.post("/data-retention/delete-customer-data",
+             dependencies=[Depends(_check_auth)])
+async def data_retention_delete_customer():
+    """Brief 229: not implemented yet."""
+    raise HTTPException(
+        status_code=501,
+        detail=("Customer data deletion not implemented yet. Will ship "
+                "in a follow-up brief alongside cleanup automation."))
+
+
 # --- Scheduling ---
 
 class ScheduleRequest(BaseModel):

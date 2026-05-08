@@ -470,6 +470,20 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Brief 229: data retention settings (singleton row, fixed id=1).
+    # Active inbox archive threshold + archive retention + end-of-retention
+    # action + keep-approved-learnings + audit log retention.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS data_retention_settings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "active_inbox_archive_after_days INTEGER, "
+        "archive_retention_months INTEGER, "
+        "end_of_retention_action TEXT NOT NULL DEFAULT 'anonymize', "
+        "keep_approved_learnings INTEGER NOT NULL DEFAULT 1, "
+        "audit_log_retention_months INTEGER NOT NULL DEFAULT 24, "
+        "updated_at TEXT NOT NULL DEFAULT ''"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS photo_library ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -1904,6 +1918,62 @@ def appointments_list() -> list:
             "updatedAt": r[11],
         })
     return out
+
+
+def get_data_retention_settings() -> dict:
+    """Brief 229: return retention settings in SR's frontend shape
+    (camelCase, status.policyActive=false until cleanup is implemented).
+    Synthesizes a default row when none exists yet — defaults match
+    SR's `DEFAULT_DATA_RETENTION` constant verbatim."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT active_inbox_archive_after_days, archive_retention_months, "
+        "end_of_retention_action, keep_approved_learnings, "
+        "audit_log_retention_months FROM data_retention_settings WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {
+            "activeInboxArchiveAfterDays": 90,
+            "archiveRetentionMonths": 24,
+            "endOfRetentionAction": "anonymize",
+            "keepApprovedLearnings": True,
+            "auditLogRetentionMonths": 24,
+            "status": {"policyActive": False},
+        }
+    return {
+        "activeInboxArchiveAfterDays": row[0],
+        "archiveRetentionMonths": row[1],
+        "endOfRetentionAction": row[2] or "anonymize",
+        "keepApprovedLearnings": bool(row[3]),
+        "auditLogRetentionMonths": row[4] or 24,
+        "status": {"policyActive": False},
+    }
+
+
+def save_data_retention_settings(active_inbox_archive_after_days,
+                                  archive_retention_months,
+                                  end_of_retention_action: str,
+                                  keep_approved_learnings: bool,
+                                  audit_log_retention_months: int) -> None:
+    """Brief 229: upsert the singleton retention settings row at id=1
+    (mirrors Brief 217's INSERT OR REPLACE pattern). Caller is
+    responsible for validating discrete value sets — this helper trusts
+    its inputs."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO data_retention_settings "
+        "(id, active_inbox_archive_after_days, archive_retention_months, "
+        "end_of_retention_action, keep_approved_learnings, "
+        "audit_log_retention_months, updated_at) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?)",
+        (active_inbox_archive_after_days, archive_retention_months,
+         end_of_retention_action,
+         1 if keep_approved_learnings else 0,
+         audit_log_retention_months, now))
+    conn.commit()
+    conn.close()
 
 
 def get_pending_notifications(status: str = "pending") -> list:
