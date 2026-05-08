@@ -205,6 +205,11 @@ def _flush_buffer(phone):
             _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
             _zernio_sender = final_msg.get("_zernio_sender_name", "")
             if _zernio_conv:
+                # Brief 220: per-conversation runtime block. Drop BEFORE
+                # storage so the conversation doesn't appear in the inbox.
+                if state_registry.get_blocked(_zernio_conv):
+                    log("whatsapp_zernio_blocked_conversation", conversation_id=_zernio_conv[:20])
+                    return  # exits the with _phone_lock block
                 # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
                 if state_registry.get_ai_muted(_zernio_conv):
                     state_registry.dm_store_message(
@@ -253,6 +258,10 @@ def _flush_buffer(phone):
                         text=reply_text,
                     )
             else:
+                # Brief 220: per-conversation runtime block (Meta-legacy WhatsApp path).
+                if state_registry.get_blocked(phone):
+                    log("whatsapp_meta_blocked_conversation", phone=phone[:20])
+                    return
                 # Brief 213: ai_muted check for Meta legacy WhatsApp.
                 if state_registry.get_ai_muted(phone):
                     state_registry.wa_store_message(phone, "user", combined_text)
@@ -331,6 +340,16 @@ def _process_zernio_event(payload: dict):
                         sender=sender_digits,
                         message_id=message_id)
                     return
+
+        # Brief 220: per-conversation runtime block. Mirrors ignored_phones
+        # (which runs above, statically configured) but works on a
+        # dashboard-controlled per-conversation_id flag. Drop BEFORE any
+        # storage so the conversation doesn't appear in the inbox.
+        if state_registry.get_blocked(msg.get("conversation_id", "")):
+            log("zernio_dm_blocked_conversation",
+                conversation_id=msg.get("conversation_id", "")[:20],
+                message_id=message_id)
+            return
 
         text = msg.get("text", "")
         if not text:

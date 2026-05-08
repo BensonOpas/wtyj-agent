@@ -271,6 +271,15 @@ def _get_conn():
         conn.execute("ALTER TABLE conversation_status ADD COLUMN human_takeover_at TEXT")
     except sqlite3.OperationalError:
         pass
+    # Brief 220: conversation_status.blocked (per-conversation drop flag,
+    # operator-controlled via dashboard). Different from ai_muted: blocked
+    # drops the inbound BEFORE any storage so the conversation doesn't
+    # appear in the inbox at all; ai_muted stores then skips Marina so
+    # operator still sees it.
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     # Brief 207: tasks shared between Calvin and Jr (operator-side workflow,
     # not customer-facing). Per-tenant SQLite isolation matches existing tables.
     conn.execute(
@@ -1355,6 +1364,55 @@ def set_ai_muted(conversation_id: str, muted: bool, channel: str = "whatsapp") -
         (conversation_id, channel, 1 if muted else 0, takeover_at, now))
     conn.commit()
     conn.close()
+
+
+def set_blocked(conversation_id: str, blocked: bool, channel: str = ""):
+    """Brief 220: flip the per-conversation blocked flag. Different from
+    ai_muted: blocked drops inbound messages BEFORE any storage so the
+    conversation doesn't appear in the dashboard inbox at all.
+    UPSERT pattern matching set_ai_muted; channel is required for INSERT
+    but ignored on UPDATE (existing rows keep their channel)."""
+    if not conversation_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO conversation_status "
+        "(conversation_id, channel, status, blocked, updated_at) "
+        "VALUES (?, ?, 'pending', ?, ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET "
+        "blocked = excluded.blocked, updated_at = excluded.updated_at",
+        (conversation_id, channel or "", 1 if blocked else 0, now))
+    conn.commit()
+    conn.close()
+
+
+def get_blocked(conversation_id: str) -> bool:
+    """Brief 220: return True if this conversation is blocked. Hot path,
+    called on every customer-message ingestion. Single-row PK lookup."""
+    if not conversation_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT blocked FROM conversation_status WHERE conversation_id = ?",
+        (conversation_id,)).fetchone()
+    conn.close()
+    return bool(row[0]) if row else False
+
+
+def list_blocked_conversations() -> list:
+    """Brief 220: return all currently-blocked conversations for the
+    dashboard's Settings → Blocked Conversations management list.
+    Each row carries camelCase keys: conversationId, channel, updatedAt."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT conversation_id, channel, updated_at FROM conversation_status "
+        "WHERE blocked = 1 ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    return [
+        {"conversationId": r[0], "channel": r[1] or "", "updatedAt": r[2]}
+        for r in rows
+    ]
 
 
 def get_active_escalation_mode(conversation_id: str):

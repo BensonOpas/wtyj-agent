@@ -1406,6 +1406,40 @@ async def handback_escalation(escalation_id: int):
     return refreshed or {"ok": True}
 
 
+# ── Brief 220: Block conversation (per-conversation runtime drop) ────────────
+
+@router.post("/messages/conversations/{conversation_id:path}/block",
+             dependencies=[Depends(_check_auth)])
+async def block_conversation(conversation_id: str):
+    """Brief 220: silence this conversation. Future messages from this
+    conversation_id will be dropped at webhook ingestion before any
+    storage call, so the conversation does NOT appear in the inbox."""
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id required")
+    state_registry.set_blocked(conversation_id, True)
+    bm_logger.log("conversation_blocked", conversation_id=conversation_id[:50])
+    return {"ok": True, "conversationId": conversation_id, "blocked": True}
+
+
+@router.post("/messages/conversations/{conversation_id:path}/unblock",
+             dependencies=[Depends(_check_auth)])
+async def unblock_conversation(conversation_id: str):
+    """Brief 220: clear the block flag so future messages flow normally."""
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id required")
+    state_registry.set_blocked(conversation_id, False)
+    bm_logger.log("conversation_unblocked", conversation_id=conversation_id[:50])
+    return {"ok": True, "conversationId": conversation_id, "blocked": False}
+
+
+@router.get("/settings/blocked-conversations",
+            dependencies=[Depends(_check_auth)])
+async def get_blocked_conversations_endpoint():
+    """Brief 220: list of currently-blocked conversations for the
+    Settings → Blocked Conversations management list."""
+    return {"conversations": state_registry.list_blocked_conversations()}
+
+
 # ── Manual Draft Creation ────────────────────────────────────────────────────
 
 class ManualDraftRequest(BaseModel):

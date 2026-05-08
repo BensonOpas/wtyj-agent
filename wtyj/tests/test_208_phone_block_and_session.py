@@ -59,6 +59,11 @@ def test_non_ignored_phone_proceeds(mock_typing, mock_parse, mock_config, mock_s
         "text": "hello",
     }
     mock_state.wa_has_been_processed.return_value = False
+    # Brief 220: state_registry.get_blocked must return False so the new
+    # block check (added after the ignored_phones check) doesn't drop
+    # this otherwise-allowed message. Mock state defaults to MagicMock,
+    # which is truthy — this stub is required for the regression guard.
+    mock_state.get_blocked.return_value = False
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
     _process_zernio_event({"event": "message.received", "data": {}})

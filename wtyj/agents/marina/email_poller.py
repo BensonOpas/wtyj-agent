@@ -621,6 +621,19 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     continue
 
+                # Brief 220: per-conversation runtime block (email path).
+                # from_email is the conversation_id for email channel.
+                # Drop BEFORE the th["messages"].append so the operator
+                # never sees this message in the inbox. Mark IMAP as seen
+                # so the poller doesn't loop on it.
+                if state_registry.get_blocked(from_email):
+                    log(f"email_blocked_conversation from={from_email[:50]}")
+                    th["last_activity"] = now
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    continue
+
                 # Append inbound message to chat log
                 th.setdefault("messages", [])
                 th["messages"].append({
