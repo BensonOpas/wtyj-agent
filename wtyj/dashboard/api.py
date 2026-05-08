@@ -1478,13 +1478,42 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
     except Exception:
         history = []
 
-    return _esc_summary.generate_summary(
+    summary_dict = _esc_summary.generate_summary(
         channel=channel,
         customer_id=customer_id,
         customer_name=customer_name,
         mode=mode,
         history=history,
     )
+
+    # Brief 228: best-effort appointment row write. Only fires when the
+    # summary indicates scheduling intent. Failure here never blocks
+    # summary persistence (caller's outer try/except already handles it).
+    if summary_dict:
+        try:
+            details = (summary_dict.get("extractedDetails") or {})
+            if details.get("intent") == "scheduling":
+                proposed = details.get("proposedTimes") or []
+                topic = details.get("topic") or "Meeting"
+                if channel == "email":
+                    thread_key = state_registry._find_email_thread_key_for(customer_id)
+                    conv_id = f"email::{thread_key}" if thread_key else customer_id
+                else:
+                    conv_id = customer_id
+                status = ("pending_team_confirmation"
+                          if proposed else "detected")
+                state_registry.appointment_upsert(
+                    conversation_id=conv_id,
+                    channel=channel,
+                    customer_name=customer_name or "",
+                    title=topic,
+                    proposed_times=proposed,
+                    status=status,
+                )
+        except Exception:
+            pass
+
+    return summary_dict
 
 
 state_registry.set_summary_dispatcher(_generate_escalation_summary)
@@ -1503,6 +1532,15 @@ async def list_escalations(mode: str = None):
     if mode in ("soft", "hard"):
         rows = [r for r in rows if r.get("mode") == mode]
     return rows
+
+
+@router.get("/appointments", dependencies=[Depends(_check_auth)])
+async def list_appointments_endpoint():
+    """Brief 228: return all appointments. Frontend's `useAppointments`
+    expects this shape (camelCase). Empty array if no appointments yet.
+    Returns under both `items` and `appointments` keys for envelope flex."""
+    items = state_registry.appointments_list()
+    return {"items": items, "appointments": items}
 
 
 @router.get("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])

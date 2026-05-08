@@ -452,6 +452,24 @@ def _get_conn():
         "sent_at TEXT NOT NULL"
         ")"
     )
+    # Brief 228: appointments — derived from escalation summaries when
+    # intent=='scheduling'. One row per conversation_id (upsert on duplicate).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS appointments ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "conversation_id TEXT NOT NULL UNIQUE, "
+        "channel TEXT NOT NULL, "
+        "customer_name TEXT NOT NULL DEFAULT '', "
+        "title TEXT NOT NULL DEFAULT '', "
+        "date_time_label TEXT NOT NULL DEFAULT '', "
+        "proposed_times_json TEXT NOT NULL DEFAULT '[]', "
+        "location TEXT NOT NULL DEFAULT '', "
+        "status TEXT NOT NULL DEFAULT 'detected', "
+        "source TEXT NOT NULL DEFAULT 'conversation', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS photo_library ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -1812,6 +1830,80 @@ def get_active_escalation_summary_for(customer_id: str) -> Optional[dict]:
         return json.loads(row[0])
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
+                       title: str, proposed_times: list, location: str = "",
+                       status: str = "detected") -> int:
+    """Brief 228: upsert an appointment row keyed on conversation_id.
+    proposed_times is a list of strings; we store JSON and pick the first
+    one for date_time_label (frontend uses that as the headline)."""
+    if not conversation_id:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    pt = proposed_times or []
+    label = pt[0] if pt else ""
+    conn = _get_conn()
+    existing = conn.execute(
+        "SELECT id FROM appointments WHERE conversation_id = ?",
+        (conversation_id,)).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE appointments SET channel = ?, customer_name = ?, "
+            "title = ?, date_time_label = ?, proposed_times_json = ?, "
+            "location = ?, status = ?, updated_at = ? "
+            "WHERE id = ?",
+            (channel, customer_name, title, label, json.dumps(pt),
+             location, status, now, existing[0]))
+        row_id = existing[0]
+    else:
+        cur = conn.execute(
+            "INSERT INTO appointments "
+            "(conversation_id, channel, customer_name, title, date_time_label, "
+            "proposed_times_json, location, status, source, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'conversation', ?, ?)",
+            (conversation_id, channel, customer_name, title, label,
+             json.dumps(pt), location, status, now, now))
+        row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def appointments_list() -> list:
+    """Brief 228: return all appointments newest-updated first, in the
+    shape SR's frontend expects (camelCase, ISO timestamps).
+    proposed_times_json is parsed and surfaced as proposedTimes for
+    detail views; date_time_label is the headline string."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, conversation_id, channel, customer_name, title, "
+        "date_time_label, proposed_times_json, location, status, source, "
+        "created_at, updated_at "
+        "FROM appointments ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            proposed = json.loads(r[6]) if r[6] else []
+        except (json.JSONDecodeError, TypeError):
+            proposed = []
+        out.append({
+            "id": str(r[0]),
+            "conversationId": r[1],
+            "channel": r[2],
+            "customerName": r[3] or "",
+            "title": r[4] or "Appointment",
+            "dateTimeLabel": r[5] or "",
+            "proposedTimes": proposed,
+            "location": r[7] or None,
+            "status": r[8],
+            "source": r[9] or "conversation",
+            "createdAt": r[10],
+            "updatedAt": r[11],
+        })
+    return out
 
 
 def get_pending_notifications(status: str = "pending") -> list:
