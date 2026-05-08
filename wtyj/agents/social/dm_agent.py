@@ -15,6 +15,48 @@ _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
 
 
+def _build_dm_approved_answers_block(channel: str) -> str:
+    """Brief 234: mirror of marina_agent._build_approved_answers_block for
+    the IG/FB DM path. Returns an APPROVED ANSWERS prompt block listing
+    recent operator-curated learnings for this channel, or '' when the
+    tenant hasn't opted in or no learnings match.
+
+    Returned without a leading '\n\n' because the caller joins parts
+    with '\n\n'.join(...) — the joiner handles spacing. Tenant opt-in
+    via client.json::features.approved_learnings_in_prompt (default
+    false). Channel filter is exact-string match so Instagram and
+    Facebook learning pools stay isolated."""
+    features = config_loader.get_raw().get("features", {}) or {}
+    if not features.get("approved_learnings_in_prompt"):
+        return ""
+    try:
+        rows = state_registry.get_approved_learnings_for_prompt(channel, limit=20)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    pairs = []
+    for r in rows:
+        q = (r.get("question") or "").strip()
+        a = (r.get("answer") or "").strip()
+        if not a:
+            continue
+        if q:
+            pairs.append(f"Q: {q}\nA: {a}")
+        else:
+            pairs.append(f"A: {a}")
+    if not pairs:
+        return ""
+    return (
+        "APPROVED ANSWERS (operator-curated knowledge):\n"
+        "The team has previously answered similar customer questions on this "
+        "channel. Use these as authoritative context, they reflect how the "
+        "human team wants you to handle these situations going forward. Match "
+        "the spirit; do not copy verbatim if the customer phrasing differs.\n\n"
+        + "\n\n".join(pairs)
+    )
+
+
 def _build_dm_system_prompt(channel: str) -> str:
     """Build a Q&A-focused system prompt for DM channels. No booking logic.
     Brief 203: when client.json's agent_persona.freeform_notes is set, the
@@ -85,6 +127,11 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
     emoji_block = "Emojis: sparingly, only if the customer used them first."
     output_rule = "Reply with ONLY your message text. No JSON. No code fences. No metadata. Just the reply."
 
+    # Brief 234: optional APPROVED ANSWERS block (gated on
+    # features.approved_learnings_in_prompt). Computed once, used by
+    # both the master_prompt branch and the fallback branch below.
+    approved_answers_block = _build_dm_approved_answers_block(channel)
+
     if master_prompt:
         # Brief 203: master prompt mode. Drop the "friendly, casual, and human"
         # tone tail (qa_role_short, not qa_role_full) so master prompt's own
@@ -92,7 +139,10 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         # paragraph (no wrapper — it has its own internal section headers).
         # Brief 206: only include BOOKING REDIRECT block when booking_flow is
         # true. Non-booking tenants don't have bookings to redirect to.
-        parts = [intro, qa_role_short, master_prompt, services_block, faq_block]
+        parts = [intro, qa_role_short, master_prompt]
+        if approved_answers_block:
+            parts.append(approved_answers_block)
+        parts.extend([services_block, faq_block])
         if booking_flow:
             parts.append(booking_redirect_block)
         parts.extend([language_block, emoji_block, output_rule])
@@ -110,18 +160,15 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
 - When listing {service_label}s, give names and brief descriptions. Only include prices if asked."""
     avoid_block = "AVOID: em dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\", \"Nice choice\", \"Amazing\", \"Absolutely\", \"certainly\", \"wonderful\", \"fantastic\", forced enthusiasm, reasoning out loud."
 
-    return (
-        intro + "\n\n"
-        + qa_role_full + "\n\n"
-        + services_block + "\n\n"
-        + faq_block + "\n\n"
-        + writing_style_block + "\n\n"
-        + booking_redirect_block + "\n\n"
-        + language_block + "\n\n"
-        + avoid_block + "\n\n"
-        + emoji_block + "\n\n"
-        + output_rule
-    )
+    fallback_parts = [intro, qa_role_full]
+    if approved_answers_block:
+        fallback_parts.append(approved_answers_block)
+    fallback_parts.extend([
+        services_block, faq_block, writing_style_block,
+        booking_redirect_block, language_block, avoid_block,
+        emoji_block, output_rule,
+    ])
+    return "\n\n".join(fallback_parts)
 
 
 def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
