@@ -1081,15 +1081,11 @@ async def list_conversations():
 
 
 def _conversation_status_fields(customer_id: str) -> dict:
-    """Brief 211: derive escalation-state fields the SR frontend reads on
-    /messages/conversations/:phone to gate its EscalationReplyComposer.
-    Brief 213: escalationMode + aiMuted now backed by real storage
-    (pending_notifications.mode + conversation_status.ai_muted).
-    Brief 222: humanTakeoverAt + learningStatus added (real storage);
-    humanGuidance + humanResponder + humanRespondedAt return null
-    placeholders pending an operator-identity model."""
+    """Brief 211/213/222 + Brief 227 (escalationSummary, recommendedOptions,
+    extractedDetails for the most recent unresolved escalation)."""
     cid = customer_id or ""
     status = state_registry.get_conversation_status(cid)
+    summary = state_registry.get_active_escalation_summary_for(cid)
     return {
         "escalated": status == "open",
         "escalationResolved": status == "resolved",
@@ -1097,11 +1093,14 @@ def _conversation_status_fields(customer_id: str) -> dict:
         "aiMuted": state_registry.get_ai_muted(cid),
         "humanTakeoverAt": state_registry.get_human_takeover_at(cid),
         "learningStatus": state_registry.get_learning_status_for_conversation(cid),
-        # Brief 222: placeholders — no storage for these today. A later
-        # brief tied to operator-identity work will populate them.
         "humanGuidance": None,
         "humanResponder": None,
         "humanRespondedAt": None,
+        # Brief 227: structured summary block — null if not yet generated
+        # or generation failed. Frontend falls back to its generic parser.
+        "escalationSummary": summary,
+        "recommendedOptions": (summary or {}).get("recommendedOptions") or [],
+        "extractedDetails": (summary or {}).get("extractedDetails") or None,
     }
 
 
@@ -1445,6 +1444,50 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
 # Brief 217: register the dispatcher with state_registry. Placed directly
 # after the function definition so the name resolves at module-load time.
 state_registry.set_alert_dispatcher(_fire_escalation_alerts)
+
+
+# ── Brief 227: Escalation summary generator ─────────────────────────────────
+# Hooked into state_registry.create_pending_notification via
+# state_registry.set_summary_dispatcher. Best-effort: failure persists
+# null, frontend falls back to its generic-text parser.
+
+from dashboard import escalation_summary as _esc_summary
+
+
+def _generate_escalation_summary(escalation_id: int, channel: str,
+                                  customer_id: str, customer_name: str) -> dict:
+    """Brief 227: dispatcher wrapper. Loads the relevant conversation history
+    for this channel, calls the Claude generator, returns the dict (or None)."""
+    try:
+        mode = state_registry.get_active_escalation_mode(customer_id)
+    except Exception:
+        mode = None
+
+    history = []
+    try:
+        if channel == "email":
+            thread_key = state_registry._find_email_thread_key_for(customer_id)
+            if thread_key:
+                detail = state_registry.email_get_conversation(thread_key)
+                history = detail.get("messages", []) or []
+        elif channel in ("instagram", "facebook", "messenger"):
+            history = state_registry.dm_get_history(customer_id, channel,
+                                                     limit=20)
+        else:  # whatsapp + anything else
+            history = state_registry.wa_get_full_history(customer_id, limit=20)
+    except Exception:
+        history = []
+
+    return _esc_summary.generate_summary(
+        channel=channel,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        mode=mode,
+        history=history,
+    )
+
+
+state_registry.set_summary_dispatcher(_generate_escalation_summary)
 
 
 # ── Escalations ──────────────────────────────────────────────────────────────
