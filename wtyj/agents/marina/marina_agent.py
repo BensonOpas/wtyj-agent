@@ -334,6 +334,40 @@ def _build_approved_answers_block(channel: str) -> str:
     )
 
 
+def _build_info_updates_block() -> str:
+    """Brief 216: render an ACTIVE BUSINESS UPDATES prompt block listing
+    operator-curated info_updates that are currently active (permanent
+    OR within their scheduled window). Returns '' when the tenant
+    hasn't opted in or no updates are active. Same leading-`\\n\\n`
+    pattern as Brief 219's APPROVED ANSWERS block so the f-string
+    spacing collapses cleanly when off."""
+    features = config_loader.get_raw().get("features", {}) or {}
+    if not features.get("info_updates_in_prompt"):
+        return ""
+    try:
+        from shared import state_registry
+        rows = state_registry.get_active_info_updates()
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    bullets = []
+    for r in rows:
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        bullets.append(f"- [{r.get('type', 'general')}] {text}")
+    if not bullets:
+        return ""
+    return (
+        "\n\nACTIVE BUSINESS UPDATES (operator-curated, time-sensitive):\n"
+        "Use these as authoritative current context. They override older "
+        "default information when relevant. Permanent items always apply; "
+        "scheduled items apply only during their window (already filtered).\n\n"
+        + "\n".join(bullets)
+    )
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -490,12 +524,13 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
 
     _customer_file_block = _build_customer_file_block(customer_file)
     _approved_answers_block = _build_approved_answers_block(channel)
+    _info_updates_block = _build_info_updates_block()
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block()}
 
-{_customer_file_block}{_approved_answers_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}
 
 {writing_style_block}
 

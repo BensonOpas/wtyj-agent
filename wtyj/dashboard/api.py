@@ -773,6 +773,91 @@ async def put_alert_settings_endpoint(req: AlertSettingsRequest):
         default_email_destination=_resolved_default_email())
 
 
+# --- Brief 216: Your Info (whitelisted client.json fields) ---
+
+class YourInfoUpdate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    support_email: str | None = None
+    phone: str | None = None
+    whatsapp: str | None = None
+    location: str | None = None
+    languages: list[str] | None = None
+    operating_days: str | None = None
+
+
+@router.get("/settings/your-info", dependencies=[Depends(_check_auth)])
+async def get_your_info():
+    """Brief 216: return only the whitelisted business fields the
+    dashboard's Your Info page is allowed to edit."""
+    biz = config_loader.get_business() or {}
+    whitelist = config_loader.your_info_whitelist()
+    return {k: biz.get(k) for k in whitelist}
+
+
+@router.put("/settings/your-info", dependencies=[Depends(_check_auth)])
+async def put_your_info(req: YourInfoUpdate):
+    """Brief 216: write through to client.json. Only fields explicitly
+    set in the request body get updated; missing/None fields are
+    untouched."""
+    payload = req.model_dump(exclude_none=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="no editable fields supplied")
+    failed = []
+    for key, value in payload.items():
+        ok = config_loader.update_business_field(key, value)
+        if not ok:
+            failed.append(key)
+    if failed:
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to update: {', '.join(failed)}",
+        )
+    biz = config_loader.get_business() or {}
+    whitelist = config_loader.your_info_whitelist()
+    return {k: biz.get(k) for k in whitelist}
+
+
+# --- Brief 216: Your Info Updates (per-tenant temporary/permanent updates) ---
+
+class InfoUpdateCreate(BaseModel):
+    text: str
+    type: str = "general"
+    active: bool = True
+    startDate: str | None = None
+    endDate: str | None = None
+
+
+@router.get("/settings/info-updates", dependencies=[Depends(_check_auth)])
+async def list_info_updates_endpoint():
+    """Brief 216: list ALL info_updates rows (active + inactive) for the
+    dashboard's Your Info Updates management list."""
+    return {"updates": state_registry.info_updates_list_all()}
+
+
+@router.post("/settings/info-updates", dependencies=[Depends(_check_auth)])
+async def create_info_update_endpoint(req: InfoUpdateCreate):
+    """Brief 216: create a permanent (no dates) or scheduled
+    (start_date + end_date) info_update row."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    row_id = state_registry.info_update_create(
+        text=text, type_=req.type, active=req.active,
+        start_date=req.startDate, end_date=req.endDate)
+    return {"id": row_id, "ok": True}
+
+
+@router.delete("/settings/info-updates/{update_id}",
+               dependencies=[Depends(_check_auth)])
+async def delete_info_update_endpoint(update_id: int):
+    """Brief 216: hard-delete an info_update row."""
+    ok = state_registry.info_update_delete(update_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="info_update not found")
+    return {"ok": True, "id": update_id}
+
+
 # --- Scheduling ---
 
 class ScheduleRequest(BaseModel):

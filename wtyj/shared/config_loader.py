@@ -112,3 +112,59 @@ def get_raw() -> dict:
         return dict(_load())
     except Exception:
         return {}
+
+
+# Brief 216: write-through edits from the dashboard's Your Info page.
+
+import tempfile as _tempfile
+
+_YOUR_INFO_WHITELIST = (
+    "name", "email", "support_email", "phone", "whatsapp",
+    "location", "languages", "operating_days",
+)
+
+
+def update_business_field(key: str, value) -> bool:
+    """Brief 216: write a single business.<key> value through to
+    client.json on disk, atomically (tempfile + rename) so a crash
+    mid-write can't leave the file truncated. Invalidates the module
+    cache so subsequent reads see the new value. Whitelist enforced
+    here AND at the endpoint layer (defense in depth — Pydantic strips
+    unknown fields but the helper is also callable from internal code).
+    Returns True on success, False on whitelist miss or disk error."""
+    global _cache
+    if key not in _YOUR_INFO_WHITELIST:
+        return False
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = json.load(f)
+    except Exception:
+        return False
+    biz = dict(current.get("business", {}) or {})
+    biz[key] = value
+    current["business"] = biz
+    tmp_path = None
+    try:
+        dir_path = os.path.dirname(_CONFIG_PATH) or "."
+        with _tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False,
+            dir=dir_path, prefix=".client.", suffix=".tmp",
+        ) as tf:
+            json.dump(current, tf, indent=2, ensure_ascii=False)
+            tmp_path = tf.name
+        os.replace(tmp_path, _CONFIG_PATH)
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return False
+    _cache = {}
+    return True
+
+
+def your_info_whitelist() -> tuple:
+    """Brief 216: expose the whitelist so the GET endpoint returns only
+    the editable fields and the PUT endpoint validates inputs."""
+    return _YOUR_INFO_WHITELIST

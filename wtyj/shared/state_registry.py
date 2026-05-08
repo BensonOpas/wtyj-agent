@@ -376,6 +376,22 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Brief 216: per-tenant temporary/permanent business updates that Marina
+    # injects into her prompt. Two flavors: permanent (no dates → always
+    # active) and scheduled (start_date + end_date → active only within
+    # the window). Type enum matches SR's product contract Section 5.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS info_updates ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "type TEXT NOT NULL DEFAULT 'general', "
+        "text TEXT NOT NULL, "
+        "active INTEGER NOT NULL DEFAULT 1, "
+        "start_date TEXT, "
+        "end_date TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
     # Brief 217: per-tenant alert settings (singleton row, fixed id=1).
     conn.execute(
         "CREATE TABLE IF NOT EXISTS alert_settings ("
@@ -2689,6 +2705,86 @@ def get_approved_learnings_for_prompt(channel: str, limit: int = 20) -> list:
         (channel, limit)).fetchall()
     conn.close()
     return [{"question": r[0] or "", "answer": r[1] or ""} for r in rows]
+
+
+# ── Brief 216: Your Info Updates (per-tenant temporary/permanent updates) ─────
+
+_INFO_UPDATE_TYPES = {"general", "offer", "holiday", "hours", "pricing", "other"}
+
+
+def info_update_create(text: str, type_: str = "general",
+                       active: bool = True,
+                       start_date: str = None,
+                       end_date: str = None) -> int:
+    """Brief 216: insert a new info_update row. Permanent rows omit
+    start_date + end_date; scheduled rows include both. Returns row id."""
+    if type_ not in _INFO_UPDATE_TYPES:
+        type_ = "other"
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO info_updates "
+        "(type, text, active, start_date, end_date, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (type_, text, 1 if active else 0, start_date, end_date, now, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def info_updates_list_all() -> list:
+    """Brief 216: return ALL info_updates (active + inactive, in-window
+    + out-of-window) for the dashboard's Settings → Your Info Updates
+    management list. camelCase keys for SR's frontend."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, type, text, active, start_date, end_date, "
+        "created_at, updated_at FROM info_updates "
+        "ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [{
+        "id": r[0], "type": r[1], "text": r[2],
+        "active": bool(r[3]),
+        "startDate": r[4], "endDate": r[5],
+        "createdAt": r[6], "updatedAt": r[7],
+    } for r in rows]
+
+
+def info_update_delete(update_id: int) -> bool:
+    """Brief 216: hard-delete an info_update row."""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM info_updates WHERE id = ?", (update_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_active_info_updates() -> list:
+    """Brief 216: return currently-active info_updates ready for prompt
+    injection. Active iff active=1 AND (no dates OR within [start, end]).
+    Half-open windows allowed: one of start/end set, the other null,
+    means 'active from X' or 'active until Y'. ISO YYYY-MM-DD format
+    expected for date columns; lexicographic comparison works because
+    the format is fixed-width."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT type, text, start_date, end_date FROM info_updates "
+        "WHERE active = 1 ORDER BY created_at DESC").fetchall()
+    conn.close()
+    out = []
+    for type_, text, start_date, end_date in rows:
+        if not start_date and not end_date:
+            out.append({"type": type_, "text": text})
+            continue
+        if start_date and today < start_date:
+            continue
+        if end_date and today > end_date:
+            continue
+        out.append({"type": type_, "text": text})
+    return out
 
 
 def _last_customer_message_for(conversation_id: str, channel: str) -> str:
