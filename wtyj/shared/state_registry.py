@@ -1386,7 +1386,7 @@ def create_pending_notification(notification_type: str, channel: str,
         existing = conn.execute(
             "SELECT id FROM pending_notifications "
             "WHERE customer_id = ? AND notification_type = 'escalation' "
-            "AND status = 'pending' "
+            "AND status IN ('pending', 'sent') "
             "ORDER BY created_at DESC LIMIT 1",
             (customer_id,)).fetchone()
         if existing:
@@ -1863,7 +1863,7 @@ def get_active_escalation_summary_for(customer_id: str) -> Optional[dict]:
     row = conn.execute(
         "SELECT escalation_summary FROM pending_notifications "
         "WHERE customer_id = ? AND notification_type = 'escalation' "
-        "AND status = 'pending' "
+        "AND status IN ('pending', 'sent') "
         "ORDER BY created_at DESC LIMIT 1",
         (customer_id,)).fetchone()
     conn.close()

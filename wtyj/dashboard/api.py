@@ -1598,77 +1598,11 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
 state_registry.set_alert_dispatcher(_fire_escalation_alerts)
 
 
-# ── Brief 227: Escalation summary generator ─────────────────────────────────
-# Hooked into state_registry.create_pending_notification via
-# state_registry.set_summary_dispatcher. Best-effort: failure persists
-# null, frontend falls back to its generic-text parser.
-
-from dashboard import escalation_summary as _esc_summary
-
-
-def _generate_escalation_summary(escalation_id: int, channel: str,
-                                  customer_id: str, customer_name: str) -> dict:
-    """Brief 227: dispatcher wrapper. Loads the relevant conversation history
-    for this channel, calls the Claude generator, returns the dict (or None)."""
-    try:
-        mode = state_registry.get_active_escalation_mode(customer_id)
-    except Exception:
-        mode = None
-
-    history = []
-    try:
-        if channel == "email":
-            thread_key = state_registry._find_email_thread_key_for(customer_id)
-            if thread_key:
-                detail = state_registry.email_get_conversation(thread_key)
-                history = detail.get("messages", []) or []
-        elif channel in ("instagram", "facebook", "messenger"):
-            history = state_registry.dm_get_history(customer_id, channel,
-                                                     limit=20)
-        else:  # whatsapp + anything else
-            history = state_registry.wa_get_full_history(customer_id, limit=20)
-    except Exception:
-        history = []
-
-    summary_dict = _esc_summary.generate_summary(
-        channel=channel,
-        customer_id=customer_id,
-        customer_name=customer_name,
-        mode=mode,
-        history=history,
-    )
-
-    # Brief 228: best-effort appointment row write. Only fires when the
-    # summary indicates scheduling intent. Failure here never blocks
-    # summary persistence (caller's outer try/except already handles it).
-    if summary_dict:
-        try:
-            details = (summary_dict.get("extractedDetails") or {})
-            if details.get("intent") == "scheduling":
-                proposed = details.get("proposedTimes") or []
-                topic = details.get("topic") or "Meeting"
-                if channel == "email":
-                    thread_key = state_registry._find_email_thread_key_for(customer_id)
-                    conv_id = f"email::{thread_key}" if thread_key else customer_id
-                else:
-                    conv_id = customer_id
-                status = ("pending_team_confirmation"
-                          if proposed else "detected")
-                state_registry.appointment_upsert(
-                    conversation_id=conv_id,
-                    channel=channel,
-                    customer_name=customer_name or "",
-                    title=topic,
-                    proposed_times=proposed,
-                    status=status,
-                )
-        except Exception:
-            pass
-
-    return summary_dict
-
-
-state_registry.set_summary_dispatcher(_generate_escalation_summary)
+# ── Brief 227 + 235: Escalation summary generator ───────────────────────────
+# Wrapper + dispatcher registration moved to shared/escalation_dispatcher.py
+# in Brief 235 so the email_poller process can also register the dispatcher
+# without pulling in dashboard.api's FastAPI dependency tree.
+from shared import escalation_dispatcher  # noqa: F401  (side-effect import)
 
 
 # ── Escalations ──────────────────────────────────────────────────────────────

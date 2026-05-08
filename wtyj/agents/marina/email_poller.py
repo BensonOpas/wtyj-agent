@@ -12,6 +12,12 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath
 from shared import state_registry
 from shared import bm_logger
 from shared import config_loader
+# Brief 235: register the Brief 227 escalation summary dispatcher in this
+# process. The side-effect import installs _generate_escalation_summary
+# as state_registry._summary_dispatcher so escalations created by the
+# email poller get summaries generated (matches the webhook_server
+# process which registers the same dispatcher via dashboard.api).
+from shared import escalation_dispatcher  # noqa: F401
 from agents.marina import marina_agent
 from agents.marina import sheets_writer
 from agents.marina import gws_calendar
