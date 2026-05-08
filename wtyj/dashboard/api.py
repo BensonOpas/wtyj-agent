@@ -1355,7 +1355,8 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
         raise HTTPException(status_code=500,
             detail=f"Failed to send email reply: {str(exc)[:120]}")
 
-    matched = state_registry.email_append_assistant_message(customer_email, body)
+    matched = state_registry.email_append_assistant_message(
+        customer_email, body, role="operator")
     bm_logger.log("dashboard_email_reply_sent",
                   thread_key=thread_key[:60],
                   email=customer_email[:60],
@@ -2118,7 +2119,7 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
                 detail=f"Failed to send email reply: {str(exc)[:120]}")
 
         thread_key = state_registry.email_append_assistant_message(
-            customer_id, operator_reply)
+            customer_id, operator_reply, role="operator")
         bm_logger.log("dashboard_email_reply_sent",
                       email=customer_id, escalation_id=escalation_id,
                       thread_key=thread_key or "(no thread match)")

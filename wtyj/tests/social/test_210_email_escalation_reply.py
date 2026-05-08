@@ -65,7 +65,10 @@ def test_email_reply_sends_via_smtp_and_marks_replied(mock_smtp, mock_append):
     assert args[1].lower().startswith("re:")
     assert args[2] == "Wednesday 4pm works. Calendar invite incoming."
 
-    mock_append.assert_called_once_with(customer_email, "Wednesday 4pm works. Calendar invite incoming.")
+    # Brief 233: hard-escalation email reply persists with role='operator'.
+    mock_append.assert_called_once_with(
+        customer_email, "Wednesday 4pm works. Calendar invite incoming.",
+        role="operator")
 
     escs = state_registry.get_all_escalations()
     matched = next((e for e in escs if e["id"] == esc_id), None)

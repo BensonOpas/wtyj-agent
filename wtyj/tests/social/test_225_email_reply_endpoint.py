@@ -74,7 +74,9 @@ def test_reply_sends_smtp_and_appends_thread(mock_smtp, tmp_path, monkeypatch):
 
     state = json.loads(fake_path.read_text())
     msgs = state["threads"][thread_key]["messages"]
-    assert msgs[-1]["role"] == "marina"
+    # Brief 233: operator-typed verbatim replies persist with role="operator"
+    # so the dashboard can render them distinctly from Marina-generated ones.
+    assert msgs[-1]["role"] == "operator"
     assert msgs[-1]["body"] == "Thanks for reaching out — looking into it."
 
 

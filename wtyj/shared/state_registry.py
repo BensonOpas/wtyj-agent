@@ -1034,7 +1034,9 @@ def email_list_conversations() -> list:
         last_ts = last.get("ts") or last.get("timestamp") or ""
         last_role = last.get("role", "")
         last_body = (last.get("body") or last.get("text") or "")[:200]
-        # Normalize role: customer -> user, marina -> assistant (matches WhatsApp shape)
+        # Normalize role: customer -> user, marina -> assistant.
+        # Brief 233: 'operator' passes through unchanged so the inbox
+        # list can show a distinct indicator for operator-typed replies.
         if last_role == "customer":
             last_role = "user"
         elif last_role == "marina":
@@ -1087,6 +1089,11 @@ def email_get_conversation(thread_key: str) -> dict:
             role = "user"
         elif role == "marina":
             role = "assistant"
+        # Brief 233: 'operator' passes through unchanged so the frontend
+        # can render verbatim operator replies distinctly from Marina-
+        # generated ones. SR's existing mapper falls back to "assistant"
+        # for unknown values, so this is a graceful no-op until the
+        # frontend opts into the new value.
         text = m.get("body") or m.get("text") or ""
         ts = m.get("ts") or m.get("timestamp") or ""
         out_messages.append({"role": role, "text": text, "created_at": ts})
@@ -1176,13 +1183,17 @@ def email_get_latest_customer_message(thread_key: str) -> dict:
     return {}
 
 
-def email_append_assistant_message(customer_email: str, body: str):
-    """Brief 210: append an operator-authored reply to the email thread state
-    so the dashboard conversation view shows it. Mirrors what
-    email_poller.py:596-601 does on the relay-receive path. Returns the
-    matched thread_key string, or None if no thread exists for this email
-    yet (caller still sends the email; the missing thread record is logged
-    but non-fatal). Brief 211: lookup logic extracted to _find_email_thread_key_for."""
+def email_append_assistant_message(customer_email: str, body: str,
+                                    role: str = "marina"):
+    """Brief 210: append an outbound reply to the email thread state.
+    Brief 233: `role` distinguishes Marina-generated replies (`"marina"`,
+    the default) from verbatim operator replies (`"operator"`). The
+    /escalations/{id}/guidance path keeps the default because Marina
+    reformulates the operator's coaching there. /escalations/{id}/reply
+    (hard escalation) and /messages/conversations/{id}/email/reply pass
+    `role="operator"` because the operator's text is sent verbatim.
+    Returns the matched thread_key string, or None if no thread exists
+    for this email yet."""
     matched_key = _find_email_thread_key_for(customer_email)
     if not matched_key:
         return None
@@ -1196,7 +1207,7 @@ def email_append_assistant_message(customer_email: str, body: str):
 
     th = state["threads"][matched_key]
     th.setdefault("messages", []).append({
-        "role": "marina",
+        "role": role,
         "ts": datetime.now(timezone.utc).isoformat(),
         "body": body,
     })
