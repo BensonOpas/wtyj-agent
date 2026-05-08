@@ -1131,6 +1131,73 @@ async def delete_conversation(phone: str):
     return {"ok": True, "deleted_rows": count, "phone": phone}
 
 
+# ── Email Reply (Brief 225) ─────────────────────────────────────────────────
+# Operator-authored reply to any email conversation, escalated or not. Mirrors
+# the verbatim-send pattern of the existing /escalations/{id}/reply email
+# branch (api.py:1772-1813) — operator's text goes to smtp_send unchanged,
+# then is appended to the local email_thread_state.json so the dashboard
+# conversation view reflects it immediately.
+
+class EmailReplyRequest(BaseModel):
+    body: str
+    mode: str = "direct"           # v1 ignores; reserved for future relay/draft modes
+    attachments: list = []         # v1 ignores (forward also defers attachments)
+
+
+@router.post("/messages/conversations/{conversation_id:path}/email/reply",
+             dependencies=[Depends(_check_auth)])
+async def reply_to_email_conversation(conversation_id: str, req: EmailReplyRequest):
+    """Brief 225: send an operator-authored email reply to a thread that may
+    not be tied to an escalation. Operator's text is sent verbatim — no
+    Marina reformulation (matches the /escalations/{id}/reply email branch)."""
+    body = (req.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="`body` is required")
+
+    thread_key = conversation_id
+    if thread_key.startswith("email::"):
+        thread_key = thread_key[len("email::"):]
+    if "@" in thread_key and ":" not in thread_key:
+        thread_key = state_registry._find_email_thread_key_for(thread_key) or ""
+
+    if not thread_key:
+        raise HTTPException(status_code=404,
+            detail="Email conversation not found")
+
+    # thread_key format from email_adapter.resolve_thread_key:
+    #   "subj:<from_email>:<normalized_subject>"
+    # parts[0] == literal "subj", parts[1] == customer email, parts[2] == subject.
+    parts = thread_key.split(":", 2)
+    customer_email = parts[1] if len(parts) >= 2 else ""
+    raw_subject = parts[2] if len(parts) >= 3 else ""
+
+    if not customer_email or "@" not in customer_email:
+        raise HTTPException(status_code=404,
+            detail="Email conversation has no resolvable customer address")
+
+    subject = raw_subject or "Unboks"
+    if not subject.lower().startswith("re:"):
+        subject = "Re: " + subject
+
+    try:
+        smtp_send(customer_email, subject, body)
+    except Exception as exc:
+        bm_logger.log("dashboard_email_reply_send_failed",
+                      thread_key=thread_key[:60],
+                      email=customer_email[:60],
+                      error=str(exc)[:200])
+        raise HTTPException(status_code=500,
+            detail=f"Failed to send email reply: {str(exc)[:120]}")
+
+    matched = state_registry.email_append_assistant_message(customer_email, body)
+    bm_logger.log("dashboard_email_reply_sent",
+                  thread_key=thread_key[:60],
+                  email=customer_email[:60],
+                  matched=matched or "(no thread match)")
+
+    return {"ok": True, "channel": "email"}
+
+
 # ── Email Forward + Delete (Brief 218) ──────────────────────────────────────
 # Two operator-facing email actions on a conversation. Forward re-sends the
 # latest customer message (text-only in v1; attachments aren't stored). Delete
