@@ -24,6 +24,33 @@ _RESPONSE_DEFAULTS = {
 }
 
 
+# Brief 224: bracketed sentinels Marina's prompt may emit for routing.
+# These must never reach the customer — strip from any text field returned
+# by process_message before it leaves the agent. NOT a blanket "[X]" strip:
+# [BOOKING_REF] and [PAYMENT_LINK] are legitimate template placeholders that
+# the email_poller substitutes downstream.
+_INTERNAL_TOKENS = (
+    "[ESCALATE]",
+    "[SOFT_ESCALATION]",
+    "[HARD_ESCALATION]",
+    "[HANDOFF]",
+    "[HUMAN_TAKEOVER]",
+)
+
+
+def _strip_internal_tokens(text: str) -> str:
+    """Remove every internal routing token from `text` and clean up trailing
+    whitespace + isolated blank lines a removed token may have left behind."""
+    if not text:
+        return text
+    out = text
+    for tok in _INTERNAL_TOKENS:
+        out = out.replace(tok, "")
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out.rstrip()
+
+
 # Brief 174: tool use schema for Marina's structured response.
 # Replaces the "Respond with ONLY a JSON object" text contract with a
 # protocol-enforced schema. Claude Sonnet 4.6 (and later) MUST emit a
@@ -1057,6 +1084,11 @@ def process_message(
                           channel=channel, from_id=from_email[:50],
                           input_preview=str(result)[:200])
             return fallback
+
+        # Brief 224: sanitize customer-facing text fields before returning.
+        result["reply"] = _strip_internal_tokens(result.get("reply", ""))
+        if result.get("reply_hold_failed"):
+            result["reply_hold_failed"] = _strip_internal_tokens(result["reply_hold_failed"])
 
         return result
 
