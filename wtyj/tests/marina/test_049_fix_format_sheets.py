@@ -15,13 +15,6 @@ def test_spreadsheet_id():
     assert sid == "1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I"
 
 
-def test_old_sheet_id_removed():
-    """T3: Old banned sheet ID not in source."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        source = f.read()
-    assert "1soG3zVnx" not in source
-
-
 def test_bookings_headers_count():
     """T4: BOOKINGS_HEADERS has 15 columns."""
     assert len(format_sheets.BOOKINGS_HEADERS) == 15
@@ -85,20 +78,6 @@ def test_get_service_callable():
 def test_get_spreadsheet_id_callable():
     """T16: _get_spreadsheet_id is callable."""
     assert callable(getattr(format_sheets, '_get_spreadsheet_id', None))
-
-
-def test_no_sheets_writer_import():
-    """T17: No reference to sheets_writer in imports."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        source = f.read()
-    assert "from sheets_writer" not in source and "import sheets_writer" not in source
-
-
-def test_file_header():
-    """T18: File header says Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        source = f.read()
-    assert "Last modified: Brief" in source
 
 
 def test_key_path_defined():

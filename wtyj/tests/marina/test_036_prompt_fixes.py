@@ -44,8 +44,3 @@ def test_reply_hold_failed_exclusions():
     assert "escalation" in _prompt or "inquiry" in _prompt
 
 
-def test_file_header_updated():
-    """T7: File header updated to Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "marina_agent.py")) as f:
-        header = f.read(300)
-    assert "Last modified: Brief" in header

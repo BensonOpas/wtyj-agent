@@ -150,21 +150,3 @@ def test_sheets_writer_append_does_not_clobber_env_var(reload_sheets_writer):
         f"env var was clobbered to {captured['env'][ENV_VAR]!r} instead of the compose value"
 
 
-# ---------------------------------------------------------------------------
-# Source text scan — old filename must not reappear in any of the 3 files
-# ---------------------------------------------------------------------------
-
-def test_old_filename_not_referenced_in_source():
-    """Regression guard: no source file should ever hardcode the pre-Brief-145
-    filename `bluemarlin-calendar-key.json` again. The new path comes from the
-    env var with a `calendar-key.json` fallback."""
-    import agents.marina.gws_calendar as gws
-    import agents.marina.format_sheets as fmt
-    import agents.marina.sheets_writer as sw
-
-    for mod in (gws, fmt, sw):
-        path = mod.__file__
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "bluemarlin-calendar-key.json" not in content, \
-            f"{path} still references the old filename"

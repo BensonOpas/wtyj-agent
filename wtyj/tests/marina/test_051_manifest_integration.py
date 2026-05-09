@@ -146,19 +146,6 @@ def test_remove_from_manifest_count():
     assert ep_src.count("gws_calendar.remove_from_manifest(") == 3
 
 
-def test_email_poller_header():
-    """T20: email_poller header says Brief."""
-    ep_src = _read_email_poller()
-    assert "Last modified: Brief" in ep_src
-
-
-def test_payment_stub_header():
-    """T21: payment_stub has file header."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "payment_stub.py")) as f:
-        ps_src = f.read()
-    assert "Last modified: Brief" in ps_src
-
-
 def test_slot_checked_reset_count():
     """T22: slot_checked reset in failure path."""
     ep_src = _read_email_poller()

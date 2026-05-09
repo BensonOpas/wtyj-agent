@@ -49,24 +49,6 @@ def test_ref_regex_matches_mixed_letters_and_digit():
         assert _BRIEF161_REF_REGEX.search(f"ref {ref}") is not None, f"missed {ref}"
 
 
-def test_social_agent_uses_new_regex():
-    """Source-level verification that social_agent.py uses the new regex."""
-    src = open(
-        os.path.join(os.path.dirname(__file__), "..", "..",
-                     "agents", "social", "social_agent.py")
-    ).read()
-    assert r"(?=[A-Z0-9]*\d)" in src, "social_agent.py must use digit-required regex"
-
-
-def test_email_poller_uses_new_regex():
-    """Source-level verification that email_poller.py uses the new regex."""
-    src = open(
-        os.path.join(os.path.dirname(__file__), "..", "..",
-                     "agents", "marina", "email_poller.py")
-    ).read()
-    assert r"(?=[A-Z0-9]*\d)" in src, "email_poller.py must use digit-required regex"
-
-
 # --- Per-phone lock (Fix 1) ---
 
 def test_get_phone_lock_returns_same_lock_for_same_key():

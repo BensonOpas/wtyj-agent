@@ -57,13 +57,4 @@ def test_wa_delete_conversation_only_affects_target_phone():
     state_registry.wa_delete_conversation(p1)  # cleanup
 
 
-def test_dashboard_delete_endpoint_exists():
-    """Brief 165: source-level guard that the DELETE endpoint is declared in api.py."""
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "dashboard", "api.py")
-    src = open(path).read()
-    assert '@router.delete("/messages/conversations/{phone}"' in src, (
-        "Brief 165: DELETE /messages/conversations/{phone} endpoint missing"
-    )
-    assert "wa_delete_conversation" in src, (
-        "Brief 165: wa_delete_conversation call missing from dashboard/api.py"
-    )
+

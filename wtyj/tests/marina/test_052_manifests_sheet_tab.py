@@ -24,35 +24,7 @@ def test_log_manifest_update_param():
     assert params == ["data"]
 
 
-def test_sheets_writer_header():
-    """T4: sheets_writer header says Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "sheets_writer.py")) as f:
-        sw_src = f.read()
-    assert "Last modified: Brief" in sw_src
-
-
-def test_manifests_tab_in_source():
-    """T5: log_manifest_update appends to 'Manifests' tab."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "sheets_writer.py")) as f:
-        sw_src = f.read()
-    assert "'Manifests'" in sw_src
-
-
 # ── format_sheets.py ──
-
-def test_manifests_headers_defined():
-    """T6: MANIFESTS_HEADERS defined."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        fs_src = f.read()
-    assert "MANIFESTS_HEADERS" in fs_src
-
-
-def test_manifests_widths_defined():
-    """T7: MANIFESTS_WIDTHS defined."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        fs_src = f.read()
-    assert "MANIFESTS_WIDTHS" in fs_src
-
 
 def test_manifests_headers_count():
     """T8: MANIFESTS_HEADERS has 11 columns."""
@@ -82,13 +54,6 @@ def test_manifests_tab_widths_match():
     assert manifests_tab["widths"] is format_sheets.MANIFESTS_WIDTHS
 
 
-def test_format_sheets_header():
-    """T13: format_sheets header says Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "format_sheets.py")) as f:
-        fs_src = f.read()
-    assert "Last modified: Brief" in fs_src
-
-
 def test_manifests_first_column_timestamp():
     """T14: MANIFESTS_HEADERS first column is 'Timestamp'."""
     assert format_sheets.MANIFESTS_HEADERS[0] == "Timestamp"
@@ -102,55 +67,6 @@ def test_manifests_contains_revenue():
 def test_manifests_contains_calendar_link():
     """T16: MANIFESTS_HEADERS contains 'Calendar Link'."""
     assert "Calendar Link" in format_sheets.MANIFESTS_HEADERS
-
-
-# ── email_poller.py ──
-
-def _read_email_poller():
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "email_poller.py")) as f:
-        return f.read()
-
-
-def test_log_manifest_update_in_email_poller():
-    """T17: log_manifest_update called in email_poller."""
-    ep_src = _read_email_poller()
-    assert "sheets_writer.log_manifest_update(" in ep_src
-
-
-def test_get_slot_passengers_in_email_poller():
-    """T18: get_slot_passengers called in email_poller Step 5."""
-    ep_src = _read_email_poller()
-    assert "state_registry.get_slot_passengers(" in ep_src
-
-
-def test_log_manifest_after_log_hold():
-    """T19: log_manifest_update called after log_hold_created."""
-    ep_src = _read_email_poller()
-    pos_hold = ep_src.find("sheets_writer.log_hold_created(")
-    pos_manifest = ep_src.find("sheets_writer.log_manifest_update(")
-    assert 0 < pos_hold < pos_manifest
-
-
-def test_email_poller_header():
-    """T20: email_poller header says Brief."""
-    ep_src = _read_email_poller()
-    assert "Last modified: Brief" in ep_src
-
-
-def test_capacity_in_manifest_log():
-    """T21: manifest log includes capacity."""
-    ep_src = _read_email_poller()
-    pos_manifest = ep_src.find("sheets_writer.log_manifest_update(")
-    section = ep_src[pos_manifest:pos_manifest+600]
-    assert '"capacity":' in section or "'capacity':" in section
-
-
-def test_total_revenue_in_manifest_log():
-    """T22: manifest log includes total_revenue."""
-    ep_src = _read_email_poller()
-    pos_manifest = ep_src.find("sheets_writer.log_manifest_update(")
-    section = ep_src[pos_manifest:pos_manifest+600]
-    assert '"total_revenue":' in section or "'total_revenue':" in section
 
 
 # ── Behavioral tests: call log_manifest_update with known data ──

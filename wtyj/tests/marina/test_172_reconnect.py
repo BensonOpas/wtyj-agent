@@ -31,11 +31,4 @@ def test_delete_escalation_nonexistent_returns_false():
     assert ok is False
 
 
-def test_dashboard_delete_escalation_endpoint_declared():
-    """Brief 172: source-level guard that the endpoint is declared in api.py."""
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "dashboard", "api.py")
-    src = open(path).read()
-    assert '@router.delete("/escalations/{escalation_id}"' in src, (
-        "Brief 172: DELETE /escalations/{escalation_id} endpoint missing"
-    )
-    assert "state_registry.delete_escalation" in src
+

@@ -44,10 +44,4 @@ def test_customer_lookup_returns_none_for_unknown_identifier():
     assert state_registry.customer_lookup("phone", "nonexistent_b167") is None
 
 
-def test_dashboard_endpoint_source_declaration():
-    """Brief 167: source-level guard that the endpoint exists in api.py."""
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "dashboard", "api.py")
-    src = open(path).read()
-    assert '@router.get("/customers/by-identifier/{type_}/{value}"' in src
-    assert "customer_lookup" in src
-    assert "customer_get_full" in src
+

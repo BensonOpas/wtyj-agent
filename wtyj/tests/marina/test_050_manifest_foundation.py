@@ -245,17 +245,3 @@ def test_create_hold_still_callable():
     assert callable(getattr(gws_calendar, 'create_hold', None))
 
 
-# ── file headers ──
-
-def test_state_registry_header():
-    """T30: state_registry header says Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "shared", "state_registry.py")) as f:
-        sr_src = f.read()
-    assert "Last modified: Brief" in sr_src
-
-
-def test_gws_calendar_header():
-    """T31: gws_calendar header says Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "gws_calendar.py")) as f:
-        gc_src = f.read()
-    assert "Last modified: Brief" in gc_src

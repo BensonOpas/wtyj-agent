@@ -33,12 +33,32 @@ briefs must be self-contained for non-repo context.
 
 **Test philosophy:** tests that check real behavior. Aim for 3-5 on a
 focused brief; scale up when the brief genuinely covers multiple
-behaviors (e.g. a new schema + helper + prompt integration). If you're
-going over 10 tests, stop and ask whether this should be two briefs. NO
-source-level string guards (`assert "foo" in open(...).read()`) — those
-are tautologies that pass because you just wrote the string. Good test
-shape: given state X, call function F, assert return value Y. Mock-based
-integration tests exercising real branches are fine.
+behaviors. If you're going over 10 tests, stop and ask whether this
+should be two briefs.
+
+**Test file location:** new tests go into `wtyj/tests/<source-path>/test_<module>.py`
+(one file per source module). Create a NEW test file ONLY when adding
+a new source module. Briefs touching existing modules must extend the
+existing per-module test file. Do NOT create `test_NNN_*.py` files for
+every brief — that pattern caused the 1100-test bloat Brief 236 cleaned up.
+
+**Acceptable test shapes:**
+- No-mock round-trips (TestClient + real test SQLite)
+- Boundary-only mocks (mock external APIs: Anthropic, IMAP, Late, Zernio
+  webhook signature) — never mock internal modules
+- Assertions on returned data shape or persisted state
+
+**Banned test shapes (will be rejected by reviewers):**
+- Source-string greppers: `assert "X" in open(<source_file>).read()`
+- Directory/file-existence checks: `assert os.path.isdir(...)`
+- File-header guards: `assert "Last modified: Brief" in header`
+- Mock-the-thing-you-test: mocking the function under test or its
+  same-module collaborators
+- "Did the mock get called with what I told it" tests where the
+  assertion is implied by the test's own setup
+
+Good test shape: given state X, call function F, assert return value Y.
+Mock-based integration tests exercising real branches are fine.
 
 **Regression baseline:** the expected "N passing" count is in the latest
 entry of briefs/system_state.md. After your new tests land, the new

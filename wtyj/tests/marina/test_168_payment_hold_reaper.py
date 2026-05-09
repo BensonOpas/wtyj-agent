@@ -162,8 +162,4 @@ def test_reaper_feature_enabled_reads_config():
     assert hold_reaper._feature_enabled() is True
 
 
-def test_supervisord_has_hold_reaper_program():
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "supervisord.conf")
-    src = open(path).read()
-    assert "[program:hold-reaper]" in src
-    assert "agents.marina.hold_reaper" in src
+

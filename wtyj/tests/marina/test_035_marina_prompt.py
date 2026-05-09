@@ -41,24 +41,3 @@ def test_service_aliases_present():
         assert alias in _prompt, f"alias '{alias}' missing from prompt"
 
 
-def test_file_header_updated():
-    """T6: File header updated to Brief."""
-    with open(os.path.join(os.path.dirname(__file__), "..", "..", "agents", "marina", "marina_agent.py")) as f:
-        header = f.read(300)
-    assert "Last modified: Brief" in header
-
-
-def test_claude_md_no_stale_thread_key_issue():
-    """T7: CLAUDE.md no longer contains the stale thread-key issue."""
-    claude_md_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "CLAUDE.md")
-    with open(claude_md_path) as f:
-        claude_content = f.read()
-    assert "Thread key breaks on subject change" not in claude_content
-
-
-def test_claude_md_no_stale_verify_issue():
-    """T8: CLAUDE.md no longer contains [VERIFY] open issue."""
-    claude_md_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "CLAUDE.md")
-    with open(claude_md_path) as f:
-        claude_content = f.read()
-    assert "items remain in client.json" not in claude_content

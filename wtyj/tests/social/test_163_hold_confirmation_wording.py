@@ -234,26 +234,3 @@ def test_system_message_says_booking_confirmed_for_none_timing(mock_get_raw, moc
     _cleanup_phone(phone)
 
 
-# --- Group C: source-level regression guard ---
-
-def test_source_system_message_branches_on_payment_timing():
-    """Brief 163: social_agent.py must branch the hold-created system message on _payment_timing.
-    A regression where someone unifies the two branches back into a single 'Booking confirmed'
-    f-string should be caught here."""
-    src_path = os.path.join(
-        os.path.dirname(__file__), "..", "..",
-        "agents", "social", "social_agent.py",
-    )
-    src = open(src_path).read()
-    assert "Hold placed — awaiting payment" in src, (
-        "Brief 163: 'Hold placed — awaiting payment' system message text missing from social_agent.py"
-    )
-    assert "Booking confirmed: " in src, (
-        "Brief 163: 'Booking confirmed: ' system message text must still exist for timing='none'"
-    )
-    hold_created_idx = src.find('flags["hold_created"] = True')
-    assert hold_created_idx >= 0
-    post_hold = src[hold_created_idx:hold_created_idx + 3000]
-    assert '_payment_timing in ("upfront", "deposit")' in post_hold, (
-        "Brief 163: the hold-created block must branch on _payment_timing"
-    )

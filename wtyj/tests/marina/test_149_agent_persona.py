@@ -261,14 +261,3 @@ def test_marina_build_client_context_does_not_contain_agent_persona():
         "agent_persona leaked into _build_client_context output; double-injection bug"
 
 
-# ---------------------------------------------------------------------------
-# Dashboard migration
-# ---------------------------------------------------------------------------
-
-def test_dashboard_draft_email_uses_structured_persona():
-    """dashboard/api.py must use _build_agent_persona_block(), not the legacy string."""
-    content = _load_text(DASHBOARD_API_PATH)
-    assert "_build_agent_persona_block" in content, \
-        "dashboard/api.py does not call _build_agent_persona_block — migration incomplete"
-    assert 'persona = csk.get("marina_persona"' not in content, \
-        "dashboard/api.py still has the legacy persona binding — migration incomplete"

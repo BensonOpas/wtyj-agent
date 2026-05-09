@@ -113,10 +113,4 @@ def test_email_get_conversation_normalizes_role_and_text(monkeypatch, tmp_path):
     assert result["messages"][1]["text"] == "hello"
 
 
-def test_dashboard_api_merges_email_conversations():
-    """Source guard: api.py list_conversations calls email_list_conversations."""
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "dashboard", "api.py")
-    src = open(path).read()
-    assert "email_list_conversations" in src
-    assert "email::" in src
-    assert "email_get_conversation" in src
+
