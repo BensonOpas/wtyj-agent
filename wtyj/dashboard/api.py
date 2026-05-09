@@ -913,33 +913,93 @@ async def put_data_retention(req: DataRetentionUpdate):
 @router.post("/data-retention/archive-now",
              dependencies=[Depends(_check_auth)])
 async def data_retention_archive_now():
-    """Brief 229: not implemented yet — cleanup automation lives in a
-    future brief. Honest 501 per SR's 'No fake success' rule."""
-    raise HTTPException(
-        status_code=501,
-        detail=("Cleanup automation not implemented yet. Settings are "
-                "stored. Archive will run when the cleanup job ships in "
-                "a follow-up brief."))
+    """Brief 237: archive conversations inactive longer than the configured
+    activeInboxArchiveAfterDays. Sets flags.deleted=true on email threads,
+    upserts conversation_status.deleted=1 on WhatsApp/IG/FB. Skips active
+    escalations and human takeover conversations."""
+    settings = state_registry.get_data_retention_settings()
+    n = settings.get("activeInboxArchiveAfterDays")
+    if n is None:
+        raise HTTPException(status_code=400, detail=(
+            "activeInboxArchiveAfterDays is null — archive disabled. "
+            "Set a value before running archive-now."))
+    result = state_registry.archive_inactive_conversations(n)
+    state_registry.data_retention_audit_write(
+        action="archive_now",
+        identifier_type=None,
+        identifier_value=None,
+        affected_counts=result,
+        actor="dashboard",
+    )
+    return {"ok": True, **result}
+
+
+class DataRetentionExportReq(BaseModel):
+    tenant: str = "unboks"
 
 
 @router.post("/data-retention/export",
              dependencies=[Depends(_check_auth)])
-async def data_retention_export():
-    """Brief 229: not implemented yet."""
-    raise HTTPException(
-        status_code=501,
-        detail=("Data export not implemented yet. Will ship in a "
-                "follow-up brief alongside cleanup automation."))
+async def data_retention_export(req: DataRetentionExportReq):
+    """Brief 237: dump customer-side data to a JSON file under
+    data/exports/. Returns path + record counts. The file lives on disk;
+    a separate streaming download endpoint is out of scope."""
+    export_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "data", "exports")
+    os.makedirs(export_dir, exist_ok=True)
+    result = state_registry.export_all_customer_data(export_dir, req.tenant)
+    state_registry.data_retention_audit_write(
+        action="export",
+        identifier_type=None,
+        identifier_value=req.tenant,
+        affected_counts=result.get("recordCounts", {}),
+        actor="dashboard",
+    )
+    return {"ok": True, **result}
+
+
+class DataRetentionDeleteReq(BaseModel):
+    identifierValue: str
+    identifierType: Literal["phone", "email", "conversation_id"]
 
 
 @router.post("/data-retention/delete-customer-data",
              dependencies=[Depends(_check_auth)])
-async def data_retention_delete_customer():
-    """Brief 229: not implemented yet."""
-    raise HTTPException(
-        status_code=501,
-        detail=("Customer data deletion not implemented yet. Will ship "
-                "in a follow-up brief alongside cleanup automation."))
+async def data_retention_delete_customer(req: DataRetentionDeleteReq):
+    """Brief 237: apply the configured endOfRetentionAction (anonymize or
+    delete) to a specific customer. Active escalations block this action.
+    Approved learnings preserved per keepApprovedLearnings setting."""
+    settings = state_registry.get_data_retention_settings()
+    action = settings.get("endOfRetentionAction") or "anonymize"
+    if action == "keep":
+        raise HTTPException(status_code=400, detail=(
+            "endOfRetentionAction is 'keep' — deletion disabled. "
+            "Update the policy first."))
+    result = state_registry.delete_customer_data(
+        identifier_value=req.identifierValue,
+        identifier_type=req.identifierType,
+        action=action,
+        keep_approved_learnings=bool(settings.get("keepApprovedLearnings", True)),
+    )
+    # Brief 237 Rule 10: audit fires for ALL outcomes (success AND blocked).
+    if not result.get("ok"):
+        state_registry.data_retention_audit_write(
+            action=f"delete_customer:blocked_by_{result.get('reason') or 'unknown'}",
+            identifier_type=req.identifierType,
+            identifier_value=req.identifierValue,
+            affected_counts={"reason": result.get("reason")},
+            actor="dashboard",
+        )
+        raise HTTPException(status_code=409, detail=result.get("reason"))
+    state_registry.data_retention_audit_write(
+        action=f"delete_customer:{action}",
+        identifier_type=req.identifierType,
+        identifier_value=req.identifierValue,
+        affected_counts=result,
+        actor="dashboard",
+    )
+    return {"ok": True, **result}
 
 
 # --- Brief 230: AI knowledge files Phase 1 ---

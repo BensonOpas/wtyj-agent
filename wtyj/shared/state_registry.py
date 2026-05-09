@@ -484,6 +484,21 @@ def _get_conn():
         "updated_at TEXT NOT NULL DEFAULT ''"
         ")"
     )
+    # Brief 237: data retention audit log. Records every archive-now /
+    # export / delete-customer-data attempt (success AND blocked). Rule 10
+    # of SR's task ab7d8f1eb97c: "Do not silently delete — log retention
+    # actions."
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS data_retention_audit_log ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "action TEXT NOT NULL, "
+        "identifier_type TEXT, "
+        "identifier_value TEXT, "
+        "affected_counts_json TEXT, "
+        "actor TEXT, "
+        "created_at TEXT NOT NULL"
+        ")"
+    )
     # Brief 230: knowledge files (uploaded reference docs Marina reads when
     # features.knowledge_files_in_prompt is true). One row per file. Text is
     # extracted synchronously at upload time and stored here; the actual
@@ -1961,6 +1976,14 @@ def get_data_retention_settings() -> dict:
         "audit_log_retention_months FROM data_retention_settings WHERE id = 1"
     ).fetchone()
     conn.close()
+    # Brief 237: policyActive stays False until automatic cron ships in
+    # a future brief. manualActionsAvailable=True signals the 3 action
+    # endpoints (archive-now / export / delete-customer-data) are live.
+    _STATUS = {
+        "policyActive": False,
+        "manualActionsAvailable": True,
+        "nextCleanupAt": None,
+    }
     if not row:
         return {
             "activeInboxArchiveAfterDays": 90,
@@ -1968,7 +1991,7 @@ def get_data_retention_settings() -> dict:
             "endOfRetentionAction": "anonymize",
             "keepApprovedLearnings": True,
             "auditLogRetentionMonths": 24,
-            "status": {"policyActive": False},
+            "status": dict(_STATUS),
         }
     return {
         "activeInboxArchiveAfterDays": row[0],
@@ -1976,7 +1999,7 @@ def get_data_retention_settings() -> dict:
         "endOfRetentionAction": row[2] or "anonymize",
         "keepApprovedLearnings": bool(row[3]),
         "auditLogRetentionMonths": row[4] or 24,
-        "status": {"policyActive": False},
+        "status": dict(_STATUS),
     }
 
 
@@ -2003,6 +2026,396 @@ def save_data_retention_settings(active_inbox_archive_after_days,
          audit_log_retention_months, now))
     conn.commit()
     conn.close()
+
+
+def data_retention_audit_write(action: str, identifier_type, identifier_value,
+                                affected_counts: dict, actor: str = "dashboard") -> int:
+    """Brief 237: record a retention action attempt to data_retention_audit_log.
+    Called for archive-now / export / delete-customer-data (success AND blocked).
+    Rule 10 of SR's task ab7d8f1eb97c."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO data_retention_audit_log "
+        "(action, identifier_type, identifier_value, affected_counts_json, "
+        "actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (action, identifier_type, identifier_value,
+         json.dumps(affected_counts or {}, default=str),
+         actor, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def archive_inactive_conversations(active_inbox_archive_after_days: int) -> dict:
+    """Brief 237: archive-now sweep. Sets flags.deleted on email threads
+    inactive longer than N days; upserts conversation_status.deleted=1 on
+    WhatsApp/IG/FB. Skips active escalations (Brief 235's pending|sent
+    filter) and human takeover (ai_muted / fully_escalated). Returns
+    counts."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=active_inbox_archive_after_days)
+    archived = 0
+    skipped_escalation = 0
+    skipped_takeover = 0
+    already_archived = 0
+
+    # Email side — load JSON, mutate, atomic replace.
+    email_path = _get_email_state_path()
+    if os.path.exists(email_path):
+        try:
+            with open(email_path, "r") as f:
+                state = json.load(f)
+        except Exception:
+            state = None
+        if state:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for thread_key, th in state.get("threads", {}).items():
+                flags = th.setdefault("flags", {})
+                if flags.get("deleted"):
+                    already_archived += 1
+                    continue
+                if flags.get("fully_escalated"):
+                    skipped_escalation += 1
+                    continue
+                if flags.get("ai_muted"):
+                    skipped_takeover += 1
+                    continue
+                last_raw = th.get("last_activity")
+                if last_raw is None:
+                    continue
+                if isinstance(last_raw, str):
+                    try:
+                        last_dt = datetime.fromisoformat(last_raw)
+                    except ValueError:
+                        continue
+                else:
+                    last_dt = datetime.fromtimestamp(float(last_raw), tz=timezone.utc)
+                if last_dt < cutoff:
+                    flags["deleted"] = True
+                    th["last_activity"] = now_iso
+                    archived += 1
+            try:
+                tmp = email_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(state, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, email_path)
+            except OSError:
+                pass
+
+    # WA/IG/FB side — group by phone, find max(created_at), check active escalations.
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT phone, MAX(created_at) FROM whatsapp_threads GROUP BY phone"
+    ).fetchall()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for phone, max_created in rows:
+        if not max_created:
+            continue
+        try:
+            last_dt = datetime.fromisoformat(max_created)
+        except ValueError:
+            continue
+        if last_dt >= cutoff:
+            continue
+        cs = conn.execute(
+            "SELECT deleted, blocked, ai_muted FROM conversation_status "
+            "WHERE conversation_id = ?", (phone,)
+        ).fetchone()
+        if cs:
+            deleted_flag, blocked_flag, ai_muted_flag = cs
+            if deleted_flag:
+                already_archived += 1
+                continue
+            if blocked_flag:
+                already_archived += 1
+                continue
+            if ai_muted_flag:
+                skipped_takeover += 1
+                continue
+        active_esc = conn.execute(
+            "SELECT 1 FROM pending_notifications WHERE customer_id = ? "
+            "AND status IN ('pending', 'sent') LIMIT 1", (phone,)
+        ).fetchone()
+        if active_esc:
+            skipped_escalation += 1
+            continue
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, updated_at, deleted) "
+            "VALUES (?, 'whatsapp', 'archived', ?, 1) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET deleted = 1, "
+            "updated_at = excluded.updated_at",
+            (phone, now_iso))
+        archived += 1
+    conn.commit()
+    conn.close()
+    return {
+        "archivedCount": archived,
+        "skippedActiveEscalation": skipped_escalation,
+        "skippedHumanTakeover": skipped_takeover,
+        "alreadyArchived": already_archived,
+    }
+
+
+def export_all_customer_data(export_dir: str, tenant: str) -> dict:
+    """Brief 237: dump all customer-side data to a JSON file under
+    export_dir. Returns the path + per-table counts. Approved learnings
+    and tasks are intentionally excluded — those are operator-curated."""
+    now_iso = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join(export_dir, f"{tenant}-{now_iso}.json")
+    conn = _get_conn()
+
+    def _rows(sql):
+        cur = conn.execute(sql)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    payload = {
+        "tenant": tenant,
+        "exportedAt": now_iso,
+        "customers": _rows("SELECT * FROM customers"),
+        "customer_identifiers": _rows("SELECT * FROM customer_identifiers"),
+        "customer_interactions": _rows("SELECT * FROM customer_interactions"),
+        "whatsapp_threads": _rows("SELECT * FROM whatsapp_threads"),
+        "pending_notifications": _rows("SELECT * FROM pending_notifications"),
+        "appointments": _rows("SELECT * FROM appointments"),
+        "bookings": _rows("SELECT * FROM bookings"),
+        "service_bookings": _rows("SELECT * FROM service_bookings"),
+        "conversation_status": _rows("SELECT * FROM conversation_status"),
+    }
+    conn.close()
+
+    # Email JSON state (no DB table).
+    email_path = _get_email_state_path()
+    if os.path.exists(email_path):
+        try:
+            with open(email_path, "r") as f:
+                payload["email_threads"] = json.load(f)
+        except Exception:
+            payload["email_threads"] = {}
+    else:
+        payload["email_threads"] = {}
+
+    counts = {k: len(v) if isinstance(v, list) else 1
+              for k, v in payload.items() if k not in ("tenant", "exportedAt")}
+
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp, path)
+
+    return {
+        "exportPath": path,
+        "recordCounts": counts,
+        "exportedAt": now_iso,
+    }
+
+
+def delete_customer_data(identifier_value: str, identifier_type: str,
+                          action: str, keep_approved_learnings: bool) -> dict:
+    """Brief 237: apply endOfRetentionAction (delete | anonymize) to a
+    specific customer's data. Active-escalation guard: refuses if the
+    customer has any pending/sent notification. keep_approved_learnings
+    preserves escalation_learnings (info_updates is tenant-wide
+    business announcements with no per-customer FK, so it is never
+    touched by this helper regardless of the flag)."""
+    if action not in ("delete", "anonymize"):
+        return {"ok": False, "reason": f"invalid_action:{action}"}
+
+    conn = _get_conn()
+    # Resolve the customer's integer PK + every text identifier they were
+    # ever filed under (per-table FKs are inconsistent: pending_notifications
+    # uses TEXT, customer_interactions uses INTEGER FK).
+    row = conn.execute(
+        "SELECT customer_id FROM customer_identifiers WHERE type = ? AND value = ? LIMIT 1",
+        (identifier_type, identifier_value)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": True, "action": action, "deletedCount": 0,
+                "anonymizedCount": 0, "reason": "no_such_customer"}
+    cust_pk = row[0]
+    ident_rows = conn.execute(
+        "SELECT type, value FROM customer_identifiers WHERE customer_id = ?",
+        (cust_pk,)).fetchall()
+    phones = {v for t, v in ident_rows if t in ("phone", "wa_conversation_id")}
+    emails = {v for t, v in ident_rows if t == "email"}
+    conv_ids = phones | {v for t, v in ident_rows if t == "conversation_id"}
+    text_keys = list(conv_ids | emails)
+
+    # Active-escalation guard (Rule 8). Filter status IN ('pending','sent')
+    # per Brief 235 — production transitions pending→sent on insert.
+    if text_keys:
+        placeholders = ",".join("?" for _ in text_keys)
+        active = conn.execute(
+            f"SELECT 1 FROM pending_notifications WHERE customer_id IN ({placeholders}) "
+            f"AND status IN ('pending', 'sent') LIMIT 1",
+            text_keys
+        ).fetchone()
+        if active:
+            conn.close()
+            return {"ok": False, "reason": "active_escalation"}
+
+    deleted = 0
+    anonymized = 0
+    skipped_learnings = 0
+
+    if action == "delete":
+        # WA/IG/FB messages by phone identifiers
+        if phones:
+            ph = list(phones)
+            placeholders = ",".join("?" for _ in ph)
+            cur = conn.execute(
+                f"DELETE FROM whatsapp_threads WHERE phone IN ({placeholders})", ph)
+            deleted += cur.rowcount
+        # pending_notifications (only resolved — active was already guarded)
+        if text_keys:
+            placeholders = ",".join("?" for _ in text_keys)
+            cur = conn.execute(
+                f"DELETE FROM pending_notifications WHERE customer_id IN "
+                f"({placeholders}) AND status NOT IN ('pending', 'sent')",
+                text_keys)
+            deleted += cur.rowcount
+            cur = conn.execute(
+                f"DELETE FROM appointments WHERE conversation_id IN ({placeholders})",
+                text_keys)
+            deleted += cur.rowcount
+            cur = conn.execute(
+                f"DELETE FROM conversation_status WHERE conversation_id IN ({placeholders})",
+                text_keys)
+            deleted += cur.rowcount
+        # customer_interactions uses INTEGER FK
+        cur = conn.execute(
+            "DELETE FROM customer_interactions WHERE customer_id = ?", (cust_pk,))
+        deleted += cur.rowcount
+        # bookings/service_bookings use INTEGER FK (best-effort — schema may differ)
+        try:
+            cur = conn.execute("DELETE FROM bookings WHERE customer_id = ?", (cust_pk,))
+            deleted += cur.rowcount
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur = conn.execute("DELETE FROM service_bookings WHERE customer_id = ?", (cust_pk,))
+            deleted += cur.rowcount
+        except sqlite3.OperationalError:
+            pass
+        # Approved learnings — preserve if flag is set
+        if not keep_approved_learnings and text_keys:
+            placeholders = ",".join("?" for _ in text_keys)
+            try:
+                cur = conn.execute(
+                    f"DELETE FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
+                    text_keys)
+                deleted += cur.rowcount
+            except sqlite3.OperationalError:
+                pass
+        else:
+            # count what we skipped, for reporting
+            if text_keys:
+                placeholders = ",".join("?" for _ in text_keys)
+                try:
+                    cnt = conn.execute(
+                        f"SELECT COUNT(*) FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
+                        text_keys).fetchone()[0]
+                    skipped_learnings = cnt or 0
+                except sqlite3.OperationalError:
+                    pass
+        # Drop identifiers + customer row last
+        cur = conn.execute(
+            "DELETE FROM customer_identifiers WHERE customer_id = ?", (cust_pk,))
+        deleted += cur.rowcount
+        cur = conn.execute("DELETE FROM customers WHERE id = ?", (cust_pk,))
+        deleted += cur.rowcount
+
+    else:  # anonymize
+        REDACTED = "[redacted]"
+        REDACTED_MSG = "[redacted message]"
+        cur = conn.execute(
+            "UPDATE customers SET display_name = ? WHERE id = ?",
+            (REDACTED, cust_pk))
+        anonymized += cur.rowcount
+        cur = conn.execute(
+            "UPDATE customer_identifiers SET value = ? WHERE customer_id = ?",
+            (REDACTED, cust_pk))
+        anonymized += cur.rowcount
+        if phones:
+            ph = list(phones)
+            placeholders = ",".join("?" for _ in ph)
+            cur = conn.execute(
+                f"UPDATE whatsapp_threads SET text = ?, sender_name = ? "
+                f"WHERE phone IN ({placeholders})",
+                [REDACTED_MSG, REDACTED] + ph)
+            anonymized += cur.rowcount
+        if not keep_approved_learnings and text_keys:
+            placeholders = ",".join("?" for _ in text_keys)
+            try:
+                cur = conn.execute(
+                    f"UPDATE escalation_learnings SET human_answer = ? "
+                    f"WHERE conversation_id IN ({placeholders})",
+                    [REDACTED] + text_keys)
+                anonymized += cur.rowcount
+            except sqlite3.OperationalError:
+                pass
+        else:
+            if text_keys:
+                placeholders = ",".join("?" for _ in text_keys)
+                try:
+                    cnt = conn.execute(
+                        f"SELECT COUNT(*) FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
+                        text_keys).fetchone()[0]
+                    skipped_learnings = cnt or 0
+                except sqlite3.OperationalError:
+                    pass
+
+    conn.commit()
+    conn.close()
+
+    # Email JSON state — both delete and anonymize touch it.
+    email_path = _get_email_state_path()
+    if os.path.exists(email_path) and emails:
+        try:
+            with open(email_path, "r") as f:
+                state = json.load(f)
+        except Exception:
+            state = None
+        if state:
+            threads = state.get("threads", {})
+            to_drop = []
+            for tk, th in threads.items():
+                from_email = (th.get("from_email") or "").lower()
+                if from_email in {e.lower() for e in emails}:
+                    if action == "delete":
+                        to_drop.append(tk)
+                    else:
+                        th["from_email"] = "[redacted]"
+                        for m in th.get("messages", []) or []:
+                            m["text"] = "[redacted message]"
+                            if "from_email" in m:
+                                m["from_email"] = "[redacted]"
+            if action == "delete":
+                for tk in to_drop:
+                    threads.pop(tk, None)
+                    if action == "delete":
+                        deleted += 1
+            else:
+                anonymized += len([1 for tk, th in threads.items()
+                                   if (th.get("from_email") or "") == "[redacted]"])
+            try:
+                tmp = email_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(state, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, email_path)
+            except OSError:
+                pass
+
+    return {
+        "ok": True,
+        "action": action,
+        "deletedCount": deleted,
+        "anonymizedCount": anonymized,
+        "skippedLearnings": skipped_learnings,
+    }
 
 
 def knowledge_file_create(filename: str, stored_filename: str, mime_type: str,

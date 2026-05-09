@@ -193,6 +193,21 @@ def cmd_set_status(args, status):
     print(f"{t['id'][:12]} → {updated.get('status')}: {_short_body(t, 60)}")
 
 
+def cmd_create(args):
+    body_text = args.body
+    if args.body_file:
+        body_text = Path(args.body_file).read_text()
+    payload = {
+        "assignedTo": args.to,
+        "createdBy": args.from_,
+        "bodyText": body_text,
+    }
+    created = _api("POST", "/tasks", json=payload)
+    tid = created.get("id", "?")
+    num = created.get("taskNumber") or created.get("task_number") or "?"
+    print(f"created #{num} {tid[:12]} → to:{args.to} from:{args.from_}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -216,6 +231,12 @@ def main():
     p_open = sub.add_parser("open", help="reopen task")
     p_open.add_argument("task", help="task id or unique body substring")
 
+    p_create = sub.add_parser("create", help="create a new task")
+    p_create.add_argument("--to", required=True, help="assignedTo (e.g. SR, Jr, Calvin)")
+    p_create.add_argument("--from", dest="from_", default="Jr", help="createdBy")
+    p_create.add_argument("--body", default="", help="task body text inline")
+    p_create.add_argument("--body-file", help="read body from file (overrides --body)")
+
     args = p.parse_args()
     if args.cmd == "list":
         cmd_list(args)
@@ -227,6 +248,8 @@ def main():
         cmd_set_status(args, "done")
     elif args.cmd == "open":
         cmd_set_status(args, "open")
+    elif args.cmd == "create":
+        cmd_create(args)
 
 
 if __name__ == "__main__":
