@@ -281,6 +281,7 @@ def handle_incoming_dm(message: dict) -> str:
                         f"({_company} — auto-escalated by {_agent} based on "
                         f"conversation context.)"
                     ),
+                    mode="soft",
                 )
                 bm_logger.log("dm_escalation_created",
                                conversation_id=conversation_id[:20],

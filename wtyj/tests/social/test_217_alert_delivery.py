@@ -297,3 +297,203 @@ def test_relay_notification_does_NOT_fire_alerts(mock_wa, mock_smtp):
     assert len(rows) == 0
 
     _cleanup_escalation(esc_id, customer_id)
+
+
+# ── Brief 239: rich alert body, suppression, Friday-12:00 case ─────────
+
+def _make_summary(reason="Calvin wants to schedule a meeting.",
+                   wants="Schedule a meeting.",
+                   decide="Choose a time.",
+                   options=None,
+                   intent="scheduling",
+                   proposed=None,
+                   prev_proposed=None,
+                   latest_msg=""):
+    s = {
+        "reason": reason,
+        "customerWants": wants,
+        "operatorNeedsToDecide": decide,
+        "recommendedOptions": options or ["Confirm Friday 12:00",
+                                            "Suggest another time",
+                                            "Switch to human takeover"],
+        "extractedDetails": {
+            "intent": intent,
+            "proposedTimes": proposed or ["Friday 12:00"],
+            "topic": "scheduling",
+        },
+    }
+    if prev_proposed is not None:
+        s["extractedDetails"]["previousProposedTimes"] = prev_proposed
+    if latest_msg:
+        s["latestCustomerMessage"] = latest_msg
+    return s
+
+
+def test_alert_body_uses_rich_summary_when_available(monkeypatch):
+    """Brief 239: when summary_dict is supplied, body includes reason,
+    decision, options, and the latest customer message verbatim."""
+    from dashboard import api as dapi
+    captured = {}
+    def fake_smtp(to, subj, body): captured.update(to=to, subj=subj, body=body)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    summary = _make_summary(latest_msg="i changed my mind, i wanna change it to friday 12:00")
+    dapi._fire_escalation_alerts(
+        escalation_id=1, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft", summary_dict=summary, is_update=False)
+    assert "Reason:" in captured["body"]
+    assert "Calvin wants to schedule" in captured["body"]
+    assert "i changed my mind" in captured["body"]
+    assert "Mode: Agent needs help" in captured["body"]
+    assert "- Confirm Friday 12:00" in captured["body"]
+
+
+def test_alert_body_falls_back_to_vague_when_no_summary(monkeypatch):
+    """Brief 239: when summary_dict is None (Claude failed), body uses the
+    legacy Brief 217 format so old tests + no-API-key paths still work."""
+    from dashboard import api as dapi
+    captured = {}
+    def fake_smtp(to, subj, body): captured.update(to=to, subj=subj, body=body)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    dapi._fire_escalation_alerts(
+        escalation_id=1, customer_name="Calvin", channel="whatsapp",
+        summary="Marina escalated a whatsapp conversation",
+        mode=None, summary_dict=None, is_update=False)
+    assert "Marina escalated a whatsapp conversation" in captured["body"]
+    assert captured["subj"] == "New escalation: Calvin"
+
+
+def test_alert_subject_specific_for_scheduling_update(monkeypatch):
+    """Brief 239: when intent=scheduling AND is_update AND proposedTimes
+    non-empty, subject names the new time."""
+    from dashboard import api as dapi
+    captured = {}
+    def fake_smtp(to, subj, body): captured.update(subj=subj)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    summary = _make_summary(proposed=["Friday 12:00"])
+    dapi._fire_escalation_alerts(
+        escalation_id=1, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft", summary_dict=summary, is_update=True)
+    assert captured["subj"] == "Updated escalation: Calvin changed meeting time to Friday 12:00"
+
+
+def test_alert_body_surfaces_previous_proposed_times(monkeypatch):
+    """Brief 239: when previousProposedTimes is non-empty, body includes a
+    'Previously proposed (now retracted): ...' line. Verifies the schema
+    field added in Step 1 is consumed by the body builder in Step 4."""
+    from dashboard import api as dapi
+    captured = {}
+    def fake_smtp(to, subj, body): captured.update(body=body)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    summary = _make_summary(
+        proposed=["Friday 12:00"],
+        prev_proposed=["tomorrow evening 17:00", "Monday morning 11:00"],
+        latest_msg="i changed my mind, i wanna change it to friday 12:00")
+    dapi._fire_escalation_alerts(
+        escalation_id=1, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft", summary_dict=summary, is_update=True)
+    assert ("Previously proposed (now retracted): "
+            "tomorrow evening 17:00, Monday morning 11:00") in captured["body"]
+
+
+def test_re_escalation_with_changed_summary_fires_updated_alert(monkeypatch):
+    """Brief 239: real round-trip — call create_pending_notification twice
+    for the same customer; second call has a materially-different summary;
+    second alert fires with is_update=True and the new proposedTimes."""
+    from shared import state_registry
+    summaries = iter([
+        _make_summary(proposed=["Thursday 17:00", "Monday 11:00"],
+                       latest_msg="i can do thu 17 or mon 11"),
+        _make_summary(proposed=["Friday 12:00"],
+                       prev_proposed=["Thursday 17:00", "Monday 11:00"],
+                       latest_msg="i changed my mind, i wanna change it to friday 12:00"),
+    ])
+    monkeypatch.setattr(state_registry, "_summary_dispatcher",
+                         lambda *a, **k: next(summaries))
+    fired = []
+    def fake_dispatch(eid, name, ch, subj, mode=None, summary_dict=None, is_update=False):
+        fired.append({"is_update": is_update,
+                       "subject": subj,
+                       "summary": summary_dict})
+    monkeypatch.setattr(state_registry, "_alert_dispatcher", fake_dispatch)
+    cid = "test-friday-conv"
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", cid, "Calvin", "Marina escalated", "...",
+        mode="soft")
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", cid, "Calvin", "Marina escalated", "...",
+        mode="soft")
+    assert len(fired) == 2
+    assert fired[0]["is_update"] is False
+    assert fired[1]["is_update"] is True
+    assert (fired[1]["summary"]["extractedDetails"]["proposedTimes"]
+            == ["Friday 12:00"])
+    assert (fired[1]["summary"]["extractedDetails"]["previousProposedTimes"]
+            == ["Thursday 17:00", "Monday 11:00"])
+
+
+def test_re_escalation_with_unchanged_summary_suppresses_alert(monkeypatch):
+    """Brief 239: when the regenerated summary is materially identical to
+    the previous one, no follow-up alert fires — only the first one."""
+    from shared import state_registry
+    same = _make_summary(proposed=["Friday 12:00"],
+                          latest_msg="i wanna change it to friday 12:00")
+    monkeypatch.setattr(state_registry, "_summary_dispatcher",
+                         lambda *a, **k: dict(same))
+    fired = []
+    monkeypatch.setattr(state_registry, "_alert_dispatcher",
+                         lambda *a, **k: fired.append((a, k)))
+    cid = "test-noop-conv"
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", cid, "Calvin", "subj1", "body1",
+        mode="soft")
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", cid, "Calvin", "subj2", "body2",
+        mode="soft")
+    assert len(fired) == 1
+
+
+def test_mode_set_at_create_persists_and_renders(monkeypatch):
+    """Brief 239: passing mode='soft' to create_pending_notification puts
+    mode='soft' on the row; the alert dispatcher receives mode='soft';
+    the rich body says 'Mode: Agent needs help' (not '(unset)')."""
+    from shared import state_registry
+    from dashboard import api as dapi
+    monkeypatch.setattr(state_registry, "_summary_dispatcher",
+                         lambda *a, **k: _make_summary(latest_msg="hi"))
+    captured = {}
+    def fake_smtp(to, subj, body): captured.update(body=body)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    cid = "test-mode-conv"
+    rid = state_registry.create_pending_notification(
+        "escalation", "whatsapp", cid, "Calvin", "subj", "body", mode="soft")
+    conn = state_registry._get_conn()
+    row = conn.execute("SELECT mode FROM pending_notifications WHERE id=?",
+                        (rid,)).fetchone()
+    conn.close()
+    assert row[0] == "soft"
+    assert "Mode: Agent needs help" in captured.get("body", "")

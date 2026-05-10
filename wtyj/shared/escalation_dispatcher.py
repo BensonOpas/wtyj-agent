@@ -46,6 +46,21 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
         history=history,
     )
 
+    if summary_dict and history:
+        # Brief 239: surface the most recent customer-side message in the
+        # summary so the alert email and dashboard can display it verbatim
+        # without the operator having to scroll the conversation. Walk the
+        # history newest-last and pick the most recent message whose role
+        # is customer/user/incoming.
+        for _msg in reversed(history):
+            _role = (_msg.get("role") or "").lower()
+            if _role in ("user", "customer", "incoming"):
+                _text = (_msg.get("text") or _msg.get("content")
+                         or _msg.get("body") or "").strip()
+                if _text:
+                    summary_dict["latestCustomerMessage"] = _text
+                    break
+
     # Brief 228: best-effort appointment row write. Only fires when the
     # summary indicates scheduling intent. Failure here never blocks
     # summary persistence.

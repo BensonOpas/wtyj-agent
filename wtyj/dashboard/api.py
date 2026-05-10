@@ -1560,17 +1560,107 @@ async def get_customer_by_identifier(type_: str, value: str):
     return state_registry.customer_get_full(cust["id"])
 
 
-# ── Brief 217: Escalation alert dispatcher ──────────────────────────────────
+# ── Brief 217 + 239: Escalation alert dispatcher ────────────────────────────
 # Hooked into state_registry.create_pending_notification (for escalation rows
 # only — relay rows are gated out). Best-effort: failure on any one channel
 # is recorded in alert_deliveries but does NOT raise — escalation row insert
-# always succeeds.
+# always succeeds. Brief 239: when summary_dict is supplied, builds a rich
+# operator-facing body using the structured Brief 227 summary; falls back to
+# the legacy vague format when summary_dict is None.
+
+def _channel_label(channel: str) -> str:
+    return {
+        "whatsapp": "WhatsApp",
+        "email": "Email",
+        "instagram": "Instagram",
+        "facebook": "Facebook",
+        "messenger": "Messenger",
+    }.get((channel or "").lower(), (channel or "").title() or "(unknown)")
+
+
+def _mode_label(mode: str) -> str:
+    if mode == "soft":
+        return "Agent needs help"
+    if mode == "hard":
+        return "Hard escalation"
+    return "(unset)"
+
+
+def _build_alert_subject(customer_name: str, summary_dict: dict,
+                          is_update: bool) -> str:
+    """Brief 239: build a specific subject when summary_dict is present;
+    fall back to the Brief 217 vague subject otherwise."""
+    if not summary_dict:
+        prefix = "Updated escalation" if is_update else "New escalation"
+        return f"{prefix}: {customer_name or 'customer'}"
+    name = customer_name or "customer"
+    extracted = summary_dict.get("extractedDetails") or {}
+    intent = (extracted.get("intent") or "").lower()
+    proposed = extracted.get("proposedTimes") or []
+    prefix = "Updated escalation" if is_update else "Escalation alert"
+    if intent == "scheduling" and is_update and proposed:
+        return f"{prefix}: {name} changed meeting time to {proposed[0]}"
+    if intent == "scheduling":
+        return f"{prefix}: {name} needs a scheduling decision"
+    wants = (summary_dict.get("customerWants") or "").strip()
+    if wants:
+        return f"{prefix}: {name} — {wants[:60]}"
+    return f"{prefix}: {name}"
+
+
+def _build_alert_body(customer_name: str, channel: str, mode: str,
+                      summary_dict: dict, fallback_summary: str,
+                      client_name: str) -> str:
+    """Brief 239: rich operator-facing body when summary_dict is present;
+    legacy Brief 217 body otherwise."""
+    if not summary_dict:
+        safe_summary = (fallback_summary or "")[:200]
+        return (
+            f"New escalation in {client_name}\n\n"
+            f"Customer: {customer_name or '(unknown)'}\n"
+            f"Channel: {channel or '(unknown)'}\n"
+            f"Mode: {_mode_label(mode)}\n"
+            f"Summary: {safe_summary}\n"
+            f"Action: Open dashboard to review."
+        )
+    reason = (summary_dict.get("reason") or "(no reason captured)").strip()
+    decide = (summary_dict.get("operatorNeedsToDecide")
+              or "(no decision specified)").strip()
+    options = summary_dict.get("recommendedOptions") or []
+    options_text = "\n".join(f"- {o}" for o in options[:5]) or "- (no options listed)"
+    latest_msg = (summary_dict.get("latestCustomerMessage") or "").strip()
+    latest_block = ""
+    if latest_msg:
+        latest_block = f'Latest customer message:\n"{latest_msg}"\n\n'
+    extracted = summary_dict.get("extractedDetails") or {}
+    prev_times = extracted.get("previousProposedTimes") or []
+    prev_block = ""
+    if prev_times:
+        prev_block = (f"Previously proposed (now retracted): "
+                      f"{', '.join(prev_times)}\n\n")
+    return (
+        f"Escalation alert\n\n"
+        f"Customer: {customer_name or '(unknown)'}\n"
+        f"Channel: {_channel_label(channel)}\n"
+        f"Mode: {_mode_label(mode)}\n\n"
+        f"Reason:\n{reason}\n\n"
+        f"{prev_block}"
+        f"{latest_block}"
+        f"Decision needed:\n{decide}\n\n"
+        f"Suggested options:\n{options_text}\n\n"
+        f"Action:\nOpen dashboard to reply."
+    )
+
 
 def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                              channel: str, summary: str,
-                             mode: str = None) -> None:
-    """Brief 217: build the alert message, dispatch to enabled channels,
-    record delivery status per attempt. Never raises."""
+                             mode: str = None,
+                             summary_dict: dict = None,
+                             is_update: bool = False) -> None:
+    """Brief 217 + 239: build the alert message, dispatch to enabled channels,
+    record delivery status per attempt. Never raises. When summary_dict is
+    supplied (Brief 239), builds a rich body with the structured summary;
+    otherwise falls back to the Brief 217 legacy format."""
     try:
         biz = config_loader.get_business() or {}
         client_name = biz.get("name", "Unboks")
@@ -1582,16 +1672,9 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
     settings = state_registry.get_alert_settings(default_email_destination=default_email)
     channels_cfg = settings.get("channels", {})
 
-    safe_summary = (summary or "")[:200]
-    mode_text = mode if mode in ("soft", "hard") else "(unset)"
-    alert_text = (
-        f"New escalation in {client_name}\n\n"
-        f"Customer: {customer_name or '(unknown)'}\n"
-        f"Channel: {channel or '(unknown)'}\n"
-        f"Mode: {mode_text}\n"
-        f"Summary: {safe_summary}\n"
-        f"Action: Open dashboard to review."
-    )
+    email_subject = _build_alert_subject(customer_name, summary_dict, is_update)
+    alert_text = _build_alert_body(customer_name, channel, mode, summary_dict,
+                                    summary, client_name)
 
     em = channels_cfg.get("email", {})
     if em.get("enabled"):
@@ -1615,7 +1698,7 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         else:
             for dest in recipients:
                 try:
-                    smtp_send(dest, f"New escalation: {customer_name or 'customer'}", alert_text)
+                    smtp_send(dest, email_subject, alert_text)
                     state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
                 except Exception as exc:
                     state_registry.record_alert_delivery(

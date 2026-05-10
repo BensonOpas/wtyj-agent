@@ -752,7 +752,8 @@ def main():
                             f"=== RE-ESCALATION (fully_escalated email) ===\n"
                             f"Customer: {_cname} <{from_email}>\n"
                             f"New issue: {_esc_note}\n\n"
-                            f"=== CHAT LOG ===\n" + "\n".join(_chat_lines))
+                            f"=== CHAT LOG ===\n" + "\n".join(_chat_lines),
+                            mode="hard")
                         log(f"Escalated re-escalation: {from_email}")
 
                     smtp_send(from_email, "Re: " + subj, result["reply"],
@@ -1107,7 +1108,8 @@ def main():
                         'escalation', 'email', from_email,
                         customer_name_esc or "Unknown",
                         f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {_esc_summary}",
-                        escalation_alert)
+                        escalation_alert,
+                        mode="hard")
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
@@ -1146,7 +1148,7 @@ def main():
                             )
                             state_registry.create_pending_notification(
                                 'escalation', 'email', from_email, _cname,
-                                _esc_subject, _esc_body)
+                                _esc_subject, _esc_body, mode="soft")
                             bm_logger.log("booking_flow_off_escalated", email=from_email)
                             # Send Marina's conversational reply, then skip to next email
                             smtp_send(from_email, "Re: " + subj, reply_text,
@@ -1223,7 +1225,8 @@ def main():
                                         f"[SYSTEM] Manifest failure for {_cname} (Email: {from_email})",
                                         f"Booking failed {_retry_count} times due to API error.\n"
                                         f"Error: {_manifest_error[:300]}\n"
-                                        f"Fields: {json.dumps(fields_now, indent=2, ensure_ascii=False)}")
+                                        f"Fields: {json.dumps(fields_now, indent=2, ensure_ascii=False)}",
+                                        mode="hard")
                                     bm_logger.log("email_manifest_escalated", email=from_email,
                                                   retry_count=_retry_count)
                                 th["flags"]["booking_confirmed"] = False

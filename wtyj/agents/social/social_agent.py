@@ -280,7 +280,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                 f"Customer: {_cname}\nNew issue: {_esc_note}\n\n"
                 f"=== CHAT LOG ===\n" + "\n".join(
                     f"[{m.get('role','?').upper()}] {m.get('text','')}" for m in (history or [])
-                ))
+                ),
+                mode="hard")
             bm_logger.log("whatsapp_escalated_re_escalation", phone=phone)
 
         # Record reply timestamp + persist (early return bypasses end-of-function persistence)
@@ -500,7 +501,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                  f"Service: {fields.get('service_name', _ck_svc)}\n"
                  f"Date: {fields.get('date', '?')}\n"
                  f"Guests: {_ck_guests} (capacity: {_svc_capacity})\n\n"
-                 f"Group exceeds standard capacity. Contact customer to discuss options."))
+                 f"Group exceeds standard capacity. Contact customer to discuss options."),
+                mode="soft")
             bm_logger.log("whatsapp_large_group_exceeds_capacity", phone=phone,
                           guests=_ck_guests, capacity=_svc_capacity,
                           service_key=_ck_svc)
@@ -681,7 +683,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
         )
         state_registry.create_pending_notification(
             'escalation', channel, phone, _cname,
-            _esc_subject, _esc_body)
+            _esc_subject, _esc_body, mode="hard")
         _skip_booking = True
 
     # Step 7.8: Booking flow toggle — if OFF, escalate booking intents instead
@@ -715,7 +717,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                 )
                 state_registry.create_pending_notification(
                     'escalation', channel, phone, _cname,
-                    _esc_subject, _esc_body)
+                    _esc_subject, _esc_body, mode="soft")
                 bm_logger.log("booking_flow_off_escalated", phone=phone)
                 _skip_booking = True
 
@@ -766,7 +768,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                             f"[SYSTEM] Manifest failure for {_cname} ({_channel_label}: {phone})",
                             f"Booking failed {_retry_count} times due to API error.\n"
                             f"Error: {_manifest_error[:300]}\n"
-                            f"Fields: {json.dumps(fields, indent=2, ensure_ascii=False)}")
+                            f"Fields: {json.dumps(fields, indent=2, ensure_ascii=False)}",
+                            mode="hard")
                         bm_logger.log("whatsapp_manifest_escalated", phone=phone,
                                       retry_count=_retry_count)
                     flags["booking_confirmed"] = False
@@ -901,7 +904,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                          f"Date: {fields.get('date', '?')}\n"
                          f"Customer: {_lg_name}\nPhone: {phone}\n"
                          f"Email: {fields.get('email', 'not provided')}\n\n"
-                         f"This booking was auto-confirmed. Review and adjust if needed."))
+                         f"This booking was auto-confirmed. Review and adjust if needed."),
+                        mode="soft")
                     state_registry.wa_store_message(phone, "system",
                         f"Large group booking ({_lg_guests} guests) — operator notified for review")
                     bm_logger.log("large_group_booking", phone=phone,

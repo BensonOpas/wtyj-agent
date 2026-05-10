@@ -43,6 +43,30 @@ def set_alert_dispatcher(fn):
     _alert_dispatcher = fn
 
 
+def _summaries_materially_differ(old: dict, new: dict) -> bool:
+    """Brief 239: compare two escalation_summary dicts; return True only
+    if operator-relevant content has changed (proposed times, latest
+    customer message, or what the customer wants). Used to suppress
+    duplicate update alert emails when the summary regenerated but the
+    situation didn't actually change for the operator.
+
+    Returns True when the dicts differ on customerWants OR
+    latestCustomerMessage OR extractedDetails.proposedTimes. Returns
+    False when all three match. Returns True (defensive: fire alert) if
+    either input is not a dict."""
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return True
+    if old.get("customerWants") != new.get("customerWants"):
+        return True
+    if old.get("latestCustomerMessage") != new.get("latestCustomerMessage"):
+        return True
+    _o = (old.get("extractedDetails") or {}).get("proposedTimes") or []
+    _n = (new.get("extractedDetails") or {}).get("proposedTimes") or []
+    if list(_o) != list(_n):
+        return True
+    return False
+
+
 def _get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -1384,13 +1408,20 @@ def dm_get_history(conversation_id: str, channel: str, limit: int = 10) -> list:
 def create_pending_notification(notification_type: str, channel: str,
                                  customer_id: str, customer_name: str,
                                  subject: str, body: str,
-                                 relay_token: str = None) -> int:
+                                 relay_token: str = None,
+                                 mode: str = None) -> int:
     """Insert (or, for an unresolved escalation, UPDATE) a pending
     notification. Brief 227: dedup unresolved escalations + structured
-    summary persisted on the same row."""
+    summary persisted on the same row. Brief 239: optional `mode` param
+    ('soft'/'hard') sets pending_notifications.mode at insert time and
+    drives the alert email's Mode line. None preserves existing value
+    on UPDATE (COALESCE)."""
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
 
+    # Brief 239: gate-safe initialization so non-escalation paths can
+    # still compute is_update without NameError.
+    existing = None
     row_id = None
 
     # Brief 227: dedup unresolved escalations. If a 'pending' row already
@@ -1411,36 +1442,45 @@ def create_pending_notification(notification_type: str, channel: str,
         cur = conn.execute(
             "INSERT INTO pending_notifications "
             "(notification_type, relay_token, channel, customer_id, customer_name, "
-            "subject, body, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            "subject, body, status, created_at, mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
             (notification_type, relay_token, channel, customer_id, customer_name,
-             subject, body, now)
+             subject, body, now, mode)
         )
         row_id = cur.lastrowid
     else:
         conn.execute(
             "UPDATE pending_notifications "
-            "SET subject = ?, body = ?, customer_name = ?, created_at = ? "
+            "SET subject = ?, body = ?, customer_name = ?, created_at = ?, "
+            "mode = COALESCE(?, mode) "
             "WHERE id = ?",
-            (subject, body, customer_name, now, row_id))
+            (subject, body, customer_name, now, mode, row_id))
     conn.commit()
     conn.close()
 
     # Brief 188: escalation/relay created → conversation is now "open"
     set_conversation_status(customer_id, "open", channel)
 
-    # Brief 217: best-effort alert dispatch. Gated on notification_type ==
-    # 'escalation' so relay rows (Marina's "ask the team a question" flow)
-    # don't ping the operator. Wrapped in try/except so a dispatcher
-    # failure NEVER blocks the escalation row from being saved.
-    if notification_type == "escalation" and _alert_dispatcher is not None:
+    # Brief 239: read previous summary BEFORE the new one is generated, so
+    # the suppression check has both versions to compare.
+    is_update = (existing is not None) and (notification_type == "escalation")
+    prev_summary = None
+    if is_update:
         try:
-            _alert_dispatcher(row_id, customer_name, channel, subject)
+            conn = _get_conn()
+            _row = conn.execute(
+                "SELECT escalation_summary FROM pending_notifications "
+                "WHERE id = ?", (row_id,)).fetchone()
+            conn.close()
+            if _row and _row[0]:
+                prev_summary = json.loads(_row[0])
         except Exception:
-            pass
+            prev_summary = None
 
-    # Brief 227: best-effort structured summary generation. Persisted on
-    # the same row whether the row was newly inserted or updated.
+    # Brief 227 + 239: generate fresh structured summary BEFORE the alert
+    # fires so the alert body can use it. Persisted regardless of whether
+    # the alert ends up firing.
+    summary_dict = None
     if notification_type == "escalation" and _summary_dispatcher is not None:
         try:
             summary_dict = _summary_dispatcher(
@@ -1454,7 +1494,33 @@ def create_pending_notification(notification_type: str, channel: str,
                 conn.commit()
                 conn.close()
         except Exception:
-            pass
+            summary_dict = None
+
+    # Brief 217 + 239: alert dispatch — suppress duplicate updates with
+    # an unchanged summary. Wrapped in try/except so a dispatcher failure
+    # NEVER blocks the escalation row from being saved.
+    if notification_type == "escalation" and _alert_dispatcher is not None:
+        should_fire = True
+        if is_update and prev_summary is not None and summary_dict is not None:
+            should_fire = _summaries_materially_differ(
+                prev_summary, summary_dict)
+        if should_fire:
+            try:
+                conn = _get_conn()
+                _r = conn.execute(
+                    "SELECT mode FROM pending_notifications WHERE id = ?",
+                    (row_id,)).fetchone()
+                conn.close()
+                actual_mode = _r[0] if _r else None
+            except Exception:
+                actual_mode = None
+            try:
+                _alert_dispatcher(row_id, customer_name, channel, subject,
+                                  mode=actual_mode,
+                                  summary_dict=summary_dict,
+                                  is_update=is_update)
+            except Exception:
+                pass
 
     return row_id
 

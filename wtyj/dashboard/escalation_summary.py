@@ -93,6 +93,20 @@ SUMMARY_TOOL = {
                             "no times mentioned."
                         ),
                     },
+                    "previousProposedTimes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Time slots the customer proposed earlier in "
+                            "the conversation but explicitly retracted or "
+                            "changed. Use this when the customer says they "
+                            "'changed their mind' or proposes a different "
+                            "time after an earlier proposal. Empty list "
+                            "when there is no retraction. Do not include "
+                            "times that are still on the table — those go "
+                            "in proposedTimes."
+                        ),
+                    },
                     "topic": {
                         "type": "string",
                         "description": "2-5 word topic label.",
@@ -157,7 +171,12 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             "'Suggest another time' and 'Switch to human takeover' as "
             "fallbacks.\n"
             "- Never invent customer wording or times that aren't in the "
-            "transcript."
+            "transcript.\n"
+            "- When the customer explicitly retracts a previously proposed "
+            "time and proposes a different one (e.g., \"i changed my mind, "
+            "change it to X\"), put the new time in proposedTimes and the "
+            "retracted time(s) in previousProposedTimes. Do not put the "
+            "same time in both lists."
         )
 
         user_prompt = (
