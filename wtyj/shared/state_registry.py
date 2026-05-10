@@ -2124,10 +2124,17 @@ def get_active_escalation_summary_for(customer_id: str) -> Optional[dict]:
 
 def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
                        title: str, proposed_times: list, location: str = "",
-                       status: str = "detected") -> int:
+                       status: str = "detected",
+                       date_time_label: str = None) -> int:
     """Brief 228: upsert an appointment row keyed on conversation_id.
-    proposed_times is a list of strings; we store JSON and pick the first
-    one for date_time_label (frontend uses that as the headline).
+    proposed_times is a list of strings; we store JSON.
+
+    Brief 248: date_time_label is the headline time string the frontend
+    displays. When supplied (e.g., the customer's explicit confirmation
+    extracted by the Brief 248 confirmedTime schema field), use it
+    verbatim. When None (legacy callers like Brief 242's
+    appointment_confirm_by_id), fall back to the first proposed_time -
+    preserves pre-Brief-248 behavior so existing callers don't change.
 
     Brief 241: when this call transitions the appointment INTO 'confirmed'
     (insert with status='confirmed', OR update from a non-confirmed status
@@ -2138,7 +2145,10 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
         return 0
     now = datetime.now(timezone.utc).isoformat()
     pt = proposed_times or []
-    label = pt[0] if pt else ""
+    # Brief 248: explicit override wins; otherwise fall back to first
+    # proposed time (pre-Brief-248 behavior preserved for callers that
+    # don't supply date_time_label, e.g. appointment_confirm_by_id).
+    label = date_time_label if date_time_label is not None else (pt[0] if pt else "")
     conn = _get_conn()
     existing = conn.execute(
         "SELECT id, status FROM appointments WHERE conversation_id = ?",

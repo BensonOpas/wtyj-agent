@@ -70,13 +70,27 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
             if details.get("intent") == "scheduling":
                 proposed = details.get("proposedTimes") or []
                 topic = details.get("topic") or "Meeting"
+                # Brief 248: prefer the customer's explicit confirmation time
+                # for the appointment row's headline date_time_label. Falls
+                # back to proposed_times[0] when no explicit confirmation -
+                # matches pre-Brief-248 derivation in appointment_upsert,
+                # so Brief 228's existing flow is bit-for-bit unchanged when
+                # confirmedTime is empty.
+                confirmed_time = (details.get("confirmedTime") or "").strip()
+                date_time_label = (
+                    confirmed_time if confirmed_time
+                    else (proposed[0] if proposed else "")
+                )
                 if channel == "email":
                     thread_key = state_registry._find_email_thread_key_for(customer_id)
                     conv_id = f"email::{thread_key}" if thread_key else customer_id
                 else:
                     conv_id = customer_id
+                # Brief 248: when confirmedTime is populated, ensure status
+                # reflects "ready for operator confirm" even if proposedTimes
+                # happens to be empty.
                 status = ("pending_team_confirmation"
-                          if proposed else "detected")
+                          if (proposed or confirmed_time) else "detected")
                 state_registry.appointment_upsert(
                     conversation_id=conv_id,
                     channel=channel,
@@ -84,6 +98,7 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
                     title=topic,
                     proposed_times=proposed,
                     status=status,
+                    date_time_label=date_time_label,
                 )
         except Exception:
             pass

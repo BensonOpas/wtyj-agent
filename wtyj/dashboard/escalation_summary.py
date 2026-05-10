@@ -12,6 +12,7 @@ Frontend contract (from EscalationReasonPanel + escalation-summary.ts):
     "extractedDetails": {
         "intent": str,              # "scheduling" | "complaint" | ...
         "proposedTimes": [str],     # every time slot the customer mentioned
+        "confirmedTime": str,       # Brief 248: time the customer EXPLICITLY confirmed in latest message; empty when none
         "topic": str,               # short topic label
     }
 }
@@ -107,12 +108,34 @@ SUMMARY_TOOL = {
                             "in proposedTimes."
                         ),
                     },
+                    "confirmedTime": {
+                        "type": "string",
+                        "description": (
+                            "Brief 248: the single specific time the "
+                            "customer EXPLICITLY confirmed they will "
+                            "attend, in their exact wording. Populate ONLY "
+                            "when the customer's most recent message "
+                            "contains explicit confirmation language for "
+                            "a specific time. Examples that QUALIFY: "
+                            "'we will be there at 12:00' -> '12:00'; "
+                            "'see you Friday at 15:00 sharp' -> 'Friday "
+                            "at 15:00 sharp'; 'confirmed for Tuesday 9am' "
+                            "-> 'Tuesday 9am'. Examples that do NOT "
+                            "qualify (leave empty string): 'maybe 12 "
+                            "could work', 'how about Tuesday?', 'I'm "
+                            "thinking Friday', any tentative or "
+                            "hypothetical wording. The confirmation must "
+                            "be in the LATEST customer message, not "
+                            "earlier in the thread. Empty string when no "
+                            "explicit confirmation in latest message."
+                        ),
+                    },
                     "topic": {
                         "type": "string",
                         "description": "2-5 word topic label.",
                     },
                 },
-                "required": ["intent", "proposedTimes", "topic"],
+                "required": ["intent", "proposedTimes", "topic", "confirmedTime"],
             },
         },
         "required": [
@@ -176,7 +199,14 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             "time and proposes a different one (e.g., \"i changed my mind, "
             "change it to X\"), put the new time in proposedTimes and the "
             "retracted time(s) in previousProposedTimes. Do not put the "
-            "same time in both lists."
+            "same time in both lists.\n"
+            "- Brief 248: when the customer's MOST RECENT message contains "
+            "an explicit confirmation that they will attend at a specific "
+            "time (e.g., \"we will be there at 12:00\", \"see you Friday "
+            "at 15:00\"), populate confirmedTime with that exact time "
+            "wording. Tentative language (\"maybe 12\", \"how about "
+            "Tuesday?\") does NOT qualify. When in doubt, leave "
+            "confirmedTime empty."
         )
 
         user_prompt = (
