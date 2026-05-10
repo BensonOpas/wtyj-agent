@@ -2,11 +2,21 @@
 # System-wide E2E test — runs on BlueMarlin after canary deploy
 # 10 checks from project_live_preparations.md. Exit 0 on success, 1 on failure.
 # Uses sentinel prefix "e2etest" so cleanup can LIKE-sweep all test data.
+#
+# Brief 238 (CTO directive): BlueMarlin is deprecated/inactive. Channel
+# credentials (LATE_API_KEY, ZERNIO_WEBHOOK_SECRET, WHATSAPP_*, EMAIL_ADDRESS)
+# are intentionally empty in /root/clients/bluemarlin/config/platform.env so
+# BlueMarlin physically cannot send outbound replies on Calvin's WhatsApp
+# (the Unboks promo line). Checks 8-10 are skipped because they rely on
+# BlueMarlin being able to verify a Zernio HMAC signature and process a
+# webhook end-to-end, which is by-design no longer possible. UNBOKS deploy
+# must not be blocked by BlueMarlin's deprecated state. Checks 1-7 still
+# exercise BlueMarlin's auth + config + DB + read endpoints, which remain
+# valid as long as the container starts cleanly.
 set -e
 
 BASE="http://localhost:8001"
 PASSWORD=$(docker exec wtyj-bluemarlin printenv DASHBOARD_PASSWORD)
-SECRET=$(docker exec wtyj-bluemarlin printenv ZERNIO_WEBHOOK_SECRET)
 RAND=$(head -c 6 /dev/urandom | xxd -p)
 SENTINEL_BRAIN="e2etest_brain_${RAND}"
 SENTINEL_WEBHOOK="e2etest${RAND}00000000000000"
@@ -71,62 +81,17 @@ curl -sf -m 5 "$BASE/dashboard/api/escalations" \
   || fail 7 "escalations endpoint"
 echo "7/10 escalations OK"
 
-# 8. Webhook accepts a signed test payload (sentinel conv_id -> Zernio returns 404 on reply)
-PAYLOAD=$(python3 -c "
-import json
-print(json.dumps({'event':'message.received','data':{
-  'text':'e2e test message','conversationId':'${SENTINEL_WEBHOOK}',
-  'id':'${SENTINEL_MSG}','accountId':'e2etest_account',
-  'sender':{'name':'E2E Test','id':'e2etest_sender'},
-  'platform':'instagram','channel':'instagram_dm'},
-  'account':{'id':'e2etest_account'}}))
-")
-SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
-curl -sf -m 5 -X POST "$BASE/webhooks/zernio" \
-  -H "Content-Type: application/json" \
-  -H "X-Zernio-Signature: $SIG" \
-  -d "$PAYLOAD" | grep -q "OK" || fail 8 "webhook accept"
-echo "8/10 webhook OK"
+# 8-10 SKIPPED — Brief 238 (CTO directive). BlueMarlin is deprecated:
+# ZERNIO_WEBHOOK_SECRET is intentionally empty so HMAC verification on a
+# signed Zernio webhook returns 403, which would make check 8 fail.
+# Checks 9 and 10 read rows that check 8's webhook would have inserted,
+# so they cannot pass without check 8. Re-enabling these checks for a
+# different (live) tenant would belong in a separate brief that points
+# the canary at unboks (port 8004) and uses unboks's secret + allowlist.
+echo "8/10 webhook SKIPPED (BlueMarlin deprecated; no Zernio creds by design)"
+echo "9/10 conversation_status SKIPPED (depends on 8/10)"
+echo "10/10 customer record SKIPPED (depends on 8/10)"
 
-# Background task processes the webhook (Claude call + DB writes)
-sleep 4
-
-# 9. Conversation status was updated
-docker exec wtyj-bluemarlin python3 -c "
-import sqlite3
-c = sqlite3.connect('/app/data/state_registry.db')
-row = c.execute('SELECT status FROM conversation_status WHERE conversation_id=?',
-                ('${SENTINEL_WEBHOOK}',)).fetchone()
-assert row, 'no conversation_status row'
-" || fail 9 "conversation_status not updated"
-echo "9/10 conversation_status OK"
-
-# 10. Customer record created
-docker exec wtyj-bluemarlin python3 -c "
-import sqlite3
-c = sqlite3.connect('/app/data/state_registry.db')
-row = c.execute(
-  'SELECT c.id FROM customers c JOIN customer_identifiers ci ON ci.customer_id=c.id '
-  'WHERE ci.value=?', ('${SENTINEL_WEBHOOK}',)).fetchone()
-assert row, 'no customer row'
-" || fail 10 "customer record not created"
-echo "10/10 customer record OK"
-
-# Cleanup - LIKE sweep by 'e2etest%' prefix covers both sentinel conversations
-docker exec wtyj-bluemarlin python3 -c "
-import sqlite3
-c = sqlite3.connect('/app/data/state_registry.db')
-ids = [r[0] for r in c.execute(
-    \"SELECT customer_id FROM customer_identifiers WHERE value LIKE 'e2etest%'\").fetchall()]
-for cid in set(ids):
-    c.execute('DELETE FROM customer_identifiers WHERE customer_id=?', (cid,))
-    c.execute('DELETE FROM customers WHERE id=?', (cid,))
-c.execute(\"DELETE FROM whatsapp_threads WHERE phone LIKE 'e2etest%'\")
-c.execute(\"DELETE FROM whatsapp_booking_state WHERE phone LIKE 'e2etest%'\")
-c.execute(\"DELETE FROM whatsapp_processed WHERE message_id LIKE 'e2etest%'\")
-c.execute(\"DELETE FROM conversation_status WHERE conversation_id LIKE 'e2etest%'\")
-c.commit()
-"
 echo ""
-echo "All 10 E2E checks passed (sentinels: brain=${SENTINEL_BRAIN}, webhook=${SENTINEL_WEBHOOK})"
+echo "BlueMarlin canary E2E passed (checks 1-7); 8-10 deliberately skipped per Brief 238 (BlueMarlin deprecated)"
 exit 0
