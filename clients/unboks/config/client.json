@@ -69,7 +69,10 @@
     "booking_flow": false,
     "ignored_phones": [
       "+59995133333"
-    ]
+    ],
+    "approved_learnings_in_prompt": true,
+    "info_updates_in_prompt": true,
+    "knowledge_files_in_prompt": true
   },
   "terminology": {
     "service_label": "service",
