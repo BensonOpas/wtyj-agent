@@ -766,8 +766,15 @@ class AlertChannelConfig(BaseModel):
         return v
 
 
+class AlertTypesConfig(BaseModel):
+    """Brief 241: per-alert-type enable flags (escalations, appointments)."""
+    escalations: bool = True
+    appointments: bool = True
+
+
 class AlertSettingsRequest(BaseModel):
     channels: dict[str, AlertChannelConfig]
+    alertTypes: AlertTypesConfig = AlertTypesConfig()  # Brief 241
 
 
 def _resolved_default_email() -> str:
@@ -784,7 +791,9 @@ async def get_alert_settings_endpoint():
 @router.put("/settings/escalation-alerts", dependencies=[Depends(_check_auth)])
 async def put_alert_settings_endpoint(req: AlertSettingsRequest):
     channels_dict = {k: v.model_dump() for k, v in req.channels.items()}
-    state_registry.save_alert_settings(channels_dict)
+    # Brief 241: persist alertTypes alongside channels
+    state_registry.save_alert_settings(
+        channels_dict, alert_types=req.alertTypes.model_dump())
     return state_registry.get_alert_settings(
         default_email_destination=_resolved_default_email())
 
@@ -1652,6 +1661,155 @@ def _build_alert_body(customer_name: str, channel: str, mode: str,
     )
 
 
+def _build_appointment_subject(customer_name: str,
+                                appointment_dict: dict) -> str:
+    """Brief 241: 'Appointment confirmed: {name} - {time}'. Falls back to
+    just the customer name when no time is set on the appointment."""
+    name = customer_name or "customer"
+    time_label = (appointment_dict.get("date_time_label") or "").strip()
+    proposed = appointment_dict.get("proposed_times") or []
+    if not time_label and proposed:
+        time_label = proposed[0]
+    if time_label:
+        return f"Appointment confirmed: {name} — {time_label}"
+    return f"Appointment confirmed: {name}"
+
+
+def _build_appointment_body(appointment_dict: dict, customer_name: str,
+                             channel: str, client_name: str) -> str:
+    """Brief 241: rich operator-facing body for confirmed appointments."""
+    topic = (appointment_dict.get("title") or "Appointment").strip()
+    time_label = (appointment_dict.get("date_time_label") or "").strip()
+    proposed = appointment_dict.get("proposed_times") or []
+    if not time_label and proposed:
+        time_label = proposed[0]
+    location = (appointment_dict.get("location") or "").strip() or "Location not set"
+    return (
+        f"Appointment confirmed\n\n"
+        f"Customer: {customer_name or '(unknown)'}\n"
+        f"Channel: {_channel_label(channel)}\n"
+        f"Topic: {topic}\n"
+        f"Time: {time_label or '(time not set)'}\n"
+        f"Location: {location}\n\n"
+        f"Open the dashboard to review or update this appointment."
+    )
+
+
+def _fire_appointment_alerts(appointment_id: int, customer_name: str,
+                              channel: str, appointment_dict: dict) -> None:
+    """Brief 241: build the appointment alert message, dispatch to enabled
+    channels, record delivery status per attempt with alert_type='appointment'.
+    Never raises. Per-channel dedup via appointment_alert_already_sent
+    (layer-2 defense; layer-1 is the transition-aware trigger in
+    appointment_upsert). WhatsApp uses the Brief 240 Zernio route - same
+    helper, no Meta fallback."""
+    try:
+        biz = config_loader.get_business() or {}
+        client_name = biz.get("name", "Unboks")
+        default_email = biz.get("support_email", "") or biz.get("email", "")
+    except Exception:
+        client_name = "Unboks"
+        default_email = ""
+
+    settings = state_registry.get_alert_settings(
+        default_email_destination=default_email)
+    channels_cfg = settings.get("channels", {})
+
+    email_subject = _build_appointment_subject(customer_name, appointment_dict)
+    alert_text = _build_appointment_body(appointment_dict, customer_name,
+                                          channel, client_name)
+
+    em = channels_cfg.get("email", {})
+    if em.get("enabled"):
+        primary = em.get("destination", "")
+        if primary in ("", "default"):
+            primary = default_email
+        alternative = (em.get("alternativeDestination") or "").strip()
+        recipients = []
+        if primary:
+            recipients.append(primary)
+        if alternative and alternative != primary:
+            recipients.append(alternative)
+        if not recipients:
+            state_registry.record_alert_delivery(
+                None, "email", "", "skipped",
+                "no email destination configured",
+                alert_type="appointment", appointment_id=appointment_id)
+        else:
+            for dest in recipients:
+                if state_registry.appointment_alert_already_sent(
+                        appointment_id, "email", dest):
+                    continue  # layer-2 dedup
+                try:
+                    smtp_send(dest, email_subject, alert_text)
+                    state_registry.record_alert_delivery(
+                        None, "email", dest, "sent",
+                        alert_type="appointment", appointment_id=appointment_id)
+                except Exception as exc:
+                    state_registry.record_alert_delivery(
+                        None, "email", dest, "failed", str(exc)[:200],
+                        alert_type="appointment", appointment_id=appointment_id)
+
+    wa = channels_cfg.get("whatsapp", {})
+    if wa.get("enabled"):
+        dest = wa.get("destination", "")
+        if not dest:
+            state_registry.record_alert_delivery(
+                None, "whatsapp", "", "skipped",
+                "no whatsapp destination configured",
+                alert_type="appointment", appointment_id=appointment_id)
+        else:
+            if not state_registry.appointment_alert_already_sent(
+                    appointment_id, "whatsapp", dest):
+                route = state_registry.get_resolved_operator_whatsapp_route()
+                if not route:
+                    state_registry.record_alert_delivery(
+                        None, "whatsapp", dest, "skipped",
+                        "zernio_operator_destination_not_resolved",
+                        alert_type="appointment", appointment_id=appointment_id)
+                else:
+                    from agents.social.zernio_dm_client import send_dm_reply
+                    try:
+                        ok = send_dm_reply(
+                            route["conversation_id"],
+                            route["account_id"],
+                            alert_text)
+                        if ok:
+                            state_registry.record_alert_delivery(
+                                None, "whatsapp", dest, "sent",
+                                alert_type="appointment",
+                                appointment_id=appointment_id)
+                        else:
+                            state_registry.record_alert_delivery(
+                                None, "whatsapp", dest, "failed",
+                                "zernio_send_dm_reply_returned_false",
+                                alert_type="appointment",
+                                appointment_id=appointment_id)
+                    except Exception as exc:
+                        state_registry.record_alert_delivery(
+                            None, "whatsapp", dest, "failed",
+                            f"zernio_send_dm_reply_exception: {str(exc)[:200]}",
+                            alert_type="appointment",
+                            appointment_id=appointment_id)
+
+    if channels_cfg.get("telegram", {}).get("enabled"):
+        state_registry.record_alert_delivery(
+            None, "telegram",
+            channels_cfg["telegram"].get("destination", ""),
+            "skipped", "telegram provider not configured",
+            alert_type="appointment", appointment_id=appointment_id)
+    if channels_cfg.get("messenger", {}).get("enabled"):
+        state_registry.record_alert_delivery(
+            None, "messenger",
+            channels_cfg["messenger"].get("destination", ""),
+            "skipped", "messenger provider not configured",
+            alert_type="appointment", appointment_id=appointment_id)
+
+
+# Brief 241: register the appointment dispatcher with state_registry.
+state_registry.set_appointment_alert_dispatcher(_fire_appointment_alerts)
+
+
 def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                              channel: str, summary: str,
                              mode: str = None,
@@ -1670,6 +1828,13 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         default_email = ""
 
     settings = state_registry.get_alert_settings(default_email_destination=default_email)
+    # Brief 241: per-alert-type gate. When alertTypes.escalations is False
+    # (operator disabled escalation alerts in Settings), short-circuit the
+    # entire dispatcher - no rows written, no provider calls. Default True
+    # for backward compat.
+    alert_types = (settings or {}).get("alertTypes") or {}
+    if not alert_types.get("escalations", True):
+        return
     channels_cfg = settings.get("channels", {})
 
     email_subject = _build_alert_subject(customer_name, summary_dict, is_update)

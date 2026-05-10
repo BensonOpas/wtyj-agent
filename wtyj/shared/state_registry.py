@@ -43,6 +43,22 @@ def set_alert_dispatcher(fn):
     _alert_dispatcher = fn
 
 
+# Brief 241: optional callback set by dashboard.api at module-import time.
+# dashboard.api registers _fire_appointment_alerts here so that
+# appointment_upsert can fire alerts WITHOUT state_registry having to
+# import dashboard.api (would create a circular import). When None,
+# appointment alert dispatch is silently skipped.
+_appointment_alert_dispatcher = None
+
+
+def set_appointment_alert_dispatcher(fn):
+    """Brief 241: dashboard.api registers _fire_appointment_alerts here at
+    import time. Decoupled callback so state_registry doesn't import
+    dashboard."""
+    global _appointment_alert_dispatcher
+    _appointment_alert_dispatcher = fn
+
+
 def _summaries_materially_differ(old: dict, new: dict) -> bool:
     """Brief 239: compare two escalation_summary dicts; return True only
     if operator-relevant content has changed (proposed times, latest
@@ -474,6 +490,30 @@ def _get_conn():
         "ADD COLUMN whatsapp_zernio_conversation_id TEXT",
         "ADD COLUMN whatsapp_zernio_account_id TEXT",
         "ADD COLUMN whatsapp_zernio_resolved_at TEXT",
+    ):
+        try:
+            conn.execute(f"ALTER TABLE alert_settings {_coldef}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # Brief 241: alert_type + appointment_id columns on alert_deliveries.
+    # Existing rows (Brief 217-240 era) get retro-labeled as 'escalation'
+    # via the DEFAULT - semantically correct since they were all
+    # escalation-alert deliveries. appointment_id stays NULL for those rows.
+    for _coldef in (
+        "ADD COLUMN alert_type TEXT NOT NULL DEFAULT 'escalation'",
+        "ADD COLUMN appointment_id INTEGER",
+    ):
+        try:
+            conn.execute(f"ALTER TABLE alert_deliveries {_coldef}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # Brief 241: per-alert-type enable flags on alert_settings. Both
+    # default ON for backward compat - existing tenants continue to receive
+    # escalation alerts; appointment alerts begin firing once the trigger
+    # (appointment_upsert transition-to-confirmed) is reached.
+    for _coldef in (
+        "ADD COLUMN alert_type_escalation_enabled INTEGER NOT NULL DEFAULT 1",
+        "ADD COLUMN alert_type_appointment_enabled INTEGER NOT NULL DEFAULT 1",
     ):
         try:
             conn.execute(f"ALTER TABLE alert_settings {_coldef}")
@@ -1758,17 +1798,23 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
 
     The `"default"` sentinel is RESOLVED in the response — i.e., GET
     returns the actual support_email value, not the literal string
-    "default" — so the frontend renders the real destination."""
+    "default" — so the frontend renders the real destination.
+
+    Brief 241: response gains a top-level `alertTypes` block
+    (`{escalations: bool, appointments: bool}`) read from the new
+    alert_type_*_enabled columns. Both default True for backward compat."""
     conn = _get_conn()
     row = conn.execute(
         "SELECT email_enabled, email_destination, whatsapp_enabled, "
         "whatsapp_destination, telegram_enabled, telegram_destination, "
         "messenger_enabled, messenger_destination, "
-        "email_alternative_destination FROM alert_settings "
-        "WHERE id = 1").fetchone()
+        "email_alternative_destination, "
+        "alert_type_escalation_enabled, alert_type_appointment_enabled "
+        "FROM alert_settings WHERE id = 1").fetchone()
     conn.close()
     if not row:
         return {
+            "alertTypes": {"escalations": True, "appointments": True},
             "channels": {
                 "email":     {"enabled": True,  "destination": default_email_destination or "",
                               "alternativeDestination": ""},
@@ -1782,6 +1828,10 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
     if email_dest in ("", "default"):
         email_dest = default_email_destination or ""
     return {
+        "alertTypes": {
+            "escalations": bool(row[9]),
+            "appointments": bool(row[10]),
+        },
         "channels": {
             "email":     {
                 "enabled": bool(row[0]),
@@ -1799,27 +1849,30 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
     }
 
 
-def save_alert_settings(channels: dict) -> None:
-    """Brief 217 + 226: upsert the singleton alert_settings row using
+def save_alert_settings(channels: dict, alert_types: dict = None) -> None:
+    """Brief 217 + 226 + 241: upsert the singleton alert_settings row using
     INSERT ... ON CONFLICT(id) DO UPDATE on a fixed id=1. Brief 240:
     switched from INSERT OR REPLACE to ON CONFLICT DO UPDATE so the
     bootstrap-only whatsapp_zernio_* columns survive a Settings save.
-    channels.email.alternativeDestination persists in
-    email_alternative_destination column."""
+    Brief 241: alert_types is optional ({escalations: bool, appointments:
+    bool}); both default True when not supplied or missing keys."""
     now = datetime.now(timezone.utc).isoformat()
     em = channels.get("email", {}) or {}
     wa = channels.get("whatsapp", {}) or {}
     tg = channels.get("telegram", {}) or {}
     ms = channels.get("messenger", {}) or {}
+    at = alert_types or {}
+    ate = 1 if at.get("escalations", True) else 0
+    ata = 1 if at.get("appointments", True) else 0
     conn = _get_conn()
-    # Brief 240: ON CONFLICT DO UPDATE preserves the bootstrap-only
-    # whatsapp_zernio_* columns when Calvin saves Settings.
     conn.execute(
         "INSERT INTO alert_settings "
         "(id, email_enabled, email_destination, whatsapp_enabled, whatsapp_destination, "
         "telegram_enabled, telegram_destination, messenger_enabled, messenger_destination, "
-        "email_alternative_destination, updated_at) "
-        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "email_alternative_destination, "
+        "alert_type_escalation_enabled, alert_type_appointment_enabled, "
+        "updated_at) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET "
         "email_enabled = excluded.email_enabled, "
         "email_destination = excluded.email_destination, "
@@ -1830,32 +1883,64 @@ def save_alert_settings(channels: dict) -> None:
         "messenger_enabled = excluded.messenger_enabled, "
         "messenger_destination = excluded.messenger_destination, "
         "email_alternative_destination = excluded.email_alternative_destination, "
+        "alert_type_escalation_enabled = excluded.alert_type_escalation_enabled, "
+        "alert_type_appointment_enabled = excluded.alert_type_appointment_enabled, "
         "updated_at = excluded.updated_at",
         (1 if em.get("enabled") else 0, em.get("destination", ""),
          1 if wa.get("enabled") else 0, wa.get("destination", ""),
          1 if tg.get("enabled") else 0, tg.get("destination", ""),
          1 if ms.get("enabled") else 0, ms.get("destination", ""),
          em.get("alternativeDestination", "") or "",
-         now))
+         ate, ata, now))
     conn.commit()
     conn.close()
 
 
 def record_alert_delivery(escalation_id, channel: str, destination: str,
-                           status: str, error: str = None) -> int:
-    """Brief 217: append a row to alert_deliveries. status one of
-    'sent', 'failed', 'skipped'. Returns row id."""
+                           status: str, error: str = None,
+                           alert_type: str = "escalation",
+                           appointment_id: int = None) -> int:
+    """Brief 217 + 241: append a row to alert_deliveries. status one of
+    'sent', 'failed', 'skipped'. alert_type is 'escalation' (default,
+    backward compat) or 'appointment'. For appointment rows, pass
+    escalation_id=None and appointment_id=<row_id>; for escalation rows,
+    pass appointment_id=None (default). Returns row id."""
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     cur = conn.execute(
         "INSERT INTO alert_deliveries "
-        "(escalation_id, channel, destination, status, error, sent_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (escalation_id, channel, destination or "", status, error, now))
+        "(escalation_id, channel, destination, status, error, sent_at, "
+        "alert_type, appointment_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (escalation_id, channel, destination or "", status, error, now,
+         alert_type, appointment_id))
     row_id = cur.lastrowid
     conn.commit()
     conn.close()
     return row_id
+
+
+def appointment_alert_already_sent(appointment_id: int, channel: str,
+                                    destination: str) -> bool:
+    """Brief 241: layer-2 dedup for appointment alerts. Returns True when
+    a previous appointment-alert delivery has already been recorded for
+    this exact (appointment_id, channel, destination) tuple with a
+    terminal status ('sent' or 'failed'). 'skipped' rows do NOT count -
+    they reflect 'we couldn't send' (e.g., Zernio route not bootstrapped
+    yet) and SHOULD retry on the next confirmation event if the
+    configuration changes. Layer 1 dedup is the transition-aware trigger
+    inside appointment_upsert."""
+    if not appointment_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM alert_deliveries "
+        "WHERE alert_type = 'appointment' AND appointment_id = ? "
+        "AND channel = ? AND destination = ? "
+        "AND status IN ('sent', 'failed') LIMIT 1",
+        (appointment_id, channel, destination or "")).fetchone()
+    conn.close()
+    return row is not None
 
 
 def resolve_conversation_from_escalation(escalation_id: int) -> None:
@@ -2042,7 +2127,13 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
                        status: str = "detected") -> int:
     """Brief 228: upsert an appointment row keyed on conversation_id.
     proposed_times is a list of strings; we store JSON and pick the first
-    one for date_time_label (frontend uses that as the headline)."""
+    one for date_time_label (frontend uses that as the headline).
+
+    Brief 241: when this call transitions the appointment INTO 'confirmed'
+    (insert with status='confirmed', OR update from a non-confirmed status
+    to 'confirmed'), fire the registered _appointment_alert_dispatcher
+    best-effort. Re-saves of the same 'confirmed' status do NOT fire
+    (transition detection)."""
     if not conversation_id:
         return 0
     now = datetime.now(timezone.utc).isoformat()
@@ -2050,9 +2141,11 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
     label = pt[0] if pt else ""
     conn = _get_conn()
     existing = conn.execute(
-        "SELECT id FROM appointments WHERE conversation_id = ?",
+        "SELECT id, status FROM appointments WHERE conversation_id = ?",
         (conversation_id,)).fetchone()
+    transitioned_to_confirmed = False
     if existing:
+        old_status = existing[1] or ""
         conn.execute(
             "UPDATE appointments SET channel = ?, customer_name = ?, "
             "title = ?, date_time_label = ?, proposed_times_json = ?, "
@@ -2061,6 +2154,8 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
             (channel, customer_name, title, label, json.dumps(pt),
              location, status, now, existing[0]))
         row_id = existing[0]
+        if old_status != "confirmed" and status == "confirmed":
+            transitioned_to_confirmed = True
     else:
         cur = conn.execute(
             "INSERT INTO appointments "
@@ -2070,8 +2165,36 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
             (conversation_id, channel, customer_name, title, label,
              json.dumps(pt), location, status, now, now))
         row_id = cur.lastrowid
+        if status == "confirmed":
+            transitioned_to_confirmed = True
     conn.commit()
     conn.close()
+
+    # Brief 241: best-effort appointment alert dispatch on transition.
+    # Wrapped in try/except so a dispatcher failure NEVER blocks the
+    # appointment row from being saved. Tenant gate: alertTypes.appointments
+    # in alert_settings; default True (on).
+    if transitioned_to_confirmed and _appointment_alert_dispatcher is not None:
+        try:
+            settings = get_alert_settings(default_email_destination="")
+            alert_types = (settings or {}).get("alertTypes") or {}
+            if alert_types.get("appointments", True):
+                appointment_dict = {
+                    "id": row_id,
+                    "conversation_id": conversation_id,
+                    "channel": channel,
+                    "customer_name": customer_name,
+                    "title": title,
+                    "date_time_label": label,
+                    "proposed_times": pt,
+                    "location": location,
+                    "status": "confirmed",
+                }
+                _appointment_alert_dispatcher(
+                    row_id, customer_name, channel, appointment_dict)
+        except Exception:
+            pass
+
     return row_id
 
 

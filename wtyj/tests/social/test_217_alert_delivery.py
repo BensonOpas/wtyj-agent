@@ -657,3 +657,164 @@ def test_inbound_wa_from_operator_phone_resolves_zernio_route(monkeypatch):
     webhook_server._process_zernio_event(payload)
     assert captured.get("conv") == "convOPER123"
     assert captured.get("acct") == "acctZER999"
+
+
+# ── Brief 241: appointment alerts using shared destinations ─────────────
+
+def _wipe_appointments_for(conversation_id: str):
+    """Brief 241: wipe appointment row + its alert_deliveries audit rows
+    before a test runs. Tests share the dev DB."""
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    rows = conn.execute(
+        "SELECT id FROM appointments WHERE conversation_id = ?",
+        (conversation_id,)).fetchall()
+    for r in rows:
+        conn.execute("DELETE FROM alert_deliveries WHERE appointment_id = ?",
+                     (r[0],))
+        conn.execute("DELETE FROM appointments WHERE id = ?", (r[0],))
+    conn.commit()
+    conn.close()
+
+
+def test_appointment_upsert_does_not_fire_dispatcher_for_pending(monkeypatch):
+    """Brief 241: status='pending_team_confirmation' on insert does NOT
+    fire the appointment alert dispatcher (acceptance #2/#3)."""
+    from shared import state_registry
+    conv = "test-241-pending"
+    _wipe_appointments_for(conv)
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="pending_team_confirmation")
+    assert fired == []
+
+
+def test_appointment_upsert_fires_dispatcher_on_insert_confirmed(monkeypatch):
+    """Brief 241: status='confirmed' on FRESH insert fires the dispatcher
+    (acceptance #6)."""
+    from shared import state_registry
+    conv = "test-241-insert-confirmed"
+    _wipe_appointments_for(conv)
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    rid = state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], location="Café Paris", status="confirmed")
+    assert len(fired) == 1
+    assert fired[0][0] == rid
+    assert fired[0][1] == "Calvin"
+    assert fired[0][2] == "whatsapp"
+    appt = fired[0][3]
+    assert appt["status"] == "confirmed"
+    assert appt["title"] == "Intake call"
+
+
+def test_appointment_upsert_fires_dispatcher_on_transition_to_confirmed(monkeypatch):
+    """Brief 241: pending_team_confirmation → confirmed fires dispatcher
+    (acceptance #6 via update path)."""
+    from shared import state_registry
+    conv = "test-241-transition"
+    _wipe_appointments_for(conv)
+    state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="pending_team_confirmation")
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], location="Café Paris", status="confirmed")
+    assert len(fired) == 1
+
+
+def test_appointment_upsert_does_not_refire_on_resave_confirmed(monkeypatch):
+    """Brief 241: confirmed → confirmed re-save does NOT fire dispatcher
+    again (acceptance #11 layer-1 dedup via transition detection)."""
+    from shared import state_registry
+    conv = "test-241-resave"
+    _wipe_appointments_for(conv)
+    state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="confirmed")
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="confirmed")
+    assert fired == []
+
+
+def test_fire_appointment_alerts_sends_email_with_correct_shape(monkeypatch):
+    """Brief 241: dispatcher writes correct subject + body via email,
+    records alert_type='appointment', appointment_id=<id> in
+    alert_deliveries (acceptance #6, #7, #12)."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    captured_email = {}
+    def fake_smtp(to, subj, body):
+        captured_email.update(to=to, subj=subj, body=body)
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {"escalations": True, "appointments": True},
+                             "channels": {"email": {"enabled": True,
+                                                     "destination": "ops@example.com",
+                                                     "alternativeDestination": ""}}})
+    monkeypatch.setattr(state_registry, "appointment_alert_already_sent",
+                         lambda *a, **k: False)
+    captured_delivery = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: captured_delivery.append((a, k)))
+    appt = {"id": 99, "conversation_id": "conv-x", "channel": "whatsapp",
+            "customer_name": "Calvin", "title": "Intake call",
+            "date_time_label": "Friday 12:00",
+            "proposed_times": ["Friday 12:00"],
+            "location": "Café Paris", "status": "confirmed"}
+    dapi._fire_appointment_alerts(99, "Calvin", "whatsapp", appt)
+    assert captured_email["subj"] == "Appointment confirmed: Calvin — Friday 12:00"
+    assert "Appointment confirmed" in captured_email["body"]
+    assert "Topic: Intake call" in captured_email["body"]
+    assert "Time: Friday 12:00" in captured_email["body"]
+    assert "Location: Café Paris" in captured_email["body"]
+    em_rows = [(a, k) for (a, k) in captured_delivery if a[1] == "email"]
+    assert len(em_rows) == 1
+    args, kwargs = em_rows[0]
+    assert kwargs.get("alert_type") == "appointment"
+    assert kwargs.get("appointment_id") == 99
+    assert args[0] is None  # escalation_id=None for appointment rows
+
+
+def test_fire_appointment_alerts_dedup_skips_already_sent(monkeypatch):
+    """Brief 241: layer-2 dedup — if appointment_alert_already_sent
+    returns True for a destination, the dispatcher does NOT call
+    smtp_send for it AND records no new alert_deliveries row
+    (acceptance #11)."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    smtp_calls = []
+    monkeypatch.setattr(dapi, "smtp_send",
+                         lambda to, s, b: smtp_calls.append(to))
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {"escalations": True, "appointments": True},
+                             "channels": {"email": {"enabled": True,
+                                                     "destination": "ops@example.com",
+                                                     "alternativeDestination": ""}}})
+    monkeypatch.setattr(state_registry, "appointment_alert_already_sent",
+                         lambda aid, ch, dest: True)
+    record_calls = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: record_calls.append((a, k)))
+    appt = {"id": 100, "conversation_id": "conv-y", "channel": "whatsapp",
+            "customer_name": "Calvin", "title": "Intake call",
+            "date_time_label": "Friday 12:00", "proposed_times": ["Friday 12:00"],
+            "location": "", "status": "confirmed"}
+    dapi._fire_appointment_alerts(100, "Calvin", "whatsapp", appt)
+    assert smtp_calls == []
+    em_rows = [(a, k) for (a, k) in record_calls if a[1] == "email"]
+    assert em_rows == []
