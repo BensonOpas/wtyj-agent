@@ -78,3 +78,6 @@ bluemarlin/src/package-lock.json
 tools/control-panel/node_modules/
 tools/control-panel/data/
 tools/control-panel/package-lock.json
+
+# tools/unboks-qa: ephemeral run reports (regenerated each run)
+tools/unboks-qa/reports/

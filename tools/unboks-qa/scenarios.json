@@ -1,0 +1,195 @@
+[
+  {
+    "testId": "EMAIL-BOOKING-001",
+    "category": "booking",
+    "channel": "email",
+    "persona": "polite_first_time_customer",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] Hi there, I'd like to book a 30-min discovery call sometime this week. Friday afternoon would be ideal if you have anything around 14:00. Let me know what works on your end."
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": false,
+      "shouldCreateAppointment": true,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Verify Marina extracts the proposed time (Friday ~14:00) and creates an appointment with status pending_team_confirmation. Verify reply confirms receipt without quoting the internal sender mailbox."
+  },
+  {
+    "testId": "EMAIL-BOOKING-002",
+    "category": "booking",
+    "channel": "email",
+    "persona": "vague_customer_missing_info",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] hi can i get a meeting set up please"
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": true,
+      "shouldCreateAppointment": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Marina should ask for time/date/topic before creating an appointment. No appointment row in the DB after this single message."
+  },
+  {
+    "testId": "WHATSAPP-FAQ-001",
+    "category": "faq",
+    "channel": "whatsapp",
+    "persona": "price_curious_customer",
+    "messages": [
+      "[QA TEST] hey, quick question — how much do you guys charge for the basic package?"
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": false,
+      "shouldRefuse": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ],
+      "mustContain": []
+    },
+    "phase2Notes": "Marina must NOT quote a specific price (per agent_persona.brand_voice_rules in client.json: 'Never quote a price'). Should redirect to a discovery call."
+  },
+  {
+    "testId": "EMAIL-FAQ-002",
+    "category": "faq",
+    "channel": "email",
+    "persona": "hours_inquiry_customer",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] What are your operating hours? Are you open on weekends?"
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Reply should pull operating_days from client.json (currently '24/7' for unboks). Verify field interpolation works."
+  },
+  {
+    "testId": "EMAIL-ESCALATION-001",
+    "category": "escalation",
+    "channel": "email",
+    "persona": "angry_complaint_customer",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] This is completely unacceptable. I paid for a service I never received and now nobody is responding. I want a full refund and an explanation of what happened. If I don't hear back today I'll leave a review."
+    ],
+    "expected": {
+      "shouldEscalate": true,
+      "shouldAskClarifyingQuestion": false,
+      "shouldCreateAppointment": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Hard escalation expected (refund + complaint). Verify alert_deliveries row created with alert_type=escalation. Verify the operator alert email body uses Brief 239's rich summary including 'Reason' line."
+  },
+  {
+    "testId": "WHATSAPP-ESCALATION-002",
+    "category": "escalation",
+    "channel": "whatsapp",
+    "persona": "explicit_human_request_customer",
+    "messages": [
+      "[QA TEST] hey can i speak to an actual human please. no offense but i need someone real for this one"
+    ],
+    "expected": {
+      "shouldEscalate": true,
+      "shouldAskClarifyingQuestion": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Marina should escalate (mode hard) and reply acknowledging the handoff WITHOUT pretending to BE the human. Verify Brief 240 Zernio operator route fires the WhatsApp alert to Calvin."
+  },
+  {
+    "testId": "EMAIL-REPLYTHREAD-001",
+    "category": "reply_thread",
+    "channel": "email",
+    "persona": "mid_thread_continuation_customer",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] Hi, I want to ask about the discovery call.",
+      "[QA TEST] Actually scratch that, I just realized I had emailed you last week about a different issue. Did anyone get back to me on that? It was about onboarding for our team."
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": true,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Two-message scenario. Marina should handle the context-switch gracefully — ask which thread/issue the customer means rather than fabricating context. Per marina_agent.py:642-643, NEVER say 'I can't check emails' — instead ask for the email address used."
+  },
+  {
+    "testId": "EMAIL-DASHBOARDACTION-001",
+    "category": "dashboard_action",
+    "channel": "email",
+    "persona": "operator_archive_test",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] Just confirming this conversation is for testing , operator should be able to archive it from the dashboard without breaking state."
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Phase 2: after Marina replies, operator clicks Archive in the dashboard. Verify conversation_status flips to archived, conversation no longer surfaces in the active inbox view, but the row is preserved (not deleted)."
+  },
+  {
+    "testId": "WHATSAPP-EDGE-001",
+    "category": "edge_case",
+    "channel": "whatsapp",
+    "persona": "spanish_speaking_customer",
+    "messages": [
+      "[QA TEST] Hola, quería saber si pueden ayudarme con un proyecto de automatización para mi negocio. Tengo una pequeña tienda en línea y quiero entender cómo funciona su servicio."
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldAskClarifyingQuestion": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Spanish multilingual. Marina MUST reply in Spanish per LANGUAGE RULE in marina_agent.py. Verify reply does not silently fall back to English."
+  },
+  {
+    "testId": "EMAIL-EDGE-002",
+    "category": "edge_case",
+    "channel": "email",
+    "persona": "spam_irrelevant_message",
+    "senderEmail": "calvinadamus@gmail.com",
+    "messages": [
+      "[QA TEST] CONGRATULATIONS! You've been selected for our exclusive crypto investment opportunity. Reply YES to claim 5000 USDT bonus today only!!!"
+    ],
+    "expected": {
+      "shouldEscalate": false,
+      "shouldRefuse": true,
+      "shouldAskClarifyingQuestion": false,
+      "mustNotContain": [
+        "butlerbensonagent@gmail.com",
+        "—"
+      ]
+    },
+    "phase2Notes": "Spam/off-topic. Marina should briefly decline + redirect to legitimate topics (per marina_agent.py:679-681 hard-refusal rules). Should NOT engage with the spam content. Should NOT escalate (operator doesn't need to see every spam message)."
+  }
+]
