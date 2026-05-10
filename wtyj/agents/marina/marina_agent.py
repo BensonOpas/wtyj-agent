@@ -1112,9 +1112,13 @@ def process_message(
             return fallback
 
         # Brief 224: sanitize customer-facing text fields before returning.
-        result["reply"] = _strip_internal_tokens(result.get("reply", ""))
+        # Brief 244: also strip em-dashes per agent_persona.brand_voice_rules
+        # (Claude ignores the prompt-side rule; mirrors dm_agent.py:253).
+        result["reply"] = _strip_internal_tokens(
+            result.get("reply", "")).replace("—", ",")
         if result.get("reply_hold_failed"):
-            result["reply_hold_failed"] = _strip_internal_tokens(result["reply_hold_failed"])
+            result["reply_hold_failed"] = _strip_internal_tokens(
+                result["reply_hold_failed"]).replace("—", ",")
 
         return result
 

@@ -94,3 +94,42 @@ def test_no_tokens_no_change():
     text = "Hello! Thanks for your message.\n\nMarina"
     result = _call_process_message(text)
     assert result["reply"] == text  # no trailing whitespace to strip
+
+
+# ── Brief 244: em-dash strip from customer-facing reply fields ─
+
+def test_em_dash_stripped_from_reply():
+    """Brief 244: process_message strips em-dashes from result['reply']
+    before returning. Mirrors dm_agent.py:253 strip behavior — em-dash
+    becomes comma (no space) to match dm_agent's existing pattern."""
+    text_with_dash = (
+        "The team will contact you shortly — keep an eye on your inbox.")
+    result = _call_process_message(text_with_dash)
+    assert "—" not in result["reply"]
+    assert result["reply"] == (
+        "The team will contact you shortly , keep an eye on your inbox.")
+
+
+def test_em_dash_stripped_from_reply_hold_failed():
+    """Brief 244: same strip applies to reply_hold_failed (apologetic
+    message when slot unavailable, also customer-facing per
+    marina_agent.py:109 schema)."""
+    plain = "OK"
+    apology_with_dash = "Sorry — that slot just got taken."
+    result = _call_process_message(
+        plain, reply_hold_failed=apology_with_dash)
+    assert "—" not in result["reply_hold_failed"]
+    assert result["reply_hold_failed"] == "Sorry , that slot just got taken."
+
+
+def test_em_dash_strip_runs_after_internal_token_strip():
+    """Brief 244 + Brief 224: both sanitizers compose. A reply containing
+    BOTH an internal escalation token AND an em-dash gets cleaned of both
+    before reaching the customer. Proves the em-dash strip is sequenced
+    AFTER _strip_internal_tokens (so trailing-whitespace cleanup from
+    token strip happens first, then em-dash replacement runs)."""
+    dirty = "I'll escalate that — the team handles refunds. [ESCALATE]"
+    result = _call_process_message(dirty)
+    assert "[ESCALATE]" not in result["reply"]
+    assert "—" not in result["reply"]
+    assert "I'll escalate that , the team handles refunds." in result["reply"]
