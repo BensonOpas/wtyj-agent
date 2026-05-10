@@ -1955,6 +1955,39 @@ async def list_appointments_endpoint():
     return {"items": items, "appointments": items}
 
 
+class ConfirmAppointmentRequest(BaseModel):
+    """Brief 242: optional fields for the operator confirm action.
+    confirmedBy and note are accepted for forward compat (frontend can
+    surface operator identity / a confirm note) but are NOT persisted
+    in this brief - the appointments table has no audit columns for
+    them yet. A future brief can ALTER ADD COLUMN if needed."""
+    confirmedBy: str = "operator"
+    note: str | None = None
+
+
+@router.post("/appointments/{appointment_id}/confirm",
+              dependencies=[Depends(_check_auth)])
+async def confirm_appointment_endpoint(
+        appointment_id: int,
+        req: ConfirmAppointmentRequest = ConfirmAppointmentRequest()):
+    """Brief 242: flip an appointment to 'confirmed'. Triggers the
+    Brief 241 appointment alert dispatcher on the first call (status
+    transition); subsequent duplicate confirm calls return
+    alreadyConfirmed=true and do NOT resend alerts (Brief 241's
+    two-layer dedup: layer 1 = transition detection in
+    appointment_upsert, layer 2 = appointment_alert_already_sent
+    audit-log check)."""
+    result = state_registry.appointment_confirm_by_id(
+        appointment_id,
+        confirmed_by=req.confirmedBy,
+        note=req.note)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="appointment not found")
+    return result
+
+
 @router.get("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
 async def get_escalation(escalation_id: int):
     """Get a single escalation by ID. Returns id as string (see list_escalations)."""

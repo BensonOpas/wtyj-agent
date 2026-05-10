@@ -818,3 +818,93 @@ def test_fire_appointment_alerts_dedup_skips_already_sent(monkeypatch):
     assert smtp_calls == []
     em_rows = [(a, k) for (a, k) in record_calls if a[1] == "email"]
     assert em_rows == []
+
+
+# ── Brief 242: operator confirm endpoint flips status + triggers dispatch ─
+
+def test_appointment_confirm_by_id_sets_status_and_fires_dispatcher(monkeypatch):
+    """Brief 242: helper SELECTs by id, calls appointment_upsert with
+    status='confirmed', which transitively fires the Brief 241
+    dispatcher. Returns dict with alreadyConfirmed=False on first call."""
+    from shared import state_registry
+    conv = "test-242-confirm-fresh"
+    _wipe_appointments_for(conv)
+    rid = state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="pending_team_confirmation")
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    result = state_registry.appointment_confirm_by_id(rid)
+    assert result is not None
+    assert result["id"] == rid
+    assert result["status"] == "confirmed"
+    assert result["alreadyConfirmed"] is False
+    assert "confirmedAt" in result and result["confirmedAt"]
+    assert len(fired) == 1
+    assert fired[0][0] == rid
+
+
+def test_appointment_confirm_by_id_idempotent_on_second_call(monkeypatch):
+    """Brief 242: a second confirm on an already-confirmed row returns
+    alreadyConfirmed=True and does NOT fire the dispatcher again
+    (Brief 241 transition detection: confirmed→confirmed = no-fire)."""
+    from shared import state_registry
+    conv = "test-242-confirm-twice"
+    _wipe_appointments_for(conv)
+    rid = state_registry.appointment_upsert(
+        conv, "whatsapp", "Calvin", "Intake call",
+        ["Friday 12:00"], status="confirmed")
+    fired = []
+    monkeypatch.setattr(state_registry, "_appointment_alert_dispatcher",
+                         lambda *a, **k: fired.append(a))
+    result = state_registry.appointment_confirm_by_id(rid)
+    assert result["status"] == "confirmed"
+    assert result["alreadyConfirmed"] is True
+    assert fired == []
+
+
+def test_appointment_confirm_by_id_returns_none_for_missing():
+    """Brief 242: helper returns None when appointment_id matches no
+    row. Caller surfaces 404."""
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM appointments WHERE id = 99999999")
+    conn.commit()
+    conn.close()
+    result = state_registry.appointment_confirm_by_id(99999999)
+    assert result is None
+
+
+def test_confirm_endpoint_returns_404_for_missing_appointment():
+    """Brief 242: POST /appointments/{id}/confirm returns 404 with
+    detail='appointment not found' when the id matches no row in the
+    appointments table.
+
+    Uses the real `_login()` pattern from `test_228_appointments.py:55`
+    (NOT a monkeypatch on _check_auth — FastAPI's Depends captures the
+    callable at decoration time, so module-level monkeypatch does not
+    swap the dependency on already-registered routes). Exercises the
+    real `appointment_confirm_by_id(<id-with-no-row>)` path so the test
+    integrates the helper SELECT + None return + endpoint 404 raise
+    end-to-end, not just the endpoint's `if result is None` check."""
+    import os
+    os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
+    from fastapi.testclient import TestClient
+    from agents.social.webhook_server import app
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM appointments WHERE id = 9999991")
+    conn.commit()
+    conn.close()
+    client = TestClient(app)
+    login_r = client.post(
+        "/dashboard/api/login", json={"password": "testpass"})
+    assert login_r.status_code == 200, f"login failed: {login_r.text}"
+    token = login_r.json()["token"]
+    resp = client.post(
+        "/dashboard/api/appointments/9999991/confirm",
+        json={"confirmedBy": "operator"},
+        headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "appointment not found"

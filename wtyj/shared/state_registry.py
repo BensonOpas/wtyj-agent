@@ -2198,6 +2198,75 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
     return row_id
 
 
+def appointment_confirm_by_id(appointment_id: int,
+                               confirmed_by: str = "operator",
+                               note: str | None = None) -> dict | None:
+    """Brief 242: flip an appointment's status to 'confirmed' by id.
+    Re-uses appointment_upsert (keyed on conversation_id) so the Brief
+    241 transition detection fires the appointment alert dispatcher
+    exactly once - second/duplicate confirm calls find old_status ==
+    'confirmed' and the transition guard correctly classifies them as
+    no-fire.
+
+    Returns:
+        {"id": int, "status": "confirmed", "confirmedAt": iso_str,
+         "alreadyConfirmed": bool} on success.
+        None when no appointment row matches the given id (caller
+        surfaces 404).
+
+    confirmed_by + note are accepted for forward API compat (frontend
+    can pass operator identity / note text) but are NOT persisted in
+    this brief - no schema column for them yet. A future brief can
+    ALTER ADD COLUMN if an audit trail of WHO confirmed is needed.
+
+    Soft coupling note: the confirmedAt timestamp is read from the
+    appointments.updated_at column AFTER the upsert - this works
+    because appointment_upsert always bumps updated_at (even on
+    no-op confirmed->confirmed re-saves at line 2152). If a future
+    refactor makes appointment_upsert skip the UPDATE on no-op,
+    confirmedAt for alreadyConfirmed=True callers would become
+    stale and need explicit recomputation here."""
+    if not appointment_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, conversation_id, channel, customer_name, title, "
+        "proposed_times_json, location, status "
+        "FROM appointments WHERE id = ?", (appointment_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    (rid, conv_id, channel, customer_name, title, ptj, location,
+     old_status) = row
+    already_confirmed = (old_status == "confirmed")
+    try:
+        proposed_times = json.loads(ptj) if ptj else []
+    except (json.JSONDecodeError, TypeError):
+        proposed_times = []
+    appointment_upsert(
+        conversation_id=conv_id,
+        channel=channel,
+        customer_name=customer_name or "",
+        title=title or "",
+        proposed_times=proposed_times,
+        location=location or "",
+        status="confirmed",
+    )
+    conn = _get_conn()
+    ts_row = conn.execute(
+        "SELECT updated_at FROM appointments WHERE id = ?",
+        (appointment_id,)).fetchone()
+    conn.close()
+    confirmed_at = ts_row[0] if ts_row else datetime.now(
+        timezone.utc).isoformat()
+    return {
+        "id": rid,
+        "status": "confirmed",
+        "confirmedAt": confirmed_at,
+        "alreadyConfirmed": already_confirmed,
+    }
+
+
 def appointments_list() -> list:
     """Brief 228: return all appointments newest-updated first, in the
     shape SR's frontend expects (camelCase, ISO timestamps).
