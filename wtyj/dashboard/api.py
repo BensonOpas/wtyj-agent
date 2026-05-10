@@ -1695,6 +1695,66 @@ def _build_appointment_body(appointment_dict: dict, customer_name: str,
     )
 
 
+def _resolve_dashboard_link(item_kind: str, item_id: int) -> str:
+    """Brief 243: build a deep-link URL into the operator dashboard for
+    a specific escalation or appointment. Reads business.slug and
+    business.dashboard_url from the tenant's client.json. Returns empty
+    string when either is missing — dispatchers fall back to plain-text
+    email body in that case (no broken link rendered).
+
+    item_kind: 'escalation' or 'appointment'.
+    item_id: integer row id (escalation_id or appointment_id).
+    """
+    try:
+        biz = config_loader.get_business() or {}
+        slug = (biz.get("slug") or "").strip()
+        base = (biz.get("dashboard_url") or "").rstrip("/").strip()
+    except Exception:
+        return ""
+    if not slug or not base:
+        return ""
+    if item_kind == "escalation":
+        path = "escalations"
+    elif item_kind == "appointment":
+        path = "appointments"
+    else:
+        return ""  # unknown item kind — defensive
+    return f"{base}/{slug}/{path}/{item_id}"
+
+
+def _build_alert_html_body(text_body: str, link_url: str,
+                            link_label: str) -> str:
+    """Brief 243: render the plain-text alert body as HTML with a CTA
+    button + fallback URL. Inline CSS only (Gmail-safe). The text body
+    is wrapped in <pre> to preserve operator at-a-glance scan layout.
+
+    Button styling: blue #1a73e8 background, white text, 12px padding,
+    4px border-radius, no underline, sans-serif font. Works in Gmail,
+    Outlook, Apple Mail, mobile clients."""
+    import html as _html
+    safe_text = _html.escape(text_body or "")
+    safe_url = _html.escape(link_url or "", quote=True)
+    safe_label = _html.escape(link_label or "Open dashboard")
+    return (
+        "<!DOCTYPE html>"
+        "<html><body style=\"font-family: -apple-system, BlinkMacSystemFont, "
+        "'Segoe UI', Roboto, sans-serif; color: #202124;\">"
+        f"<pre style=\"font-family: inherit; white-space: pre-wrap; "
+        f"font-size: 14px; margin: 0 0 16px 0;\">{safe_text}</pre>"
+        f"<p style=\"margin: 16px 0;\">"
+        f"<a href=\"{safe_url}\" "
+        f"style=\"display: inline-block; background-color: #1a73e8; "
+        f"color: #ffffff; text-decoration: none; padding: 12px 24px; "
+        f"border-radius: 4px; font-weight: 500;\">{safe_label}</a>"
+        f"</p>"
+        f"<p style=\"font-size: 12px; color: #5f6368; margin: 16px 0 0 0;\">"
+        f"Plain link:<br>"
+        f"<a href=\"{safe_url}\" style=\"color: #1a73e8;\">{safe_url}</a>"
+        f"</p>"
+        "</body></html>"
+    )
+
+
 def _fire_appointment_alerts(appointment_id: int, customer_name: str,
                               channel: str, appointment_dict: dict) -> None:
     """Brief 241: build the appointment alert message, dispatch to enabled
@@ -1736,12 +1796,21 @@ def _fire_appointment_alerts(appointment_id: int, customer_name: str,
                 "no email destination configured",
                 alert_type="appointment", appointment_id=appointment_id)
         else:
+            # Brief 243: build deep-link to this appointment ONCE
+            # outside the per-recipient loop. Empty string when tenant
+            # config lacks business.slug or business.dashboard_url —
+            # smtp_send falls back to plain text only.
+            _link_url = _resolve_dashboard_link("appointment", appointment_id)
+            _html_body = (
+                _build_alert_html_body(alert_text, _link_url, "Open appointment")
+                if _link_url else None
+            )
             for dest in recipients:
                 if state_registry.appointment_alert_already_sent(
                         appointment_id, "email", dest):
                     continue  # layer-2 dedup
                 try:
-                    smtp_send(dest, email_subject, alert_text)
+                    smtp_send(dest, email_subject, alert_text, html_body=_html_body)
                     state_registry.record_alert_delivery(
                         None, "email", dest, "sent",
                         alert_type="appointment", appointment_id=appointment_id)
@@ -1861,9 +1930,18 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                 escalation_id, "email", "", "skipped",
                 "no email destination configured")
         else:
+            # Brief 243: build deep-link to this escalation ONCE outside
+            # the per-recipient loop. Empty string when tenant config
+            # lacks business.slug or business.dashboard_url — smtp_send
+            # falls back to plain text only.
+            _link_url = _resolve_dashboard_link("escalation", escalation_id)
+            _html_body = (
+                _build_alert_html_body(alert_text, _link_url, "Open escalation")
+                if _link_url else None
+            )
             for dest in recipients:
                 try:
-                    smtp_send(dest, email_subject, alert_text)
+                    smtp_send(dest, email_subject, alert_text, html_body=_html_body)
                     state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
                 except Exception as exc:
                     state_registry.record_alert_delivery(

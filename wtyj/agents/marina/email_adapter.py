@@ -120,10 +120,24 @@ def imap_connect():
 
 
 # ========= SENDING =========
-def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None):
+def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None,
+              html_body: str = None):
     """Brief 204: Gmail app password mode when EMAIL_PASSWORD is set; else
-    Microsoft OAuth XOAUTH2 (existing path)."""
-    msg = MIMEMultipart()
+    Microsoft OAuth XOAUTH2 (existing path).
+
+    Brief 243: when html_body is provided, send multipart/alternative
+    with both text/plain and text/html parts. Email clients render the
+    HTML version; clients that strip HTML (or text-only readers) get the
+    plain `body`. When html_body is None (default), current single-part
+    plain-text behavior is unchanged."""
+    # Brief 243: switch to multipart/alternative when an HTML body is
+    # supplied, so the text part is the explicit fallback. Default
+    # MIMEMultipart() subtype is 'mixed' which is wrong for this
+    # purpose - clients may show both parts as separate attachments.
+    if html_body is not None:
+        msg = MIMEMultipart('alternative')
+    else:
+        msg = MIMEMultipart()
     msg["From"] = "Marina <{}>".format(EMAIL_ADDR)
     msg["To"] = to_addr
     msg["Subject"] = subject
@@ -134,7 +148,11 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
         msg["References"] = references
     if reply_to:
         msg["Reply-To"] = reply_to
+    # Brief 243: text part FIRST so HTML-stripping clients pick it as
+    # the body. Text-only clients ignore the HTML and pick text.
     msg.attach(MIMEText(body, "plain", "utf-8"))
+    if html_body is not None:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     if EMAIL_PASSWORD:
         # Gmail app password — basic LOGIN auth via STARTTLS.

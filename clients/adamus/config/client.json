@@ -17,7 +17,9 @@
     "agent_signature": "Sofia\nRestaurant Adamus",
     "spreadsheet_id": "1OYtPI5Fn7btaPROsJgtpXnoWR025cbjHWudHx2a8ggc",
     "support_email": "butlerbensonagent@gmail.com",
-    "operating_mode": "full_booking"
+    "operating_mode": "full_booking",
+    "slug": "adamus",
+    "dashboard_url": "https://dashboard.unboks.org"
   },
   "agent_persona": {
     "tone": "warm, casual, beachy",

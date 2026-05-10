@@ -20,7 +20,9 @@
     "spreadsheet_id": "1t1gy6qILNbJNwMBhvixT5yNspulT6-Mkr4-2dMo384I",
     "support_email": "butlerbensonagent@gmail.com",
     "demo_support_email": "butlerbensonagent@gmail.com",
-    "operating_mode": "full_booking"
+    "operating_mode": "full_booking",
+    "slug": "bluemarlin",
+    "dashboard_url": "https://dashboard.unboks.org"
   },
   "agent_persona": {
     "tone": "warm, calm, practical, guest-aware",

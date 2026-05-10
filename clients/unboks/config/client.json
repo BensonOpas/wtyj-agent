@@ -19,7 +19,9 @@
     "agent_internal_id": "marina-unboks",
     "spreadsheet_id": "",
     "support_email": "butlerbensonagent@gmail.com",
-    "operating_mode": "qualify_and_handoff"
+    "operating_mode": "qualify_and_handoff",
+    "slug": "unboks",
+    "dashboard_url": "https://dashboard.unboks.org"
   },
   "agent_persona": {
     "tone": "professional but casual, not stiff, never over-eager",

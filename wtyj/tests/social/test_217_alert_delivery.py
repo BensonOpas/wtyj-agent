@@ -332,7 +332,7 @@ def test_alert_body_uses_rich_summary_when_available(monkeypatch):
     decision, options, and the latest customer message verbatim."""
     from dashboard import api as dapi
     captured = {}
-    def fake_smtp(to, subj, body): captured.update(to=to, subj=subj, body=body)
+    def fake_smtp(to, subj, body, **kw): captured.update(to=to, subj=subj, body=body)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
                          lambda **k: {"channels": {"email": {"enabled": True,
@@ -355,7 +355,7 @@ def test_alert_body_falls_back_to_vague_when_no_summary(monkeypatch):
     legacy Brief 217 format so old tests + no-API-key paths still work."""
     from dashboard import api as dapi
     captured = {}
-    def fake_smtp(to, subj, body): captured.update(to=to, subj=subj, body=body)
+    def fake_smtp(to, subj, body, **kw): captured.update(to=to, subj=subj, body=body)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
                          lambda **k: {"channels": {"email": {"enabled": True,
@@ -375,7 +375,7 @@ def test_alert_subject_specific_for_scheduling_update(monkeypatch):
     non-empty, subject names the new time."""
     from dashboard import api as dapi
     captured = {}
-    def fake_smtp(to, subj, body): captured.update(subj=subj)
+    def fake_smtp(to, subj, body, **kw): captured.update(subj=subj)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
                          lambda **k: {"channels": {"email": {"enabled": True,
@@ -395,7 +395,7 @@ def test_alert_body_surfaces_previous_proposed_times(monkeypatch):
     field added in Step 1 is consumed by the body builder in Step 4."""
     from dashboard import api as dapi
     captured = {}
-    def fake_smtp(to, subj, body): captured.update(body=body)
+    def fake_smtp(to, subj, body, **kw): captured.update(body=body)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
                          lambda **k: {"channels": {"email": {"enabled": True,
@@ -481,7 +481,7 @@ def test_mode_set_at_create_persists_and_renders(monkeypatch):
     monkeypatch.setattr(state_registry, "_summary_dispatcher",
                          lambda *a, **k: _make_summary(latest_msg="hi"))
     captured = {}
-    def fake_smtp(to, subj, body): captured.update(body=body)
+    def fake_smtp(to, subj, body, **kw): captured.update(body=body)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
                          lambda **k: {"channels": {"email": {"enabled": True,
@@ -756,7 +756,7 @@ def test_fire_appointment_alerts_sends_email_with_correct_shape(monkeypatch):
     from dashboard import api as dapi
     from shared import state_registry
     captured_email = {}
-    def fake_smtp(to, subj, body):
+    def fake_smtp(to, subj, body, **kw):
         captured_email.update(to=to, subj=subj, body=body)
     monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
     monkeypatch.setattr(state_registry, "get_alert_settings",
@@ -798,7 +798,7 @@ def test_fire_appointment_alerts_dedup_skips_already_sent(monkeypatch):
     from shared import state_registry
     smtp_calls = []
     monkeypatch.setattr(dapi, "smtp_send",
-                         lambda to, s, b: smtp_calls.append(to))
+                         lambda to, s, b, **kw: smtp_calls.append(to))
     monkeypatch.setattr(state_registry, "get_alert_settings",
                          lambda **k: {
                              "alertTypes": {"escalations": True, "appointments": True},
@@ -908,3 +908,144 @@ def test_confirm_endpoint_returns_404_for_missing_appointment():
         headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 404
     assert resp.json()["detail"] == "appointment not found"
+
+
+# ── Brief 243: HTML CTA buttons + dashboard deep-links in alert emails ─
+
+def test_resolve_dashboard_link_builds_path_when_slug_and_url_present(
+        monkeypatch):
+    """Brief 243: helper returns f"{base}/{slug}/escalations/{id}" or
+    f"{base}/{slug}/appointments/{id}" when business.slug and
+    business.dashboard_url are both present in client.json."""
+    from dashboard import api as dapi
+    from shared import config_loader
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks",
+                                   "dashboard_url": "https://dashboard.unboks.org"})
+    assert dapi._resolve_dashboard_link("escalation", 42) == \
+        "https://dashboard.unboks.org/unboks/escalations/42"
+    assert dapi._resolve_dashboard_link("appointment", 99) == \
+        "https://dashboard.unboks.org/unboks/appointments/99"
+    # Trailing slash on base is normalised
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks",
+                                   "dashboard_url": "https://dashboard.unboks.org/"})
+    assert dapi._resolve_dashboard_link("escalation", 1) == \
+        "https://dashboard.unboks.org/unboks/escalations/1"
+
+
+def test_resolve_dashboard_link_returns_empty_when_slug_missing(
+        monkeypatch):
+    """Brief 243: helper returns empty string when business.slug or
+    business.dashboard_url is missing — dispatchers fall back to
+    plain-text email body, no broken link rendered."""
+    from dashboard import api as dapi
+    from shared import config_loader
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"dashboard_url": "https://dashboard.unboks.org"})
+    assert dapi._resolve_dashboard_link("escalation", 42) == ""
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks"})
+    assert dapi._resolve_dashboard_link("appointment", 42) == ""
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks",
+                                   "dashboard_url": "https://dashboard.unboks.org"})
+    assert dapi._resolve_dashboard_link("unknown_kind", 42) == ""
+
+
+def test_build_alert_html_body_includes_button_and_fallback_url():
+    """Brief 243: HTML body contains the CTA <a> button with the
+    correct href + label AND a plain-text fallback URL line below
+    (so text-stripping clients still get a clickable URL). Plain
+    body text is preserved inside <pre>."""
+    from dashboard import api as dapi
+    text = "Customer: Calvin\nChannel: whatsapp\nAction: review"
+    url = "https://dashboard.unboks.org/unboks/escalations/42"
+    html = dapi._build_alert_html_body(text, url, "Open escalation")
+    assert "<!DOCTYPE html>" in html
+    # Button: <a href="..." style="...background-color: #1a73e8...">Open escalation</a>
+    assert f'href="{url}"' in html
+    assert "background-color: #1a73e8" in html
+    assert ">Open escalation</a>" in html
+    # Plain-text body inside <pre>
+    assert "<pre " in html
+    assert "Customer: Calvin" in html  # escaped preserves visible text
+    assert "Channel: whatsapp" in html
+    # Fallback URL line below the button
+    assert "Plain link:" in html
+    # The url appears at least twice: once in button href, once in fallback link
+    assert html.count(url) >= 2
+
+
+def test_escalation_dispatcher_passes_html_body_when_link_resolves(
+        monkeypatch):
+    """Brief 243: when business.slug + dashboard_url are configured,
+    _fire_escalation_alerts builds a deep-link and passes html_body=
+    to smtp_send. When the helper returns empty, no html_body is
+    passed (plain-only fallback)."""
+    from dashboard import api as dapi
+    from shared import state_registry, config_loader
+    captured = []
+    def fake_smtp(to, subj, body, **kw):
+        captured.append({"to": to, "subj": subj, "body": body,
+                          "html_body": kw.get("html_body")})
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {"escalations": True, "appointments": True},
+                             "channels": {"email": {"enabled": True,
+                                                     "destination": "ops@example.com",
+                                                     "alternativeDestination": ""}}})
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks",
+                                   "dashboard_url": "https://dashboard.unboks.org",
+                                   "name": "unboks"})
+    dapi._fire_escalation_alerts(
+        escalation_id=4242,
+        customer_name="Calvin",
+        channel="whatsapp",
+        summary="customer needs help")
+    assert len(captured) == 1
+    sent = captured[0]
+    assert sent["html_body"] is not None
+    assert "https://dashboard.unboks.org/unboks/escalations/4242" in sent["html_body"]
+    assert ">Open escalation</a>" in sent["html_body"]
+
+
+def test_appointment_dispatcher_passes_html_body_with_appointment_link(
+        monkeypatch):
+    """Brief 243: appointment dispatcher builds an appointments deep-link
+    and passes html_body= to smtp_send with the 'Open appointment' label."""
+    from dashboard import api as dapi
+    from shared import state_registry, config_loader
+    captured = []
+    def fake_smtp(to, subj, body, **kw):
+        captured.append({"html_body": kw.get("html_body"), "subj": subj})
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {"escalations": True, "appointments": True},
+                             "channels": {"email": {"enabled": True,
+                                                     "destination": "ops@example.com",
+                                                     "alternativeDestination": ""}}})
+    monkeypatch.setattr(state_registry, "appointment_alert_already_sent",
+                         lambda *a, **k: False)
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    monkeypatch.setattr(config_loader, "get_business",
+                         lambda: {"slug": "unboks",
+                                   "dashboard_url": "https://dashboard.unboks.org",
+                                   "name": "unboks"})
+    appt = {"id": 7777, "conversation_id": "conv-z", "channel": "whatsapp",
+            "customer_name": "Calvin", "title": "Intake call",
+            "date_time_label": "Friday 12:00",
+            "proposed_times": ["Friday 12:00"],
+            "location": "Café Paris", "status": "confirmed"}
+    dapi._fire_appointment_alerts(7777, "Calvin", "whatsapp", appt)
+    assert len(captured) == 1
+    sent = captured[0]
+    assert sent["html_body"] is not None
+    assert "https://dashboard.unboks.org/unboks/appointments/7777" in sent["html_body"]
+    assert ">Open appointment</a>" in sent["html_body"]
