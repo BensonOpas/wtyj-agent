@@ -343,6 +343,15 @@ def _get_conn():
         conn.execute("ALTER TABLE conversation_status ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # Brief 249: conversation_status.deleted (archived state for the
+    # WhatsApp/IG/FB inbox). Brief 237 introduced read+write of this
+    # column without a migration -- silently broken since it shipped.
+    # Brief 249 adds the missing migration so manual archive endpoints
+    # AND Brief 237's bulk archive sweep both work.
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     # Brief 207: tasks shared between Calvin and Jr (operator-side workflow,
     # not customer-facing). Per-tenant SQLite isolation matches existing tables.
     conn.execute(
@@ -1163,6 +1172,172 @@ def email_list_conversations() -> list:
     return result
 
 
+def email_set_archived(thread_key: str, archived: bool) -> bool:
+    """Brief 249: toggle the archive state on an email thread. Sets/clears
+    flags.deleted in email_thread_state.json (the existing Brief 218 +
+    Brief 237 'archived' semantic - the flag is named 'deleted' for
+    historical reasons but semantically means 'hidden from active inbox',
+    NOT hard-removed from storage). Returns True if the thread was found
+    and updated; False if no matching thread_key in state."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return False
+    threads = state.get("threads") or {}
+    th = threads.get(thread_key)
+    if not th:
+        return False
+    flags = th.setdefault("flags", {})
+    if archived:
+        flags["deleted"] = True
+    else:
+        # Unarchive -- remove the key entirely so a future re-read sees
+        # the thread as never-archived (clean shape).
+        flags.pop("deleted", None)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def wa_set_archived(conversation_id: str, archived: bool) -> bool:
+    """Brief 249: toggle the archive state on a WhatsApp/IG/FB
+    conversation. Sets/clears conversation_status.deleted (the existing
+    Brief 218 + Brief 237 'archived' semantic). UPSERTs the
+    conversation_status row when missing so manual archive works for
+    conversations that have no prior status entry. Returns True; raises
+    on DB error (caller wraps if it cares)."""
+    if not conversation_id:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    deleted_int = 1 if archived else 0
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, updated_at, deleted) "
+            "VALUES (?, 'whatsapp', ?, ?, ?) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET "
+            "deleted = excluded.deleted, updated_at = excluded.updated_at",
+            (conversation_id, "archived" if archived else "active",
+             now, deleted_int))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def email_list_archived_conversations() -> list:
+    """Brief 249: return email threads with flags.deleted=true (the
+    inverse of email_list_conversations' filter). Same response shape
+    as email_list_conversations so the frontend can swap the data
+    source by URL without re-mapping fields."""
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return []
+    threads = state.get("threads", {})
+    result = []
+    for thread_key, th in threads.items():
+        messages = th.get("messages", []) or []
+        if not messages:
+            continue
+        flags = th.get("flags", {}) or {}
+        # Inverse filter: only archived (deleted=true) rows.
+        if not flags.get("deleted"):
+            continue
+        last = messages[-1]
+        last_ts = last.get("ts") or last.get("timestamp") or ""
+        last_role = last.get("role", "")
+        last_body = (last.get("body") or last.get("text") or "")[:200]
+        if last_role == "customer":
+            last_role = "user"
+        elif last_role == "marina":
+            last_role = "assistant"
+        fields = th.get("fields", {}) or {}
+        customer_name = fields.get("customer_name") or ""
+        if not customer_name:
+            parts = thread_key.split(":", 2)
+            if len(parts) >= 2:
+                customer_name = parts[1]
+        result.append({
+            "phone": f"email::{thread_key}",
+            "customer_name": customer_name or "(email customer)",
+            "last_message": last_body,
+            "last_message_role": last_role,
+            "last_message_at": last_ts,
+            "status": "archived",
+            "message_count": len(messages),
+            "channel": "email",
+        })
+    result.sort(key=lambda r: r["last_message_at"] or "", reverse=True)
+    return result
+
+
+def wa_list_archived_conversations() -> list:
+    """Brief 249: return WhatsApp/IG/FB conversations with
+    conversation_status.deleted=1 (the inverse of wa_list_conversations'
+    new Brief 249 filter). Same response shape as wa_list_conversations."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT t.phone, t.text, t.created_at, t.role, t.channel "
+        "FROM whatsapp_threads t "
+        "INNER JOIN ("
+        "  SELECT phone, MAX(created_at) as max_ts "
+        "  FROM whatsapp_threads GROUP BY phone"
+        ") latest ON t.phone = latest.phone AND t.created_at = latest.max_ts "
+        "INNER JOIN conversation_status cs ON t.phone = cs.conversation_id "
+        "WHERE cs.deleted = 1 "
+        "ORDER BY t.created_at DESC"
+    ).fetchall()
+    conversations = []
+    for r in rows:
+        phone = r[0]
+        state_row = conn.execute(
+            "SELECT fields_json, flags_json FROM whatsapp_booking_state "
+            "WHERE phone = ?", (phone,)
+        ).fetchone()
+        fields = json.loads(state_row[0] or "{}") if state_row else {}
+        name = (fields.get("customer_name") or fields.get("name") or "")
+        if not name:
+            sender_row = conn.execute(
+                "SELECT sender_name FROM whatsapp_threads WHERE phone = ? "
+                "AND role = 'user' AND sender_name != '' "
+                "ORDER BY created_at DESC LIMIT 1", (phone,)
+            ).fetchone()
+            if sender_row and sender_row[0]:
+                name = sender_row[0]
+        if not name:
+            name = phone
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ?", (phone,)
+        ).fetchone()
+        conversations.append({
+            "phone": phone,
+            "customer_name": name,
+            "last_message": (r[1] or "")[:200],
+            "last_message_role": r[3] or "",
+            "last_message_at": r[2] or "",
+            "status": "archived",
+            "message_count": count_row[0] if count_row else 0,
+            "channel": r[4] if len(r) > 4 and r[4] else "whatsapp",
+        })
+    conn.close()
+    return conversations
+
+
 def email_get_conversation(thread_key: str) -> dict:
     """Brief 171: return full message history + fields for an email thread.
     Messages are normalized to the WhatsApp shape: {role, text, created_at}."""
@@ -1351,6 +1526,11 @@ def wa_list_conversations() -> list:
         "  SELECT phone, MAX(created_at) as max_ts "
         "  FROM whatsapp_threads GROUP BY phone"
         ") latest ON t.phone = latest.phone AND t.created_at = latest.max_ts "
+        # Brief 249: exclude conversations marked archived
+        # (conversation_status.deleted=1 set by Brief 237's bulk sweep
+        # OR by Brief 249's manual archive endpoint).
+        "LEFT JOIN conversation_status cs ON t.phone = cs.conversation_id "
+        "WHERE cs.deleted IS NULL OR cs.deleted = 0 "
         "ORDER BY t.created_at DESC"
     ).fetchall()
 

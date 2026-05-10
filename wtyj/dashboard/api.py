@@ -1300,6 +1300,65 @@ async def list_conversations():
     return merged
 
 
+@router.get("/messages/conversations/archived",
+             dependencies=[Depends(_check_auth)])
+async def list_archived_conversations():
+    """Brief 249: return archived WhatsApp + email conversations merged.
+    Same response shape as GET /messages/conversations so the frontend
+    can swap data source by URL. Cross-device-consistent because the
+    archive state is server-side (email flags.deleted +
+    conversation_status.deleted)."""
+    wa = state_registry.wa_list_archived_conversations()
+    for c in wa:
+        c.setdefault("channel", "whatsapp")
+    email = state_registry.email_list_archived_conversations()
+    merged = wa + email
+    merged.sort(key=lambda r: r.get("last_message_at") or "", reverse=True)
+    return merged
+
+
+@router.post("/messages/conversations/{conversation_id:path}/archive",
+              dependencies=[Depends(_check_auth)])
+async def archive_conversation(conversation_id: str):
+    """Brief 249: per-conversation manual archive. Email conv_id starts
+    with 'email::<thread_key>'; WhatsApp/IG/FB uses the bare phone/conv
+    id. Sets the existing 'archived' flag (flags.deleted for email,
+    conversation_status.deleted=1 for WhatsApp). Idempotent - archiving
+    an already-archived conversation succeeds without error."""
+    if conversation_id.startswith("email::"):
+        thread_key = conversation_id[len("email::"):]
+        ok = state_registry.email_set_archived(thread_key, True)
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail="email thread not found")
+        return {"ok": True, "conversationId": conversation_id,
+                "channel": "email", "archived": True}
+    state_registry.wa_set_archived(conversation_id, True)
+    return {"ok": True, "conversationId": conversation_id,
+            "channel": "whatsapp", "archived": True}
+
+
+@router.post("/messages/conversations/{conversation_id:path}/unarchive",
+              dependencies=[Depends(_check_auth)])
+async def unarchive_conversation(conversation_id: str):
+    """Brief 249: per-conversation manual unarchive. Inverse of
+    archive_conversation. Idempotent - unarchiving a not-archived
+    conversation succeeds without error."""
+    if conversation_id.startswith("email::"):
+        thread_key = conversation_id[len("email::"):]
+        ok = state_registry.email_set_archived(thread_key, False)
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail="email thread not found")
+        return {"ok": True, "conversationId": conversation_id,
+                "channel": "email", "archived": False}
+    state_registry.wa_set_archived(conversation_id, False)
+    return {"ok": True, "conversationId": conversation_id,
+            "channel": "whatsapp", "archived": False}
+
+
 def _conversation_status_fields(customer_id: str) -> dict:
     """Brief 211/213/222 + Brief 227 (escalationSummary, recommendedOptions,
     extractedDetails for the most recent unresolved escalation)."""
@@ -2012,15 +2071,19 @@ from shared import escalation_dispatcher  # noqa: F401  (side-effect import)
 # ── Escalations ──────────────────────────────────────────────────────────────
 
 @router.get("/escalations", dependencies=[Depends(_check_auth)])
-async def list_escalations(mode: str = None):
+async def list_escalations(mode: str = None, status: str = None):
     """List all escalation notifications.
     Brief 210 hotfix: SR's frontend mapper requires string ids.
-    Brief 213: support ?mode=soft|hard|all (all = no filter)."""
+    Brief 213: support ?mode=soft|hard|all (all = no filter).
+    Brief 249: support ?status=resolved|sent|pending|replied|all
+    so the frontend can render a Resolved/History view."""
     rows = state_registry.get_all_escalations()
     for r in rows:
         r["id"] = str(r["id"])
     if mode in ("soft", "hard"):
         rows = [r for r in rows if r.get("mode") == mode]
+    if status and status != "all":
+        rows = [r for r in rows if r.get("status") == status]
     return rows
 
 

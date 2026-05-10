@@ -1,0 +1,208 @@
+"""Brief 249: per-conversation manual archive/unarchive endpoints
++ archived-conversations listing + WhatsApp listing filter regression
++ resolved escalations history filter."""
+import json
+import os
+import sys
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
+os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "test")
+os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "test")
+os.environ.setdefault("META_ACCESS_TOKEN", "test")
+os.environ.setdefault("LATE_API_KEY", "test")
+
+from fastapi.testclient import TestClient
+from agents.social.webhook_server import app
+
+client = TestClient(app)
+
+
+def _login():
+    r = client.post("/dashboard/api/login", json={"password": "testpass"})
+    return r.json()["token"]
+
+
+def _auth(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _wipe_wa_phone(phone: str):
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                 (phone,))
+    conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?",
+                 (phone,))
+    conn.commit()
+    conn.close()
+
+
+def test_archive_whatsapp_excludes_from_active_list_and_includes_in_archived():
+    """Brief 249: POST /archive on a WhatsApp conv removes it from
+    /messages/conversations and adds it to /messages/conversations/archived."""
+    from shared import state_registry
+    phone = "249_wa_archive_test_phone"
+    _wipe_wa_phone(phone)
+    state_registry.wa_store_message(phone, "user", "[QA] hello")
+
+    token = _login()
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert r.status_code == 200
+    assert any(c["phone"] == phone for c in r.json()), \
+        "expected phone in active list before archive"
+
+    r = client.post(f"/dashboard/api/messages/conversations/{phone}/archive",
+                     headers=_auth(token))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["archived"] is True
+    assert body["channel"] == "whatsapp"
+
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert not any(c["phone"] == phone for c in r.json()), \
+        "phone must be excluded from active list after archive"
+
+    r = client.get("/dashboard/api/messages/conversations/archived",
+                    headers=_auth(token))
+    assert r.status_code == 200
+    assert any(c["phone"] == phone for c in r.json()), \
+        "phone must appear in archived list"
+
+    _wipe_wa_phone(phone)
+
+
+def test_unarchive_whatsapp_restores_to_active_list():
+    """Brief 249: POST /unarchive flips it back to active."""
+    from shared import state_registry
+    phone = "249_wa_unarchive_test_phone"
+    _wipe_wa_phone(phone)
+    state_registry.wa_store_message(phone, "user", "[QA] hello")
+    state_registry.wa_set_archived(phone, True)
+
+    token = _login()
+    r = client.post(
+        f"/dashboard/api/messages/conversations/{phone}/unarchive",
+        headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["archived"] is False
+
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert any(c["phone"] == phone for c in r.json()), \
+        "phone must reappear in active list after unarchive"
+    _wipe_wa_phone(phone)
+
+
+def test_archive_email_thread_excludes_and_includes(monkeypatch, tmp_path):
+    """Brief 249: archive on an email::thread_key conv toggles flags.deleted
+    in email_thread_state.json. Uses tmp_path to isolate the test from
+    real production state."""
+    from shared import state_registry
+    fake_state = {
+        "threads": {
+            "subj:bob@x.com:test 249": {
+                "messages": [{"role": "customer", "ts": "2026-05-10T00:00:00+00:00",
+                              "body": "[QA] test"}],
+                "fields": {"customer_name": "Bob 249"},
+                "flags": {},
+            }
+        }
+    }
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps(fake_state))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    token = _login()
+    conv_id = "email::subj:bob@x.com:test 249"
+
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert any(c["phone"] == conv_id for c in r.json()), \
+        "expected email conv in active list before archive"
+
+    r = client.post(
+        f"/dashboard/api/messages/conversations/{conv_id}/archive",
+        headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["channel"] == "email"
+
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert not any(c["phone"] == conv_id for c in r.json())
+    r = client.get("/dashboard/api/messages/conversations/archived",
+                    headers=_auth(token))
+    assert any(c["phone"] == conv_id for c in r.json())
+
+
+def test_archive_email_404_when_thread_key_missing(monkeypatch, tmp_path):
+    """Brief 249: archive on a non-existent email thread_key returns 404."""
+    from shared import state_registry
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps({"threads": {}}))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    token = _login()
+    r = client.post(
+        "/dashboard/api/messages/conversations/email::nonexistent/archive",
+        headers=_auth(token))
+    assert r.status_code == 404
+    assert "not found" in r.json()["detail"]
+
+
+def test_wa_list_conversations_filters_brief_237_archived_rows():
+    """Brief 249 regression fix: Brief 237's bulk archive sweep marked
+    WhatsApp rows with conversation_status.deleted=1 + status='archived'
+    but pre-Brief-249 wa_list_conversations did NOT filter on this flag,
+    so archived rows stayed in the active list. After Brief 249's LEFT
+    JOIN filter, they're correctly excluded."""
+    from shared import state_registry
+    phone = "249_wa_brief237_filter_phone"
+    _wipe_wa_phone(phone)
+    state_registry.wa_store_message(phone, "user", "[QA] hi")
+    state_registry.wa_set_archived(phone, True)
+
+    token = _login()
+    r = client.get("/dashboard/api/messages/conversations", headers=_auth(token))
+    assert not any(c["phone"] == phone for c in r.json()), \
+        "Brief 237's archived row must be excluded from wa_list_conversations"
+    _wipe_wa_phone(phone)
+
+
+def test_get_escalations_status_filter_returns_only_resolved():
+    """Brief 249: GET /escalations?status=resolved returns only
+    notification rows whose status='resolved'. Other statuses excluded."""
+    from shared import state_registry
+    cust_pending = "249_resolved_filter_pending@example.com"
+    eid_pending = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=cust_pending, customer_name="Pending Test",
+        subject="[ESCALATION] pending", body="body", mode="hard")
+    cust_resolved = "249_resolved_filter_resolved@example.com"
+    eid_resolved = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=cust_resolved, customer_name="Resolved Test",
+        subject="[ESCALATION] resolved", body="body", mode="hard")
+    state_registry.update_notification_status(eid_resolved, "resolved")
+
+    try:
+        token = _login()
+        r = client.get("/dashboard/api/escalations?status=resolved",
+                        headers=_auth(token))
+        assert r.status_code == 200
+        rows = r.json()
+        ids = [r["id"] for r in rows]
+        assert str(eid_resolved) in ids, \
+            "resolved escalation must be in status=resolved filter"
+        assert str(eid_pending) not in ids, \
+            "non-resolved escalation must NOT appear when status=resolved"
+    finally:
+        # try/finally guarantees cleanup runs even if an assertion fails;
+        # otherwise dev DB accumulates rows on every re-run.
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id IN (?, ?)",
+                     (eid_pending, eid_resolved))
+        conn.commit()
+        conn.close()
