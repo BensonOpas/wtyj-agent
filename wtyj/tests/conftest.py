@@ -4,6 +4,8 @@ and points config_loader at the BlueMarlin client config for dev tests.
 import sys
 import os
 
+import pytest
+
 # Add bluemarlin/ (parent of tests/) to sys.path so package imports work
 _BM_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _BM_ROOT)
@@ -15,3 +17,26 @@ _REPO_ROOT = os.path.dirname(_BM_ROOT)
 _BM_CLIENT_CONFIG = os.path.join(_REPO_ROOT, "clients", "bluemarlin", "config", "client.json")
 if os.path.exists(_BM_CLIENT_CONFIG) and "CLIENT_CONFIG_PATH" not in os.environ:
     os.environ["CLIENT_CONFIG_PATH"] = _BM_CLIENT_CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _bypass_tenant_guard_in_tests():
+    """Brief 238 — strip channel_account_allowlist from the cached test
+    config for the duration of each test, so existing tests bypass the
+    inbound/outbound tenant guard via its block-absent path.
+
+    Note: get_raw() returns dict(_load()) — a shallow copy — so we have
+    to pop from config_loader._cache directly. The Brief 238 tests inject
+    their own allowlist by patching shared.config_loader.get_raw, which
+    overrides this strip at the function-call level (the patched function
+    returns their fake_cfg directly without going through _cache)."""
+    from shared import config_loader
+    config_loader._load()  # ensure cache populated
+    if "channel_account_allowlist" in config_loader._cache:
+        saved = config_loader._cache.pop("channel_account_allowlist")
+        try:
+            yield
+        finally:
+            config_loader._cache["channel_account_allowlist"] = saved
+    else:
+        yield

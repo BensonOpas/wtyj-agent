@@ -486,5 +486,10 @@
       "type": "sailing catamaran",
       "max_guests": 30
     }
+  },
+  "channel_account_allowlist": {
+    "mode": "strict",
+    "zernio_accounts": [],
+    "notes": "This tenant has no live inbound channels. Strict mode + empty list means any Zernio webhook arriving here is treated as misrouted and rejected before processing."
   }
 }

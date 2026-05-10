@@ -105,5 +105,10 @@
     "primary_email": "hello@unboks.org",
     "calendly_url": null,
     "public_form_url": null
+  },
+  "channel_account_allowlist": {
+    "mode": "permissive",
+    "zernio_accounts": [],
+    "notes": "Permissive mode logs WARN on unknown account_ids but still processes. Bedding-in period: collect real account_ids from production logs over ~1 day, populate zernio_accounts, then switch mode to strict. The known Zernio profile is 69b868672cde65a782026248 (Default Profile) per infra.md; account_ids are per-account-within-profile and need to be observed empirically."
   }
 }

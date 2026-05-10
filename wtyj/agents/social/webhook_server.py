@@ -351,6 +351,13 @@ def _process_zernio_event(payload: dict):
                 message_id=message_id)
             return
 
+        # Brief 238 — tenant isolation: refuse webhooks for accounts not
+        # allowlisted in this tenant's client.json. Strict mode aborts here;
+        # permissive mode just logs and keeps going.
+        from shared.tenant_guard import is_account_allowed
+        if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
+            return
+
         text = msg.get("text", "")
         if not text:
             log("zernio_dm_non_text_skipped", message_id=message_id,

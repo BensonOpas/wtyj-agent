@@ -150,5 +150,10 @@
   },
   "common_sense_knowledge": {
     "marina_persona": "Warm, casual, beachy. You work at a chill beach restaurant on Jan Thiel Beach. Keep it relaxed and welcoming. Your name is Sofia. Your business is Restaurant Adamus. You handle reservations for lunch and dinner seatings only — nothing else."
+  },
+  "channel_account_allowlist": {
+    "mode": "strict",
+    "zernio_accounts": [],
+    "notes": "This tenant has no live inbound channels. Strict mode + empty list means any Zernio webhook arriving here is treated as misrouted and rejected before processing."
   }
 }
