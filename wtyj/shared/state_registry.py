@@ -464,6 +464,21 @@ def _get_conn():
         )
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Brief 240: Zernio-route fields for operator WhatsApp alerts. The
+    # user-facing whatsapp_destination stays as the displayed phone (e.g.,
+    # "+351963618003"); these three columns capture the Zernio
+    # conversation_id + account_id needed for outbound delivery, populated
+    # automatically by the auto-resolve hook in webhook_server when the
+    # operator sends a bootstrap inbound from that number.
+    for _coldef in (
+        "ADD COLUMN whatsapp_zernio_conversation_id TEXT",
+        "ADD COLUMN whatsapp_zernio_account_id TEXT",
+        "ADD COLUMN whatsapp_zernio_resolved_at TEXT",
+    ):
+        try:
+            conn.execute(f"ALTER TABLE alert_settings {_coldef}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     # Brief 217: append-only audit log of alert delivery attempts.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS alert_deliveries ("
@@ -1687,6 +1702,53 @@ def get_human_takeover_at(conversation_id: str):
 
 # ── Brief 217: Alert settings + delivery audit ──
 
+def get_resolved_operator_whatsapp_route() -> dict | None:
+    """Brief 240: return the Zernio route resolved for the operator
+    WhatsApp alert destination, or None if not yet bootstrapped.
+
+    Shape: {"conversation_id": str, "account_id": str, "resolved_at": str}.
+    Both conversation_id and account_id must be non-empty for the route
+    to count as resolved; otherwise returns None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT whatsapp_zernio_conversation_id, "
+        "whatsapp_zernio_account_id, whatsapp_zernio_resolved_at "
+        "FROM alert_settings WHERE id = 1").fetchone()
+    conn.close()
+    if not row or not row[0] or not row[1]:
+        return None
+    return {
+        "conversation_id": row[0],
+        "account_id": row[1],
+        "resolved_at": row[2] or "",
+    }
+
+
+def set_resolved_operator_whatsapp_route(conversation_id: str,
+                                          account_id: str) -> None:
+    """Brief 240: persist the Zernio route for operator WhatsApp alerts.
+    UPSERTs into alert_settings - preserves the user-controlled
+    whatsapp_destination + enabled flags + email columns. Idempotent:
+    re-running with the same conv_id + account_id refreshes resolved_at
+    only."""
+    if not conversation_id or not account_id:
+        return  # defensive: never persist a half-resolved route
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO alert_settings (id, whatsapp_zernio_conversation_id, "
+        "whatsapp_zernio_account_id, whatsapp_zernio_resolved_at, "
+        "updated_at) VALUES (1, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "whatsapp_zernio_conversation_id = excluded.whatsapp_zernio_conversation_id, "
+        "whatsapp_zernio_account_id = excluded.whatsapp_zernio_account_id, "
+        "whatsapp_zernio_resolved_at = excluded.whatsapp_zernio_resolved_at, "
+        "updated_at = excluded.updated_at",
+        (conversation_id, account_id, now, now))
+    conn.commit()
+    conn.close()
+
+
 def get_alert_settings(default_email_destination: str = "") -> dict:
     """Brief 217 + 226: return the alert config in SR's frontend shape.
     Channels.email always carries an `alternativeDestination` field (empty
@@ -1710,7 +1772,8 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
             "channels": {
                 "email":     {"enabled": True,  "destination": default_email_destination or "",
                               "alternativeDestination": ""},
-                "whatsapp":  {"enabled": False, "destination": ""},
+                "whatsapp":  {"enabled": False, "destination": "",
+                              "zernioResolved": False},
                 "telegram":  {"enabled": False, "destination": ""},
                 "messenger": {"enabled": False, "destination": ""},
             }
@@ -1725,7 +1788,11 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
                 "destination": email_dest,
                 "alternativeDestination": row[8] or "",
             },
-            "whatsapp":  {"enabled": bool(row[2]), "destination": row[3] or ""},
+            "whatsapp":  {
+                "enabled": bool(row[2]),
+                "destination": row[3] or "",
+                "zernioResolved": bool(get_resolved_operator_whatsapp_route()),
+            },
             "telegram":  {"enabled": bool(row[4]), "destination": row[5] or ""},
             "messenger": {"enabled": bool(row[6]), "destination": row[7] or ""},
         }
@@ -1734,8 +1801,9 @@ def get_alert_settings(default_email_destination: str = "") -> dict:
 
 def save_alert_settings(channels: dict) -> None:
     """Brief 217 + 226: upsert the singleton alert_settings row using
-    INSERT OR REPLACE on a fixed id=1. Atomic — no DELETE-then-INSERT
-    race window where a partial failure could leave the table empty.
+    INSERT ... ON CONFLICT(id) DO UPDATE on a fixed id=1. Brief 240:
+    switched from INSERT OR REPLACE to ON CONFLICT DO UPDATE so the
+    bootstrap-only whatsapp_zernio_* columns survive a Settings save.
     channels.email.alternativeDestination persists in
     email_alternative_destination column."""
     now = datetime.now(timezone.utc).isoformat()
@@ -1744,12 +1812,25 @@ def save_alert_settings(channels: dict) -> None:
     tg = channels.get("telegram", {}) or {}
     ms = channels.get("messenger", {}) or {}
     conn = _get_conn()
+    # Brief 240: ON CONFLICT DO UPDATE preserves the bootstrap-only
+    # whatsapp_zernio_* columns when Calvin saves Settings.
     conn.execute(
-        "INSERT OR REPLACE INTO alert_settings "
+        "INSERT INTO alert_settings "
         "(id, email_enabled, email_destination, whatsapp_enabled, whatsapp_destination, "
         "telegram_enabled, telegram_destination, messenger_enabled, messenger_destination, "
         "email_alternative_destination, updated_at) "
-        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "email_enabled = excluded.email_enabled, "
+        "email_destination = excluded.email_destination, "
+        "whatsapp_enabled = excluded.whatsapp_enabled, "
+        "whatsapp_destination = excluded.whatsapp_destination, "
+        "telegram_enabled = excluded.telegram_enabled, "
+        "telegram_destination = excluded.telegram_destination, "
+        "messenger_enabled = excluded.messenger_enabled, "
+        "messenger_destination = excluded.messenger_destination, "
+        "email_alternative_destination = excluded.email_alternative_destination, "
+        "updated_at = excluded.updated_at",
         (1 if em.get("enabled") else 0, em.get("destination", ""),
          1 if wa.get("enabled") else 0, wa.get("destination", ""),
          1 if tg.get("enabled") else 0, tg.get("destination", ""),

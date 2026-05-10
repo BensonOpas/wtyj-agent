@@ -1707,22 +1707,40 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
     wa = channels_cfg.get("whatsapp", {})
     if wa.get("enabled"):
         dest = wa.get("destination", "")
-        if dest:
-            try:
-                ok = send_whatsapp_message(dest, alert_text)
-                if ok:
-                    state_registry.record_alert_delivery(escalation_id, "whatsapp", dest, "sent")
-                else:
-                    state_registry.record_alert_delivery(
-                        escalation_id, "whatsapp", dest, "failed",
-                        "send_whatsapp_message returned False")
-            except Exception as exc:
-                state_registry.record_alert_delivery(
-                    escalation_id, "whatsapp", dest, "failed", str(exc)[:200])
-        else:
+        if not dest:
             state_registry.record_alert_delivery(
                 escalation_id, "whatsapp", "", "skipped",
                 "no whatsapp destination configured")
+        else:
+            # Brief 240: operator WA alerts go via Zernio (same provider as
+            # unboks customer chat, no Meta CSW issue). The route must be
+            # bootstrapped by the operator sending one inbound WA from the
+            # configured destination - webhook_server.py's auto-resolve hook
+            # captures conv_id + account_id then. Until resolved, we record
+            # `skipped` with the bootstrap reason (no fake `sent`).
+            route = state_registry.get_resolved_operator_whatsapp_route()
+            if not route:
+                state_registry.record_alert_delivery(
+                    escalation_id, "whatsapp", dest, "skipped",
+                    "zernio_operator_destination_not_resolved")
+            else:
+                from agents.social.zernio_dm_client import send_dm_reply
+                try:
+                    ok = send_dm_reply(
+                        route["conversation_id"],
+                        route["account_id"],
+                        alert_text)
+                    if ok:
+                        state_registry.record_alert_delivery(
+                            escalation_id, "whatsapp", dest, "sent")
+                    else:
+                        state_registry.record_alert_delivery(
+                            escalation_id, "whatsapp", dest, "failed",
+                            "zernio_send_dm_reply_returned_false")
+                except Exception as exc:
+                    state_registry.record_alert_delivery(
+                        escalation_id, "whatsapp", dest, "failed",
+                        f"zernio_send_dm_reply_exception: {str(exc)[:200]}")
 
     if channels_cfg.get("telegram", {}).get("enabled"):
         state_registry.record_alert_delivery(

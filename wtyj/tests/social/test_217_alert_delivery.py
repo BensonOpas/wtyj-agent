@@ -59,6 +59,24 @@ def _cleanup_escalation(esc_id, customer_id):
     conn.close()
 
 
+def _wipe_escalations_for(customer_id: str):
+    """Brief 239 + 240: wipe stale rows for this customer_id before a test
+    runs. Tests share the dev DB; without this, a prior run's row triggers
+    Brief 239's dedup-update path and the test's expected create-from-scratch
+    flow doesn't fire."""
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM alert_deliveries WHERE escalation_id IN "
+                 "(SELECT id FROM pending_notifications WHERE customer_id = ?)",
+                 (customer_id,))
+    conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?",
+                 (customer_id,))
+    conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                 (customer_id,))
+    conn.commit()
+    conn.close()
+
+
 # --- Test 1: GET synthesizes default when no row exists
 def test_get_alert_settings_synthesizes_default_when_no_row():
     _clean_alert_state()
@@ -131,34 +149,14 @@ def test_create_pending_notification_fires_email_alert(mock_smtp):
     _cleanup_escalation(esc_id, customer_id)
 
 
-# --- Test 4: WhatsApp alert routes to configured destination, NOT business WhatsApp
-@patch("dashboard.api.send_whatsapp_message", return_value=True)
-def test_create_pending_notification_fires_whatsapp_alert_to_configured_destination(mock_wa):
-    from shared import state_registry
-    _clean_alert_state()
-    private_phone = "+15559999000"
-    _set_alert_settings(whatsapp={"enabled": True, "destination": private_phone})
-
-    customer_id = "217_wa_phone_other"  # the customer's WhatsApp, NOT the alert dest
-    esc_id = state_registry.create_pending_notification(
-        notification_type="escalation", channel="whatsapp",
-        customer_id=customer_id, customer_name="Test",
-        subject="urgent", body="x")
-
-    mock_wa.assert_called_once()
-    sent_to = mock_wa.call_args.args[0]
-    assert sent_to == private_phone, \
-        f"alert routed to wrong number: expected {private_phone}, got {sent_to}"
-    assert sent_to != customer_id, "alert must not go to the customer's own WhatsApp"
-
-    conn = state_registry._get_conn()
-    rows = conn.execute(
-        "SELECT channel, status FROM alert_deliveries "
-        "WHERE escalation_id = ?", (esc_id,)).fetchall()
-    conn.close()
-    assert any(r[0] == "whatsapp" and r[1] == "sent" for r in rows)
-
-    _cleanup_escalation(esc_id, customer_id)
+# --- Test 4 (Brief 217 obsolete, removed in Brief 240): asserted that
+# `send_whatsapp_message` (Meta Cloud API) was called for operator WA
+# alerts. Brief 240 replaced that contract: operator WA alerts now go via
+# Zernio's send_dm_reply, not Meta. Three new tests at the bottom of this
+# file (test_wa_alert_unresolved_route_records_skipped_no_zernio_call,
+# test_wa_alert_resolved_route_calls_zernio_records_sent,
+# test_wa_alert_zernio_failure_records_failed_with_reason) cover the
+# new contract end-to-end.
 
 
 # --- Test 5: dispatcher failure does NOT block escalation row insert
@@ -436,6 +434,7 @@ def test_re_escalation_with_changed_summary_fires_updated_alert(monkeypatch):
                        "summary": summary_dict})
     monkeypatch.setattr(state_registry, "_alert_dispatcher", fake_dispatch)
     cid = "test-friday-conv"
+    _wipe_escalations_for(cid)
     state_registry.create_pending_notification(
         "escalation", "whatsapp", cid, "Calvin", "Marina escalated", "...",
         mode="soft")
@@ -463,6 +462,7 @@ def test_re_escalation_with_unchanged_summary_suppresses_alert(monkeypatch):
     monkeypatch.setattr(state_registry, "_alert_dispatcher",
                          lambda *a, **k: fired.append((a, k)))
     cid = "test-noop-conv"
+    _wipe_escalations_for(cid)
     state_registry.create_pending_notification(
         "escalation", "whatsapp", cid, "Calvin", "subj1", "body1",
         mode="soft")
@@ -489,6 +489,7 @@ def test_mode_set_at_create_persists_and_renders(monkeypatch):
     monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
                          lambda *a, **k: None)
     cid = "test-mode-conv"
+    _wipe_escalations_for(cid)
     rid = state_registry.create_pending_notification(
         "escalation", "whatsapp", cid, "Calvin", "subj", "body", mode="soft")
     conn = state_registry._get_conn()
@@ -497,3 +498,162 @@ def test_mode_set_at_create_persists_and_renders(monkeypatch):
     conn.close()
     assert row[0] == "soft"
     assert "Mode: Agent needs help" in captured.get("body", "")
+
+
+# ── Brief 240: operator WhatsApp alerts via Zernio + bootstrap ─────────
+
+def test_wa_alert_unresolved_route_records_skipped_no_zernio_call(monkeypatch):
+    """Brief 240: WA enabled + destination configured + Zernio route NOT yet
+    resolved → alert dispatcher records 'skipped' with the bootstrap reason
+    and does NOT call send_dm_reply or any Meta send function."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {
+                             "email": {"enabled": False, "destination": "", "alternativeDestination": ""},
+                             "whatsapp": {"enabled": True, "destination": "+351963618003", "zernioResolved": False},
+                         }})
+    monkeypatch.setattr(state_registry, "get_resolved_operator_whatsapp_route",
+                         lambda: None)
+    captured = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: captured.append(a))
+    called = {"send_dm_reply": False, "send_whatsapp_message": False}
+    monkeypatch.setattr("agents.social.zernio_dm_client.send_dm_reply",
+                         lambda *a, **k: called.__setitem__("send_dm_reply", True) or True)
+    monkeypatch.setattr(dapi, "send_whatsapp_message",
+                         lambda *a, **k: called.__setitem__("send_whatsapp_message", True) or True)
+    dapi._fire_escalation_alerts(
+        escalation_id=1, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft",
+        summary_dict={"reason": "x", "extractedDetails": {"intent": "scheduling"}},
+        is_update=False)
+    wa_rows = [a for a in captured if len(a) >= 4 and a[1] == "whatsapp"]
+    assert len(wa_rows) == 1
+    eid, ch, dest, status = wa_rows[0][:4]
+    assert status == "skipped"
+    assert dest == "+351963618003"
+    reason = wa_rows[0][4] if len(wa_rows[0]) > 4 else ""
+    assert "zernio_operator_destination_not_resolved" in reason
+    assert called["send_dm_reply"] is False
+    assert called["send_whatsapp_message"] is False
+
+
+def test_wa_alert_resolved_route_calls_zernio_records_sent(monkeypatch):
+    """Brief 240: WA enabled + Zernio route resolved → alert dispatcher
+    calls send_dm_reply with the route's conv_id + account_id and records
+    'sent' on True. Also verifies the Brief 239 rich body is what gets sent."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    from agents.social import zernio_dm_client
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {
+                             "email": {"enabled": False, "destination": "", "alternativeDestination": ""},
+                             "whatsapp": {"enabled": True, "destination": "+351963618003", "zernioResolved": True},
+                         }})
+    monkeypatch.setattr(state_registry, "get_resolved_operator_whatsapp_route",
+                         lambda: {"conversation_id": "convOPER123",
+                                   "account_id": "acctZER999",
+                                   "resolved_at": "2026-05-10T04:00:00+00:00"})
+    captured_send = {}
+    def fake_send(conv, acct, text):
+        captured_send.update(conv=conv, acct=acct, text=text)
+        return True
+    monkeypatch.setattr(zernio_dm_client, "send_dm_reply", fake_send)
+    captured_delivery = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: captured_delivery.append(a))
+    dapi._fire_escalation_alerts(
+        escalation_id=2, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft",
+        summary_dict={"reason": "Calvin needs scheduling decision",
+                       "operatorNeedsToDecide": "Choose a time",
+                       "recommendedOptions": ["Confirm Friday 12:00"],
+                       "extractedDetails": {"intent": "scheduling",
+                                              "proposedTimes": ["Friday 12:00"]},
+                       "latestCustomerMessage": "i wanna change to friday 12:00"},
+        is_update=False)
+    assert captured_send["conv"] == "convOPER123"
+    assert captured_send["acct"] == "acctZER999"
+    assert "Reason:" in captured_send["text"]
+    wa_rows = [a for a in captured_delivery if len(a) >= 4 and a[1] == "whatsapp"]
+    assert len(wa_rows) == 1
+    assert wa_rows[0][3] == "sent"
+    assert wa_rows[0][2] == "+351963618003"
+
+
+def test_wa_alert_zernio_failure_records_failed_with_reason(monkeypatch):
+    """Brief 240: Zernio's send_dm_reply returns False → alert dispatcher
+    records 'failed' with reason 'zernio_send_dm_reply_returned_false'."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    from agents.social import zernio_dm_client
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {
+                             "email": {"enabled": False, "destination": "", "alternativeDestination": ""},
+                             "whatsapp": {"enabled": True, "destination": "+351963618003", "zernioResolved": True},
+                         }})
+    monkeypatch.setattr(state_registry, "get_resolved_operator_whatsapp_route",
+                         lambda: {"conversation_id": "convX",
+                                   "account_id": "acctY",
+                                   "resolved_at": "2026-05-10T04:00:00+00:00"})
+    monkeypatch.setattr(zernio_dm_client, "send_dm_reply",
+                         lambda *a, **k: False)
+    captured = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: captured.append(a))
+    dapi._fire_escalation_alerts(
+        escalation_id=3, customer_name="Calvin", channel="whatsapp",
+        summary="ignored", mode="soft",
+        summary_dict={"reason": "x", "extractedDetails": {"intent": "scheduling"}},
+        is_update=False)
+    wa_rows = [a for a in captured if len(a) >= 4 and a[1] == "whatsapp"]
+    assert len(wa_rows) == 1
+    eid, ch, dest, status = wa_rows[0][:4]
+    assert status == "failed"
+    reason = wa_rows[0][4] if len(wa_rows[0]) > 4 else ""
+    assert "zernio_send_dm_reply_returned_false" in reason
+
+
+def test_inbound_wa_from_operator_phone_resolves_zernio_route(monkeypatch):
+    """Brief 240: an inbound Zernio WhatsApp webhook whose normalized
+    sender_id matches the configured whatsapp_destination triggers
+    set_resolved_operator_whatsapp_route with the conv_id + account_id from
+    the parsed message. The WhatsApp-only gating in the source is enforced
+    by the `if msg.get(\"platform\") == \"whatsapp\":` guard at the call
+    site; this test exercises only the positive WhatsApp path."""
+    from agents.social import webhook_server
+    from shared import state_registry
+    payload = {"event": "message.received", "data": {
+        "id": "msgB240a", "conversationId": "convOPER123",
+        "accountId": "acctZER999", "platform": "whatsapp",
+        "text": "hi", "sender": {"name": "Calvin", "id": "+351963618003"}}}
+    parsed = {"conversation_id": "convOPER123", "platform": "whatsapp",
+              "channel": "whatsapp", "sender_name": "Calvin",
+              "sender_id": "+351963618003", "text": "hi",
+              "message_id": "msgB240a", "account_id": "acctZER999"}
+    monkeypatch.setattr(webhook_server, "parse_zernio_webhook",
+                         lambda p: parsed)
+    monkeypatch.setattr(webhook_server.state_registry, "wa_has_been_processed",
+                         lambda mid: False)
+    monkeypatch.setattr(webhook_server.state_registry,
+                         "wa_mark_as_processed", lambda mid: None)
+    monkeypatch.setattr(webhook_server.state_registry, "get_blocked",
+                         lambda cid: False)
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {
+                             "whatsapp": {"enabled": True, "destination": "+351963618003"},
+                         }})
+    monkeypatch.setattr("shared.tenant_guard.config_loader.get_raw",
+                         lambda: {})
+    captured = {}
+    def fake_set_route(conv, acct):
+        captured.update(conv=conv, acct=acct)
+    monkeypatch.setattr(state_registry,
+                         "set_resolved_operator_whatsapp_route", fake_set_route)
+    monkeypatch.setattr(webhook_server, "_buffer_message", lambda m: None)
+    monkeypatch.setattr(webhook_server, "send_typing_indicator",
+                         lambda *a, **k: None)
+    webhook_server._process_zernio_event(payload)
+    assert captured.get("conv") == "convOPER123"
+    assert captured.get("acct") == "acctZER999"

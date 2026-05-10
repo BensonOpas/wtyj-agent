@@ -358,6 +358,35 @@ def _process_zernio_event(payload: dict):
         if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
             return
 
+        # Brief 240: auto-resolve operator WhatsApp alert route. If this
+        # inbound is from the configured operator phone (whatsapp_destination
+        # in alert_settings), persist the Zernio conversation_id + account_id
+        # so the alert dispatcher can deliver future operator alerts via
+        # Zernio (not Meta). WhatsApp-only - DMing the IG/FB account does
+        # not bootstrap a WA alert route. Best-effort: never blocks the
+        # inbound event from being processed normally.
+        if msg.get("platform") == "whatsapp":
+            try:
+                _alert_settings = state_registry.get_alert_settings(
+                    default_email_destination="")
+                _wa_dest = (((_alert_settings or {}).get("channels") or {})
+                            .get("whatsapp") or {}).get("destination") or ""
+                if _wa_dest:
+                    _sender_digits = _normalize_phone_digits(
+                        msg.get("sender_id", ""))
+                    _dest_digits = _normalize_phone_digits(_wa_dest)
+                    if _sender_digits and _sender_digits == _dest_digits:
+                        state_registry.set_resolved_operator_whatsapp_route(
+                            msg.get("conversation_id", ""),
+                            msg.get("account_id", ""))
+                        log("operator_whatsapp_route_resolved",
+                            sender_digits=_sender_digits,
+                            conversation_id=msg.get("conversation_id", "")[:20],
+                            account_id=msg.get("account_id", "")[:20])
+            except Exception as _e:
+                log("operator_whatsapp_route_resolve_failed",
+                    error=str(_e)[:200])
+
         text = msg.get("text", "")
         if not text:
             log("zernio_dm_non_text_skipped", message_id=message_id,
