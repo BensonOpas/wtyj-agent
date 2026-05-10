@@ -2416,6 +2416,37 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     customer_id = esc.get("customer_id", "")
 
     if channel == "whatsapp" and customer_id:
+        # Brief 246: hard mode = operator IS the author. Send verbatim.
+        # Soft/legacy mode = relay (Marina reformulates).
+        # Mirrors the email branch at lines 2470-2511 (Brief 210).
+        if esc.get("mode") == "hard":
+            operator_reply = req.text
+            sent_ok = send_whatsapp_message(customer_id, operator_reply)
+            if not sent_ok:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
+            state_registry.wa_store_message(customer_id, "operator", operator_reply)
+            bm_logger.log("dashboard_hard_reply_sent",
+                          phone=customer_id, escalation_id=escalation_id,
+                          mode="hard", channel="whatsapp")
+            state_registry.update_notification_status(escalation_id, "replied")
+
+            # Brief 215: auto-create approved learning entry from operator answer.
+            try:
+                state_registry.save_escalation_learning(
+                    conversation_id=customer_id, channel="whatsapp",
+                    source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
+                    human_answer=operator_reply,
+                    status="approved", ai_may_use=True)
+            except Exception as _learn_exc:
+                bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
+                              escalation_id=escalation_id, source="reply_whatsapp_hard")
+
+            return {"ok": True, "reply": operator_reply,
+                    "channel": "whatsapp", "role": "operator"}
+
+        # Soft / legacy / no-mode path: existing relay behavior unchanged
         wa_state = state_registry.wa_get_booking_state(customer_id)
         wa_fields = wa_state.get("fields", {})
         wa_flags = wa_state.get("flags", {})

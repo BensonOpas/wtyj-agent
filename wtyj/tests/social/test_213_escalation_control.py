@@ -311,3 +311,124 @@ def test_email_poller_mute_helper_returns_correct_value():
     conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (target,))
     conn.commit()
     conn.close()
+
+
+# ── Brief 246: hard-takeover WhatsApp /reply sends verbatim ─
+
+def test_hard_mode_whatsapp_reply_sends_verbatim_not_through_marina(monkeypatch):
+    """Brief 246: when escalation.mode='hard' (set by /takeover), a WhatsApp
+    /reply MUST send operator text verbatim via send_whatsapp_message — NOT
+    route through marina_agent.process_message which would reformulate or
+    refuse abusive text. Mirrors email branch Brief 210 verbatim behavior."""
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "246_hard_wa_verbatim_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation",
+        channel="whatsapp",
+        customer_id=customer_id,
+        customer_name="Test Customer",
+        subject="Marina escalated",
+        body="needs help",
+        mode="hard",
+    )
+
+    sent = {}
+    monkeypatch.setattr(dapi, "send_whatsapp_message",
+                         lambda phone, text: sent.update(phone=phone, text=text) or True)
+    marina_called = {"called": False}
+    def fail_if_called(*a, **k):
+        marina_called["called"] = True
+        return {"reply": "MARINA SHOULD NOT BE CALLED"}
+    monkeypatch.setattr(dapi.marina_agent, "process_message", fail_if_called)
+
+    operator_text = "Hi, this is Calvin from Unboks. Quick test reply."
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                     json={"message": operator_text}, headers=_auth(token))
+
+    assert r.status_code == 200, f"reply failed: {r.text}"
+    body = r.json()
+    assert body["ok"] is True
+    assert body["reply"] == operator_text
+    assert body.get("role") == "operator"
+    assert body.get("channel") == "whatsapp"
+    assert sent.get("text") == operator_text, (
+        f"send_whatsapp_message was called with {sent.get('text')!r}, "
+        f"expected verbatim {operator_text!r}")
+    assert marina_called["called"] is False, (
+        "marina_agent.process_message MUST NOT be called in hard-mode WhatsApp /reply")
+
+
+def test_hard_mode_whatsapp_reply_stores_role_operator_not_assistant(monkeypatch):
+    """Brief 246: stored conversation trail row uses role='operator' so the
+    dashboard does NOT render it as Marina/assistant. Mirrors email branch
+    Brief 210 storage behavior."""
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "246_hard_wa_role_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation",
+        channel="whatsapp",
+        customer_id=customer_id,
+        customer_name="Test Customer",
+        subject="Marina escalated",
+        body="needs help",
+        mode="hard",
+    )
+    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t: True)
+
+    operator_text = "Operator reply for role storage test."
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                     json={"message": operator_text}, headers=_auth(token))
+    assert r.status_code == 200
+
+    history = state_registry.wa_get_history(customer_id, limit=5)
+    assert any(m["role"] == "operator" and m["text"] == operator_text
+               for m in history), (
+        f"expected role='operator' row with verbatim text; history={history}")
+    assert not any(m["role"] == "assistant" and m["text"] == operator_text
+                   for m in history), (
+        f"hard-mode operator text MUST NOT be stored as role='assistant'; "
+        f"history={history}")
+
+
+def test_soft_mode_whatsapp_reply_unchanged_still_routes_through_marina(monkeypatch):
+    """Brief 246: regression — when escalation.mode is NOT 'hard' (soft or
+    None for legacy rows), WhatsApp /reply preserves the existing Brief 159
+    relay behavior: routes through marina_agent.process_message and stores
+    Marina's reformulation as role='assistant'."""
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "246_soft_wa_relay_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation",
+        channel="whatsapp",
+        customer_id=customer_id,
+        customer_name="Test Customer",
+        subject="Marina escalated",
+        body="needs help",
+        mode="soft",
+    )
+
+    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t: True)
+    monkeypatch.setattr(
+        dapi.marina_agent, "process_message",
+        lambda *a, **k: {"reply": "Marina-reformulated reply", "flags": {}})
+
+    operator_text = "Operator coaching text, Marina should reformulate."
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                     json={"message": operator_text}, headers=_auth(token))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["reply"] == "Marina-reformulated reply"
+
+    history = state_registry.wa_get_history(customer_id, limit=5)
+    assert any(m["role"] == "assistant" and m["text"] == "Marina-reformulated reply"
+               for m in history), (
+        f"soft-mode reply MUST still store as role='assistant'; history={history}")
