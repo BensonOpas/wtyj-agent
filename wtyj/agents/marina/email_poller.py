@@ -18,6 +18,15 @@ from shared import config_loader
 # email poller get summaries generated (matches the webhook_server
 # process which registers the same dispatcher via dashboard.api).
 from shared import escalation_dispatcher  # noqa: F401
+# Brief 247: register the alert dispatcher in this process so email-channel
+# escalations fire alerts. email_poller runs as a SEPARATE supervisord process
+# from webhook_server (per /etc/supervisord.conf inside the container). Module-
+# level Python state is per-process, so state_registry._alert_dispatcher (and
+# _appointment_alert_dispatcher) registered when webhook_server imports
+# dashboard.api does NOT exist in email_poller's process. Pre-Brief-247, every
+# email-channel escalation silently no-op'd alert delivery (see issue #17).
+# Do not remove unless _fire_escalation_alerts moves to a shared module.
+from dashboard import api as _dashboard_api_for_dispatcher_registration  # noqa: F401
 from agents.marina import marina_agent
 from agents.marina import sheets_writer
 from agents.marina import gws_calendar
@@ -1086,15 +1095,13 @@ def main():
                         f"=== MARINA'S INTERNAL NOTE ===\n"
                         f"{result.get('internal_note', '')}"
                     )
-                    try:
-                        smtp_send(
-                            demo_support_email,
-                            f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {_esc_summary}",
-                            escalation_alert,
-                        )
-                        log(f"Escalation alert sent to {demo_support_email} for {from_email}")
-                    except Exception as _esc_err:
-                        log(f"Escalation alert send failed: {_esc_err}")
+                    # Brief 247: legacy direct smtp_send to demo_support_email
+                    # was removed. The dispatcher fires via
+                    # state_registry.create_pending_notification below; it
+                    # sends to email_destination + email_alternative_destination
+                    # with Brief 239's rich body, plus WhatsApp via Brief 240's
+                    # Zernio route, plus telegram (skipped if not configured).
+                    # See wtyj/dashboard/api.py:_fire_escalation_alerts.
                     sheets_writer.log_escalation({
                         "email": from_email,
                         "subject": subj,
