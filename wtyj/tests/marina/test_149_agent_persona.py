@@ -261,3 +261,45 @@ def test_marina_build_client_context_does_not_contain_agent_persona():
         "agent_persona leaked into _build_client_context output; double-injection bug"
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Brief 258: unboks WhatsApp chat tone (issue #28) — config-only edit
+# ---------------------------------------------------------------------------
+
+def test_brief_258_unboks_persona_block_builds_without_error(monkeypatch):
+    """Brief 258 is a pure data edit to clients/unboks/config/client.json's
+    agent_persona.freeform_notes (+3.4k chars of WhatsApp chat tone rules).
+    Most likely failure mode: a malformed JSON edit that breaks json.load on
+    container startup, or a KeyError in _build_agent_persona_block from
+    unexpected character sequences.
+
+    This test loads the unboks config directly, points config_loader at it
+    via the existing monkeypatch pattern, and exercises the real builder.
+    Assertions are intentionally non-tautological (no substring checks on
+    the new section content — that would be a source-string grep on the
+    config file, which Brief 236 bans). Catches: JSON parse failures,
+    missing-field KeyError, encoding issues, empty-string returns."""
+    import json, os
+    from agents.marina import marina_agent
+    from shared import config_loader
+
+    # Reuse the module-level _REPO_ROOT constant (already 4 dirname()s deep
+    # from this file, pointing at /.../bluemarlin-agent/).
+    UNBOKS_CLIENT_JSON = os.path.join(_REPO_ROOT, "clients", "unboks", "config", "client.json")
+    with open(UNBOKS_CLIENT_JSON, "r", encoding="utf-8") as f:
+        unboks_cfg = json.load(f)
+    monkeypatch.setattr(config_loader, "get_raw", lambda: unboks_cfg)
+
+    block = marina_agent._build_agent_persona_block()
+    assert block, "persona block must be non-empty for unboks tenant"
+    assert "Tone:" in block, "persona block structural section missing"
+    assert "Additional context:" in block, (
+        "Additional context section (which carries freeform_notes) is missing"
+    )
+
+    # Round-trip sanity: the JSON edit didn't drop the field.
+    assert unboks_cfg["agent_persona"]["freeform_notes"], (
+        "agent_persona.freeform_notes is empty after the Brief 258 edit"
+    )
