@@ -1676,6 +1676,119 @@ def _build_alert_subject(customer_name: str, summary_dict: dict,
     return f"{prefix}: {name}"
 
 
+def _strip_email_artifacts(text: str) -> str:
+    """Brief 256: defensive sanitizer that strips email-message artifacts
+    (quoted history, signature blocks, confidentiality disclaimers, common
+    'On <date> X wrote:' quote intros, forwarded-message headers) and hard-
+    caps at 180 chars. Used by the WhatsApp compact alert builder so a
+    long customer email body (or a Claude regression that fails to extract
+    the entity per Brief 252) cannot leak into an operator's WhatsApp alert
+    feed.
+
+    Operates on a single string; returns a single string. Best-effort:
+    when a pattern doesn't match, text passes through untouched up to the
+    180-char cap. Em dashes are replaced with hyphens per Brief 251's
+    brand rule. Empty input returns empty string."""
+    import re as _re
+    if not text:
+        return ""
+    s = text
+
+    # Quoted reply intros — cut at first match.
+    cut_patterns = [
+        # "On <date>, X <email> wrote:" — Gmail / generic
+        _re.compile(r"\n?On [^\n]+wrote:.*$", _re.DOTALL | _re.IGNORECASE),
+        # Forwarded / original message headers
+        _re.compile(r"\n?-{3,}\s*Original Message\s*-{3,}.*$", _re.DOTALL | _re.IGNORECASE),
+        _re.compile(r"\n?-{3,}\s*Forwarded message\s*-{3,}.*$", _re.DOTALL | _re.IGNORECASE),
+        # RFC 3676 sig delimiter (with or without trailing space)
+        _re.compile(r"\n-- ?\n.*$", _re.DOTALL),
+        # Common sign-off lead-ins (start of line)
+        _re.compile(r"\n(?:Best regards|Best,|Kind regards|Thanks,|Thank you,|Cheers,|Sincerely,|Sent from my iPhone|Sent from my Android)[\s,].*$", _re.DOTALL | _re.IGNORECASE),
+        # Confidentiality disclaimer keywords
+        _re.compile(r"\n[^\n]*(?:This email and any attachments|confidentiality notice|CONFIDENTIAL:|intended recipient|privileged and confidential|IMPORTANT NOTICE).*$", _re.DOTALL | _re.IGNORECASE),
+    ]
+    for pat in cut_patterns:
+        s = pat.sub("", s)
+
+    # First quoted line (starting with ">") -> cut from there.
+    lines = s.split("\n")
+    keep = []
+    for ln in lines:
+        if ln.lstrip().startswith(">"):
+            break
+        keep.append(ln)
+    s = "\n".join(keep)
+
+    # Em dash -> hyphen (Brief 251 brand rule)
+    s = s.replace("\u2014", "-").replace("\u2013", "-")
+
+    # Collapse runs of blank lines
+    s = _re.sub(r"\n\s*\n\s*\n+", "\n\n", s)
+    s = s.strip()
+
+    if len(s) > 180:
+        s = s[:180].rstrip() + "\u2026"
+    return s
+
+
+def _build_alert_body_whatsapp(customer_name: str, channel: str,
+                                summary_dict: dict,
+                                fallback_summary: str) -> str:
+    """Brief 256: compact 5-line WhatsApp escalation alert body, capped
+    near 600 chars regardless of how rich the underlying summary_dict is.
+    Per issue #25: WhatsApp alerts must be short and action-oriented;
+    quoted email history, signatures, and confidentiality disclaimers must
+    be stripped. Email alerts keep the rich Brief 239 body via the
+    separate _build_alert_body helper.
+
+    Worst-case body length: ~539 chars (60-char customer name + 180-char
+    Need + 180-char Latest + fixed labels + Action line)."""
+    customer_name_safe = (customer_name or "(unknown)")[:60]
+    channel_label = _channel_label(channel)
+
+    if not summary_dict:
+        # Legacy Brief 217 fallback path — single Need line, no Latest distinction.
+        need_line = _strip_email_artifacts(fallback_summary or "")
+        if not need_line:
+            need_line = "(no decision specified)"
+        return (
+            f"Escalation alert\n\n"
+            f"Customer: {customer_name_safe}\n"
+            f"Channel: {channel_label}\n"
+            f"Need: {need_line}\n\n"
+            f"Action: Open dashboard to reply."
+        )
+
+    decide = (summary_dict.get("operatorNeedsToDecide") or "").strip()
+    reason = (summary_dict.get("reason") or "").strip()
+    if decide:
+        need_line = decide[:180]
+    elif reason:
+        need_line = reason[:180]
+    else:
+        need_line = "(no decision specified)"
+
+    raw_latest = (summary_dict.get("latestCustomerMessage") or "").strip()
+    latest_line = _strip_email_artifacts(raw_latest)
+    if not latest_line:
+        latest_line = _strip_email_artifacts(fallback_summary or "")
+
+    parts = [
+        "Escalation alert",
+        "",
+        f"Customer: {customer_name_safe}",
+        f"Channel: {channel_label}",
+        f"Need: {need_line}",
+    ]
+    if latest_line:
+        parts.append("")
+        parts.append(f"Latest: {latest_line}")
+    parts.append("")
+    parts.append("Action: Open dashboard to reply.")
+    return "\n".join(parts)
+
+
 def _build_alert_body(customer_name: str, channel: str, mode: str,
                       summary_dict: dict, fallback_summary: str,
                       client_name: str) -> str:
@@ -1968,6 +2081,11 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
     email_subject = _build_alert_subject(customer_name, summary_dict, is_update)
     alert_text = _build_alert_body(customer_name, channel, mode, summary_dict,
                                     summary, client_name)
+    # Brief 256: WhatsApp gets a compact body (no quoted history, no
+    # signature, no disclaimer, ~539 char ceiling). Email keeps the rich
+    # body above via smtp_send below.
+    alert_text_whatsapp = _build_alert_body_whatsapp(customer_name, channel,
+                                                     summary_dict, summary)
 
     em = channels_cfg.get("email", {})
     if em.get("enabled"):
@@ -2031,7 +2149,7 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                     ok = send_dm_reply(
                         route["conversation_id"],
                         route["account_id"],
-                        alert_text)
+                        alert_text_whatsapp)  # Brief 256: compact body for WA
                     if ok:
                         state_registry.record_alert_delivery(
                             escalation_id, "whatsapp", dest, "sent")

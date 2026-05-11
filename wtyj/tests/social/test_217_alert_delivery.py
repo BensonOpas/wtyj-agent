@@ -540,9 +540,11 @@ def test_wa_alert_unresolved_route_records_skipped_no_zernio_call(monkeypatch):
 
 
 def test_wa_alert_resolved_route_calls_zernio_records_sent(monkeypatch):
-    """Brief 240: WA enabled + Zernio route resolved → alert dispatcher
-    calls send_dm_reply with the route's conv_id + account_id and records
-    'sent' on True. Also verifies the Brief 239 rich body is what gets sent."""
+    """Brief 240 + Brief 256: WA enabled + Zernio route resolved → alert
+    dispatcher calls send_dm_reply with the route's conv_id + account_id and
+    records 'sent' on True. Post-Brief-256, WhatsApp receives the COMPACT
+    body (not the Brief 239 rich body) so the body must contain the
+    compact-format labels and NOT the rich-format Reason/Suggested options."""
     from dashboard import api as dapi
     from shared import state_registry
     from agents.social import zernio_dm_client
@@ -575,7 +577,18 @@ def test_wa_alert_resolved_route_calls_zernio_records_sent(monkeypatch):
         is_update=False)
     assert captured_send["conv"] == "convOPER123"
     assert captured_send["acct"] == "acctZER999"
-    assert "Reason:" in captured_send["text"]
+    # Brief 256: WhatsApp body is the compact 5-line format, not the rich body.
+    body = captured_send["text"]
+    assert "Escalation alert" in body
+    assert "Customer: Calvin" in body
+    assert "Channel: WhatsApp" in body
+    assert "Need: Choose a time" in body
+    assert "Latest: i wanna change to friday 12:00" in body
+    assert "Action: Open dashboard to reply." in body
+    # Rich body fields MUST NOT be present in the WhatsApp dispatch.
+    assert "Reason:" not in body
+    assert "Suggested options:" not in body
+    assert "Confirm Friday 12:00" not in body  # recommendedOptions bullets excluded
     wa_rows = [a for a in captured_delivery if len(a) >= 4 and a[1] == "whatsapp"]
     assert len(wa_rows) == 1
     assert wa_rows[0][3] == "sent"
@@ -1049,3 +1062,130 @@ def test_appointment_dispatcher_passes_html_body_with_appointment_link(
     assert sent["html_body"] is not None
     assert "https://dashboard.unboks.org/unboks/appointments/7777" in sent["html_body"]
     assert ">Open appointment</a>" in sent["html_body"]
+
+
+
+# --- Brief 256: compact WhatsApp escalation alert body ---
+
+def test_brief_256_whatsapp_alert_compact_shape():
+    """Brief 256: compact body has the 5-line shape from Calvin's #25 target —
+    'Escalation alert' header, Customer/Channel/Need/Latest fields, Action line.
+    None of the rich Brief 239 fields (Reason, Mode, Suggested options, bullets,
+    Previously proposed) leak in. Em dashes are scrubbed per Brief 251."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin Adamus",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Confirm appointment time change.",
+            "latestCustomerMessage": "Customer asks to move Tuesday 11:00 to Tuesday 12:00 due to flight delay.",
+        },
+        fallback_summary="",
+    )
+    assert body.startswith("Escalation alert"), body
+    assert "Customer: Calvin Adamus" in body
+    assert "Channel: Email" in body
+    assert "Need: Confirm appointment time change." in body
+    assert "Latest: Customer asks to move Tuesday 11:00 to Tuesday 12:00 due to flight delay." in body
+    assert "Action: Open dashboard to reply." in body
+    # Forbidden rich-body fields
+    assert "Reason:" not in body
+    assert "Suggested options:" not in body
+    assert "Mode:" not in body
+    assert "Previously proposed" not in body
+    assert "- " not in body  # no bullet rows
+    assert "—" not in body and "–" not in body  # no em/en dashes
+
+
+def test_brief_256_whatsapp_alert_strips_quoted_history():
+    """Brief 256: 'On <date>, X wrote:' quote intros + lines starting with '>'
+    are cut from latestCustomerMessage before it reaches the WA alert."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Decide on time",
+            "latestCustomerMessage": (
+                "Hi, can we move to 12:00?\n\n"
+                "On 2026-05-10, support@unboks.org wrote:\n"
+                "> Original message\n"
+                "> with quoted lines"
+            ),
+        },
+        fallback_summary="",
+    )
+    assert "Hi, can we move to 12:00?" in body
+    assert "On 2026-05-10" not in body
+    assert "> Original message" not in body
+    assert "> with quoted lines" not in body
+
+
+def test_brief_256_whatsapp_alert_strips_signature_and_disclaimer():
+    """Brief 256: 'Best regards' sign-offs, contact info, and
+    confidentiality disclaimers must be stripped from the WA alert."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Decide on time",
+            "latestCustomerMessage": (
+                "Sure, that works.\n\n"
+                "Best regards,\n"
+                "Calvin Adamus\n"
+                "+351 963 618 003\n\n"
+                "This email and any attachments are confidential and intended "
+                "solely for the addressee."
+            ),
+        },
+        fallback_summary="",
+    )
+    assert "Sure, that works." in body
+    assert "Best regards" not in body
+    assert "+351 963 618 003" not in body
+    assert "This email and any attachments" not in body
+    assert "confidential" not in body
+
+
+def test_brief_256_whatsapp_alert_under_600_chars():
+    """Brief 256 (load-bearing assertion): worst-case input — 200-char
+    customer name, 300-char decide, 800-char latestCustomerMessage with
+    signature + disclaimer + quoted history — produces a body under
+    600 chars. The three caps (customer 60, need 180, latest 180) are
+    what keep this bounded; without them the same input produces >1000 chars."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="X" * 200,  # 200-char pathological name
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Decide " + ("on the request " * 20),  # ~300 chars
+            "latestCustomerMessage": (
+                ("Customer is asking for a refund " * 25)  # ~750 chars
+                + "\n\n"
+                + "Best regards,\nCalvin\n+351 963 618 003\n\n"
+                + "This email and any attachments are confidential."
+            ),  # >800 chars total
+        },
+        fallback_summary="",
+    )
+    assert len(body) <= 600, f"body length {len(body)} exceeds 600-char cap; body={body!r}"
+
+
+def test_brief_256_whatsapp_alert_falls_back_when_no_summary_dict():
+    """Brief 256: legacy Brief 217 path — no summary_dict. Body uses
+    fallback_summary as the Need line, no Latest, doesn't crash, doesn't
+    leak the '(no decision specified)' placeholder when a real fallback
+    is available."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="whatsapp",
+        summary_dict=None,
+        fallback_summary="Customer urgently needs help",
+    )
+    assert "Customer: Calvin" in body
+    assert "Channel: WhatsApp" in body
+    assert "Need: Customer urgently needs help" in body
+    assert "(no decision specified)" not in body
+    assert "Action: Open dashboard to reply." in body
