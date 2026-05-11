@@ -206,7 +206,19 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             "at 15:00\"), populate confirmedTime with that exact time "
             "wording. Tentative language (\"maybe 12\", \"how about "
             "Tuesday?\") does NOT qualify. When in doubt, leave "
-            "confirmedTime empty."
+            "confirmedTime empty.\n"
+            "- Brief 250: when the customer's MOST RECENT message changes "
+            "the requested time, asks to reschedule, or introduces a new "
+            "decision point (e.g., \"can u make it 10 instead\", "
+            "\"actually let's do tomorrow\", \"my dog is sick can we "
+            "move to X\"), the customerWants, operatorNeedsToDecide, "
+            "and recommendedOptions fields MUST reflect that NEW request. "
+            "Older proposed times that the customer hasn't explicitly "
+            "kept on the table belong in previousProposedTimes (if they "
+            "were retracted) OR may be omitted from proposedTimes if the "
+            "newest message clearly supersedes them. The summary should "
+            "tell the operator what to decide RIGHT NOW based on the "
+            "latest message, not what was being decided 20 messages ago."
         )
 
         user_prompt = (

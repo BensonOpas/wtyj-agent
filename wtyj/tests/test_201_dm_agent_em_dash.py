@@ -148,3 +148,81 @@ def test_get_conversation_endpoint_adds_content_and_timestamp_aliases():
         assert m["timestamp"] == m["created_at"]
         # id passes through from state_registry
         assert "id" in m
+
+
+# ── Brief 250: wa_get_full_history must return MOST RECENT N when total > limit ─
+
+def test_wa_get_full_history_returns_most_recent_when_total_exceeds_limit():
+    """Brief 250: when a conversation has more messages than `limit`,
+    the function MUST return the most-recent `limit` messages, not the
+    oldest. Pre-Brief-250 the SQL was `ORDER BY ASC LIMIT ?` which
+    returned the oldest N -- silently truncating the messages Claude
+    needed to see in the escalation summary (issue #20 root cause)."""
+    from shared import state_registry
+    phone = "250_recent_phone"
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()
+    # Seed 25 messages with sequential text. msg_0 is oldest, msg_24 is newest.
+    for i in range(25):
+        state_registry.wa_store_message(phone, "user", f"msg_{i}")
+    history = state_registry.wa_get_full_history(phone, limit=10)
+    assert len(history) == 10, f"expected 10 entries, got {len(history)}"
+    texts = [m["text"] for m in history]
+    assert texts[-1] == "msg_24", (
+        f"last entry must be the most recent (msg_24); got {texts[-1]!r}")
+    assert texts[0] == "msg_15", (
+        f"first entry must be msg_15 (10th newest); got {texts[0]!r}")
+    assert "msg_0" not in texts, (
+        f"msg_0 (oldest) MUST NOT be in the most-recent 10; "
+        f"this would indicate the pre-Brief-250 ASC bug; texts={texts}")
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()
+
+
+def test_wa_get_full_history_preserves_oldest_first_output_order():
+    """Brief 250: even though the SELECT now picks the newest N, the
+    output order is still oldest-first (callers iterate forward through
+    time). Backward-compat with all 5 production callers."""
+    from shared import state_registry
+    phone = "250_order_phone"
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()
+    for i in range(5):
+        state_registry.wa_store_message(phone, "user", f"order_{i}")
+    history = state_registry.wa_get_full_history(phone, limit=10)
+    assert len(history) == 5
+    texts = [m["text"] for m in history]
+    assert texts == ["order_0", "order_1", "order_2", "order_3", "order_4"], (
+        f"output must be oldest-first (order_0 first, order_4 last); "
+        f"got {texts}")
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()
+
+
+def test_wa_get_full_history_returns_all_when_total_below_limit():
+    """Brief 250: when total messages <= limit, behavior is unchanged
+    from pre-Brief-250 -- all messages returned, oldest-first. This is
+    the common case for short conversations and dashboard full-history
+    views (limit=200)."""
+    from shared import state_registry
+    phone = "250_below_limit_phone"
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()
+    for i in range(3):
+        state_registry.wa_store_message(phone, "user", f"all_{i}")
+    history = state_registry.wa_get_full_history(phone, limit=100)
+    assert [m["text"] for m in history] == ["all_0", "all_1", "all_2"]
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+    conn.commit()
+    conn.close()

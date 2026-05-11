@@ -1582,17 +1582,30 @@ def wa_list_conversations() -> list:
 
 
 def wa_get_full_history(phone: str, limit: int = 100) -> list:
-    """Get full conversation history for a phone number (no 24h cutoff). Oldest first.
+    """Get the most-recent conversation history for a phone number
+    (no 24h cutoff). Returns the most recent `limit` messages, ordered
+    oldest-first in the output (callers iterate forward through time).
+
     Brief 201: also returns row id (SQLite autoincrement) so frontends can use it
-    as a stable React key."""
+    as a stable React key.
+
+    Brief 250: SELECT changed from `ORDER BY ASC LIMIT ?` to `ORDER BY
+    DESC LIMIT ? ... reversed()`. Pre-Brief-250 the function returned
+    the OLDEST N messages when total > limit -- silently truncating the
+    most recent ones. This broke escalation summary generation for any
+    conversation > 20 messages (escalation_dispatcher.py:37 calls with
+    limit=20) because Claude only saw stale history. Output order
+    contract preserved: still oldest-first."""
     conn = _get_conn()
     rows = conn.execute(
         "SELECT id, role, text, created_at FROM whatsapp_threads "
-        "WHERE phone = ? ORDER BY created_at ASC LIMIT ?",
+        "WHERE phone = ? ORDER BY created_at DESC LIMIT ?",
         (phone, limit)
     ).fetchall()
     conn.close()
-    return [{"id": r[0], "role": r[1], "text": r[2], "created_at": r[3]} for r in rows]
+    # Brief 250: reversed() to keep the documented oldest-first output
+    # contract; SELECT picks the most-recent N rows.
+    return [{"id": r[0], "role": r[1], "text": r[2], "created_at": r[3]} for r in reversed(rows)]
 
 
 def wa_cleanup_stale_data() -> dict:
