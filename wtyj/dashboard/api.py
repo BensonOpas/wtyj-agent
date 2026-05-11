@@ -1732,15 +1732,119 @@ def _strip_email_artifacts(text: str) -> str:
     return s
 
 
+def _strip_internal_prefixes(text: str) -> str:
+    """Brief 257: drop email-poller / social-agent subject-prefix
+    artifacts ([ESCALATION], [BOOKING REQUEST], [RELAY-...],
+    NO-REF, parenthesized email/phone) from text that may have leaked
+    into an operator alert field as a fallback-summary substitute when
+    Claude's structured summary was empty. See issue #25 round-2 FAIL:
+    Calvin saw `[ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) -`
+    in the Latest line.
+
+    Deterministic 6-step ordered strip, then sentinel check. Empty input
+    or input that strips to empty returns empty string; the caller is
+    expected to omit the field entirely rather than show \"\"."""
+    import re as _re
+    if not text:
+        return ""
+    s = text
+    # 1. Drop bracketed subject prefixes.
+    s = _re.sub(r"\[ESCALATION\]", "", s)
+    s = _re.sub(r"\[BOOKING REQUEST\]", "", s)
+    s = _re.sub(r"\[RELAY-[A-Za-z0-9]+\]", "", s)
+    # 2. Drop bare NO-REF token (case-sensitive).
+    s = _re.sub(r"\bNO-REF\b", "", s)
+    # 3. Drop parenthesized email blobs.
+    s = _re.sub(r"\([^)]*@[^)]*\)", "", s)
+    # 4. Drop parenthesized phone-looking blobs.
+    s = _re.sub(r"\(\+?[\d\s\-]{6,}\)", "", s)
+    # 5. Strip leading/trailing whitespace + - / : / , punctuation runs.
+    # Brief 257 fix: do NOT strip trailing `.` - it is a normal sentence
+    # terminator. Stripping it broke Brief 256 tests that asserted
+    # "Confirm appointment time change." (with period) in body.
+    s = _re.sub(r"^[\s\-:,]+", "", s)
+    s = _re.sub(r"[\s\-:,]+$", "", s)
+    # 6. Collapse runs of horizontal whitespace (spaces/tabs) only.
+    # Brief 257 fix: do NOT collapse newlines - downstream
+    # _strip_email_artifacts uses newline-anchored patterns
+    # (`\n-- \n` sig delimiter, `\n(?:Best regards|...)` sign-off).
+    # Pre-fix this helper collapsed all `\s+` to a single space,
+    # turning "Sure, that works.\n\nBest regards,\n..." into one
+    # line and bypassing the email-artifact stripper.
+    s = _re.sub(r"[ \t]+", " ", s)
+    return s
+
+
+def _strip_hallucinated_external_systems(text: str) -> str:
+    """Brief 257: drop Claude-emitted sentences that invent external
+    systems Marina doesn't have (CRM, ticket history, Salesforce,
+    Zendesk, helpdesk, external records) or claim "no conversation
+    history available" when the source email IS in the dashboard.
+
+    See issue #25 round-2 FAIL: Need line said `Reach out to Calvin
+    directly to establish context, or review any external records and
+    CRM/ticket history for prior interactions.` Belt-and-suspenders for
+    Brief 252's entity-extraction prompt rule which Claude bypasses on
+    contextless inputs.
+
+    Sentence-level cuts: when a banned phrase appears, cut from the
+    start of the containing sentence to the next sentence boundary
+    (`.`, `!`, `?`) or end of string. If the result is empty after
+    cuts, return the generic operator-facing fallback `Review and
+    reply.` (analogous to the existing `(no decision specified)`
+    placeholder in _build_alert_body_whatsapp)."""
+    import re as _re
+    if not text:
+        return ""
+    banned = [
+        r"external records",
+        r"\bCRM\b",
+        r"ticket history",
+        r"helpdesk",
+        r"Salesforce",
+        r"Zendesk",
+        r"no conversation history available",
+        r"no prior context available",
+        r"cannot find any conversation history",
+        r"Reach out to the customer directly to establish context",
+        r"Review any external records",
+    ]
+    # Build a sentence-level cut: for each banned phrase, remove the
+    # sentence that contains it. Sentence = run of non-[.!?] chars
+    # optionally followed by one of [.!?]. We iterate so multiple bad
+    # sentences in one input are all removed.
+    s = text
+    for pat in banned:
+        sentence_pat = _re.compile(
+            r"[^.!?]*" + pat + r"[^.!?]*(?:[.!?]|$)",
+            _re.IGNORECASE,
+        )
+        s = sentence_pat.sub("", s)
+    s = _re.sub(r"\s{2,}", " ", s).strip()
+    if not s:
+        return "Review and reply."
+    return s
+
+
 def _build_alert_body_whatsapp(customer_name: str, channel: str,
                                 summary_dict: dict,
                                 fallback_summary: str) -> str:
-    """Brief 256: compact 5-line WhatsApp escalation alert body, capped
-    near 600 chars regardless of how rich the underlying summary_dict is.
-    Per issue #25: WhatsApp alerts must be short and action-oriented;
-    quoted email history, signatures, and confidentiality disclaimers must
-    be stripped. Email alerts keep the rich Brief 239 body via the
-    separate _build_alert_body helper.
+    """Brief 256 + Brief 257: compact 5-line WhatsApp escalation alert
+    body, capped near 600 chars and content-sanitized at the boundary.
+
+    Brief 256 introduced the shape (Customer/Channel/Need/Latest/Action)
+    with email-artifact stripping (signatures/disclaimers/quoted history).
+    Brief 257 layers two additional sanitizers in response to issue #25
+    round-2 FAIL: (a) Need is piped through _strip_internal_prefixes ->
+    _strip_hallucinated_external_systems so CRM/ticket/no-history language
+    and subject-prefix artifacts can't leak in; (b) Latest is piped through
+    _strip_internal_prefixes BEFORE _strip_email_artifacts; (c) if the
+    ORIGINAL latestCustomerMessage starts with an internal subject prefix
+    ([ESCALATION], [BOOKING REQUEST], [RELAY-), the Latest line is omitted
+    entirely (never showing the operator a subject prefix as if it were a
+    customer message); (d) the prior Brief 256 fallback chain that used
+    fallback_summary (the subject) as a Latest replacement is REMOVED -
+    never use the subject as Latest.
 
     Worst-case body length: ~539 chars (60-char customer name + 180-char
     Need + 180-char Latest + fixed labels + Action line)."""
@@ -1748,10 +1852,14 @@ def _build_alert_body_whatsapp(customer_name: str, channel: str,
     channel_label = _channel_label(channel)
 
     if not summary_dict:
-        # Legacy Brief 217 fallback path — single Need line, no Latest distinction.
-        need_line = _strip_email_artifacts(fallback_summary or "")
+        # Legacy Brief 217 fallback path - single Need line, no Latest.
+        # Brief 257: sanitize fallback through internal-prefix + hallucination
+        # strippers, then email-artifact stripper for signature/disclaimer.
+        need_line = _strip_internal_prefixes(fallback_summary or "")
+        need_line = _strip_hallucinated_external_systems(need_line)
+        need_line = _strip_email_artifacts(need_line)
         if not need_line:
-            need_line = "(no decision specified)"
+            need_line = "Review and reply."
         return (
             f"Escalation alert\n\n"
             f"Customer: {customer_name_safe}\n"
@@ -1763,16 +1871,32 @@ def _build_alert_body_whatsapp(customer_name: str, channel: str,
     decide = (summary_dict.get("operatorNeedsToDecide") or "").strip()
     reason = (summary_dict.get("reason") or "").strip()
     if decide:
-        need_line = decide[:180]
+        need_line = decide
     elif reason:
-        need_line = reason[:180]
+        need_line = reason
     else:
-        need_line = "(no decision specified)"
+        need_line = ""
+
+    # Brief 257: sanitize Need through both Brief 257 strippers, then cap.
+    need_line = _strip_internal_prefixes(need_line)
+    need_line = _strip_hallucinated_external_systems(need_line)
+    if not need_line:
+        need_line = "Review and reply."
+    need_line = need_line[:180]
 
     raw_latest = (summary_dict.get("latestCustomerMessage") or "").strip()
-    latest_line = _strip_email_artifacts(raw_latest)
-    if not latest_line:
-        latest_line = _strip_email_artifacts(fallback_summary or "")
+    # Brief 257: omit Latest entirely if the raw value starts with an
+    # internal subject prefix (it was never a customer message).
+    _internal_prefixes = ("[ESCALATION]", "[BOOKING REQUEST]", "[RELAY-")
+    if raw_latest.startswith(_internal_prefixes):
+        latest_line = ""
+    else:
+        # Brief 257: strip internal prefixes BEFORE email-artifact strip.
+        latest_line = _strip_internal_prefixes(raw_latest)
+        latest_line = _strip_email_artifacts(latest_line)
+    # Brief 257: subject-as-Latest fallback REMOVED. If summary has no
+    # latestCustomerMessage, the Latest line is omitted - never show the
+    # subject (which contains [ESCALATION] NO-REF noise) in its place.
 
     parts = [
         "Escalation alert",

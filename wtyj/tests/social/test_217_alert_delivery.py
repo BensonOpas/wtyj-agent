@@ -1189,3 +1189,138 @@ def test_brief_256_whatsapp_alert_falls_back_when_no_summary_dict():
     assert "Need: Customer urgently needs help" in body
     assert "(no decision specified)" not in body
     assert "Action: Open dashboard to reply." in body
+
+
+
+# --- Brief 257: WhatsApp alert content sanitization (issue #25 round-2 fix) ---
+
+def test_brief_257_wa_alert_strips_escalation_subject_prefix_from_latest():
+    """Brief 257: Calvin's round-2 failure - Latest line contained
+    `[ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) - wants to book`.
+    With Brief 257, the new _strip_internal_prefixes helper removes the
+    bracketed tokens, NO-REF, and the parenthesized email blob from
+    latestCustomerMessage before it reaches the alert body."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Confirm time",
+            # NOTE: this latestCustomerMessage does NOT start with an internal
+            # prefix; it merely contains the prefix tokens embedded mid-string.
+            # (The starts-with-prefix omit-Latest rule is exercised by test 6.)
+            "latestCustomerMessage": "From [ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) - wants to book a slot",
+        },
+        fallback_summary="",
+    )
+    assert "[ESCALATION]" not in body
+    assert "NO-REF" not in body
+    assert "calvin@gaimin.io" not in body
+
+
+def test_brief_257_wa_alert_strips_crm_hallucination_from_need():
+    """Brief 257: Calvin's round-2 Need line contained
+    `Reach out to Calvin directly to establish context, or review any
+    external records and CRM/ticket history for prior interactions.`
+    With Brief 257, _strip_hallucinated_external_systems removes
+    sentences containing CRM / ticket history / external records."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Reach out to Calvin directly to establish context, or review any external records and CRM/ticket history for prior interactions.",
+            "latestCustomerMessage": "Hi, I need help with my booking",
+        },
+        fallback_summary="",
+    )
+    assert "external records" not in body
+    assert "CRM" not in body
+    assert "ticket history" not in body
+
+
+def test_brief_257_wa_alert_strips_no_conversation_history_phrase():
+    """Brief 257: Calvin called out 'no conversation history available' as
+    an unwanted hallucination since the source email IS in the dashboard.
+    _strip_hallucinated_external_systems drops sentences containing that
+    phrase. Latest line is omitted because latestCustomerMessage is empty."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "There is no conversation history available. Please contact the customer.",
+            "latestCustomerMessage": "",
+        },
+        fallback_summary="",
+    )
+    assert "no conversation history available" not in body
+    assert "Latest:" not in body  # empty latestCustomerMessage AND no fallback
+
+
+def test_brief_257_wa_alert_omits_latest_when_no_real_customer_message():
+    """Brief 257: load-bearing rule - subject-as-Latest fallback is REMOVED.
+    Even when fallback_summary contains the [ESCALATION] subject, the Latest
+    line is NOT populated from it. summary_dict.latestCustomerMessage is the
+    sole source for Latest; if empty, the line is omitted."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict={
+            "operatorNeedsToDecide": "Confirm appointment",
+            "latestCustomerMessage": "",
+        },
+        fallback_summary="[ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) - wants booking",
+    )
+    assert "Latest:" not in body
+    assert "Customer: Calvin" in body
+    assert "Channel: Email" in body
+    assert "Need: Confirm appointment" in body
+    assert "Action: Open dashboard to reply." in body
+
+
+def test_brief_257_wa_alert_legacy_fallback_path_sanitized():
+    """Brief 257: when summary_dict is None (legacy Brief 217 path), the
+    Need line uses fallback_summary - which IS the subject for email-poller
+    paths. Sanitize it the same way: strip internal prefixes + hallucinations
+    + email artifacts so [ESCALATION] NO-REF noise doesn't reach the alert."""
+    from dashboard import api as dapi
+    body = dapi._build_alert_body_whatsapp(
+        customer_name="Calvin",
+        channel="email",
+        summary_dict=None,
+        fallback_summary="[ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) - urgent help needed",
+    )
+    assert "[ESCALATION]" not in body
+    assert "NO-REF" not in body
+    assert "calvin@gaimin.io" not in body
+    # The trailing 'urgent help needed' should survive OR the sanitizer
+    # fallback 'Review and reply.' should be present.
+    assert ("urgent help needed" in body) or ("Review and reply." in body)
+
+
+def test_brief_257_wa_alert_omits_latest_when_latestCustomerMessage_starts_with_internal_prefix():
+    """Brief 257: load-bearing assertion for the step-3 rule - if
+    latestCustomerMessage starts with [ESCALATION], [BOOKING REQUEST], or
+    [RELAY-, OMIT the Latest line entirely. This is distinct from the
+    strip-then-show behavior: test 1 only asserts the tokens are absent,
+    which a strip-and-show implementation would also satisfy. Test 6
+    exclusively locks in OMISSION for the starts-with sentinel case."""
+    from dashboard import api as dapi
+    for prefix_msg in (
+        "[ESCALATION] NO-REF - garbage payload",
+        "[BOOKING REQUEST] Calvin wants help",
+        "[RELAY-abc123] more garbage",
+    ):
+        body = dapi._build_alert_body_whatsapp(
+            customer_name="Calvin",
+            channel="email",
+            summary_dict={"operatorNeedsToDecide": "Decide", "latestCustomerMessage": prefix_msg},
+            fallback_summary="",
+        )
+        assert "Latest:" not in body, (
+            f"Latest line should be omitted entirely when "
+            f"latestCustomerMessage starts with internal prefix; got body for "
+            f"input {prefix_msg!r}: {body!r}"
+        )
