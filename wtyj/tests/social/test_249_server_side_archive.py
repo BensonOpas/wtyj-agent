@@ -206,3 +206,107 @@ def test_get_escalations_status_filter_returns_only_resolved():
                      (eid_pending, eid_resolved))
         conn.commit()
         conn.close()
+
+
+# ── Brief 253: get_all_escalations excludes rows on archived conversations ─
+
+def test_escalations_on_archived_wa_conversation_excluded_from_get_all():
+    """Brief 253: when a WhatsApp conversation is archived via Brief
+    249's wa_set_archived (conversation_status.deleted=1), its
+    escalation rows are excluded from get_all_escalations() — fixing
+    the issue #22 stuck-row symptom where Calvin's archived
+    conversation kept showing escalations in the dashboard
+    Escalations tab."""
+    from shared import state_registry
+    phone = "253_archived_conv_phone"
+    _wipe_wa_phone(phone)
+
+    eid = state_registry.create_pending_notification(
+        notification_type="escalation", channel="whatsapp",
+        customer_id=phone, customer_name="Brief 253 Test",
+        subject="Stuck escalation test", body="body", mode="hard")
+    try:
+        rows_before = state_registry.get_all_escalations()
+        assert any(r["id"] == eid for r in rows_before), (
+            f"escalation {eid} must be visible BEFORE archive; "
+            f"got {[r['id'] for r in rows_before[:5]]}")
+
+        state_registry.wa_set_archived(phone, True)
+
+        rows_after = state_registry.get_all_escalations()
+        assert not any(r["id"] == eid for r in rows_after), (
+            f"escalation {eid} must be excluded AFTER archive; "
+            f"the LEFT JOIN with conversation_status.deleted=1 should "
+            f"have filtered it out")
+
+        state_registry.wa_set_archived(phone, False)
+        rows_unarchived = state_registry.get_all_escalations()
+        assert any(r["id"] == eid for r in rows_unarchived), (
+            f"escalation {eid} must reappear after unarchive — "
+            f"Brief 253 is a view filter, not a delete")
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id = ?", (eid,))
+        conn.commit()
+        conn.close()
+        _wipe_wa_phone(phone)
+
+
+def test_escalations_on_conversation_without_status_row_still_returned():
+    """Brief 253: many active WhatsApp conversations have NO
+    conversation_status row at all. The LEFT JOIN must preserve these
+    via `WHERE cs.deleted IS NULL OR cs.deleted = 0`.
+
+    NOTE: create_pending_notification (state_registry.py:1656) calls
+    set_conversation_status which UPSERTs a row, so the "no status row"
+    scenario CANNOT be created via the helper. This test bypasses the
+    helper with a direct SQL INSERT so the LEFT JOIN's NULL branch is
+    genuinely exercised (round-1 reviewer caught the original test
+    using the helper — the cs row was always being created, so the
+    test never hit the NULL branch it claimed to cover)."""
+    from shared import state_registry
+    from datetime import datetime, timezone
+    phone = "253_no_status_row_phone"
+    _wipe_wa_phone(phone)
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                 (phone,))
+    conn.commit()
+    conn.close()
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = state_registry._get_conn()
+    cur = conn.execute(
+        "INSERT INTO pending_notifications "
+        "(notification_type, channel, customer_id, customer_name, "
+        "subject, body, status, created_at, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("escalation", "whatsapp", phone, "Brief 253 NoStatus",
+         "No status row test", "body", "sent", now, "hard"))
+    eid = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    try:
+        conn = state_registry._get_conn()
+        cs_row = conn.execute(
+            "SELECT 1 FROM conversation_status WHERE conversation_id = ?",
+            (phone,)).fetchone()
+        conn.close()
+        assert cs_row is None, (
+            f"test setup error: conversation_status row exists for "
+            f"{phone!r}; the direct-INSERT path was supposed to bypass "
+            f"set_conversation_status; defensive cleanup at start of "
+            f"test must have failed")
+
+        rows = state_registry.get_all_escalations()
+        assert any(r["id"] == eid for r in rows), (
+            f"escalation {eid} on conversation with NO status row must "
+            f"be returned; LEFT JOIN's `cs.deleted IS NULL` branch "
+            f"failed to preserve it")
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id = ?", (eid,))
+        conn.commit()
+        conn.close()
+        _wipe_wa_phone(phone)

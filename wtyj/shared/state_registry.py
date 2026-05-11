@@ -2242,13 +2242,24 @@ def get_all_escalations() -> list:
     Brief 181: contact_type. Brief 183: customer_contact. Brief 188:
     conversation_status. Brief 213: mode. Brief 211: routable phone field.
     Brief 227: escalation_summary parsed and surfaced as escalationSummary +
-    recommendedOptions + extractedDetails."""
+    recommendedOptions + extractedDetails.
+    Brief 253: excludes escalations whose WhatsApp/IG/FB conversation has
+    been archived via Brief 249's archive endpoint
+    (conversation_status.deleted=1). Email-channel archives use a
+    different mechanism (flags.deleted in email_thread_state.json) and
+    are NOT filtered by this JOIN -- see Brief 253 out-of-scope notes."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT id, notification_type, relay_token, channel, customer_id, "
-        "customer_name, subject, body, status, created_at, mode, "
-        "escalation_summary "
-        "FROM pending_notifications ORDER BY created_at DESC"
+        "SELECT pn.id, pn.notification_type, pn.relay_token, pn.channel, "
+        "pn.customer_id, pn.customer_name, pn.subject, pn.body, pn.status, "
+        "pn.created_at, pn.mode, pn.escalation_summary "
+        "FROM pending_notifications pn "
+        # Brief 253: LEFT JOIN to drop escalations on archived conversations.
+        # LEFT JOIN preserves rows whose conversation has no
+        # conversation_status entry at all (most active conversations).
+        "LEFT JOIN conversation_status cs ON pn.customer_id = cs.conversation_id "
+        "WHERE cs.deleted IS NULL OR cs.deleted = 0 "
+        "ORDER BY pn.created_at DESC"
     ).fetchall()
     conn.close()
     result = []
