@@ -2747,3 +2747,24 @@ Tests: 1101 / 0 failures (1095 + 6).
 4. **Brief 236 banned pattern still has wide reach.** Three of the last five briefs (256 / 257 / 258) hit Brief 236's source-string-grep boundary in their first draft. The pattern is subtle: tests that "go through" one indirection layer (helper function, config loader, concatenator) but ultimately verify "the string I just wrote down is still in the place I wrote it" are still tautologies. The signal: if removing the production code wouldn't fail the test, the test isn't testing the production code. Brief 258's surviving test passes that signal — it would fail if the config got corrupted (JSON parse) or the builder crashed (KeyError), not just if my JSON edit got reverted.
 
 Tests: 1102 / 0 failures (1101 + 1).
+
+
+---
+
+## Brief 259 — Banning phrases doesn't break the reflex SHAPE (2026-05-11)
+
+**The bug.** Brief 258 successfully removed Marina's `Good question` / `No problem` / `Happy to go deeper` / `Got it` reflex openers. Calvin's round-3 live retest still found her sounding chatbot-like — she'd just swapped one phrase pool for another. New openers: `Nice, ...`, `That's a solid volume.`, `Classic repeated questions.`, `Perfect ...`, `WhatsApp works perfectly.` Same reflex shape: validation → fact → explanation → follow-up question, every single turn.
+
+**The fix.** Widened the rule from "ban specific phrases" to "ban the always-validate reflex pattern." Added a "Reply rhythm" section instructing rotation among direct-answer / short-question / brief-ack / fact-and-stop, plus a contradiction-handling rule (one short clarifying question instead of silently accepting contradictory statements), plus a "reduce salesy certainty" rule (replace `works perfectly` / `exactly what you need` with matter-of-fact alternatives). Pure config edit; same `agent_persona.freeform_notes` integration as Brief 258.
+
+**The lessons.**
+
+1. **A phrase ban changes the LEXICON, not the GRAMMAR.** Telling an LLM "don't say X" doesn't address the underlying generative pattern that produced X. If the model has learned "every customer-service reply opens with validation," banning the specific validation words just makes it pick new validation words. The structural fix has to target the PATTERN — describe the reflex itself, name it as the thing to avoid, give examples of replies that BREAK the pattern (direct answers, questions with no preface, facts with no follow-up). Brief 259's "Reply rhythm" section is the structural counterpart Brief 258 was missing.
+
+2. **Tone fixes are inherently iterative.** Three rounds on issue #28: Brief 258 + clarification follow-up + Brief 259. Each round revealed a new layer of the "obviously AI" pattern. This is not failure — it's how prompt-based tone direction works. Each pass narrows the gap. Set expectations accordingly: don't promise "Marina sounds human" after round 1; promise "Marina is closer to your direction; here's the retest."
+
+3. **Brief-reviewer caught a self-referential bug worth naming.** My new contradiction-handling example used an em-dash. The same `freeform_notes` block where I was adding this guidance has an explicit "No em dashes" rule. Adding a rule violation inside the rule-file is a special class of bug. Pattern: when extending a config that has its own rules, validate the new content against those rules BEFORE shipping. A simple check: search the new text for any character/pattern the existing rules ban.
+
+4. **"Mirror these, do not copy verbatim" framing is load-bearing.** Reviewer flagged that the 3 new before/after example pairs didn't carry the caveat from the existing block header. Without it, Claude may treat the "Prefer:" string as a template to emit literally. Inline-reframed so the caveat explicitly applies to the new pairs. Pattern: when adding to an existing block, check whether the block header's framing scopes the additions — if not obvious, restate it inline.
+
+Tests: 1102 / 0 failures unchanged (same JSON-loads guardrail from Brief 258).
