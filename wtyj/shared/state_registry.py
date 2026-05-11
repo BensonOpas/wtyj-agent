@@ -2136,6 +2136,59 @@ def appointment_alert_already_sent(appointment_id: int, channel: str,
     return row is not None
 
 
+def email_clear_fully_escalated_flag(customer_email: str) -> int:
+    """Brief 254: clear flags.fully_escalated AND flags.awaiting_relay
+    on ALL email_thread_state.json threads matching this customer email.
+    Used by resolve_conversation_from_escalation + delete_escalation to
+    prevent orphan escalation flags after the underlying pending_notifications
+    row is resolved/deleted.
+
+    Without this cleanup, email_list_conversations derives status='escalated'
+    forever from flags.get('fully_escalated') OR flags.get('awaiting_relay')
+    (state_registry.py:1156-1159) and the Inbox row shows an escalation
+    badge with no matching row in /escalations -- the symptom Calvin
+    reported in issue #23.
+
+    Returns the count of threads whose flags were cleared (0 if no
+    matching threads OR if email_thread_state.json could not be loaded;
+    callers should treat this as best-effort cleanup, not a critical
+    failure path)."""
+    if not customer_email:
+        return 0
+    path = _get_email_state_path()
+    if not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r") as f:
+            state = json.load(f)
+    except Exception:
+        return 0
+    threads = state.get("threads") or {}
+    cleared = 0
+    for thread_key, th in threads.items():
+        # thread_key shape: "subj:{customer_email}:{normalized_subject}"
+        parts = thread_key.split(":", 2)
+        if len(parts) < 3 or parts[0] != "subj":
+            continue
+        if parts[1] != customer_email:
+            continue
+        flags = th.setdefault("flags", {})
+        if flags.get("fully_escalated") or flags.get("awaiting_relay"):
+            flags["fully_escalated"] = False
+            flags.pop("awaiting_relay", None)
+            cleared += 1
+    if cleared == 0:
+        return 0
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        return 0
+    return cleared
+
+
 def resolve_conversation_from_escalation(escalation_id: int) -> None:
     """Brief 188: when operator resolves an escalation, set conversation status
     to 'resolved' AND clear fully_escalated from booking state flags so the
@@ -2143,7 +2196,13 @@ def resolve_conversation_from_escalation(escalation_id: int) -> None:
 
     Uses json_set() to avoid a read-modify-write cycle within this function.
     Note: a concurrent message thread that already loaded flags before this call
-    may overwrite the clear via wa_save_booking_state — low severity, see brief."""
+    may overwrite the clear via wa_save_booking_state — low severity, see brief.
+
+    Brief 254: ALSO clears flags.fully_escalated in email_thread_state.json
+    for the customer's email threads when esc_channel == 'email'. Pre-Brief-254
+    the resolve path only cleared WA flags; email-channel escalations left
+    orphan flags driving the Inbox status='escalated' forever (issue #23 root
+    cause per Sonia's audit at issue #24)."""
     conn = _get_conn()
     row = conn.execute(
         "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
@@ -2174,6 +2233,11 @@ def resolve_conversation_from_escalation(escalation_id: int) -> None:
 
     conn.commit()
     conn.close()
+
+    # Brief 254: also clear email flags when channel=email. Done OUTSIDE the
+    # DB connection because email_thread_state.json is a file write.
+    if esc_channel == "email" and customer_id:
+        email_clear_fully_escalated_flag(customer_id)
 
 
 def _lookup_customer_contact(customer_id: str, contact_type: str) -> dict:
@@ -3076,7 +3140,21 @@ def get_pending_notifications(status: str = "pending") -> list:
 def delete_escalation(escalation_id: int) -> bool:
     """Brief 172: hard-delete a pending_notifications row. Returns True if a
     row was deleted. Used by the dashboard Escalations page trash button (SR's
-    UX — archive first, then from archive view you can delete permanently)."""
+    UX — archive first, then from archive view you can delete permanently).
+
+    Brief 254: BEFORE the DELETE, clear orphan escalation state via
+    resolve_conversation_from_escalation so:
+      - conversation_status.status flips to 'resolved' (drives email detail's
+        escalated=false), and
+      - whatsapp_booking_state.flags_json.fully_escalated cleared (drives WA),
+      - email_thread_state.json.flags.fully_escalated cleared (drives email list).
+    Without this cleanup the dashboard shows escalated=true forever with
+    no matching /escalations row -- issue #23 root cause."""
+    # Brief 254: clear orphan flags BEFORE the DELETE.
+    # resolve_conversation_from_escalation reads customer_id + channel from
+    # the row, so it must run while the row still exists.
+    resolve_conversation_from_escalation(escalation_id)
+
     conn = _get_conn()
     cur = conn.execute("DELETE FROM pending_notifications WHERE id = ?", (escalation_id,))
     changed = cur.rowcount > 0

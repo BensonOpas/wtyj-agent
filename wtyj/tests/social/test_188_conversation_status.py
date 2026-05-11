@@ -157,3 +157,179 @@ def test_after_resolve_normal_ai_path(mock_sr, mock_marina, mock_sheets, mock_co
 
     # Function returned the reply
     assert result == "Hello! How can I help you today?"
+
+
+# ── Brief 254: email-side flag cleanup + delete cleanup ─
+
+def test_resolve_clears_email_fully_escalated_flag(monkeypatch, tmp_path):
+    """Brief 254: resolve_conversation_from_escalation now ALSO clears
+    email_thread_state.json.flags.fully_escalated for email-channel
+    escalations. Pre-Brief-254 this was only cleared for WhatsApp;
+    email escalations left orphan flags driving Inbox status='escalated'
+    forever (issue #23)."""
+    import json
+    from shared import state_registry
+
+    customer_email = "brief254_email@example.com"
+    thread_key = f"subj:{customer_email}:test subject"
+    fake_state = {
+        "threads": {
+            thread_key: {
+                "messages": [{"role": "customer", "ts": "2026-05-11T00:00:00+00:00",
+                              "body": "test"}],
+                "fields": {"customer_name": "Brief 254 Test"},
+                "flags": {"fully_escalated": True, "awaiting_relay": True},
+            }
+        }
+    }
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps(fake_state))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    eid = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=customer_email, customer_name="Brief 254 Test",
+        subject="[ESCALATION] test", body="body", mode="hard")
+    try:
+        with open(state_path) as f:
+            pre = json.load(f)
+        assert pre["threads"][thread_key]["flags"].get("fully_escalated") is True
+        assert pre["threads"][thread_key]["flags"].get("awaiting_relay") is True
+
+        state_registry.resolve_conversation_from_escalation(eid)
+
+        with open(state_path) as f:
+            post = json.load(f)
+        flags = post["threads"][thread_key]["flags"]
+        assert flags.get("fully_escalated") is False, (
+            f"flags.fully_escalated must be False after resolve; got {flags}")
+        assert "awaiting_relay" not in flags or flags.get("awaiting_relay") is None, (
+            f"flags.awaiting_relay must be cleared after resolve; got {flags}")
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id = ?", (eid,))
+        conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                     (customer_email,))
+        conn.commit()
+        conn.close()
+
+
+def test_delete_escalation_clears_email_flags_before_deleting(monkeypatch, tmp_path):
+    """Brief 254: delete_escalation now calls
+    resolve_conversation_from_escalation BEFORE the DELETE, so all
+    orphan flags get cleared. Pre-Brief-254 delete only did the
+    DELETE — leaving conversation_status.status='open' and
+    email_thread_state.flags.fully_escalated=true orphaned (issue #23
+    root cause per Sonia's audit at issue #24)."""
+    import json
+    from shared import state_registry
+
+    customer_email = "brief254_delete_email@example.com"
+    thread_key = f"subj:{customer_email}:delete test"
+    fake_state = {
+        "threads": {
+            thread_key: {
+                "messages": [{"role": "customer", "ts": "2026-05-11T00:00:00+00:00",
+                              "body": "test"}],
+                "fields": {"customer_name": "Brief 254 Delete Test"},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps(fake_state))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    eid = state_registry.create_pending_notification(
+        notification_type="escalation", channel="email",
+        customer_id=customer_email, customer_name="Brief 254 Delete Test",
+        subject="[ESCALATION] delete test", body="body", mode="hard")
+
+    try:
+        result = state_registry.delete_escalation(eid)
+        assert result is True
+
+        conn = state_registry._get_conn()
+        row = conn.execute(
+            "SELECT 1 FROM pending_notifications WHERE id = ?", (eid,)).fetchone()
+        conn.close()
+        assert row is None, "delete_escalation should have removed the row"
+
+        conn = state_registry._get_conn()
+        cs = conn.execute(
+            "SELECT status FROM conversation_status WHERE conversation_id = ?",
+            (customer_email,)).fetchone()
+        conn.close()
+        assert cs is not None and cs[0] == "resolved", (
+            f"conversation_status.status must be 'resolved' after delete; "
+            f"got {cs[0] if cs else None!r}")
+
+        with open(state_path) as f:
+            post = json.load(f)
+        assert post["threads"][thread_key]["flags"].get("fully_escalated") is False, (
+            f"flags.fully_escalated must be False after delete; "
+            f"got {post['threads'][thread_key]['flags']}")
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id = ?", (eid,))
+        conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                     (customer_email,))
+        conn.commit()
+        conn.close()
+
+
+def test_delete_escalation_clears_whatsapp_flags_before_deleting():
+    """Brief 254: delete_escalation also clears WhatsApp
+    whatsapp_booking_state.flags_json.fully_escalated via the
+    resolve_conversation_from_escalation call. Pre-Brief-254 this was
+    not done on the delete path."""
+    from shared import state_registry
+    phone = "254_delete_wa_phone"
+
+    state_registry.wa_save_booking_state(
+        phone, {"service_key": "test"}, {"fully_escalated": True}, [])
+    pre_state = state_registry.wa_get_booking_state(phone)
+    assert pre_state["flags"].get("fully_escalated") is True
+
+    eid = state_registry.create_pending_notification(
+        notification_type="escalation", channel="whatsapp",
+        customer_id=phone, customer_name="Brief 254 WA Delete",
+        subject="WA test", body="body", mode="hard")
+    try:
+        ok = state_registry.delete_escalation(eid)
+        assert ok is True
+
+        post_state = state_registry.wa_get_booking_state(phone)
+        assert post_state["flags"].get("fully_escalated") is False, (
+            f"WhatsApp fully_escalated must be False after delete; "
+            f"got {post_state['flags']}")
+
+        conn = state_registry._get_conn()
+        cs = conn.execute(
+            "SELECT status FROM conversation_status WHERE conversation_id = ?",
+            (phone,)).fetchone()
+        conn.close()
+        assert cs is not None and cs[0] == "resolved"
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM pending_notifications WHERE id = ?", (eid,))
+        conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?",
+                     (phone,))
+        conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?",
+                     (phone,))
+        conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
+        conn.commit()
+        conn.close()
+
+
+def test_delete_escalation_returns_false_for_missing_row():
+    """Brief 254 regression: delete_escalation still returns False when
+    no row matches the escalation_id. Pre-Brief-254 behavior preserved —
+    only the cleanup-before-delete logic is new."""
+    from shared import state_registry
+    result = state_registry.delete_escalation(99999999)
+    assert result is False, (
+        "delete_escalation should return False for non-existent id; "
+        "Pre-Brief-254 behavior must be preserved")
