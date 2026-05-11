@@ -2726,3 +2726,24 @@ Best regards,
 5. **Brief-reviewer round 1 caught a real regex problem.** My first draft of `_strip_internal_prefixes` used a structured regex `\[RELAY-[^\]]+\]\s*(?:NO-REF|[A-Z0-9]{4,8})?\s*-?\s*[^-]+?\s*-?\s*` with no concrete terminator and non-greedy quantifiers — would have matched ambiguously or zero-width. Reviewer flagged it; I replaced the whole step with a 6-step deterministic token-strip pipeline (drop bracketed tokens → drop bare tokens → drop parenthesized blobs → strip residue). Pattern: a regex that doesn't have a concrete terminator is a regex that doesn't know what it's matching against. Prefer ordered string operations over clever-looking structured regexes.
 
 Tests: 1101 / 0 failures (1095 + 6).
+
+
+---
+
+## Brief 258 — Prompt-rule additions in client.json need honest tests, not source-string greps (2026-05-11)
+
+**The bug.** Calvin's WhatsApp conversation review (issue #28) flagged Marina sounding obviously AI-generated and over-explained — repeated reflex openers, third-person `Unboks` where a human would say `we`, overuse of `the AI` instead of `your agent` / `AI Agent`, FAQ-style headings on a casual chat channel, generic probing questions ending every reply.
+
+**The fix.** Pure config edit: ~3.4k chars appended to unboks's `agent_persona.freeform_notes`. New section covers banned reflex openers, pronoun/terminology preferences, WhatsApp format rules, poor-fit lead handling, and 5 before/after example pairs. `_build_agent_persona_block` already injects `freeform_notes` as the "Additional context:" prompt section — the new rules apply automatically without code change.
+
+**The lessons.**
+
+1. **`assert "X" in <output of no-op concatenator>` is a tautology dressed as an integration test.** My first-draft Brief 258 tests asserted that the new section header appeared in `_build_agent_persona_block()`'s output. Brief-reviewer correctly flagged: the builder is `lines.append(f"\nAdditional context:\n{persona['freeform_notes']}")` — a literal string concatenation with zero transformation logic. Going through the no-op concatenator does NOT make the test behavioral; it's still effectively `assert "X" in client.json`, which Brief 236 banned. Pattern: when you can't write a deterministic test for a real behavioral change (LLM tone on inference), don't fake one with substring asserts. Ship a meaningful test that catches the REAL failure mode (JSON parse / KeyError / builder crash) without asserting specific content. The behavioral verification lives in the user's live retest, captured in Success Condition.
+
+2. **Brief 251 / 252 prompt-rule tests are NOT analogous to Brief 258.** Brief 251 / 252 added prompt rules in Python source (`_STYLE_INSTRUCTIONS` dict / `_build_system_prompt` function). The tests asserted distinctive strings in the prompt builder's output — fair, because the builder has actual mapping logic (look up dict by key, splice rule into prompt). Brief 258's rules live in JSON config with no mapping layer. Reviewer correctly distinguished the two cases. Lesson: not all "prompt rule added → assert in prompt builder output" patterns are equivalent; the test value depends on whether there's mapping/selection logic in between.
+
+3. **Reuse existing path constants in tests.** My first test draft computed `_REPO_ROOT` with three `dirname` calls instead of four. Wrong by one level. The file already had a correct `_REPO_ROOT` module-level constant. Pattern: when adding tests to an existing file, read the file's existing constants and reuse them instead of re-deriving paths. Costs less, fewer bugs.
+
+4. **Brief 236 banned pattern still has wide reach.** Three of the last five briefs (256 / 257 / 258) hit Brief 236's source-string-grep boundary in their first draft. The pattern is subtle: tests that "go through" one indirection layer (helper function, config loader, concatenator) but ultimately verify "the string I just wrote down is still in the place I wrote it" are still tautologies. The signal: if removing the production code wouldn't fail the test, the test isn't testing the production code. Brief 258's surviving test passes that signal — it would fail if the config got corrupted (JSON parse) or the builder crashed (KeyError), not just if my JSON edit got reverted.
+
+Tests: 1102 / 0 failures (1101 + 1).
