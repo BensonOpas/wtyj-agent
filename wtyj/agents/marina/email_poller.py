@@ -438,6 +438,17 @@ def main():
         try:
             now = time.time()
 
+            # Brief 255: reload state from disk each iteration so external
+            # writers (Brief 254's email_clear_fully_escalated_flag, dashboard
+            # archive/delete endpoints, operator wipes) are respected. Before
+            # Brief 255 state was loaded once at process startup and any
+            # external disk write was silently overwritten on the next
+            # save_json from this loop -- see issue #23 / #26 for the symptom
+            # chain (orphan fully_escalated flags resurrected, j2-26 wipe
+            # undone within 6 minutes).
+            state = load_json(THREAD_STATE_PATH, {"threads": {}, "message_id_index": {}})
+            state.setdefault("message_id_index", {})
+
             # Brief 182: reconnect if needed (first run, error recovery, or token refresh)
             if im is None or (now - _last_connect > _TOKEN_REFRESH_SECONDS):
                 if im is not None:

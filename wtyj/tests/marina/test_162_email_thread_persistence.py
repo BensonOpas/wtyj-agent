@@ -184,3 +184,116 @@ def test_cleanup_protects_relay_thread_missing_last_activity():
     assert "subj:calvin@gaimin.io:hi_booking" in state["threads"], (
         "Thread with awaiting_relay AND missing last_activity should survive"
     )
+
+
+# --- Group D: Brief 255 — per-iteration state reload from disk ---
+
+def test_brief_255_main_loop_reloads_state_each_iteration(monkeypatch, tmp_path):
+    """Brief 255 regression guard. Runs email_poller.main() for 2 iterations
+    with mocked IO and asserts that an external disk write between iterations
+    is reflected in the in-memory `state` of iteration 2.
+
+    Before Brief 255 the email_poller loaded state ONCE at process startup
+    and the in-memory snapshot overwrote any external write on the next
+    save_json. That's why j2-26's disk wipe lasted 6 minutes before the
+    poller resurrected the 9 pre-wipe threads, and why Brief 254's
+    flag-clear helper had no observable effect. If a future commit deletes
+    the per-iteration reload at email_poller.py:441-449, this test fails
+    because captured[1] still contains the stale 'original' thread instead
+    of the externally-emptied disk state."""
+    import json
+    import time as _time_mod
+    from unittest.mock import MagicMock
+
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps({
+        "threads": {
+            "subj:a@b.com:original": {
+                "flags": {"fully_escalated": True},
+                "fields": {},
+                "last_activity": int(_time_mod.time()),
+            }
+        },
+        "message_id_index": {},
+        "sender_rates": {},
+    }))
+
+    monkeypatch.setattr(email_poller, "THREAD_STATE_PATH", str(state_path))
+    monkeypatch.setattr(email_poller, "EMAIL_ADDR", "test@example.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "x")
+    monkeypatch.setattr(email_poller, "HEARTBEAT_PATH", str(tmp_path / "heartbeat.txt"))
+
+    captured = []
+
+    def fake_cleanup(state, now):
+        captured.append(json.dumps(state.get("threads", {}), sort_keys=True))
+        if len(captured) == 1:
+            state_path.write_text(json.dumps({
+                "threads": {},
+                "message_id_index": {},
+                "sender_rates": {},
+            }))
+
+    monkeypatch.setattr(email_poller, "_cleanup_stale_data", fake_cleanup)
+
+    fake_im = MagicMock()
+    fake_im.select.return_value = None
+    fake_im.uid.return_value = ("OK", [None])
+    fake_im.noop.return_value = ("OK", None)
+    fake_im.logout.return_value = None
+    monkeypatch.setattr(email_poller, "imap_connect", lambda: fake_im)
+
+    class _StopLoop(Exception):
+        pass
+
+    sleep_count = [0]
+
+    def fake_sleep(_seconds):
+        sleep_count[0] += 1
+        if sleep_count[0] >= 2:
+            raise _StopLoop()
+
+    monkeypatch.setattr(_time_mod, "sleep", fake_sleep)
+
+    try:
+        email_poller.main()
+    except _StopLoop:
+        pass
+
+    assert len(captured) >= 2, (
+        f"expected >= 2 iterations, got {len(captured)}: {captured}"
+    )
+    assert "subj:a@b.com:original" in captured[0], (
+        f"iteration 1 should have loaded seeded state, got: {captured[0]}"
+    )
+    assert captured[1] == "{}", (
+        f"iteration 2 should have reloaded the externally-emptied disk "
+        f"state (Brief 255 reload); got: {captured[1]}. If this assertion "
+        f"fails, the per-iteration reload at email_poller.py:441-449 has "
+        f"been removed and the orphan-flag / wipe-undone bug from "
+        f"issues #23 / #26 has regressed."
+    )
+
+
+def test_brief_255_load_json_returns_default_when_file_missing(tmp_path):
+    """Brief 255: load_json returns the default dict (not None, not raise)
+    when the target file does not exist. Regression guard for the
+    per-iteration reload path against the file being deleted between
+    iterations (e.g., during an operator wipe). email_poller.py:120's
+    bare `except: return default` is the safety net."""
+    missing = str(tmp_path / "does_not_exist.json")
+    default = {"threads": {}, "message_id_index": {}}
+    result = email_poller.load_json(missing, default)
+    assert result == default
+
+
+def test_brief_255_load_json_returns_default_when_file_corrupt(tmp_path):
+    """Brief 255: load_json returns the default dict when the target
+    file contains malformed JSON. Confirms the safety net catches any
+    transient mid-write state (e.g., if a future writer ever bypasses
+    the atomic .tmp + os.replace pattern at email_poller.py:123-128)."""
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not valid json at all")
+    default = {"threads": {}, "message_id_index": {}}
+    result = email_poller.load_json(str(corrupt), default)
+    assert result == default
