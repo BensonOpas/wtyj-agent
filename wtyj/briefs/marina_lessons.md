@@ -2676,3 +2676,26 @@ A backend brief shipped from a Sonia (read-only audit agent) finding. Multiple l
 **Caught by.** Brief-reviewer round 1 (FAIL with 3 real issues, all valid: wrong test file per Brief 236 rule, tests didn't catch the regression being shipped, rollback path was non-canonical). Without round 1, this would have shipped tests that proved nothing and a rollback that wouldn't roll back. The reviewer pattern is paying for itself with each catch.
 
 Tests: 1090 passing / 0 failures (1087 + 3). Test 1 is the behavioral regression guard — runs `email_poller.main()` for 2 iterations with mocked IMAP and a cleanup hook that snapshots in-memory state and triggers an external disk write between iterations. If the in-loop reload is ever removed, the test fails.
+
+
+---
+
+## Brief 256 — WhatsApp escalation alerts: same body for email + WA was the wrong design from day 1 (2026-05-11)
+
+**The bug.** Calvin's live verification on issue #25: WhatsApp alert for an email escalation included the customer's quoted email chain, full signature block, contact info, and confidentiality disclaimer. *"This is not an alert, this is a book."* The original Brief 217 dispatcher built one alert body and sent it to every enabled channel. Briefs 239, 241, 243 layered more richness onto that one body (structured summary fields, HTML CTA, deep-link URLs) — perfect for email, fatal for WhatsApp where every char matters and a clip-to-fit truncation client-side would drop the Action line.
+
+**The fix.** Two new helpers — `_strip_email_artifacts` (defensive sanitization of quoted history / signatures / disclaimers) and `_build_alert_body_whatsapp` (Calvin's 5-line target format). Dispatcher now builds both bodies and routes per channel. Email path is byte-identical post-deploy.
+
+**The lessons.**
+
+1. **One body for all channels is a coupling smell that hides until a channel's UX constraints surface.** Briefs 217 through 243 progressively added fields to the single body. The coupling was invisible because email-side reviewers thought *"more detail = better"* and never imagined the same string getting compressed onto a phone notification. The right architectural move would have been per-channel body builders from Brief 217 day 1. Cost of doing it later: one P1 hotfix and one Calvin live-fail.
+
+2. **Sanitizing customer text at the boundary is necessary even with a Claude-side entity-extraction prompt rule.** Brief 252 told Claude to extract concrete entities, no meta-language. Calvin still received a "book" in his WhatsApp alert. The prompt is best-effort; the Python sanitizer is the load-bearing defense. Belt-and-suspenders here is not pessimism — it's the only design that survives Claude regressions, prompt drift, and pathological inputs.
+
+3. **600-char "Vulcan summary" is a hard architectural constraint, not a soft target.** Calvin's spec was "under roughly 600 chars". Treated as a soft hint, the brief originally left `customer_name` uncapped. Brief-reviewer caught it: a 200-char display name from a future Zernio integration would silently blow the cap. Fix: all three free-text fields capped (customer 60, need 180, latest 180), worst-case math now ≤539. Test 4 runs the pathological 200-char-name input to prove the ceiling holds.
+
+4. **Tests that codify the wrong invariant are a load-bearing trap.** The pre-existing `test_wa_alert_resolved_route_calls_zernio_records_sent` had `assert "Reason:" in captured_send["text"]` — quietly cementing the *exact behavior* this brief fixes as a passing test. Without spotting and updating it, the regression would have come back the moment someone re-asserted "WA body must match the rich body". The test is now updated to assert the compact contract, with a comment cross-referencing Brief 256.
+
+Caught by: Brief-reviewer round 1 FAIL with 2 real issues (wrong test file path + customer_name not bounded in worst-case math). Round 2 PASS.
+
+Tests: 1095 / 0 failures (1090 + 5).
