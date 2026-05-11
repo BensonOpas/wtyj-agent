@@ -125,3 +125,42 @@ def test_bridge_uses_empty_label_when_no_times_at_all(monkeypatch):
 
     assert captured.get("date_time_label") == ""
     assert captured.get("status") == "detected"
+
+
+# ── Brief 252: prompt extracts concrete entities + bans meta-language ─
+
+def test_summary_prompt_includes_concrete_entity_extraction_rule():
+    """Brief 252: the system prompt MUST include the entity-extraction
+    rule. Distinctive markers from Calvin's issue #20 follow-up that
+    distinguish this rule from the existing Brief 248 / Brief 250 rules."""
+    from dashboard.escalation_summary import _build_system_prompt
+    prompt = _build_system_prompt()
+    assert "EXTRACT THE CONCRETE ENTITY" in prompt
+    assert "MUST INCLUDE THAT EXACT ENTITY VERBATIM" in prompt
+    assert "updated request" in prompt
+    assert "their latest message" in prompt
+    assert "based on their reply" in prompt
+
+
+def test_summary_prompt_includes_concrete_do_examples():
+    """Brief 252: the prompt MUST include positive DO examples that
+    show Claude what concrete entity extraction looks like (not just
+    the negative DO NOT)."""
+    from dashboard.escalation_summary import _build_system_prompt
+    prompt = _build_system_prompt()
+    assert "Move or confirm the appointment at 10:30" in prompt
+    assert "Confirm whether 10:30 is available" in prompt
+    assert "USE THE TIME" in prompt
+    assert "USE THE SERVICE" in prompt
+    assert "INCLUDE THE REASON" in prompt
+
+
+def test_summary_prompt_preserves_brief_248_and_250_rules():
+    """Brief 252 regression: the helper extraction must not drop the
+    earlier Brief 248 (confirmedTime) or Brief 250 (latest-message
+    anchoring) rules. Both must remain in the prompt verbatim."""
+    from dashboard.escalation_summary import _build_system_prompt
+    prompt = _build_system_prompt()
+    assert "When in doubt, leave confirmedTime empty" in prompt
+    assert "what was being decided 20 messages ago" in prompt
+    assert "we will be there at 12:00" in prompt
