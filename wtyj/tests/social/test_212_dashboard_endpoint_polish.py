@@ -143,3 +143,75 @@ def test_ai_editor_invalid_action_returns_400():
                      headers=_auth(token))
     assert r.status_code == 400
     assert "sing" in r.json()["detail"]
+
+
+# ── Brief 251: per-style distinct AI editor prompts ─
+
+def test_ai_editor_style_professional_uses_distinct_prompt():
+    """Brief 251: 'professional' style instruction must include the
+    Calvin-specified phrasing about keeping it concise + removing filler
+    AND must NOT include the markers from other styles."""
+    from dashboard.api import _build_ai_editor_prompt
+    prompt = _build_ai_editor_prompt(
+        action="style", text="hello", target_language="", style="professional")
+    assert "professional tone" in prompt
+    assert "Remove filler words" in prompt
+    assert "Do not use em dashes" in prompt
+    assert "warmer and more human" not in prompt
+    assert "approachable tone" not in prompt
+    assert "must be shorter than the input" not in prompt
+    assert "directly and plainly" not in prompt
+
+
+def test_ai_editor_style_warmer_uses_distinct_prompt():
+    """Brief 251: 'warmer' includes 'warmer and more human' + 'genuine
+    appreciation' markers."""
+    from dashboard.api import _build_ai_editor_prompt
+    prompt = _build_ai_editor_prompt(
+        action="style", text="hello", target_language="", style="warmer")
+    assert "warmer and more human" in prompt
+    assert "genuine appreciation" in prompt
+    assert "Do not use em dashes" in prompt
+    assert "professional tone" not in prompt
+    assert "must be shorter than the input" not in prompt
+
+
+def test_ai_editor_style_shorter_uses_distinct_prompt():
+    """Brief 251: 'shorter' MUST tell Claude the output has to be
+    shorter than the input (Calvin's hard rule from issue #21)."""
+    from dashboard.api import _build_ai_editor_prompt
+    prompt = _build_ai_editor_prompt(
+        action="style", text="hello", target_language="", style="shorter")
+    assert "must be shorter than the input" in prompt
+    assert "as few words as possible" in prompt
+    assert "Do not use em dashes" in prompt
+    assert "professional tone" not in prompt
+    assert "warmer and more human" not in prompt
+
+
+def test_ai_editor_style_friendlier_uses_distinct_prompt():
+    """Brief 251: 'friendlier' = 'friendly, approachable tone' +
+    'conversational and relaxed, not stiff'."""
+    from dashboard.api import _build_ai_editor_prompt
+    prompt = _build_ai_editor_prompt(
+        action="style", text="hello", target_language="", style="friendlier")
+    assert "approachable tone" in prompt
+    assert "conversational and relaxed" in prompt
+    assert "Do not use em dashes" in prompt
+    assert "warmer and more human" not in prompt
+    assert "must be shorter than the input" not in prompt
+    assert "directly and plainly" not in prompt
+
+
+def test_ai_editor_style_direct_uses_distinct_prompt():
+    """Brief 251: 'direct' includes 'directly and plainly' + 'crisp
+    and efficient' markers."""
+    from dashboard.api import _build_ai_editor_prompt
+    prompt = _build_ai_editor_prompt(
+        action="style", text="hello", target_language="", style="direct")
+    assert "directly and plainly" in prompt
+    assert "crisp and efficient" in prompt
+    assert "Do not use em dashes" in prompt
+    assert "professional tone" not in prompt
+    assert "warmer and more human" not in prompt
+    assert "approachable tone" not in prompt

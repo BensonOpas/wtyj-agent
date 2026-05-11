@@ -2790,6 +2790,56 @@ _AI_EDITOR_VALID_LANGUAGES = {"English", "Dutch", "Spanish", "Papiamento", "Swed
 _AI_EDITOR_VALID_STYLES = {"professional", "warmer", "shorter", "friendlier", "direct"}
 
 
+# Brief 251: per-style distinct instructions for /ai-editor action='style'.
+# Each instruction defines a different goal-shaping strategy so Claude
+# produces meaningfully different rewrites across the 5 styles. Verbatim
+# from issue #21 with light formatting; global suffixes (preserve
+# meaning / no em dashes / return only rewrite) repeated per-style for
+# Claude's per-prompt context isolation.
+_STYLE_INSTRUCTIONS = {
+    "professional": (
+        "Rewrite this customer service message in a professional tone. "
+        "Keep it concise and clear. Remove filler words and grammar "
+        "errors. Do not make it overly stiff or corporate if the "
+        "original is informal. Preserve the full meaning. Do not add "
+        "any information not in the original. Do not use em dashes. "
+        "Return only the rewritten message. No preamble, no explanation."
+    ),
+    "warmer": (
+        "Rewrite this customer service message to sound warmer and "
+        "more human. Show genuine appreciation. Avoid corporate "
+        "language. It should feel personal, like it was written by a "
+        "real person who cares. Preserve the full meaning. Do not add "
+        "any information not in the original. Do not use em dashes. "
+        "Return only the rewritten message. No preamble, no explanation."
+    ),
+    "shorter": (
+        "Rewrite this message using as few words as possible while "
+        "preserving the full meaning. The output must be shorter than "
+        "the input. Remove all filler, redundancy, and unnecessary "
+        "phrasing. Do not add any content that was not in the "
+        "original. Do not use em dashes. Return only the rewritten "
+        "message. No preamble, no explanation."
+    ),
+    "friendlier": (
+        "Rewrite this customer service message in a friendly, "
+        "approachable tone. Keep it professional enough for customer "
+        "service but make it feel conversational and relaxed, not "
+        "stiff. Preserve the full meaning. Do not add any information "
+        "not in the original. Do not use em dashes. Return only the "
+        "rewritten message. No preamble, no explanation."
+    ),
+    "direct": (
+        "Rewrite this customer service message as directly and plainly "
+        "as possible. Use simple language. No filler. Keep only what "
+        "is necessary to be polite and convey the meaning. The result "
+        "should feel crisp and efficient. Do not add any content that "
+        "was not in the original. Do not use em dashes. Return only "
+        "the rewritten message. No preamble, no explanation."
+    ),
+}
+
+
 def _build_ai_editor_prompt(action: str, text: str, target_language: str, style: str) -> str:
     """Brief 212: assemble the action-specific user prompt for /ai-editor.
     Instructions are crisp so the model returns rewritten text only — no
@@ -2811,13 +2861,17 @@ def _build_ai_editor_prompt(action: str, text: str, target_language: str, style:
             f"Text:\n{text}"
         )
     if action == "style":
-        return (
-            f"Rewrite the following text in a more {style} style. Keep the "
-            "same language, factual content, and any names. Return only "
-            "the rewritten text — no preamble, no quotation marks, no "
-            "explanation.\n\n"
-            f"Text:\n{text}"
-        )
+        # Brief 251: per-style distinct instructions. The pre-Brief-251
+        # template `"Rewrite ... in a more {style} style"` produced
+        # near-identical outputs because Claude couldn't differentiate
+        # styles from a single-adjective instruction. Each style now has
+        # its own goal-shaped instruction strategy per issue #21.
+        instruction = _STYLE_INSTRUCTIONS.get(style)
+        if not instruction:
+            # Defensive: validator at the endpoint already rejects unknown
+            # styles with 400 before this branch is reached.
+            raise ValueError(f"unknown style: {style}")
+        return f"{instruction}\n\nText:\n{text}"
     raise ValueError(f"unknown action: {action}")
 
 
