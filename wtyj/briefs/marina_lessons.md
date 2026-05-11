@@ -2699,3 +2699,30 @@ Tests: 1090 passing / 0 failures (1087 + 3). Test 1 is the behavioral regression
 Caught by: Brief-reviewer round 1 FAIL with 2 real issues (wrong test file path + customer_name not bounded in worst-case math). Round 2 PASS.
 
 Tests: 1095 / 0 failures (1090 + 5).
+
+
+---
+
+## Brief 257 — Sanitizers must compose; ordering and granularity matter (2026-05-11)
+
+**The bug.** Brief 256 shipped clean, brief-reviewer + output-reviewer PASS, full regression green. Calvin's first live retest of Brief 256 still FAILED on #25 — two paths leaked content the sanitizer didn't cover. (1) `[ESCALATION] NO-REF - Calvin Adamus (calvin@gaimin.io) - ...` appeared in the WA Latest line because Brief 256's empty-`latestCustomerMessage` fallback used `fallback_summary` (the email-poller subject). (2) Claude-emitted `Reach out to Calvin directly to establish context, or review any external records and CRM/ticket history for prior interactions.` appeared in the Need line because Brief 252's entity-extraction prompt didn't gate Claude's generic-troubleshooting drift when the input had no concrete entity.
+
+**The fix.** Two more sanitizers: `_strip_internal_prefixes` (subject artifacts: bracketed tokens, NO-REF, parenthesized email/phone) + `_strip_hallucinated_external_systems` (CRM/Zendesk/no-history sentence-level cuts). Compact builder pipes Need through both, pipes Latest through internal-prefix strip BEFORE email-artifact strip, omits Latest entirely when the raw value starts with an internal prefix, removes the fallback-summary-as-Latest chain.
+
+**The lessons.**
+
+1. **One sanitizer never catches the whole class of bug.** Brief 256's `_strip_email_artifacts` covered signatures + disclaimers + quoted history — but didn't anticipate subject prefixes leaking into the same field via a fallback chain, and didn't anticipate Claude inventing CRM/Zendesk language. Each leak vector needs its own sanitizer. The pattern that emerged: the boundary defense layer grows as adversarial inputs are discovered — accept this as a feature, not a sign of bad design.
+
+2. **Sanitizer ordering matters and is invisible until it breaks.** My first commit of `_strip_internal_prefixes` collapsed all whitespace (`\s+` → ` `) which turned `Sure, that works.
+
+Best regards,
+...` into one line. Then `_strip_email_artifacts` couldn't match its `
+(?:Best regards|...)` anchor and the signature survived. Caught by the full regression run on Brief 256 tests — NOT by the new Brief 257 tests (they used inputs that didn't exercise the interaction). Lesson: when a sanitizer pipes into another sanitizer, document each sanitizer's invariants (in/out string shape) and add a test that exercises the COMPOSITION specifically, not just each in isolation. Inline comments now flag that `_strip_internal_prefixes` must preserve newlines because `_strip_email_artifacts` depends on them.
+
+3. **Strip periods carefully.** I lumped `.` into the trailing-strip charset for `_strip_internal_prefixes`. That correctly removed dangling periods after `(calvin@gaimin.io)` was excised, but ALSO incorrectly stripped legitimate sentence-ending periods on clean Claude output. Test failure showed "Confirm appointment time change" instead of "Confirm appointment time change." Lesson: trailing-punctuation strips need to distinguish "punctuation that's part of the cleaning residue" from "punctuation that's natural to the text". Period is almost always the latter. Stripped only `[\s\-:,]+$` from then on.
+
+4. **Audit beats reproduction when the symptom doesn't fit the code.** Calvin reported a verbose-format WA alert that's impossible given the post-Brief-256 code path (single dispatcher, single call to `_build_alert_body_whatsapp`). I spent 10 minutes confirming via grep + container code inspection (`docker exec wtyj-unboks grep ...`) that the live container did have the Brief 256 fix. The deploy-window race (17:30 push → 17:39 restart) explains it: the email_poller process that handled Calvin's first test was still on the pre-Brief-256 image. I documented this in the brief instead of writing more code for a non-reproducing symptom.
+
+5. **Brief-reviewer round 1 caught a real regex problem.** My first draft of `_strip_internal_prefixes` used a structured regex `\[RELAY-[^\]]+\]\s*(?:NO-REF|[A-Z0-9]{4,8})?\s*-?\s*[^-]+?\s*-?\s*` with no concrete terminator and non-greedy quantifiers — would have matched ambiguously or zero-width. Reviewer flagged it; I replaced the whole step with a 6-step deterministic token-strip pipeline (drop bracketed tokens → drop bare tokens → drop parenthesized blobs → strip residue). Pattern: a regex that doesn't have a concrete terminator is a regex that doesn't know what it's matching against. Prefer ordered string operations over clever-looking structured regexes.
+
+Tests: 1101 / 0 failures (1095 + 6).
