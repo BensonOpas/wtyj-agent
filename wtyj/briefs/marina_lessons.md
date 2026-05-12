@@ -2866,3 +2866,20 @@ Tests: 1116 / 0 failures (1111 + 5).
 5. **Reviewer caught a hidden behavior change in legacy endpoint.** My first draft extended `update_escalation_learning_status` to record audit fields. The legacy `/learning/{id}/approve` endpoint calls this helper with two args; the new audit-field recording fires regardless. Brief originally claimed "/learning endpoints unchanged" — technically true at the API response surface but false at the DB-write layer (legacy approve now also stamps approved_at with empty operator). Brief now documents this explicitly. Pattern: when a brief claims "X is unchanged," verify the claim holds at EVERY layer (API surface, DB writes, log events). "Unchanged" is a precise word — use it carefully.
 
 Tests: 1122 / 0 failures (1116 + 6).
+
+
+---
+
+## Brief 264 — Pydantic `bool` coerces strings; `StrictBool` is what you actually want (2026-05-12)
+
+**The bug.** Brief 264 ships two tenant-scoped boolean settings via PUT with a Pydantic `BaseModel` body. Test 3 asserts that PUT with `{"showSuggestionAfterReplies": "yes"}` returns HTTP 422. The test failed with 200 because Pydantic's default `bool` field happily coerces `"yes"`/`"no"`/`"1"`/`"0"`/`"on"`/`"off"` to actual booleans (this is documented Pydantic v1/v2 behavior — they call it "loose validation"). So `"yes"` round-trips to `True` and persists.
+
+**The fix.** Switched the model field type from `bool` to `pydantic.StrictBool`. StrictBool only accepts native JSON booleans (`true` / `false`); strings, numbers, and `null` all return HTTP 422. Test 3 passes.
+
+**The lesson.** Pydantic's default coercion is a footgun whenever you want a validation barrier rather than a parsing helper. `bool` says "convert what's here into a bool"; `StrictBool` says "this must already be a bool." For API request bodies that act as a validation contract (rather than a tolerant parser), `StrictBool` / `StrictStr` / `StrictInt` are the right primitives. Same applies to `int` → `StrictInt` (otherwise `"42"` coerces to `42`).
+
+Caveat: don't reach for StrictBool everywhere. For configuration values read from env vars (where strings are unavoidable), the coercion is a feature, not a bug. The decision rule: API request bodies that the frontend constructs from typed booleans → StrictBool. Anything sourced from text (env, config files, CLI args) → bool.
+
+Brief 264 also revisits the "use existing infrastructure" lesson from Briefs 261 and 263: the `system_settings` key-value table at `state_registry.py:680` is the perfect home for two boolean settings. No new schema, no new helpers beyond a thin adapter that parses TEXT back to bool. The grep-before-scoping reflex paid off again — a green-field "two-boolean tenant settings" feature compressed to ~50 LOC because the storage primitive was already there.
+
+Tests: 1127 / 0 failures (1122 + 5).
