@@ -2123,6 +2123,20 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
                   email=customer_email[:60],
                   matched=matched or "(no thread match)")
 
+    # Brief 266 + Brief 267: toggle-aware learning create from the Inbox-side
+    # email reply path. Brief 225's endpoint never auto-learned before; Brief
+    # 267 wires it to the same helper used by /escalations/{id}/reply so the
+    # operator's reply via the Email Inbox UI honors the
+    # createPendingLearningFromOperatorReplies toggle uniformly with the
+    # Escalations-tab reply UX. No escalation_id at this surface (the Brief
+    # 225 endpoint is conversation-scoped, not escalation-scoped).
+    _create_learning_from_operator_reply(
+        conversation_id=customer_email,
+        channel="email",
+        answer=body,
+        source="messages_email_reply",
+        escalation_id=None)
+
     return {"ok": True, "channel": "email"}
 
 

@@ -736,3 +736,73 @@ def test_brief_266_resolve_site_unaffected_by_toggle(monkeypatch):
                      "WHERE customer_id = '266_resolve_test'")
         conn.commit()
         conn.close()
+
+
+
+# --- Brief 267: wire Brief 225 /messages/conversations/{id}/email/reply
+# into the Brief 266 helper (issue #36 production retest fix) ---
+
+def test_brief_267_inbox_email_reply_creates_pending_when_toggle_on(monkeypatch, tmp_path):
+    """Brief 267: when an operator replies via the Email Inbox conversation
+    detail (Brief 225 /messages/conversations/{id}/email/reply at api.py:2074)
+    with the createPendingLearningFromOperatorReplies toggle ON, a
+    status='suggested' learning row must be created. Pre-Brief-267 this
+    endpoint never created a learning row at all - the bug that failed
+    Calvin's live retest of Brief 266."""
+    import json
+    from shared import state_registry
+    test_email = "267_inbox_test@example.com"
+    thread_key = f"subj:{test_email}:test subject"
+    try:
+        _wipe_learnings_for_266(conv_id_prefix="267_")
+        _reset_settings_266()
+        state_registry.set_setting(
+            "agent_learning_create_pending_from_replies", "true")
+        # Seed an email_thread_state.json with one customer message so
+        # email_append_assistant_message has a thread to find.
+        state_path = tmp_path / "email_thread_state.json"
+        state_path.write_text(json.dumps({
+            "threads": {
+                thread_key: {
+                    "fields": {"customer_name": "Test Customer"},
+                    "flags": {},
+                    "messages": [
+                        {"role": "customer", "body": "what hours?",
+                         "ts": "2026-05-12T00:00:00+00:00"}
+                    ],
+                }
+            },
+            "message_id_index": {},
+            "sender_rates": {},
+        }))
+        monkeypatch.setattr(state_registry, "_get_email_state_path",
+                             lambda: str(state_path))
+        # Mock smtp_send so the endpoint doesn'''t actually try SMTP.
+        from agents.marina import email_adapter
+        monkeypatch.setattr(email_adapter, "smtp_send",
+                             lambda to, subj, body, **kw: True)
+        from dashboard import api as dapi
+        monkeypatch.setattr(dapi, "smtp_send",
+                             lambda to, subj, body, **kw: True)
+        token = _login()
+        # URL-encode the colon-and-space in the thread_key segment.
+        from urllib.parse import quote
+        conv_path = quote(f"email::{thread_key}", safe="")
+        r = client.post(
+            f"/dashboard/api/messages/conversations/{conv_path}/email/reply",
+            headers=_auth(token),
+            json={"body": "Brief 267 inbox reply text"},
+        )
+        assert r.status_code == 200, f"endpoint should 200; got {r.status_code} {r.text}"
+        # Assert: a pending learning row exists for this customer email
+        # with the reply text.
+        rows = state_registry.list_escalation_learnings(status="suggested")
+        ours = [r for r in rows if r["conversationId"] == test_email
+                and r["humanAnswer"] == "Brief 267 inbox reply text"]
+        assert len(ours) == 1, (
+            f"expected 1 pending row from Inbox email reply with toggle ON; "
+            f"got {len(ours)}. All suggested rows: {rows}")
+        assert ours[0]["status"] == "suggested"
+    finally:
+        _wipe_learnings_for_266(conv_id_prefix="267_")
+        _reset_settings_266()
