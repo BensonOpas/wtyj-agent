@@ -2883,3 +2883,28 @@ Caveat: don't reach for StrictBool everywhere. For configuration values read fro
 Brief 264 also revisits the "use existing infrastructure" lesson from Briefs 261 and 263: the `system_settings` key-value table at `state_registry.py:680` is the perfect home for two boolean settings. No new schema, no new helpers beyond a thin adapter that parses TEXT back to bool. The grep-before-scoping reflex paid off again — a green-field "two-boolean tenant settings" feature compressed to ~50 LOC because the storage primitive was already there.
 
 Tests: 1127 / 0 failures (1122 + 5).
+
+
+---
+
+## Brief 265 — "Investigate" deserves an honest finding, not a placeholder feature (2026-05-12)
+
+**The bug.** Issue #33 has two parts: (A) add multiple action buttons to email alerts and (B) investigate whether Zernio supports interactive WhatsApp buttons. Part A is straightforward extension work. Part B asked me to verify capability before building.
+
+**The decision that mattered.** Calvin's spec offered an escape clause: *"If interactive buttons are not supported, implement OR document a numbered fallback."* The "OR" matters. Two paths:
+1. Add `Reply with 1 / 2 / 3` text to the WhatsApp body. Cheap, looks like progress.
+2. Document the Zernio constraint + defer the reply-parser backend work needed to make `1 / 2 / 3` actually work.
+
+I chose path 2. Reason: a numbered fallback without a reply-parser is operator-misleading. Operator sees `1 — Open dashboard / 2 — Take over / 3 — Resolve`, types `1` back, and nothing happens because there's no inbound webhook handler that interprets the reply as an action command. The "feature" would fail silently on first use — worse than no feature at all.
+
+**The lessons.**
+
+1. **"OR" clauses in specs are invitations to scope honestly, not opportunities to ship the cheaper half.** When a spec says "implement X OR document why X is blocked," the document-it path is a legitimate first-class deliverable. Brief 265's OUTPUT spends ~200 words on the Zernio investigation finding: the SDK signature, what Meta direct path would require, why the reply-parser is its own brief. That's the deliverable for Part B. Pattern: when the spec offers an escape clause, the escape clause is real work, not a fallback.
+
+2. **Verify SDK capability by reading the call signature, not by reading the marketing.** I didn't read Zernio's public docs (no access). What I read: `wtyj/agents/social/zernio_dm_client.py:99-115` — the actual SDK call we make is `client.inbox.send_inbox_message(conversation_id, account_id, message=text)`. A plain text string. No `interactive`, `buttons`, `template_components` kwarg in the call site. If Zernio's SDK supported buttons, the codebase would already have a call site using them (or at least a TODO comment to add one). It doesn't. That's evidence enough to commit to the "not supported" finding without external research. Pattern: SDK capability is a property of the SDK surface; the codebase IS the SDK surface (the call site can use whatever the SDK exposes); absence of usage = absence of support (or absence of need, but in our case both).
+
+3. **Backward compat via overloaded signature with `kwargs` defaults.** The existing `_build_alert_html_body(text_body, link_url, link_label)` had ~14 callers in tests; renaming the signature would break them all. Adding a `buttons` kwarg with `None` default, plus logic that wraps the positional `link_url`/`link_label` into a single-element list when `buttons is None`, lets every existing test pass unchanged AND lets new callers use the multi-button shape. Pattern: when refactoring a helper that's used widely, default-kwargs are the cheapest backward-compat shim — far less invasive than a separate `_v2` function or a wrapper that forwards.
+
+4. **The "Open dashboard" universal fallback button is the highest-value addition.** The escalation-specific deep-link (Brief 243) was useful but narrow — it lands on one item. The dashboard-root button is the operator's "I want to see context beyond this one thing" affordance. Cheap to add (one new branch in `_resolve_dashboard_link`), high utility (works regardless of escalation/appointment context). Pattern: when extending a feature surface, ask what the universal-action affordance would be — it's often a one-line addition with broad utility.
+
+Tests: 1130 / 0 failures (1127 + 3).
