@@ -445,6 +445,194 @@ async def save_learning(learning_id: int):
     return {"ok": True, "id": learning_id, "status": "saved"}
 
 
+# === Brief 263: operator-approved learnings alias surface ===
+# Per issue #32, Calvin wants the operator-approval flow exposed under
+# /escalation-learnings/* with status terms pending/approved/dismissed.
+# This block ADDS new endpoints; the legacy /learning/* surface above
+# stays working unchanged. Internal status mapping at the API boundary
+# preserves Brief 215 storage semantics (suggested/approved/saved/deleted).
+
+
+def _learning_status_external_to_internal(external: str) -> str:
+    """Brief 263: map Calvin's pending/approved/dismissed -> Brief 215
+    suggested/approved/deleted. Unknown values pass through as-is so a
+    typoed status surfaces as a 0-row response rather than silent
+    re-interpretation."""
+    return {
+        "pending": "suggested",
+        "approved": "approved",
+        "dismissed": "deleted",
+    }.get(external or "", external or "")
+
+
+def _learning_status_internal_to_external(internal: str) -> str:
+    """Brief 263: reverse mapping for the response shape."""
+    return {
+        "suggested": "pending",
+        "approved": "approved",
+        "saved": "approved",   # both surface as 'approved' to Calvin's UX
+        "deleted": "dismissed",
+    }.get(internal or "", internal or "")
+
+
+def _learning_row_to_external_shape(row: dict) -> dict:
+    """Brief 263: reshape a Brief 215 row (camelCase, internal status)
+    into Calvin's #32 spec shape (id as string, escalationId, status
+    mapped, suggestedText/approvedText split by current status,
+    approvedAt/dismissedAt audit fields, operator)."""
+    internal_status = row.get("status", "")
+    external_status = _learning_status_internal_to_external(internal_status)
+    human_answer = row.get("humanAnswer", "")
+    return {
+        "id": str(row.get("id", "")),
+        "escalationId": row.get("conversationId", ""),
+        "status": external_status,
+        "suggestedText": human_answer,
+        "approvedText": human_answer if internal_status in ("approved", "saved") else None,
+        "createdAt": row.get("createdAt", ""),
+        "updatedAt": row.get("updatedAt", ""),
+        "approvedAt": row.get("approvedAt"),
+        "dismissedAt": row.get("dismissedAt"),
+        "operator": row.get("approvedBy") or row.get("createdBy") or None,
+    }
+
+
+@router.get("/escalation-learnings", dependencies=[Depends(_check_auth)])
+async def list_escalation_learnings_endpoint(status: str = None):
+    """Brief 263: alias of /learning with Calvin's #32 status terms
+    (pending/approved/dismissed) and the reshaped response per #32 spec."""
+    internal_status = _learning_status_external_to_internal(status) if status else None
+    rows = state_registry.list_escalation_learnings(status=internal_status)
+    return [_learning_row_to_external_shape(r) for r in rows]
+
+
+class SuggestLearningRequest(BaseModel):
+    suggestedText: str
+    sourceQuestion: str = ""
+    channel: str = ""
+    operator: str = ""
+
+
+@router.post("/escalations/{escalation_id}/suggest-learning",
+              dependencies=[Depends(_check_auth)])
+async def suggest_learning_for_escalation(escalation_id: str,
+                                            req: SuggestLearningRequest):
+    """Brief 263: operator creates a NEW pending learning suggestion for
+    an escalation. Resolution rule for conversation_id + channel:
+    1. If escalation_id parses as int AND a pending_notifications row
+       exists with that id: SELECT customer_id + channel from that row.
+       conversation_id := customer_id.
+    2. Otherwise (non-numeric escalation_id OR no matching row):
+       conversation_id := escalation_id (raw conversation key);
+       channel := req.channel (must be non-empty in this branch).
+    Returns the new row in Calvin's #32 spec shape."""
+    if not req.suggestedText or not isinstance(req.suggestedText, str):
+        raise HTTPException(status_code=400, detail="suggestedText required")
+    conversation_id = ""
+    channel = ""
+    try:
+        esc_id_int = int(escalation_id)
+    except ValueError:
+        esc_id_int = None
+    if esc_id_int is not None:
+        conn = state_registry._get_conn()
+        row = conn.execute(
+            "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
+            (esc_id_int,)).fetchone()
+        conn.close()
+        if row:
+            conversation_id = row[0]
+            channel = row[1]
+    if not conversation_id:
+        conversation_id = escalation_id
+        channel = req.channel
+        if not channel:
+            raise HTTPException(
+                status_code=400,
+                detail="channel required when escalation row not found")
+    row_id = state_registry.create_pending_learning(
+        conversation_id=conversation_id,
+        channel=channel,
+        source_question=req.sourceQuestion,
+        suggested_text=req.suggestedText,
+        created_by=req.operator or None,
+    )
+    rows = state_registry.list_escalation_learnings(status="suggested")
+    row_dict = next((r for r in rows if r["id"] == row_id), None)
+    if not row_dict:
+        raise HTTPException(status_code=500,
+                             detail="learning created but not retrievable")
+    return _learning_row_to_external_shape(row_dict)
+
+
+class PatchLearningRequest(BaseModel):
+    suggestedText: str
+
+
+@router.patch("/escalation-learnings/{learning_id}",
+               dependencies=[Depends(_check_auth)])
+async def patch_learning(learning_id: int, req: PatchLearningRequest):
+    """Brief 263: edit the suggested text before approval. Allowed only
+    when status='suggested' (pending). Returns 409 Conflict if the row
+    has already been approved/dismissed - the text is frozen once
+    operator decides."""
+    ok = state_registry.edit_escalation_learning_text(
+        learning_id, req.suggestedText)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="Learning not editable (approved, dismissed, or not found)")
+    rows = state_registry.list_escalation_learnings()
+    row_dict = next((r for r in rows if r["id"] == learning_id), None)
+    if not row_dict:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    return _learning_row_to_external_shape(row_dict)
+
+
+class ApproveLearningRequest(BaseModel):
+    operator: str = ""
+
+
+@router.post("/escalation-learnings/{learning_id}/approve",
+              dependencies=[Depends(_check_auth)])
+async def approve_learning_v2(learning_id: int,
+                                req: ApproveLearningRequest = ApproveLearningRequest()):
+    """Brief 263: approve a pending learning. Records approved_at +
+    approved_by audit fields. The Brief 215 prompt-path filter
+    (status IN ('approved','saved') AND ai_may_use_automatically=1)
+    then picks up the row on the next prompt build."""
+    ok = state_registry.update_escalation_learning_status(
+        learning_id, "approved", operator=req.operator)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    # Brief 263: the helper above already flipped ai_may_use_automatically=1
+    # so the row becomes prompt-path eligible. No extra SQL needed here.
+    rows = state_registry.list_escalation_learnings()
+    row_dict = next((r for r in rows if r["id"] == learning_id), None)
+    if not row_dict:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    return _learning_row_to_external_shape(row_dict)
+
+
+@router.post("/escalation-learnings/{learning_id}/dismiss",
+              dependencies=[Depends(_check_auth)])
+async def dismiss_learning(learning_id: int):
+    """Brief 263: soft-reject a pending learning. Sets status='deleted'
+    (the existing Brief 215 status that filters everywhere) + dismissed_at.
+    Distinct from DELETE /learning/{id} which hard-removes the row."""
+    ok = state_registry.update_escalation_learning_status(
+        learning_id, "deleted")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    # Re-fetch by direct SQL since list_escalation_learnings skips deleted
+    # rows by default; we need status='deleted' filter explicitly.
+    rows = state_registry.list_escalation_learnings(status="deleted")
+    row_dict = next((r for r in rows if r["id"] == learning_id), None)
+    if not row_dict:
+        raise HTTPException(status_code=404, detail="Learning not found")
+    return _learning_row_to_external_shape(row_dict)
+
+
 # --- Data ---
 
 @router.get("/availability", dependencies=[Depends(_check_auth)])

@@ -460,6 +460,20 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Brief 263: operator-approval audit fields per issue #32.
+    # Idempotent; nullable TEXT; populated only on the matching transition.
+    try:
+        conn.execute("ALTER TABLE escalation_learnings ADD COLUMN approved_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE escalation_learnings ADD COLUMN dismissed_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE escalation_learnings ADD COLUMN approved_by TEXT")
+    except sqlite3.OperationalError:
+        pass
     # Brief 216: per-tenant temporary/permanent business updates that Marina
     # injects into her prompt. Two flavors: permanent (no dates → always
     # active) and scheduled (start_date + end_date → active only within
@@ -4144,22 +4158,74 @@ def save_escalation_learning(conversation_id: str, channel: str,
     return row_id
 
 
+def create_pending_learning(conversation_id: str, channel: str,
+                              source_question: str, suggested_text: str,
+                              created_by: str = None) -> int:
+    """Brief 263: create a NEW learning row in status='suggested' (pending
+    per issue #32 vocabulary). Used by POST /escalations/{id}/suggest-learning.
+    Distinct from save_escalation_learning which defaults to status='approved'
+    (the legacy Brief 215 auto-learn path). ai_may_use_automatically is
+    False on creation; approval flips status only — the prompt-path
+    filter at get_approved_learnings_for_prompt selects status IN
+    ('approved','saved') AND ai_may_use_automatically=1, so a suggested
+    row stays out of the prompt regardless of the ai_may_use flag value."""
+    return save_escalation_learning(
+        conversation_id=conversation_id,
+        channel=channel,
+        source_question=source_question,
+        human_answer=suggested_text,
+        status="suggested",
+        ai_may_use=False,
+        category=None,
+        created_by=created_by,
+    )
+
+
+def edit_escalation_learning_text(learning_id: int, new_text: str) -> bool:
+    """Brief 263: edit the human_answer text. Allowed only when the row's
+    current status is 'suggested' (pending). Returns False if the row
+    doesn't exist OR status is approved/saved/deleted - once approved or
+    dismissed, the text is frozen (operator must dismiss + create a new
+    suggestion to change it)."""
+    if not new_text or not isinstance(new_text, str):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT status FROM escalation_learnings WHERE id = ?",
+        (learning_id,)).fetchone()
+    if not row or row[0] != "suggested":
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE escalation_learnings SET human_answer = ?, updated_at = ? "
+        "WHERE id = ?",
+        (new_text, now, learning_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
 def list_escalation_learnings(status: str = None) -> list:
-    """Brief 215: return escalation learning entries newest-first.
-    Skip rows with status='deleted'. Optional status filter."""
+    """Brief 215 + Brief 263: return escalation learning entries newest-first.
+    Skip rows with status='deleted' (dismissed) unless status filter is
+    explicitly 'deleted'. Optional status filter. Brief 263 adds approvedAt
+    + dismissedAt + approvedBy audit fields to the response shape."""
     conn = _get_conn()
     if status:
         rows = conn.execute(
             "SELECT id, conversation_id, channel, source_question, human_answer, "
             "status, ai_may_use_automatically, category, created_by, "
-            "created_at, updated_at FROM escalation_learnings "
+            "created_at, updated_at, approved_at, dismissed_at, approved_by "
+            "FROM escalation_learnings "
             "WHERE status = ? ORDER BY created_at DESC",
             (status,)).fetchall()
     else:
         rows = conn.execute(
             "SELECT id, conversation_id, channel, source_question, human_answer, "
             "status, ai_may_use_automatically, category, created_by, "
-            "created_at, updated_at FROM escalation_learnings "
+            "created_at, updated_at, approved_at, dismissed_at, approved_by "
+            "FROM escalation_learnings "
             "WHERE status != 'deleted' ORDER BY created_at DESC").fetchall()
     conn.close()
     return [{
@@ -4168,18 +4234,42 @@ def list_escalation_learnings(status: str = None) -> list:
         "status": r[5], "aiMayUseAutomatically": bool(r[6]),
         "category": r[7], "createdBy": r[8],
         "createdAt": r[9], "updatedAt": r[10],
+        "approvedAt": r[11], "dismissedAt": r[12], "approvedBy": r[13],
     } for r in rows]
 
 
-def update_escalation_learning_status(learning_id: int, new_status: str) -> bool:
-    """Brief 215: flip status. Allowed: suggested|approved|saved|deleted."""
+def update_escalation_learning_status(learning_id: int, new_status: str,
+                                       operator: str = "") -> bool:
+    """Brief 215 + Brief 263: flip status. Allowed: suggested|approved|saved|deleted.
+    Brief 263 also records:
+    - approved_at + approved_by when new_status='approved' (uniform audit:
+      legacy /learning/{id}/approve also stamps approved_at with empty
+      operator string).
+    - dismissed_at when new_status='deleted' (soft-reject via the new
+      /escalation-learnings/{id}/dismiss endpoint; legacy DELETE /learning/{id}
+      hard-removes the row instead of stamping)."""
     if new_status not in ("suggested", "approved", "saved", "deleted"):
         return False
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
-    cur = conn.execute(
-        "UPDATE escalation_learnings SET status = ?, updated_at = ? WHERE id = ?",
-        (new_status, now, learning_id))
+    if new_status == "approved":
+        # Brief 263: also flip ai_may_use_automatically=1 so a row that
+        # was originally suggested (ai_may_use=0) becomes prompt-path
+        # eligible immediately on approval. Canonical approve semantics.
+        cur = conn.execute(
+            "UPDATE escalation_learnings SET status = ?, updated_at = ?, "
+            "approved_at = ?, approved_by = ?, ai_may_use_automatically = 1 "
+            "WHERE id = ?",
+            (new_status, now, now, operator or "", learning_id))
+    elif new_status == "deleted":
+        cur = conn.execute(
+            "UPDATE escalation_learnings SET status = ?, updated_at = ?, "
+            "dismissed_at = ? WHERE id = ?",
+            (new_status, now, now, learning_id))
+    else:
+        cur = conn.execute(
+            "UPDATE escalation_learnings SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, now, learning_id))
     updated = cur.rowcount > 0
     conn.commit()
     conn.close()
