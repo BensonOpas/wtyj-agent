@@ -565,6 +565,89 @@ async def suggest_learning_for_escalation(escalation_id: str,
     return _learning_row_to_external_shape(row_dict)
 
 
+def _create_learning_from_operator_reply(conversation_id: str,
+                                           channel: str,
+                                           answer: str,
+                                           source: str = "",
+                                           operator: str = "",
+                                           escalation_id: int = None):
+    """Brief 266: wire-up helper called from every passive operator
+    reply/guidance path. Reads the Brief 264 toggle
+    `agent_learning_create_pending_from_replies`:
+    - "true"  -> create_pending_learning (Brief 263; status='suggested',
+      ai_may_use=False). Operator must approve before the Agent uses it.
+    - else    -> legacy save_escalation_learning(status='approved',
+      ai_may_use=True). Brief 215 auto-learn behavior preserved.
+
+    Guards:
+    - Skips when `answer` is empty or whitespace-only.
+    - Skips when an existing learning row for the same conversation_id
+      already carries this exact `answer` text in any non-deleted status
+      (dedup against re-replies / re-runs). Dismissed (deleted) rows are
+      NOT a match - operator can re-create after dismiss via re-reply.
+
+    Wrapped in try/except - returns None on guard skip or exception,
+    learning row id on success. Caller is operator-facing; never raises.
+
+    NOTE: this helper is NOT used by /escalations/{id}/resolve - that site
+    is operator-gated by body.saveAsLearning AND honors body.autoUseNextTime
+    + body.category which this helper has no parameters for. The toggle
+    only governs the 5 passive auto-learn paths (3 reply branches, 2
+    guidance branches)."""
+    try:
+        stripped = (answer or "").strip()
+        if not stripped:
+            return None
+        conn = state_registry._get_conn()
+        dup = conn.execute(
+            "SELECT id FROM escalation_learnings "
+            "WHERE conversation_id = ? AND human_answer = ? "
+            "AND status != 'deleted' LIMIT 1",
+            (conversation_id, stripped)).fetchone()
+        conn.close()
+        if dup:
+            return None
+        toggle = state_registry.get_setting(
+            _AGENT_LEARNING_SETTING_CREATE_PENDING, "")
+        src_q = ""
+        try:
+            src_q = state_registry._last_customer_message_for(
+                conversation_id, channel) or ""
+        except Exception:
+            src_q = ""
+        if toggle == "true":
+            row_id = state_registry.create_pending_learning(
+                conversation_id=conversation_id,
+                channel=channel,
+                source_question=src_q,
+                suggested_text=stripped,
+                created_by=operator or None,
+            )
+        else:
+            row_id = state_registry.save_escalation_learning(
+                conversation_id=conversation_id,
+                channel=channel,
+                source_question=src_q,
+                human_answer=stripped,
+                status="approved",
+                ai_may_use=True,
+                created_by=operator or None,
+            )
+        bm_logger.log(
+            "learning_created_from_reply",
+            escalation_id=escalation_id,
+            source=source,
+            toggle=("pending" if toggle == "true" else "approved"),
+            row_id=row_id)
+        return row_id
+    except Exception as exc:
+        bm_logger.log("learning_write_failed",
+                       error=str(exc)[:120],
+                       escalation_id=escalation_id,
+                       source=source)
+        return None
+
+
 class PatchLearningRequest(BaseModel):
     suggestedText: str
 
@@ -3370,16 +3453,11 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
                           mode="hard", channel="whatsapp")
             state_registry.update_notification_status(escalation_id, "replied")
 
-            # Brief 215: auto-create approved learning entry from operator answer.
-            try:
-                state_registry.save_escalation_learning(
-                    conversation_id=customer_id, channel="whatsapp",
-                    source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
-                    human_answer=operator_reply,
-                    status="approved", ai_may_use=True)
-            except Exception as _learn_exc:
-                bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
-                              escalation_id=escalation_id, source="reply_whatsapp_hard")
+            # Brief 215 + Brief 266: toggle-aware learning create.
+            _create_learning_from_operator_reply(
+                conversation_id=customer_id, channel="whatsapp",
+                answer=operator_reply, source="reply_whatsapp_hard",
+                escalation_id=escalation_id)
 
             return {"ok": True, "reply": operator_reply,
                     "channel": "whatsapp", "role": "operator"}
@@ -3421,18 +3499,12 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
 
         state_registry.update_notification_status(escalation_id, "replied")
 
-        # Brief 215: auto-create approved learning entry from operator answer.
-        # Wrapped in try/except — never block the customer reply on a write
-        # failure here.
-        try:
-            state_registry.save_escalation_learning(
-                conversation_id=customer_id, channel="whatsapp",
-                source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
-                human_answer=req.text,
-                status="approved", ai_may_use=True)
-        except Exception as _learn_exc:
-            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
-                          escalation_id=escalation_id, source="reply_whatsapp")
+        # Brief 215 + Brief 266: toggle-aware learning create. Never blocks
+        # the customer reply on a write failure (helper handles try/except).
+        _create_learning_from_operator_reply(
+            conversation_id=customer_id, channel="whatsapp",
+            answer=req.text, source="reply_whatsapp",
+            escalation_id=escalation_id)
 
         return {"ok": True, "reply": relay_reply}
 
@@ -3466,16 +3538,11 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
 
         state_registry.update_notification_status(escalation_id, "replied")
 
-        # Brief 215: auto-create approved learning entry from operator answer.
-        try:
-            state_registry.save_escalation_learning(
-                conversation_id=customer_id, channel="email",
-                source_question=state_registry._last_customer_message_for(customer_id, "email"),
-                human_answer=operator_reply,
-                status="approved", ai_may_use=True)
-        except Exception as _learn_exc:
-            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
-                          escalation_id=escalation_id, source="reply_email")
+        # Brief 215 + Brief 266: toggle-aware learning create.
+        _create_learning_from_operator_reply(
+            conversation_id=customer_id, channel="email",
+            answer=operator_reply, source="reply_email",
+            escalation_id=escalation_id)
 
         return {"ok": True, "reply": operator_reply, "channel": "email"}
 
@@ -3553,16 +3620,11 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
 
         state_registry.update_notification_status(escalation_id, "replied")
 
-        # Brief 215: auto-create approved learning entry from operator's coaching.
-        try:
-            state_registry.save_escalation_learning(
-                conversation_id=customer_id, channel="whatsapp",
-                source_question=state_registry._last_customer_message_for(customer_id, "whatsapp"),
-                human_answer=req.text,
-                status="approved", ai_may_use=True)
-        except Exception as _learn_exc:
-            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
-                          escalation_id=escalation_id, source="guidance_whatsapp")
+        # Brief 215 + Brief 266: toggle-aware learning create.
+        _create_learning_from_operator_reply(
+            conversation_id=customer_id, channel="whatsapp",
+            answer=req.text, source="guidance_whatsapp",
+            escalation_id=escalation_id)
 
         return {"ok": True, "reply": relay_reply, "channel": "whatsapp"}
 
@@ -3625,16 +3687,11 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
 
         state_registry.update_notification_status(escalation_id, "replied")
 
-        # Brief 215: auto-create approved learning entry from operator's coaching.
-        try:
-            state_registry.save_escalation_learning(
-                conversation_id=customer_id, channel="email",
-                source_question=state_registry._last_customer_message_for(customer_id, "email"),
-                human_answer=req.text,
-                status="approved", ai_may_use=True)
-        except Exception as _learn_exc:
-            bm_logger.log("learning_write_failed", error=str(_learn_exc)[:120],
-                          escalation_id=escalation_id, source="guidance_email")
+        # Brief 215 + Brief 266: toggle-aware learning create.
+        _create_learning_from_operator_reply(
+            conversation_id=customer_id, channel="email",
+            answer=req.text, source="guidance_email",
+            escalation_id=escalation_id)
 
         return {"ok": True, "reply": relay_reply, "channel": "email"}
 
