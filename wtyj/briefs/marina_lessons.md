@@ -2931,3 +2931,26 @@ Tests: 1130 / 0 failures (1127 + 3).
 5. **The deferred-action helper docstring is documentation.** The helper's docstring explicitly says dismissed rows are NOT a duplicate match and explains why (operator can re-suggest after dismiss via re-reply). Without that explanation, a future maintainer reading the SQL `status != 'deleted'` clause might "fix" it (add `OR status = 'deleted'`) to "block re-creation after dismiss" — flipping the intended behavior. Pattern: when the SQL behavior is the OPPOSITE of what intuition suggests, the comment must say which behavior is intentional and what the alternative would look like. The lesson is "comments document intent, especially when the code looks like it could be a bug."
 
 Tests: 1136 / 0 failures (1130 + 6).
+
+
+---
+
+## Brief 267 — "Wire the toggle in" needs grep on the FRONTEND'S endpoint usage, not just the backend's existing call-site list (2026-05-12)
+
+**The bug.** Brief 266 wired the createPendingLearningFromOperatorReplies toggle into 5 reply paths — every site that already called `save_escalation_learning`. Tests passed, deploy was clean, Calvin retested and reported FAIL: toggle ON, no pending learning. Production grep then found Brief 225's `/messages/conversations/{id}/email/reply` endpoint (api.py:2074) which is the canonical Email Inbox reply endpoint — never had a `save_escalation_learning` call (no auto-learn historically), so it wasn't in Brief 266's refactor list. The Replit frontend's `replyToEmail()` hook routes here, not to `/escalations/{id}/reply`. Brief 266 missed the most-used reply surface entirely.
+
+**The fix.** Brief 267: one-line wire of the Brief 266 helper into the Brief 225 endpoint. Plus an operator-side production toggle flip via `docker exec` to unblock retest without waiting for SR's Replit Settings UI wire-up.
+
+**The lessons.**
+
+1. **"Wire X into reply paths" requires answering: which endpoints does the frontend ACTUALLY use?** I grepped the backend for `save_escalation_learning` to find the refactor targets, but the canonical-from-the-frontend-side reply endpoint was Brief 225, which had no `save_escalation_learning` call — so it didn't show up in the grep. The backend-side grep is a lossy proxy for "endpoints the frontend hits." Better approach: list every `@router.post(...reply...)` (or open the frontend's API client file directly) and check each against the spec's "operator reply paths" criteria. Brief 266 should have done this; Brief 267 caught it the expensive way.
+
+2. **Production state inspection > local test passes when a user reports FAIL.** My first reaction to Calvin's FAIL could have been "but the tests pass, are you sure?" Wrong. The right reaction is "let me look at the actual production state." `docker exec` into the live container, grep the helper presence, query the actual learning rows, inspect the actual setting value. In 2 minutes of production poking, I found: (a) the toggle is "false" not "true" (Replit UI not wired); (b) the helper IS deployed; (c) the recent learnings are all approved (legacy path, toggle effectively off); (d) the inbox-side endpoint missing wire. Production inspection delivered the diagnosis; tests would have given me a false sense of security.
+
+3. **An operator-side fix can ship alongside the brief.** Even after Brief 267 deploys, the toggle on the unboks tenant is still "false" because the Replit Settings UI doesn't write to the backend yet. Brief 267 documents an operator-side `docker exec` to set the toggle directly. This bypasses the SR dependency and lets Calvin retest immediately. Pattern: when a brief ships infrastructure that depends on a separate-team's frontend wiring, include an operator-side bypass (curl / docker exec / direct DB write) so verification doesn't block on the cross-team dependency.
+
+4. **"Why no test would have caught this"** is the right post-mortem question. My Brief 266 tests covered the helper's branching behavior + the 5 wired sites. None of them exercised the FRONTEND'S actual reply flow. To catch this kind of miss, the test suite would need an end-to-end test that simulates the frontend's specific HTTP call sequence (login → POST to the exact endpoint shape the dashboard uses). That's heavier infrastructure; for one-off endpoint wire-ups, the cost of running the frontend's actual API call sequence is high. Cheaper alternative: when shipping a "wire toggle X into Y paths" brief, the Acceptance section should list the exact endpoint URLs the frontend will hit and verify the wire-up for each.
+
+5. **Test count: 1 for a one-line wire-up is fine.** Reviewer flagged the low count as defensible because the helper's branching/dedup/empty-skip behavior is already covered by Brief 266's 6 tests. The new test exercises the new wire site end-to-end, which is what matters. Pattern: when shipping a 1-line wire that calls an already-tested helper, 1 integration test at the new site is the right test density.
+
+Tests: 1137 / 0 failures (1136 + 1).
