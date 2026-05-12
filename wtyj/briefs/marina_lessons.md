@@ -2908,3 +2908,26 @@ I chose path 2. Reason: a numbered fallback without a reply-parser is operator-m
 4. **The "Open dashboard" universal fallback button is the highest-value addition.** The escalation-specific deep-link (Brief 243) was useful but narrow — it lands on one item. The dashboard-root button is the operator's "I want to see context beyond this one thing" affordance. Cheap to add (one new branch in `_resolve_dashboard_link`), high utility (works regardless of escalation/appointment context). Pattern: when extending a feature surface, ask what the universal-action affordance would be — it's often a one-line addition with broad utility.
 
 Tests: 1130 / 0 failures (1127 + 3).
+
+
+---
+
+## Brief 266 — Operator-gated paths must NOT be silently overridden by global toggles (2026-05-12)
+
+**The bug (round 1 review caught it).** My first draft of Brief 266 routed ALL learning-create call sites through the new toggle helper, including `/escalations/{id}/resolve`. The resolve endpoint accepts `body.autoUseNextTime` + `body.category` from the operator request body. The helper had no parameters for those, so routing the resolve site through it would have silently dropped both values. The brief originally claimed "OFF = byte-identical behavior" — false claim that the reviewer caught.
+
+**The fix.** Exclude the resolve site from the refactor. The resolve site stays as-is. Only the 5 PASSIVE auto-learn paths (reply hard WA / reply soft WA / reply email / guidance WA / guidance email) go through the helper.
+
+**The lessons.**
+
+1. **Distinguish "passive auto-learn" from "operator-gated explicit save."** The 5 reply/guidance sites today fire `save_escalation_learning(... ai_may_use=True)` unconditionally on every successful reply. The operator doesn't explicitly say "save this as a learning" — it just happens. That's passive auto-learn. The resolve site is gated by `body.saveAsLearning=true` (operator opted in) AND lets the operator override `autoUseNextTime` + `category`. That's an explicit operator decision. A global toggle that overrides one type makes sense; overriding the other silently kills operator agency.
+
+2. **"OFF = byte-identical" requires verifying every parameter the original site passed.** My first draft's helper had `ai_may_use=True` hardcoded. The reply/guidance sites all hardcoded `ai_may_use=True` so the helper's hardcode matched those. The resolve site passed `ai_may_use=body.autoUseNextTime`. The helper wouldn't have known. Pattern: when a helper claims to preserve N callers' behavior, check that every call site's parameters are reproducible from the helper's signature. If any call site passes a runtime-variable parameter (like `body.autoUseNextTime`) that the helper hardcodes, that site is NOT a safe candidate for the refactor.
+
+3. **Regression test for the EXCLUDED path is load-bearing.** Brief 266 explicitly does NOT touch the resolve site. The natural risk: a future refactor or "let's unify these paths" cleanup tries to route resolve through the helper, silently breaks operator-controlled behavior. Test 6 (resolve-site regression guard) is the test that catches that. The brief's "we don't touch X" guarantee deserves a test asserting "X behaves the way we promised it would, AFTER all the changes" — not just relying on the absence of a code change.
+
+4. **Internal count consistency matters more than it seems.** Brief 266 had "5 vs 7 vs 6 sites" inconsistencies across Context, Why, Instructions, Tests, Rollback. Reviewer round 1 flagged the "7" instances. Round 2 fixed those but missed "Append 5 tests" (was 6) + "1-to-1 swap (6 sites)" (was 5) — same class of error reappeared in different sections. Pattern: a count appearing in N sections is a fact that needs to be the SAME in all N sections. Use a fixed variable in your head ("5 wired sites; 6 tests; 2 deliberately-excluded sites") and grep the brief for any digit that doesn't match the canonical number before submitting.
+
+5. **The deferred-action helper docstring is documentation.** The helper's docstring explicitly says dismissed rows are NOT a duplicate match and explains why (operator can re-suggest after dismiss via re-reply). Without that explanation, a future maintainer reading the SQL `status != 'deleted'` clause might "fix" it (add `OR status = 'deleted'`) to "block re-creation after dismiss" — flipping the intended behavior. Pattern: when the SQL behavior is the OPPOSITE of what intuition suggests, the comment must say which behavior is intentional and what the alternative would look like. The lesson is "comments document intent, especially when the code looks like it could be a bug."
+
+Tests: 1136 / 0 failures (1130 + 6).
