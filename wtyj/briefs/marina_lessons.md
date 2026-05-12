@@ -2843,3 +2843,26 @@ I chose option 2. Pattern: when shipping a backend that mirrors a frontend's har
 3. **Validation errors must be frontend-renderable.** The `_validate_sot_blocks` helper raises `ValueError` with messages like `"Block 0: content exceeds 4096 chars"` — that string lands in the HTTP 400 `detail` field unchanged and is directly renderable in a toast/banner. No translation layer between "Python error message" and "user-visible message" is necessary because the validator was written knowing its output is the operator-facing error. Pattern: when writing validation helpers, draft the error messages as if a non-coder will read them — saves a round-trip later.
 
 Tests: 1116 / 0 failures (1111 + 5).
+
+
+---
+
+## Brief 263 — Audit grep caught Brief 215's full foundation; brief became gap-closing (2026-05-12)
+
+**The bug.** Calvin's issue #32 spec asked for operator-approved learnings with full backend — pending/approved/dismissed states, suggest/edit/dismiss/approve endpoints, audit fields, prompt-path integration. The spec read like a green-field feature. Grep caught Brief 215 era had ALREADY shipped `escalation_learnings` table + `/learning/*` endpoint family + prompt-path integration via `get_approved_learnings_for_prompt`. Issue #32's actual gaps vs the existing system were small: PATCH endpoint, dismiss endpoint, three audit columns, and Calvin's preferred endpoint path naming.
+
+**The decision.** Same pattern as Brief 261 (block sender): close the gaps, preserve the existing endpoints, document the deferred product decision (the "stop auto-learning" default-flip is a separate brief). Used AskUserQuestion-style transparency in the brief Context section to surface what already exists before scoping the new work.
+
+**The lessons.**
+
+1. **The "challenge before building" rule pays off twice in three briefs.** Brief 261 caught Brief 220 had already built block-sender. Brief 263 caught Brief 215 had already built learnings. Both times the spec read like green-field; both times grep saved a full-rebuild brief. Pattern: when a brief reads end-to-end-feature, the first action is ALWAYS `grep -rn` for any helper, table, or endpoint that matches the spec's nouns. The cost of grepping is 30 seconds; the cost of rebuilding what exists is multi-hour brief + lost trust.
+
+2. **Status-term mapping at the API boundary is cheaper than a schema rename.** Brief 215 storage uses `suggested | approved | saved | deleted`. Calvin's spec uses `pending | approved | dismissed`. Two options: rename the storage column values (heavy migration, breaks legacy callers) OR map at the API boundary (translates external↔internal, costs ~10 lines of dict lookup). The boundary mapping ships in this brief; the storage stays Brief 215 native. Future briefs can flip the storage convention if needed without changing the API surface. Pattern: when external naming preferences differ from existing internal storage, prefer a boundary translator over a rename.
+
+3. **Defer product-policy decisions; ship infrastructure.** Calvin's spec implied an unwritten product rule: "stop auto-learning by default." That would mean changing `save_escalation_learning`'s default from `status='approved'` to `status='suggested'` — a behavioral shift on every active tenant, requiring Calvin's explicit per-tenant confirmation. Brief 263 ships the operator-approval surface (so Calvin can validate the UX end-to-end) BUT preserves the auto-learn default. The default-flip becomes a separate, focused product decision Calvin can make after live-testing the new flow. Pattern: a single brief that bundles "ship infrastructure" + "change default behavior" is two briefs in a trenchcoat. Split them.
+
+4. **Reviewer caught a referenced-function-doesn't-exist bug.** My first draft referenced `create_escalation_learning` six times — actual function is `save_escalation_learning`. The Brief 215 commit message had used "create" colloquially in its description but the code uses "save". Pattern: when referencing a function from memory or from a brief, always grep before writing. The CLAUDE.md "Never reference a file, function, or variable you have not read" rule applies even when the function existed in earlier briefs — the actual name as it lives in source today is the only truth.
+
+5. **Reviewer caught a hidden behavior change in legacy endpoint.** My first draft extended `update_escalation_learning_status` to record audit fields. The legacy `/learning/{id}/approve` endpoint calls this helper with two args; the new audit-field recording fires regardless. Brief originally claimed "/learning endpoints unchanged" — technically true at the API response surface but false at the DB-write layer (legacy approve now also stamps approved_at with empty operator). Brief now documents this explicitly. Pattern: when a brief claims "X is unchanged," verify the claim holds at EVERY layer (API surface, DB writes, log events). "Unchanged" is a precise word — use it carefully.
+
+Tests: 1122 / 0 failures (1116 + 6).
