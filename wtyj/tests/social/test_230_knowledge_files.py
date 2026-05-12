@@ -474,3 +474,123 @@ def test_brief_262_subsections_round_trip_intact():
     assert s2["title"] == "Soft escalation"
     assert s2["items"] == ["unknown product", "out-of-scope request"]
     assert "content" not in s2  # subsection without content stays without content
+
+
+
+# --- Brief 264: Agent learning preference settings (issue #35) ---
+
+def _reset_agent_learning_settings():
+    """Clear both Brief 264 keys so reruns start clean."""
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM system_settings WHERE key IN (?, ?)",
+                 ("agent_learning_show_suggestion",
+                  "agent_learning_create_pending_from_replies"))
+    conn.commit()
+    conn.close()
+
+
+def test_brief_264_get_returns_defaults_on_fresh_tenant():
+    """Brief 264: GET /settings/agent-learnings returns defaults
+    (show=true, create=false) when no keys exist in system_settings."""
+    _reset_agent_learning_settings()
+    token = _login()
+    r = client.get("/dashboard/api/settings/agent-learnings", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "showSuggestionAfterReplies": True,
+        "createPendingLearningFromOperatorReplies": False,
+    }
+
+
+def test_brief_264_put_persists_both_booleans():
+    """Brief 264: PUT saves both booleans; subsequent GET returns them."""
+    _reset_agent_learning_settings()
+    token = _login()
+    r = client.put(
+        "/dashboard/api/settings/agent-learnings",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"showSuggestionAfterReplies": False,
+              "createPendingLearningFromOperatorReplies": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "showSuggestionAfterReplies": False,
+        "createPendingLearningFromOperatorReplies": True,
+    }
+    # GET round-trip
+    r2 = client.get("/dashboard/api/settings/agent-learnings", headers=_auth(token))
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {
+        "showSuggestionAfterReplies": False,
+        "createPendingLearningFromOperatorReplies": True,
+    }
+
+
+def test_brief_264_put_validates_non_boolean_rejected():
+    """Brief 264: non-boolean payload returns 422 (Pydantic validation).
+    No partial save — subsequent GET returns the prior state."""
+    _reset_agent_learning_settings()
+    token = _login()
+    # First seed a valid prior state
+    client.put(
+        "/dashboard/api/settings/agent-learnings",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"showSuggestionAfterReplies": True,
+              "createPendingLearningFromOperatorReplies": False},
+    )
+    # Bad payload (string instead of bool)
+    r = client.put(
+        "/dashboard/api/settings/agent-learnings",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"showSuggestionAfterReplies": "yes",
+              "createPendingLearningFromOperatorReplies": False},
+    )
+    assert r.status_code == 422, r.text
+    # Verify no partial save - GET returns the seeded state
+    r2 = client.get("/dashboard/api/settings/agent-learnings", headers=_auth(token))
+    assert r2.status_code == 200
+    assert r2.json() == {
+        "showSuggestionAfterReplies": True,
+        "createPendingLearningFromOperatorReplies": False,
+    }
+
+
+def test_brief_264_partial_settings_use_defaults_for_missing_key():
+    """Brief 264: when one key is set and the other is missing,
+    GET returns the saved value for the set key AND the default for
+    the missing key. Proves per-key default-fallback."""
+    _reset_agent_learning_settings()
+    # Directly set ONE key only
+    state_registry.set_setting("agent_learning_create_pending_from_replies", "true")
+    token = _login()
+    r = client.get("/dashboard/api/settings/agent-learnings", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # show -> default true (not set)
+    assert body["showSuggestionAfterReplies"] is True
+    # create -> saved true (set directly)
+    assert body["createPendingLearningFromOperatorReplies"] is True
+
+
+def test_brief_264_no_downstream_wire_up_yet():
+    """Brief 264 load-bearing: toggling createPendingLearningFromOperatorReplies
+    does NOT auto-create any learnings. The wire-up at the reply path is
+    explicitly deferred to a follow-up brief; Brief 264 only stores the setting."""
+    _reset_agent_learning_settings()
+    # Count suggested learnings before
+    before = state_registry.list_escalation_learnings(status="suggested")
+    before_count = len(before)
+    token = _login()
+    # PUT the toggle on
+    r = client.put(
+        "/dashboard/api/settings/agent-learnings",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"showSuggestionAfterReplies": True,
+              "createPendingLearningFromOperatorReplies": True},
+    )
+    assert r.status_code == 200, r.text
+    # Count suggested learnings after
+    after = state_registry.list_escalation_learnings(status="suggested")
+    assert len(after) == before_count, (
+        f"toggling the setting must NOT auto-create learnings "
+        f"(before={before_count}, after={len(after)})")

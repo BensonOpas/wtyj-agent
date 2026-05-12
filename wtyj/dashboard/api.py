@@ -13,7 +13,7 @@ import anthropic
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
@@ -1563,6 +1563,71 @@ async def put_source_of_truth(req: SourceOfTruthRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     saved = state_registry.source_of_truth_set(cleaned)
     return {"blocks": saved}
+
+
+# === Brief 264: Agent learning preference settings (issue #35) ===
+# Two tenant-scoped booleans persisted via the existing system_settings
+# key-value table. No schema change. Brief 264 only STORES the settings;
+# the downstream wire-up (auto-create pending learnings from operator
+# replies when createPendingLearningFromOperatorReplies is true) is
+# deferred to a follow-up brief.
+
+_AGENT_LEARNING_SETTING_SHOW = "agent_learning_show_suggestion"
+_AGENT_LEARNING_SETTING_CREATE_PENDING = "agent_learning_create_pending_from_replies"
+_AGENT_LEARNING_DEFAULTS = {
+    "showSuggestionAfterReplies": True,
+    "createPendingLearningFromOperatorReplies": False,
+}
+
+
+def _read_agent_learning_settings() -> dict:
+    """Brief 264: read both Agent learning toggles from system_settings,
+    parse stored TEXT values back to Python bools, fall back to defaults
+    when key is missing. Returns the camelCase shape the frontend expects."""
+    show_raw = state_registry.get_setting(_AGENT_LEARNING_SETTING_SHOW, "")
+    create_raw = state_registry.get_setting(_AGENT_LEARNING_SETTING_CREATE_PENDING, "")
+    return {
+        "showSuggestionAfterReplies": (
+            show_raw == "true" if show_raw
+            else _AGENT_LEARNING_DEFAULTS["showSuggestionAfterReplies"]
+        ),
+        "createPendingLearningFromOperatorReplies": (
+            create_raw == "true" if create_raw
+            else _AGENT_LEARNING_DEFAULTS["createPendingLearningFromOperatorReplies"]
+        ),
+    }
+
+
+@router.get("/settings/agent-learnings",
+            dependencies=[Depends(_check_auth)])
+async def get_agent_learning_settings():
+    """Brief 264: load tenant Agent learning preference settings.
+    Returns defaults for any setting not yet saved (fresh tenant)."""
+    return _read_agent_learning_settings()
+
+
+class AgentLearningSettingsRequest(BaseModel):
+    # Brief 264: StrictBool rejects string coercion ("yes" / "1" etc.)
+    # so a non-bool payload fails Pydantic validation -> HTTP 422 per
+    # Calvin's "invalid payload returns safe 400/422" requirement.
+    showSuggestionAfterReplies: StrictBool
+    createPendingLearningFromOperatorReplies: StrictBool
+
+
+@router.put("/settings/agent-learnings",
+            dependencies=[Depends(_check_auth)])
+async def put_agent_learning_settings(req: AgentLearningSettingsRequest):
+    """Brief 264: save tenant Agent learning preference settings.
+    Pydantic enforces booleans on the way in (HTTP 422 on type mismatch);
+    helper stringifies for system_settings storage. Returns the
+    canonical saved state."""
+    state_registry.set_setting(
+        _AGENT_LEARNING_SETTING_SHOW,
+        "true" if req.showSuggestionAfterReplies else "false")
+    state_registry.set_setting(
+        _AGENT_LEARNING_SETTING_CREATE_PENDING,
+        "true" if req.createPendingLearningFromOperatorReplies else "false")
+    return _read_agent_learning_settings()
 
 
 @router.delete("/knowledge/files/{file_id}",
