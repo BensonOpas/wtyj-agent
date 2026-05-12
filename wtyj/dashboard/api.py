@@ -2563,39 +2563,67 @@ def _resolve_dashboard_link(item_kind: str, item_id: int) -> str:
         path = "escalations"
     elif item_kind == "appointment":
         path = "appointments"
+    elif item_kind == "dashboard":
+        # Brief 265: top-level tenant dashboard root for the "Open dashboard"
+        # action button. No item id appended; the frontend's slug landing
+        # page handles the bare URL.
+        return f"{base}/{slug}"
     else:
         return ""  # unknown item kind — defensive
     return f"{base}/{slug}/{path}/{item_id}"
 
 
-def _build_alert_html_body(text_body: str, link_url: str,
-                            link_label: str) -> str:
-    """Brief 243: render the plain-text alert body as HTML with a CTA
-    button + fallback URL. Inline CSS only (Gmail-safe). The text body
-    is wrapped in <pre> to preserve operator at-a-glance scan layout.
+def _build_alert_html_body(text_body: str, link_url: str = "",
+                            link_label: str = "",
+                            buttons: list = None) -> str:
+    """Brief 243 + Brief 265: render the plain-text alert body as HTML
+    with one or more inline CTA buttons + plain-text fallback URLs.
+    Inline CSS only (Gmail-safe). The text body is wrapped in <pre> to
+    preserve operator at-a-glance scan layout.
+
+    Backward compat: callers passing (text_body, link_url, link_label)
+    positionally get a single-button render (Brief 243 behavior). New
+    callers can pass `buttons=[(url, label), ...]` for a horizontal
+    multi-button row. The "Plain link:" fallback lists EVERY URL
+    one per line so text-only mail clients still get each link.
 
     Button styling: blue #1a73e8 background, white text, 12px padding,
-    4px border-radius, no underline, sans-serif font. Works in Gmail,
-    Outlook, Apple Mail, mobile clients."""
+    4px border-radius, no underline, sans-serif font, 8px right margin
+    between buttons. Works in Gmail, Outlook, Apple Mail, mobile clients."""
     import html as _html
+    # Normalize buttons input: prefer the `buttons` kwarg; fall back to
+    # the single (link_url, link_label) pair for Brief 243 backward compat.
+    if buttons is None:
+        buttons = []
+        if link_url:
+            buttons.append((link_url, link_label or "Open dashboard"))
     safe_text = _html.escape(text_body or "")
-    safe_url = _html.escape(link_url or "", quote=True)
-    safe_label = _html.escape(link_label or "Open dashboard")
+    button_html_parts = []
+    plain_link_parts = []
+    for url, label in buttons:
+        safe_url = _html.escape(url or "", quote=True)
+        safe_label = _html.escape(label or "Open dashboard")
+        button_html_parts.append(
+            f"<a href=\"{safe_url}\" "
+            f"style=\"display: inline-block; background-color: #1a73e8; "
+            f"color: #ffffff; text-decoration: none; padding: 12px 24px; "
+            f"border-radius: 4px; font-weight: 500; margin-right: 8px; "
+            f"margin-bottom: 8px;\">{safe_label}</a>"
+        )
+        plain_link_parts.append(
+            f"<a href=\"{safe_url}\" style=\"color: #1a73e8;\">{safe_url}</a>"
+        )
+    buttons_block = "".join(button_html_parts) if button_html_parts else ""
+    plain_links_block = "<br>".join(plain_link_parts) if plain_link_parts else ""
     return (
         "<!DOCTYPE html>"
         "<html><body style=\"font-family: -apple-system, BlinkMacSystemFont, "
         "'Segoe UI', Roboto, sans-serif; color: #202124;\">"
         f"<pre style=\"font-family: inherit; white-space: pre-wrap; "
         f"font-size: 14px; margin: 0 0 16px 0;\">{safe_text}</pre>"
-        f"<p style=\"margin: 16px 0;\">"
-        f"<a href=\"{safe_url}\" "
-        f"style=\"display: inline-block; background-color: #1a73e8; "
-        f"color: #ffffff; text-decoration: none; padding: 12px 24px; "
-        f"border-radius: 4px; font-weight: 500;\">{safe_label}</a>"
-        f"</p>"
+        f"<p style=\"margin: 16px 0;\">{buttons_block}</p>"
         f"<p style=\"font-size: 12px; color: #5f6368; margin: 16px 0 0 0;\">"
-        f"Plain link:<br>"
-        f"<a href=\"{safe_url}\" style=\"color: #1a73e8;\">{safe_url}</a>"
+        f"Plain link:<br>{plain_links_block}"
         f"</p>"
         "</body></html>"
     )
@@ -2646,10 +2674,17 @@ def _fire_appointment_alerts(appointment_id: int, customer_name: str,
             # outside the per-recipient loop. Empty string when tenant
             # config lacks business.slug or business.dashboard_url —
             # smtp_send falls back to plain text only.
-            _link_url = _resolve_dashboard_link("appointment", appointment_id)
+            # Brief 265: 2 buttons - Open appointment + Open dashboard
+            _appt_link = _resolve_dashboard_link("appointment", appointment_id)
+            _dash_link = _resolve_dashboard_link("dashboard", 0)
+            _buttons = []
+            if _appt_link:
+                _buttons.append((_appt_link, "Open appointment"))
+            if _dash_link:
+                _buttons.append((_dash_link, "Open dashboard"))
             _html_body = (
-                _build_alert_html_body(alert_text, _link_url, "Open appointment")
-                if _link_url else None
+                _build_alert_html_body(alert_text, buttons=_buttons)
+                if _buttons else None
             )
             for dest in recipients:
                 if state_registry.appointment_alert_already_sent(
@@ -2785,10 +2820,17 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
             # the per-recipient loop. Empty string when tenant config
             # lacks business.slug or business.dashboard_url — smtp_send
             # falls back to plain text only.
-            _link_url = _resolve_dashboard_link("escalation", escalation_id)
+            # Brief 265: 2 buttons - Open escalation + Open dashboard
+            _esc_link = _resolve_dashboard_link("escalation", escalation_id)
+            _dash_link = _resolve_dashboard_link("dashboard", 0)
+            _buttons = []
+            if _esc_link:
+                _buttons.append((_esc_link, "Open escalation"))
+            if _dash_link:
+                _buttons.append((_dash_link, "Open dashboard"))
             _html_body = (
-                _build_alert_html_body(alert_text, _link_url, "Open escalation")
-                if _link_url else None
+                _build_alert_html_body(alert_text, buttons=_buttons)
+                if _buttons else None
             )
             for dest in recipients:
                 try:

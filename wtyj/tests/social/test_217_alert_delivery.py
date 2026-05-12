@@ -1324,3 +1324,72 @@ def test_brief_257_wa_alert_omits_latest_when_latestCustomerMessage_starts_with_
             f"latestCustomerMessage starts with internal prefix; got body for "
             f"input {prefix_msg!r}: {body!r}"
         )
+
+
+
+# --- Brief 265: email alert multi-button row (issue #33 Part A) ---
+
+def test_brief_265_email_alert_renders_two_buttons():
+    """Brief 265: _build_alert_html_body with `buttons` kwarg renders
+    BOTH button anchors AND both URLs in the plain-link fallback
+    section. Total <a> count = 2 buttons + 2 fallback links = 4."""
+    from dashboard import api as dapi
+    html = dapi._build_alert_html_body(
+        "Test escalation body",
+        buttons=[
+            ("https://dash.test/u/escalations/42", "Open escalation"),
+            ("https://dash.test/u", "Open dashboard"),
+        ],
+    )
+    # Both button labels rendered
+    assert ">Open escalation<" in html
+    assert ">Open dashboard<" in html
+    # Both URLs reachable in the plain-link fallback (text-only mail clients
+    # see them via the rendered href even if buttons don't render)
+    assert "https://dash.test/u/escalations/42" in html
+    assert 'href="https://dash.test/u"' in html
+    # Exact anchor count: 2 buttons + 2 fallback links
+    assert html.count("<a ") == 4, (
+        f"expected 4 anchors (2 buttons + 2 fallback links); got {html.count('<a ')}")
+
+
+def test_brief_265_email_alert_backward_compat_single_button():
+    """Brief 265: callers using the Brief 243 (link_url, link_label)
+    positional signature continue to render a single button + single
+    fallback link. Backward compat preserved."""
+    from dashboard import api as dapi
+    html = dapi._build_alert_html_body(
+        "Test body",
+        link_url="https://dash.test/single",
+        link_label="View",
+    )
+    assert ">View<" in html
+    assert "https://dash.test/single" in html
+    # Exactly 2 anchors: 1 button + 1 fallback link
+    assert html.count("<a ") == 2, (
+        f"expected 2 anchors (1 button + 1 fallback); got {html.count('<a ')}")
+    # No leaked "Open dashboard" default label
+    assert ">Open dashboard<" not in html
+
+
+def test_brief_265_resolve_dashboard_link_supports_dashboard_root(monkeypatch):
+    """Brief 265: _resolve_dashboard_link("dashboard", 0) returns the
+    bare {base}/{slug} URL (no /dashboard/0 suffix). Regression guard
+    for the existing escalation/appointment branches in the same call."""
+    from dashboard import api as dapi
+    from shared import config_loader
+    monkeypatch.setattr(
+        config_loader, "get_business",
+        lambda: {"slug": "unboks", "dashboard_url": "https://dashboard.unboks.org"},
+    )
+    # Brief 265 dashboard root
+    assert dapi._resolve_dashboard_link("dashboard", 0) == (
+        "https://dashboard.unboks.org/unboks")
+    # Regression: existing escalation branch
+    assert dapi._resolve_dashboard_link("escalation", 42) == (
+        "https://dashboard.unboks.org/unboks/escalations/42")
+    # Regression: existing appointment branch
+    assert dapi._resolve_dashboard_link("appointment", 7) == (
+        "https://dashboard.unboks.org/unboks/appointments/7")
+    # Unknown kind still returns empty (defensive)
+    assert dapi._resolve_dashboard_link("bogus", 1) == ""
