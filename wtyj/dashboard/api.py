@@ -2636,23 +2636,51 @@ async def handback_escalation(escalation_id: int):
 
 # ── Brief 220: Block conversation (per-conversation runtime drop) ────────────
 
+# Brief 261: optional body for the block endpoint - captures audit
+# context (reason + blocked_by) per issue #30. Both fields optional;
+# backward compatible with any existing frontend caller that POSTs
+# without a body.
+class BlockRequest(BaseModel):
+    reason: str = ""
+    blocked_by: str = ""
+
+
 @router.post("/messages/conversations/{conversation_id:path}/block",
              dependencies=[Depends(_check_auth)])
-async def block_conversation(conversation_id: str):
+async def block_conversation(conversation_id: str,
+                              req: BlockRequest = BlockRequest()):
     """Brief 220: silence this conversation. Future messages from this
     conversation_id will be dropped at webhook ingestion before any
-    storage call, so the conversation does NOT appear in the inbox."""
+    storage call, so the conversation does NOT appear in the inbox.
+
+    Brief 261: optional JSON body {reason, blocked_by} captured as
+    audit fields on the conversation_status row + emitted into the
+    bm_logger event. Both fields default to empty string; absent body
+    keeps backward-compatible behavior."""
     if not conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id required")
-    state_registry.set_blocked(conversation_id, True)
-    bm_logger.log("conversation_blocked", conversation_id=conversation_id[:50])
-    return {"ok": True, "conversationId": conversation_id, "blocked": True}
+    state_registry.set_blocked(conversation_id, True,
+                                reason=req.reason,
+                                blocked_by=req.blocked_by)
+    bm_logger.log("conversation_blocked",
+                   conversation_id=conversation_id[:50],
+                   reason=(req.reason or "")[:50],
+                   blocked_by=(req.blocked_by or "")[:50])
+    return {
+        "ok": True,
+        "conversationId": conversation_id,
+        "blocked": True,
+        "reason": req.reason,
+        "blockedBy": req.blocked_by,
+    }
 
 
 @router.post("/messages/conversations/{conversation_id:path}/unblock",
              dependencies=[Depends(_check_auth)])
 async def unblock_conversation(conversation_id: str):
-    """Brief 220: clear the block flag so future messages flow normally."""
+    """Brief 220: clear the block flag so future messages flow normally.
+    Brief 261: also clears the reason + blocked_by audit fields so a
+    future re-block doesn't inherit stale context."""
     if not conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id required")
     state_registry.set_blocked(conversation_id, False)
@@ -2664,7 +2692,20 @@ async def unblock_conversation(conversation_id: str):
             dependencies=[Depends(_check_auth)])
 async def get_blocked_conversations_endpoint():
     """Brief 220: list of currently-blocked conversations for the
-    Settings → Blocked Conversations management list."""
+    Settings -> Blocked Conversations management list.
+    Brief 261: each row now includes reason + blockedBy audit fields."""
+    return {"conversations": state_registry.list_blocked_conversations()}
+
+
+@router.get("/blocked-senders",
+            dependencies=[Depends(_check_auth)])
+async def list_blocked_senders():
+    """Brief 261: alias of /settings/blocked-conversations matching the
+    endpoint path from issue #30. Returns byte-identical JSON to the
+    existing handler (same envelope `{"conversations": [...]}`, same
+    camelCase row shape `conversationId/channel/updatedAt/reason/blockedBy`).
+    Exists purely so SR's Replit frontend can adopt Calvin's preferred
+    /blocked-senders path without a backend rename."""
     return {"conversations": state_registry.list_blocked_conversations()}
 
 

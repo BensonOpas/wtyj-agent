@@ -343,6 +343,18 @@ def _get_conn():
         conn.execute("ALTER TABLE conversation_status ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # Brief 261: conversation_status.reason + blocked_by (audit fields
+    # for the Block sender flow per issue #30). Both nullable TEXT;
+    # cleared on unblock. Idempotent ALTER for safe re-execution on
+    # existing tenant DBs.
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN reason TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN blocked_by TEXT")
+    except sqlite3.OperationalError:
+        pass
     # Brief 249: conversation_status.deleted (archived state for the
     # WhatsApp/IG/FB inbox). Brief 237 introduced read+write of this
     # column without a migration -- silently broken since it shipped.
@@ -1156,6 +1168,15 @@ def email_list_conversations() -> list:
         # from the active inbox; provider-side cleanup is a follow-up).
         if flags.get("deleted"):
             continue
+        # Brief 261: skip threads whose customer email is blocked
+        # (issue #30 - the inbound suppression at email_poller.py:685
+        # already blocks new mail, this hides the existing thread row
+        # from the active inbox). Extract email from thread_key shape
+        # "subj:<email>:<normalized_subject>".
+        _tk_parts = thread_key.split(":", 2)
+        if len(_tk_parts) >= 2 and _tk_parts[0] == "subj":
+            if get_blocked(_tk_parts[1]):
+                continue
         status = "escalated" if flags.get("fully_escalated") or flags.get("awaiting_relay") else "active"
         result.append({
             "phone": f"email::{thread_key}",
@@ -1529,8 +1550,11 @@ def wa_list_conversations() -> list:
         # Brief 249: exclude conversations marked archived
         # (conversation_status.deleted=1 set by Brief 237's bulk sweep
         # OR by Brief 249's manual archive endpoint).
+        # Brief 261: exclude blocked (cs.blocked=1) so blocked senders
+        # disappear from the active Inbox list per issue #30.
         "LEFT JOIN conversation_status cs ON t.phone = cs.conversation_id "
-        "WHERE cs.deleted IS NULL OR cs.deleted = 0 "
+        "WHERE (cs.deleted IS NULL OR cs.deleted = 0) "
+        "AND (cs.blocked IS NULL OR cs.blocked = 0) "
         "ORDER BY t.created_at DESC"
     ).fetchall()
 
@@ -1852,23 +1876,35 @@ def set_ai_muted(conversation_id: str, muted: bool, channel: str = "whatsapp") -
     conn.close()
 
 
-def set_blocked(conversation_id: str, blocked: bool, channel: str = ""):
+def set_blocked(conversation_id: str, blocked: bool, channel: str = "",
+                 reason: str = "", blocked_by: str = ""):
     """Brief 220: flip the per-conversation blocked flag. Different from
     ai_muted: blocked drops inbound messages BEFORE any storage so the
     conversation doesn't appear in the dashboard inbox at all.
     UPSERT pattern matching set_ai_muted; channel is required for INSERT
-    but ignored on UPDATE (existing rows keep their channel)."""
+    but ignored on UPDATE (existing rows keep their channel).
+
+    Brief 261: optional `reason` (spam / abusive / wrong_contact / other
+    or free-form) and `blocked_by` (operator label) audit fields per
+    issue #30. Cleared to empty string on unblock so a future block
+    event doesn't inherit stale audit context from the prior block."""
     if not conversation_id:
         return
     now = datetime.now(timezone.utc).isoformat()
+    _reason = (reason or "") if blocked else ""
+    _blocked_by = (blocked_by or "") if blocked else ""
     conn = _get_conn()
     conn.execute(
         "INSERT INTO conversation_status "
-        "(conversation_id, channel, status, blocked, updated_at) "
-        "VALUES (?, ?, 'pending', ?, ?) "
+        "(conversation_id, channel, status, blocked, reason, blocked_by, updated_at) "
+        "VALUES (?, ?, 'pending', ?, ?, ?, ?) "
         "ON CONFLICT(conversation_id) DO UPDATE SET "
-        "blocked = excluded.blocked, updated_at = excluded.updated_at",
-        (conversation_id, channel or "", 1 if blocked else 0, now))
+        "blocked = excluded.blocked, "
+        "reason = excluded.reason, "
+        "blocked_by = excluded.blocked_by, "
+        "updated_at = excluded.updated_at",
+        (conversation_id, channel or "", 1 if blocked else 0,
+         _reason, _blocked_by, now))
     conn.commit()
     conn.close()
 
@@ -1887,16 +1923,28 @@ def get_blocked(conversation_id: str) -> bool:
 
 
 def list_blocked_conversations() -> list:
-    """Brief 220: return all currently-blocked conversations for the
-    dashboard's Settings → Blocked Conversations management list.
-    Each row carries camelCase keys: conversationId, channel, updatedAt."""
+    """Brief 220 + Brief 261: return all currently-blocked conversations
+    for the dashboard's Settings -> Blocked Conversations management list
+    AND for the /blocked-senders alias added by Brief 261.
+
+    Each row carries camelCase keys for backward compatibility:
+    - Existing Brief 220: conversationId, channel, updatedAt.
+    - Brief 261 additions: reason, blockedBy (empty strings when audit
+      fields were never set or cleared on unblock)."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT conversation_id, channel, updated_at FROM conversation_status "
-        "WHERE blocked = 1 ORDER BY updated_at DESC").fetchall()
+        "SELECT conversation_id, channel, updated_at, reason, blocked_by "
+        "FROM conversation_status WHERE blocked = 1 "
+        "ORDER BY updated_at DESC").fetchall()
     conn.close()
     return [
-        {"conversationId": r[0], "channel": r[1] or "", "updatedAt": r[2]}
+        {
+            "conversationId": r[0],
+            "channel": r[1] or "",
+            "updatedAt": r[2],
+            "reason": r[3] or "",
+            "blockedBy": r[4] or "",
+        }
         for r in rows
     ]
 

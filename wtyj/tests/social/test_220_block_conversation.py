@@ -191,3 +191,207 @@ def test_get_blocked_conversations_returns_response_shape():
             assert isinstance(row.get("updatedAt"), str)
     finally:
         _wipe_220()
+
+
+
+# --- Brief 261: close 4 Brief 220 gaps (reason, blocked_by, inbox filtering, /blocked-senders alias) ---
+
+def _wipe_261():
+    """Drop 261_-prefixed conversation_status rows so reruns don't accumulate."""
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM conversation_status WHERE conversation_id LIKE '261_%'")
+    conn.commit()
+    conn.close()
+
+
+def test_brief_261_set_blocked_persists_reason_and_blocked_by():
+    """Brief 261 gap 2+3: set_blocked() now accepts and persists reason +
+    blocked_by audit fields. list_blocked_conversations() surfaces them
+    via the new camelCase keys reason + blockedBy (alongside the existing
+    Brief 220 camelCase keys conversationId / channel / updatedAt)."""
+    from shared import state_registry
+    try:
+        _wipe_261()
+        state_registry.set_blocked("261_audit_test", True,
+                                    channel="email",
+                                    reason="spam",
+                                    blocked_by="calvin")
+        rows = state_registry.list_blocked_conversations()
+        ours = [r for r in rows if r["conversationId"] == "261_audit_test"]
+        assert len(ours) == 1, f"expected 1 row, got {len(ours)}"
+        row = ours[0]
+        assert row["reason"] == "spam"
+        assert row["blockedBy"] == "calvin"
+        # Brief 220 camelCase fields preserved unchanged
+        assert row["channel"] == "email"
+        assert isinstance(row["updatedAt"], str)
+    finally:
+        _wipe_261()
+
+
+def test_brief_261_unblock_clears_reason_and_blocked_by():
+    """Brief 261: unblock clears reason + blocked_by so a future re-block
+    doesn't inherit stale audit context."""
+    from shared import state_registry
+    try:
+        _wipe_261()
+        state_registry.set_blocked("261_clear_test", True,
+                                    channel="email",
+                                    reason="abusive",
+                                    blocked_by="op1")
+        # Verify set
+        rows = state_registry.list_blocked_conversations()
+        assert any(r["conversationId"] == "261_clear_test" for r in rows)
+        # Unblock
+        state_registry.set_blocked("261_clear_test", False)
+        # Verify gone from blocked list
+        rows = state_registry.list_blocked_conversations()
+        assert not any(r["conversationId"] == "261_clear_test" for r in rows)
+        # Verify audit fields cleared on the row (direct SQL inspection)
+        conn = state_registry._get_conn()
+        sql_row = conn.execute(
+            "SELECT reason, blocked_by FROM conversation_status "
+            "WHERE conversation_id = ?", ("261_clear_test",)).fetchone()
+        conn.close()
+        assert sql_row[0] == "", f"reason should be empty, got {sql_row[0]!r}"
+        assert sql_row[1] == "", f"blocked_by should be empty, got {sql_row[1]!r}"
+    finally:
+        _wipe_261()
+
+
+def test_brief_261_wa_list_conversations_filters_blocked():
+    """Brief 261 gap 1: wa_list_conversations() must exclude blocked
+    conversations from the active inbox list."""
+    from shared import state_registry
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    test_phone = "261_wa_block_test"
+    conn = state_registry._get_conn()
+    # Seed a WA thread row
+    conn.execute(
+        "INSERT INTO whatsapp_threads "
+        "(phone, role, text, sender_name, channel, created_at) "
+        "VALUES (?, 'user', ?, ?, 'whatsapp', ?)",
+        (test_phone, "hi from blocked", "Test", now_iso))
+    conn.commit()
+    conn.close()
+    try:
+        _wipe_261()
+        # Pre-block: appears
+        listings = state_registry.wa_list_conversations()
+        phones = [c["phone"] for c in listings]
+        assert test_phone in phones, f"WA conv should appear before block; got {phones[:5]}"
+        # Block
+        state_registry.set_blocked(test_phone, True, channel="whatsapp",
+                                    reason="spam", blocked_by="op")
+        # Post-block: filtered out
+        listings = state_registry.wa_list_conversations()
+        phones = [c["phone"] for c in listings]
+        assert test_phone not in phones, f"WA conv should be filtered when blocked"
+        # Unblock: reappears
+        state_registry.set_blocked(test_phone, False)
+        listings = state_registry.wa_list_conversations()
+        phones = [c["phone"] for c in listings]
+        assert test_phone in phones, "WA conv should reappear after unblock"
+    finally:
+        conn = state_registry._get_conn()
+        conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (test_phone,))
+        conn.commit()
+        conn.close()
+        _wipe_261()
+
+
+def test_brief_261_email_list_conversations_filters_blocked(monkeypatch, tmp_path):
+    """Brief 261 gap 1: email_list_conversations() must exclude threads
+    whose customer email is blocked. The check extracts the email from
+    the thread_key shape `subj:<email>:<normalized_subject>` and calls
+    get_blocked(email)."""
+    import json
+    from shared import state_registry
+    from datetime import datetime, timezone
+    # Seed tmp email_thread_state.json with one thread
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps({
+        "threads": {
+            "subj:spam_sender_261@example.com:annoying": {
+                "fields": {"customer_name": "Spammer"},
+                "flags": {},
+                "messages": [
+                    {"role": "customer", "body": "buy now!",
+                     "ts": datetime.now(timezone.utc).isoformat()}
+                ],
+            }
+        },
+        "message_id_index": {},
+        "sender_rates": {},
+    }))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+    try:
+        _wipe_261()
+        # Pre-block: appears
+        listings = state_registry.email_list_conversations()
+        keys = [c["phone"] for c in listings]
+        assert any("spam_sender_261@example.com" in k for k in keys), (
+            f"email thread should appear before block; got {keys}")
+        # Block the email sender
+        state_registry.set_blocked("spam_sender_261@example.com", True,
+                                    channel="email", reason="spam")
+        # Post-block: filtered out
+        listings = state_registry.email_list_conversations()
+        keys = [c["phone"] for c in listings]
+        assert not any("spam_sender_261@example.com" in k for k in keys), (
+            f"email thread should be filtered when blocked; got {keys}")
+        # Unblock: reappears
+        state_registry.set_blocked("spam_sender_261@example.com", False)
+        listings = state_registry.email_list_conversations()
+        keys = [c["phone"] for c in listings]
+        assert any("spam_sender_261@example.com" in k for k in keys), (
+            f"email thread should reappear after unblock; got {keys}")
+    finally:
+        _wipe_261()
+
+
+def test_brief_261_block_endpoint_accepts_reason_and_blocked_by_body():
+    """Brief 261 gap 2+3+4: POST /messages/conversations/{id}/block accepts
+    optional JSON body with reason + blocked_by. GET /blocked-senders is
+    an alias of /settings/blocked-conversations that returns the same
+    wrapped envelope `{"conversations": [...]}` with camelCase row keys
+    extended by reason + blockedBy."""
+    try:
+        _wipe_261()
+        token = _login()
+        # POST with body
+        r = client.post(
+            "/dashboard/api/messages/conversations/261_endpoint_test/block",
+            headers=_auth(token),
+            json={"reason": "abusive", "blocked_by": "calvin"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["conversationId"] == "261_endpoint_test"
+        assert body["blocked"] is True
+        assert body["reason"] == "abusive"
+        assert body["blockedBy"] == "calvin"
+        # GET /blocked-senders should return the row with the audit fields
+        r2 = client.get("/dashboard/api/blocked-senders", headers=_auth(token))
+        assert r2.status_code == 200, r2.text
+        envelope = r2.json()
+        assert "conversations" in envelope, f"expected wrapped envelope, got {envelope}"
+        rows = envelope["conversations"]
+        ours = [c for c in rows if c["conversationId"] == "261_endpoint_test"]
+        assert len(ours) == 1
+        assert ours[0]["reason"] == "abusive"
+        assert ours[0]["blockedBy"] == "calvin"
+        # GET /settings/blocked-conversations should return byte-identical shape
+        r3 = client.get(
+            "/dashboard/api/settings/blocked-conversations",
+            headers=_auth(token))
+        assert r3.status_code == 200, r3.text
+        assert r3.json() == envelope, (
+            "/blocked-senders and /settings/blocked-conversations should "
+            "return byte-identical JSON per Brief 261 alias contract")
+    finally:
+        _wipe_261()
