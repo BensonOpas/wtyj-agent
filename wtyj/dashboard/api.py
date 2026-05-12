@@ -1080,6 +1080,146 @@ async def list_knowledge_files():
     return state_registry.knowledge_files_list()
 
 
+# === Brief 260: cloud knowledge connector status endpoint ===
+# Reads env-var presence + oauth_tokens row presence to compute per-provider
+# status. Does NOT modify the existing Brief 196 Google Drive OAuth flow
+# (which is wired to photos). See marina_brief_260_*.md for the full design
+# and the OAuth-app-registration steps required before OneDrive / Dropbox
+# can flip from `not_configured` to `setup_required`.
+
+
+def _google_drive_connection_status() -> dict:
+    """Brief 260: Google Drive provider status. `connected` requires both
+    GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET env vars present
+    AND a stored token row keyed by 'google_drive'. The token row is
+    shared with the existing photos OAuth flow at /google/auth - reading
+    is non-destructive."""
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    base = {
+        "provider": "google_drive",
+        "label": "Google Drive",
+        "blurb": "Docs, Sheets, PDFs, menus.",
+    }
+    if not (client_id and client_secret):
+        return {
+            **base,
+            "status": "not_configured",
+            "needs_provider_app_registration": True,
+        }
+    tokens = state_registry.get_oauth_tokens("google_drive")
+    if not tokens:
+        return {
+            **base,
+            "status": "setup_required",
+            "needs_provider_app_registration": False,
+        }
+    result = {
+        **base,
+        "status": "connected",
+        "needs_provider_app_registration": False,
+    }
+    folder_id = tokens.get("folder_id") or ""
+    if folder_id:
+        result["folder_name"] = folder_id  # frontend can resolve via /google/folders
+    last_synced = tokens.get("updated_at") or ""
+    if last_synced:
+        result["last_synced_at"] = last_synced
+    return result
+
+
+def _onedrive_connection_status() -> dict:
+    """Brief 260: OneDrive provider status. Reads ONEDRIVE_OAUTH_CLIENT_ID
+    + ONEDRIVE_OAUTH_CLIENT_SECRET env vars. No OAuth flow exists yet;
+    when env vars are absent the status is `not_configured` and Calvin
+    must register an Azure AD app + set the env vars before this can
+    flip to `setup_required`. See Brief 260 OUTPUT for setup steps."""
+    client_id = os.environ.get("ONEDRIVE_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("ONEDRIVE_OAUTH_CLIENT_SECRET", "")
+    base = {
+        "provider": "onedrive",
+        "label": "OneDrive",
+        "blurb": "Word, Excel, PDFs from Microsoft 365.",
+    }
+    if not (client_id and client_secret):
+        return {
+            **base,
+            "status": "not_configured",
+            "needs_provider_app_registration": True,
+        }
+    tokens = state_registry.get_oauth_tokens("onedrive")
+    if not tokens:
+        return {
+            **base,
+            "status": "setup_required",
+            "needs_provider_app_registration": False,
+        }
+    return {
+        **base,
+        "status": "connected",
+        "needs_provider_app_registration": False,
+    }
+
+
+def _dropbox_connection_status() -> dict:
+    """Brief 260: Dropbox provider status. Reads DROPBOX_OAUTH_CLIENT_ID
+    + DROPBOX_OAUTH_CLIENT_SECRET env vars. No OAuth flow exists yet;
+    when env vars are absent the status is `not_configured` and Calvin
+    must register a Dropbox developer-console app + set the env vars
+    before this can flip to `setup_required`. See Brief 260 OUTPUT."""
+    client_id = os.environ.get("DROPBOX_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("DROPBOX_OAUTH_CLIENT_SECRET", "")
+    base = {
+        "provider": "dropbox",
+        "label": "Dropbox",
+        "blurb": "Shared folders with policies and price lists.",
+    }
+    if not (client_id and client_secret):
+        return {
+            **base,
+            "status": "not_configured",
+            "needs_provider_app_registration": True,
+        }
+    tokens = state_registry.get_oauth_tokens("dropbox")
+    if not tokens:
+        return {
+            **base,
+            "status": "setup_required",
+            "needs_provider_app_registration": False,
+        }
+    return {
+        **base,
+        "status": "connected",
+        "needs_provider_app_registration": False,
+    }
+
+
+@router.get("/knowledge/cloud-connections",
+            dependencies=[Depends(_check_auth)])
+async def list_cloud_connections():
+    """Brief 260: return the supported cloud knowledge connector providers
+    and their per-tenant status. Issue #29 narrows the supported set to
+    Google Drive, OneDrive, Dropbox; SharePoint and Box are excluded.
+
+    Status per provider:
+    - `connected`: OAuth env vars present AND tokens stored in oauth_tokens.
+    - `setup_required`: OAuth env vars present but no tokens yet (operator
+      can click Connect to start the OAuth flow).
+    - `not_configured`: OAuth env vars missing on this deploy (provider-app
+      registration + env vars required before Connect can do anything).
+      UI should show this as a disabled card with a "Setup pending" note.
+
+    Order is fixed (Google, OneDrive, Dropbox) so the frontend can render
+    cards in a stable sequence without sorting."""
+    return {
+        "providers": [
+            _google_drive_connection_status(),
+            _onedrive_connection_status(),
+            _dropbox_connection_status(),
+        ],
+    }
+
+
 @router.delete("/knowledge/files/{file_id}",
                dependencies=[Depends(_check_auth)])
 async def delete_knowledge_file(file_id: int):

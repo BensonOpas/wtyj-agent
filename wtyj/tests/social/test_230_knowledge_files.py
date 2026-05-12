@@ -226,3 +226,92 @@ def test_get_knowledge_files_for_prompt_only_returns_ready():
     assert "ready.txt" in names
     assert "failed.txt" not in names
     assert "empty.txt" not in names
+
+
+
+# --- Brief 260: cloud knowledge connectors status endpoint ---
+
+def _reset_oauth_tokens():
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM oauth_tokens")
+    conn.commit()
+
+
+def test_brief_260_cloud_connections_returns_three_providers_in_fixed_order(monkeypatch):
+    """Brief 260: GET /knowledge/cloud-connections returns exactly 3
+    providers (Google Drive, OneDrive, Dropbox) in stable order.
+    SharePoint and Box are excluded per issue #29."""
+    _reset_oauth_tokens()
+    # Force OneDrive/Dropbox env vars absent so the response is deterministic.
+    monkeypatch.delenv("ONEDRIVE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ONEDRIVE_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DROPBOX_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DROPBOX_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    token = _login()
+    r = client.get("/dashboard/api/knowledge/cloud-connections", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    providers = body["providers"]
+    assert len(providers) == 3
+    ids = [p["provider"] for p in providers]
+    assert ids == ["google_drive", "onedrive", "dropbox"]
+    # SharePoint and Box must not appear.
+    assert "sharepoint" not in ids
+    assert "box" not in ids
+
+
+def test_brief_260_google_drive_setup_required_when_env_set_but_no_tokens(monkeypatch):
+    """Brief 260: Google Drive shows setup_required when OAuth env vars
+    are set but no token row exists yet."""
+    _reset_oauth_tokens()
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
+    token = _login()
+    r = client.get("/dashboard/api/knowledge/cloud-connections", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    google = [p for p in r.json()["providers"] if p["provider"] == "google_drive"][0]
+    assert google["status"] == "setup_required", google
+    assert google["needs_provider_app_registration"] is False
+
+
+def test_brief_260_google_drive_connected_when_env_set_and_tokens_stored(monkeypatch):
+    """Brief 260: Google Drive flips to connected once env vars are set
+    AND a token row exists in oauth_tokens."""
+    _reset_oauth_tokens()
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
+    state_registry.save_oauth_tokens(
+        "google_drive", "test-access", "test-refresh",
+        "2030-01-01T00:00:00+00:00")
+    try:
+        token = _login()
+        r = client.get("/dashboard/api/knowledge/cloud-connections", headers=_auth(token))
+        assert r.status_code == 200, r.text
+        google = [p for p in r.json()["providers"] if p["provider"] == "google_drive"][0]
+        assert google["status"] == "connected", google
+        assert google["needs_provider_app_registration"] is False
+    finally:
+        _reset_oauth_tokens()
+
+
+def test_brief_260_onedrive_and_dropbox_not_configured_without_env(monkeypatch):
+    """Brief 260 load-bearing assertion: OneDrive and Dropbox honestly
+    report not_configured when their OAuth env vars are absent on this
+    deploy. needs_provider_app_registration=True signals to the UI
+    that Calvin must register the external provider app before any
+    Connect flow can be wired."""
+    _reset_oauth_tokens()
+    monkeypatch.delenv("ONEDRIVE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ONEDRIVE_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DROPBOX_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DROPBOX_OAUTH_CLIENT_SECRET", raising=False)
+    token = _login()
+    r = client.get("/dashboard/api/knowledge/cloud-connections", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    by_id = {p["provider"]: p for p in r.json()["providers"]}
+    assert by_id["onedrive"]["status"] == "not_configured"
+    assert by_id["onedrive"]["needs_provider_app_registration"] is True
+    assert by_id["dropbox"]["status"] == "not_configured"
+    assert by_id["dropbox"]["needs_provider_app_registration"] is True
