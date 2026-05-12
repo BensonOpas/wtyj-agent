@@ -2789,3 +2789,28 @@ Tests: 1102 / 0 failures unchanged (same JSON-loads guardrail from Brief 258).
 4. **Status endpoints prefer fixed-order list responses.** Brief 260's `GET /knowledge/cloud-connections` returns `{"providers": [...]}` in a stable order (Google, OneDrive, Dropbox). The frontend can `map()` over the list without re-sorting, and a missing provider is a visible test failure rather than a silent shift in card order. Tradeoff: less flexible than an `{providers: {google_drive: {...}, onedrive: {...}, ...}}` map shape, but maps require the frontend to know the key set in advance — and the key set IS what's narrowing per issue #29.
 
 Tests: 1106 / 0 failures (1102 + 4).
+
+
+---
+
+## Brief 261 — "Challenge before building" caught a full duplicate-build (2026-05-11)
+
+**The bug.** Issue #30 asked for a universal Block sender action with backend model, channel-aware identity, inbox filtering, escalation suppression, agent reply suppression, audit log, unblock path. Calvin's spec read like a green-field feature. My first instinct was to scope a full implementation.
+
+**The check.** Per CLAUDE.md "BEFORE AGREEING TO BUILD ANYTHING: Is there something that already does this? Search first." I grepped for `set_blocked` / `is_blocked` / `block_sender`. Result: Brief 220 already shipped the entire foundation — column, helpers, endpoints, AND inbound suppression hooks in all 4 channels. Issue #30's spec had only 4 surface-level gaps vs the existing implementation: (a) inbox listings didn't filter blocked rows; (b) no reason field; (c) no blocked_by audit; (d) endpoint path naming.
+
+**The fix.** Surface the existing system to Calvin via AskUserQuestion, list the 4 gaps explicitly, ask him to pick scope. He chose "close the 4 gaps only." Brief 261 became a 150-LOC + 5-test follow-up instead of a 1000-LOC rebuild.
+
+**The lessons.**
+
+1. **Grep is the cheapest design tool.** 30 seconds of grepping for `blocked` / `block_sender` saved ~3 hours of duplicate work. The CLAUDE.md "challenge before building" rule has paid off many times in this session; Brief 261 is its highest-leverage win to date. Pattern: when a brief reads like "build this end-to-end feature," the FIRST action is always grep for any helper, table, or endpoint that's already doing the work.
+
+2. **AskUserQuestion is the right transparency tool when a brief overlaps an existing system.** I could have silently scoped Brief 261 to gap-closing and shipped. Calvin's spec was complete enough that he might have rated my output "fine" even if I rebuilt. But: (a) he might also want the existing Brief 220 surface AND the new gaps, in which case my unilateral scope decision creates rework; (b) transparency about prior briefs builds trust that I'm reading the codebase honestly, not pattern-matching off the spec. AskUserQuestion let him pick from 4 explicit options (close gaps only / full rebuild / gaps + audit table / surface and ask). He picked option 1. The 30 seconds spent on the question saved hours of either rebuild OR rework.
+
+3. **Brief-reviewer caught a CAMELCASE-vs-SNAKECASE shape regression.** My first draft of `list_blocked_conversations()` quietly renamed `conversationId` → `conversation_id`, `updatedAt` → `blocked_at`, AND invented a new `id` field. SR's Replit frontend reads `conversationId` / `updatedAt`. The rename would have shipped as a silent breaking change. Reviewer cross-checked the actual code at line 1898-1900 against my proposed shape and flagged the rename. Pattern: when extending an existing function's return shape, the brief MUST preserve every existing key verbatim and ADD new keys with the same casing convention. Snake_case-vs-camelCase is a 5-line code review and a hidden-bug epidemic if you don't.
+
+4. **Envelope shape matters too.** Brief 220's `/settings/blocked-conversations` returns `{"conversations": [...]}`. My first draft of `/blocked-senders` returned a bare list — different envelope. Brief said "same data" but the JSON shape diverged. Reviewer caught it; round 2 wrapped the alias the same way. Pattern: when adding an alias endpoint, the response shape contract is `(envelope + row shape)`; preserving only one is a half-fix.
+
+5. **OUT-of-scope documentation in OUTPUT is load-bearing.** Brief 261 deliberately did NOT fix the conversation_id format inconsistency (frontend uses `email::subj:foo:subject`; email_poller uses raw `from_email`). I documented this explicitly in the OUTPUT under "Unexpected findings" so Calvin sees the deferred bug AND the reasoning. Without that paper trail, the next operator who hits the bug has no context for why Brief 261 didn't fix it.
+
+Tests: 1111 / 0 failures (1106 + 5).
