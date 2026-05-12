@@ -1220,6 +1220,163 @@ async def list_cloud_connections():
     }
 
 
+# === Brief 262: Source of Truth server-side persistence ===
+# Replit #28 shipped the frontend SotBlock editor; Brief 262 replaces
+# the browser-localStorage save path with tenant-scoped server storage.
+# Each container has its own DB file -> tenant isolation by construction.
+
+_SOT_MAX_BLOCKS = 50
+_SOT_MAX_SUBSECTIONS_PER_BLOCK = 20
+_SOT_MAX_ITEMS = 50
+_SOT_MAX_TITLE = 200
+_SOT_MAX_ID = 200
+_SOT_MAX_CONTENT = 4096
+_SOT_ALLOWED_BLOCK_KEYS = {"id", "title", "content", "items", "subsections"}
+_SOT_ALLOWED_SUBSECTION_KEYS = {"title", "content", "items"}
+
+
+def _validate_sot_blocks(blocks) -> list:
+    """Brief 262: enforce Calvin's caps and strip unknown keys. Raises
+    ValueError with a frontend-visible message on the first violation.
+    Returns the cleaned blocks list (with unknown keys stripped) so the
+    PUT response can echo the canonical saved state."""
+    if not isinstance(blocks, list):
+        raise ValueError("blocks must be a list")
+    if len(blocks) > _SOT_MAX_BLOCKS:
+        raise ValueError(f"Too many blocks (max {_SOT_MAX_BLOCKS})")
+    out = []
+    for idx, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            raise ValueError(f"Block {idx} must be an object")
+        block_id = block.get("id", "")
+        title = block.get("title", "")
+        if not isinstance(block_id, str) or not block_id:
+            raise ValueError(f"Block {idx}: id must be a non-empty string")
+        if len(block_id) > _SOT_MAX_ID:
+            raise ValueError(f"Block {idx}: id exceeds {_SOT_MAX_ID} chars")
+        if not isinstance(title, str) or not title:
+            raise ValueError(f"Block {idx}: title must be a non-empty string")
+        if len(title) > _SOT_MAX_TITLE:
+            raise ValueError(f"Block {idx}: title exceeds {_SOT_MAX_TITLE} chars")
+        cleaned = {"id": block_id, "title": title}
+        if "content" in block:
+            content = block["content"]
+            if content is not None:
+                if not isinstance(content, str):
+                    raise ValueError(f"Block {idx}: content must be a string")
+                if len(content) > _SOT_MAX_CONTENT:
+                    raise ValueError(
+                        f"Block {idx}: content exceeds {_SOT_MAX_CONTENT} chars")
+                cleaned["content"] = content
+        if "items" in block:
+            items = block["items"]
+            if items is not None:
+                if not isinstance(items, list):
+                    raise ValueError(f"Block {idx}: items must be a list")
+                if len(items) > _SOT_MAX_ITEMS:
+                    raise ValueError(
+                        f"Block {idx}: items exceeds {_SOT_MAX_ITEMS} entries")
+                cleaned_items = []
+                for i, item in enumerate(items):
+                    if not isinstance(item, str):
+                        raise ValueError(
+                            f"Block {idx} item {i}: must be a string")
+                    if len(item) > _SOT_MAX_CONTENT:
+                        raise ValueError(
+                            f"Block {idx} item {i}: exceeds {_SOT_MAX_CONTENT} chars")
+                    cleaned_items.append(item)
+                cleaned["items"] = cleaned_items
+        if "subsections" in block:
+            subs = block["subsections"]
+            if subs is not None:
+                if not isinstance(subs, list):
+                    raise ValueError(f"Block {idx}: subsections must be a list")
+                if len(subs) > _SOT_MAX_SUBSECTIONS_PER_BLOCK:
+                    raise ValueError(
+                        f"Block {idx}: subsections exceeds "
+                        f"{_SOT_MAX_SUBSECTIONS_PER_BLOCK}")
+                cleaned_subs = []
+                for j, sub in enumerate(subs):
+                    if not isinstance(sub, dict):
+                        raise ValueError(
+                            f"Block {idx} subsection {j}: must be an object")
+                    sub_title = sub.get("title", "")
+                    if not isinstance(sub_title, str) or not sub_title:
+                        raise ValueError(
+                            f"Block {idx} subsection {j}: title required")
+                    if len(sub_title) > _SOT_MAX_TITLE:
+                        raise ValueError(
+                            f"Block {idx} subsection {j}: title exceeds "
+                            f"{_SOT_MAX_TITLE} chars")
+                    cleaned_sub = {"title": sub_title}
+                    if "content" in sub and sub["content"] is not None:
+                        sub_content = sub["content"]
+                        if not isinstance(sub_content, str):
+                            raise ValueError(
+                                f"Block {idx} subsection {j}: content must "
+                                f"be a string")
+                        if len(sub_content) > _SOT_MAX_CONTENT:
+                            raise ValueError(
+                                f"Block {idx} subsection {j}: content exceeds "
+                                f"{_SOT_MAX_CONTENT} chars")
+                        cleaned_sub["content"] = sub_content
+                    if "items" in sub and sub["items"] is not None:
+                        sub_items = sub["items"]
+                        if not isinstance(sub_items, list):
+                            raise ValueError(
+                                f"Block {idx} subsection {j}: items must be a list")
+                        if len(sub_items) > _SOT_MAX_ITEMS:
+                            raise ValueError(
+                                f"Block {idx} subsection {j}: items exceeds "
+                                f"{_SOT_MAX_ITEMS}")
+                        cleaned_sub_items = []
+                        for k, sub_item in enumerate(sub_items):
+                            if not isinstance(sub_item, str):
+                                raise ValueError(
+                                    f"Block {idx} subsection {j} item {k}: "
+                                    f"must be a string")
+                            if len(sub_item) > _SOT_MAX_CONTENT:
+                                raise ValueError(
+                                    f"Block {idx} subsection {j} item {k}: "
+                                    f"exceeds {_SOT_MAX_CONTENT} chars")
+                            cleaned_sub_items.append(sub_item)
+                        cleaned_sub["items"] = cleaned_sub_items
+                    cleaned_subs.append(cleaned_sub)
+                cleaned["subsections"] = cleaned_subs
+        # Unknown keys (e.g., "internal_prompt") are silently stripped by
+        # the whitelist construction above. Calvin's "no internal prompt
+        # exposure" requirement is satisfied because the returned dict
+        # only contains the allowed keys.
+        out.append(cleaned)
+    return out
+
+
+class SourceOfTruthRequest(BaseModel):
+    blocks: list = []
+
+
+@router.get("/source-of-truth", dependencies=[Depends(_check_auth)])
+async def get_source_of_truth():
+    """Brief 262: load tenant SOT blocks. Returns empty list on a fresh
+    tenant; the frontend seeds DEFAULT_SOT on first PUT to avoid backend
+    duplicating the frontend constant."""
+    return {"blocks": state_registry.source_of_truth_get()}
+
+
+@router.put("/source-of-truth", dependencies=[Depends(_check_auth)])
+async def put_source_of_truth(req: SourceOfTruthRequest):
+    """Brief 262: save tenant SOT blocks. Validates caps + types,
+    strips unknown keys per the SOT_ALLOWED_*_KEYS whitelists, then
+    persists. Returns the canonical saved blocks (post-validation) so
+    the frontend sees exactly what was stored."""
+    try:
+        cleaned = _validate_sot_blocks(req.blocks)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    saved = state_registry.source_of_truth_set(cleaned)
+    return {"blocks": saved}
+
+
 @router.delete("/knowledge/files/{file_id}",
                dependencies=[Depends(_check_auth)])
 async def delete_knowledge_file(file_id: int):

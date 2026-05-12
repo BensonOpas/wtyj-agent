@@ -668,6 +668,17 @@ def _get_conn():
         "value TEXT NOT NULL"
         ")"
     )
+    # Brief 262: tenant Source of Truth blob. Single row per tenant
+    # (each container has its own DB file -> tenant isolation by
+    # construction). blocks_json carries the entire SotBlock[] array
+    # the dashboard editor renders.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS source_of_truth ("
+        "id INTEGER PRIMARY KEY, "
+        "blocks_json TEXT NOT NULL DEFAULT '[]', "
+        "updated_at TEXT NOT NULL DEFAULT ''"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -3100,6 +3111,45 @@ def knowledge_file_create(filename: str, stored_filename: str, mime_type: str,
     conn.commit()
     conn.close()
     return row_id
+
+
+def source_of_truth_get() -> list:
+    """Brief 262: return tenant SOT blocks from the source_of_truth
+    single-row blob. Returns [] when no row exists or row contains
+    invalid JSON (defensive - never crashes the API)."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT blocks_json FROM source_of_truth WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    if not row:
+        return []
+    try:
+        parsed = json.loads(row[0] or "[]")
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def source_of_truth_set(blocks: list) -> list:
+    """Brief 262: UPSERT the tenant SOT blob (single row id=1). Caller
+    is responsible for validation; this helper only persists. Returns
+    the parsed-back list to prove the round-trip is clean."""
+    if not isinstance(blocks, list):
+        blocks = []
+    now = datetime.now(timezone.utc).isoformat()
+    blob = json.dumps(blocks, ensure_ascii=False)
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO source_of_truth (id, blocks_json, updated_at) "
+        "VALUES (1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "blocks_json = excluded.blocks_json, "
+        "updated_at = excluded.updated_at",
+        (blob, now))
+    conn.commit()
+    conn.close()
+    return source_of_truth_get()
 
 
 def knowledge_files_list() -> list:

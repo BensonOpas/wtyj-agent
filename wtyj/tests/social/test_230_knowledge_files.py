@@ -315,3 +315,162 @@ def test_brief_260_onedrive_and_dropbox_not_configured_without_env(monkeypatch):
     assert by_id["onedrive"]["needs_provider_app_registration"] is True
     assert by_id["dropbox"]["status"] == "not_configured"
     assert by_id["dropbox"]["needs_provider_app_registration"] is True
+
+
+
+# --- Brief 262: Source of Truth server-side persistence (issue #31) ---
+
+def _reset_sot():
+    conn = state_registry._get_conn()
+    conn.execute("DELETE FROM source_of_truth")
+    conn.commit()
+    conn.close()
+
+
+def test_brief_262_get_returns_empty_blocks_on_fresh_tenant():
+    """Brief 262: GET /source-of-truth returns {"blocks": []} when no
+    row exists for the tenant. Frontend treats this as the seed-on-first-
+    load signal and PUTs its DEFAULT_SOT constant."""
+    _reset_sot()
+    token = _login()
+    r = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"blocks": []}
+
+
+def test_brief_262_put_persists_blocks_and_get_returns_them():
+    """Brief 262: PUT saves blocks; subsequent GET returns the same
+    blocks. Round-trip contract."""
+    _reset_sot()
+    token = _login()
+    blocks = [
+        {"id": "pricing", "title": "Pricing", "content": "Trip from 95 EUR pp"},
+        {"id": "channels", "title": "Channels",
+         "items": ["WhatsApp", "Email", "Instagram"]},
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": blocks},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["blocks"] == blocks
+    # GET round-trip
+    r2 = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {"blocks": blocks}
+
+
+def test_brief_262_put_validates_oversized_payload_rejected():
+    """Brief 262: oversized content (>4 KB) returns 400 with a clear
+    detail message. The 400 must not partially save (subsequent GET
+    returns the prior state, not the rejected payload)."""
+    _reset_sot()
+    token = _login()
+    # Seed a valid prior state
+    seed = [{"id": "core", "title": "Core", "content": "ok"}]
+    client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": seed},
+    )
+    # Submit an oversized payload
+    bad_blocks = [
+        {"id": "x", "title": "y", "content": "A" * 10000}
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": bad_blocks},
+    )
+    assert r.status_code == 400, r.text
+    assert "exceeds" in r.json()["detail"].lower() or "4096" in r.json()["detail"]
+    # Verify no partial save - GET still returns the seeded state
+    r2 = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
+    assert r2.status_code == 200
+    assert r2.json()["blocks"] == seed
+
+
+def test_brief_262_put_strips_unknown_keys_from_blocks():
+    """Brief 262 load-bearing: unknown keys (internal_prompt, debug_only,
+    etc.) are silently stripped by the SOT_ALLOWED_BLOCK_KEYS whitelist.
+    Calvin's "do not expose internal prompt/debug fields" requirement
+    is enforced because the response and the persisted JSON only carry
+    the allowed keys."""
+    _reset_sot()
+    token = _login()
+    blocks = [
+        {
+            "id": "core",
+            "title": "Core",
+            "content": "Hello",
+            "internal_prompt": "leak attempt - should be dropped",
+            "debug_only": True,
+            "_admin_field": "another leak",
+        }
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": blocks},
+    )
+    assert r.status_code == 200, r.text
+    saved = r.json()["blocks"]
+    assert len(saved) == 1
+    block = saved[0]
+    # Allowed keys present:
+    assert block["id"] == "core"
+    assert block["title"] == "Core"
+    assert block["content"] == "Hello"
+    # Unknown keys stripped:
+    assert "internal_prompt" not in block
+    assert "debug_only" not in block
+    assert "_admin_field" not in block
+    # GET also returns the cleaned shape (no leak via subsequent reads):
+    r2 = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
+    assert "internal_prompt" not in r2.text
+    assert "debug_only" not in r2.text
+
+
+def test_brief_262_subsections_round_trip_intact():
+    """Brief 262: nested SotSubsection shape (title + content + items)
+    survives round trip without any field loss. Load-bearing assertion
+    for the nested validation logic."""
+    _reset_sot()
+    token = _login()
+    blocks = [
+        {
+            "id": "escalation",
+            "title": "Escalation Rules",
+            "content": "When to involve a human.",
+            "subsections": [
+                {
+                    "title": "Hard escalation",
+                    "content": "Refunds, complaints, legal questions.",
+                    "items": ["refund request", "legal threat", "abusive"],
+                },
+                {
+                    "title": "Soft escalation",
+                    "items": ["unknown product", "out-of-scope request"],
+                },
+            ],
+        }
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": blocks},
+    )
+    assert r.status_code == 200, r.text
+    saved = r.json()["blocks"]
+    assert len(saved) == 1
+    block = saved[0]
+    assert block["title"] == "Escalation Rules"
+    assert len(block["subsections"]) == 2
+    s1, s2 = block["subsections"]
+    assert s1["title"] == "Hard escalation"
+    assert s1["content"] == "Refunds, complaints, legal questions."
+    assert s1["items"] == ["refund request", "legal threat", "abusive"]
+    assert s2["title"] == "Soft escalation"
+    assert s2["items"] == ["unknown product", "out-of-scope request"]
+    assert "content" not in s2  # subsection without content stays without content
