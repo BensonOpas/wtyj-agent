@@ -2814,3 +2814,32 @@ Tests: 1106 / 0 failures (1102 + 4).
 5. **OUT-of-scope documentation in OUTPUT is load-bearing.** Brief 261 deliberately did NOT fix the conversation_id format inconsistency (frontend uses `email::subj:foo:subject`; email_poller uses raw `from_email`). I documented this explicitly in the OUTPUT under "Unexpected findings" so Calvin sees the deferred bug AND the reasoning. Without that paper trail, the next operator who hits the bug has no context for why Brief 261 didn't fix it.
 
 Tests: 1111 / 0 failures (1106 + 5).
+
+
+---
+
+## Brief 262 — Default content authoring belongs in one place (2026-05-12)
+
+**The bug.** Replit #28 shipped a frontend SotBlock editor saved to localStorage. Calvin verified the editing worked but the implementation honestly told the operator "Edits are saved on this device while we wire up sync." Brief 262 ships the missing backend persistence: new `source_of_truth` table, GET/PUT endpoints, validation with field caps, unknown-key strip.
+
+**The decision that mattered: where does DEFAULT_SOT live?** The frontend already has a `DEFAULT_SOT` constant — a 200-line literal SotBlock array that bootstraps an empty tenant's SOT. Two options for the backend:
+1. Copy DEFAULT_SOT to a Python constant; backend returns it when no row exists.
+2. Backend returns `{"blocks": []}` when no row exists; frontend detects empty and PUTs its DEFAULT_SOT.
+
+Option 1 looks cleaner ("the backend owns defaults") but duplicates a 200-line authoring source across the two repos. The two will drift the moment Calvin tweaks the default content in one place and not the other. Option 2 keeps the authoring source in one place; the backend stays content-free; the frontend's seed-on-empty pattern is a one-time bootstrap.
+
+I chose option 2. Pattern: when shipping a backend that mirrors a frontend's hardcoded data, prefer "backend is content-free; frontend seeds on empty" over duplicating the constant.
+
+**The lessons.**
+
+1. **Whitelist > blacklist for unknown-key handling.** Calvin's spec said *"Strip or reject dangerous/unexpected types"* and *"Do not expose internal prompt/debug fields."* The validator could have either rejected unknown keys (HTTP 400) or stripped them silently. Strip-by-whitelist is the more resilient choice because:
+   - Forward-compatible: a future frontend can send new keys without breaking the backend deploy.
+   - Security: `internal_prompt` / `debug_only` / `_admin_field` get silently dropped regardless of what client claims to send.
+   - Reject-on-unknown couples deploys (frontend can't ship a new field until backend allow-lists it).
+   - Test 4 locks in the strip behavior so a future refactor can't quietly switch to reject without failing.
+
+2. **Single-row-per-tenant JSON-blob storage is fine for "load all / edit all / save all" UIs.** SotBlock data is structured + nested but the only consumer (the Settings page) loads the whole array, edits it, and saves the whole array. Per-row storage would have been more queryable but pointless given the access pattern. The validator's caps + the small expected payload size (~tens of KB max for a full SOT) make the blob choice the right one. Pattern: match storage granularity to the read/write granularity, not the data shape granularity.
+
+3. **Validation errors must be frontend-renderable.** The `_validate_sot_blocks` helper raises `ValueError` with messages like `"Block 0: content exceeds 4096 chars"` — that string lands in the HTTP 400 `detail` field unchanged and is directly renderable in a toast/banner. No translation layer between "Python error message" and "user-visible message" is necessary because the validator was written knowing its output is the operator-facing error. Pattern: when writing validation helpers, draft the error messages as if a non-coder will read them — saves a round-trip later.
+
+Tests: 1116 / 0 failures (1111 + 5).
