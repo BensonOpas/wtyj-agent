@@ -2768,3 +2768,24 @@ Tests: 1102 / 0 failures (1101 + 1).
 4. **"Mirror these, do not copy verbatim" framing is load-bearing.** Reviewer flagged that the 3 new before/after example pairs didn't carry the caveat from the existing block header. Without it, Claude may treat the "Prefer:" string as a template to emit literally. Inline-reframed so the caveat explicitly applies to the new pairs. Pattern: when adding to an existing block, check whether the block header's framing scopes the additions — if not obvious, restate it inline.
 
 Tests: 1102 / 0 failures unchanged (same JSON-loads guardrail from Brief 258).
+
+
+---
+
+## Brief 260 — Honest "not_configured" beats fake "connected" (2026-05-11)
+
+**The bug.** Calvin's dashboard Source-of-Truth area showed "Google Drive will be connected by the Unboks team. Cloud connections aren't switched on for your workspace yet." for ALL 5 connector cards. The frontend at `use-cloud-knowledge-connections.ts` was a localStorage stub that forced every provider to `connected: false` because no backend endpoint existed yet. Calvin wanted real connector status: Google Drive / OneDrive / Dropbox visible with honest state; SharePoint and Box dropped.
+
+**The fix.** Backend status endpoint `GET /knowledge/cloud-connections` returning 3 providers with computed `connected` / `setup_required` / `not_configured` state from env-var presence + oauth_tokens row presence. NO new OAuth flows for OneDrive or Dropbox (those require Calvin to register external apps externally — Azure AD + Dropbox dev console — before any flow can work). Documented the exact env vars and redirect URLs in the OUTPUT so Calvin can provision them on his timeline.
+
+**The lessons.**
+
+1. **Scope an "or clearly define missing work" feature honestly.** Calvin's spec explicitly allowed partial implementation: *"Make connectors real enough OR clearly define the missing OAuth/backend work if full implementation cannot be completed."* The wrong move would have been to write OAuth flows for OneDrive/Dropbox with placeholder env vars that fail on first real use — shipping dead code paths that LOOK wired. The right move was a small, honest backend that surfaces "not_configured" with `needs_provider_app_registration: true`, then exhaustively document the external setup steps in the OUTPUT. Reviewers and operators can both see exactly what's blocking the next step.
+
+2. **External-blocker documentation is load-bearing artifact, not a footnote.** Brief 260's OUTPUT has 50+ lines on Azure AD + Dropbox app registration: exact menu paths, exact permission scopes, exact env var names, exact redirect URLs. That documentation IS the brief's deliverable for the deferred providers. Without it, Calvin sees `not_configured` on the dashboard and has to come back asking what to do. With it, he can either provision the apps and request a follow-up brief, or leave them at `not_configured` indefinitely without misleading the dashboard. Cost of writing it: 10 minutes. Cost of NOT writing it: a clarification round and another brief cycle.
+
+3. **Reuse the existing oauth_tokens table instead of inventing a new schema.** Brief 196 already built an `oauth_tokens` row keyed by `google_drive` for the photos flow. Brief 260's helper reads from the same row — no schema change, no migration, the existing token shape is exactly what the knowledge-files use case needs (scope is `drive.readonly`, same as photos). When OneDrive + Dropbox eventually wire their flows, they can add rows keyed by `onedrive` / `dropbox` to the SAME table. Pattern: when adding a new feature, scan for existing tables/columns that already match the semantics before designing new infrastructure.
+
+4. **Status endpoints prefer fixed-order list responses.** Brief 260's `GET /knowledge/cloud-connections` returns `{"providers": [...]}` in a stable order (Google, OneDrive, Dropbox). The frontend can `map()` over the list without re-sorting, and a missing provider is a visible test failure rather than a silent shift in card order. Tradeoff: less flexible than an `{providers: {google_drive: {...}, onedrive: {...}, ...}}` map shape, but maps require the frontend to know the key set in advance — and the key set IS what's narrowing per issue #29.
+
+Tests: 1106 / 0 failures (1102 + 4).
