@@ -159,6 +159,29 @@ async def get_status():
     }
 
 
+@router.get("/icp-overrides", dependencies=[Depends(_check_auth)])
+async def get_icp_overrides():
+    """J3-N2-01: return Nr 3 ICP override envelope for this tenant.
+    
+    Returns the same shape as Nr 3's get_effective_tenant_state but
+    proxied (and cached) through Nr 2 so the React frontend never
+    sees the bridge token. Body shape:
+      {
+        \"available\": bool,            # False when bridge unreachable
+        \"reason\": str (optional),    # present when available=False
+        \"tenant_id\": str | None,
+        \"feature_toggles\": {...},    # always present (empty when unavailable)
+        \"display_metadata\": {...},   # always present (empty when unavailable)
+      }
+    The endpoint NEVER raises - failure modes are returned as data
+    so React can render a graceful 'bridge offline' state.
+    """
+    # Lazy import - keeps the requests-import + cache load out of
+    # the module-level fast path.
+    from wtyj.shared import icp_overrides as _icp
+    return _icp.fetch_overrides()
+
+
 # --- Drafts ---
 
 @router.get("/drafts", dependencies=[Depends(_check_auth)])
