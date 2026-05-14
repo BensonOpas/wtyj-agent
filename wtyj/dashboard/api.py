@@ -178,7 +178,7 @@ async def get_icp_overrides():
     """
     # Lazy import - keeps the requests-import + cache load out of
     # the module-level fast path.
-    from wtyj.shared import icp_overrides as _icp
+    from shared import icp_overrides as _icp
     return _icp.fetch_overrides()
 
 
