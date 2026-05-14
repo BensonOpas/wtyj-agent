@@ -69,14 +69,21 @@ def _resolve_tenant_id() -> Optional[str]:
 def _empty_envelope(tenant_id: Optional[str], reason: str) -> dict:
     """Returned when the bridge is unreachable for any reason. The
     'available': False flag lets callers (the /api/icp-overrides
-    endpoint, React UI) tell the difference between 'bridge is fine
-    and the tenant has no overrides' and 'bridge is unreachable'."""
+    endpoint, React UI, marina_agent) tell the difference between
+    'bridge is fine and the tenant has no overrides' and 'bridge is
+    unreachable'.
+
+    J3-N2-02: sot_entries + ai_agent_settings keys ALWAYS present
+    (default empty / None) so prompt-builders can use d['sot_entries']
+    directly without KeyError-guarding."""
     return {
         "available": False,
         "reason": reason,
         "tenant_id": tenant_id,
         "feature_toggles": {},
         "display_metadata": {},
+        "sot_entries": [],
+        "ai_agent_settings": {"tone": None, "escalation_rules": None},
     }
 
 
@@ -199,16 +206,32 @@ def fetch_overrides() -> dict:
         return env
     feature_toggles = body.get("feature_toggles")
     display_metadata = body.get("display_metadata")
+    sot_entries = body.get("sot_entries")
+    ai_agent_settings = body.get("ai_agent_settings")
     if not isinstance(feature_toggles, dict):
         feature_toggles = {}
     if not isinstance(display_metadata, dict):
         display_metadata = {}
+    # J3-N2-02: sot_entries should be a list; AI settings should be a
+    # dict with tone + escalation_rules keys. Coerce defensively.
+    if not isinstance(sot_entries, list):
+        sot_entries = []
+    if not isinstance(ai_agent_settings, dict):
+        ai_agent_settings = {"tone": None, "escalation_rules": None}
+    else:
+        # Ensure both nested keys exist (None when not configured)
+        ai_agent_settings = {
+            "tone": ai_agent_settings.get("tone"),
+            "escalation_rules": ai_agent_settings.get("escalation_rules"),
+        }
 
     envelope = {
         "available": True,
         "tenant_id": tenant_id,
         "feature_toggles": feature_toggles,
         "display_metadata": display_metadata,
+        "sot_entries": sot_entries,
+        "ai_agent_settings": ai_agent_settings,
     }
     _cache_put(tenant_id, envelope)
     return envelope

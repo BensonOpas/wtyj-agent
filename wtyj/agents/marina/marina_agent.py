@@ -227,17 +227,91 @@ def _build_service_alias_text() -> str:
 
 
 
-def _build_agent_persona_block() -> str:
+def _icp_envelope_for_prompt() -> dict:
+    """J3-N2-02: fetch the ICP override envelope once per prompt build.
+
+    The icp_overrides helper has its own 60s in-process cache, so this
+    is cheap to call. Returns the envelope shape from J3-N2-01 with
+    J3-BE-18/19 additions: sot_entries (list), ai_agent_settings
+    (dict with tone + escalation_rules, None when not overridden).
+
+    NEVER raises - the helper returns an empty envelope on any error.
+    Fail-closed: when bridge is unreachable the agent falls back to
+    backend defaults (client.json) automatically because every block-
+    builder checks the override and only consumes it when present."""
+    try:
+        from shared import icp_overrides
+        return icp_overrides.fetch_overrides()
+    except Exception:
+        # Defensive - should never happen but never let an ICP
+        # import or fetch issue break the agent prompt build.
+        return {
+            "available": False,
+            "sot_entries": [],
+            "ai_agent_settings": {"tone": None, "escalation_rules": None},
+        }
+
+
+def _build_icp_sot_block(envelope: dict) -> str:
+    """J3-N2-02: render ICP-pushed SOT entries as an authoritative
+    knowledge block alongside the existing info_updates / knowledge_
+    files blocks. Empty string when no SOT overrides exist.
+
+    Entries are operator-curated via the control panel and intended
+    as factual current context the Agent should treat as authoritative.
+    Each entry surfaces its category as a tag."""
+    entries = envelope.get("sot_entries") or []
+    if not isinstance(entries, list) or not entries:
+        return ""
+    bullets = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        title = (e.get("title") or "").strip()
+        content = (e.get("content") or "").strip()
+        category = (e.get("category") or "general").strip()
+        if not title or not content:
+            continue
+        bullets.append(f"\n[{category}] {title}\n{content}")
+    if not bullets:
+        return ""
+    return (
+        "\n\nICP SOURCE OF TRUTH (operator-curated via control panel — "
+        "authoritative current context, treat as factual):"
+        + "".join(bullets)
+    )
+
+
+def _build_agent_persona_block(envelope: dict = None) -> str:
     """Build the AGENT PERSONA prompt block from the structured agent_persona
     section in client.json. Falls back to the legacy common_sense_knowledge.marina_persona
     free-text string if the structured section is missing or empty.
 
     Brief 149.
+
+    J3-N2-02: when the ICP override envelope contains an
+    ai_agent_settings.tone override, that value REPLACES the backend
+    tone string. Similarly ai_agent_settings.escalation_rules replaces
+    the backend escalation_tone block (with both soft+hard rules
+    rendered in the canonical operator-facing terminology).
+    Tenant isolation: envelope tenant_id is resolved locally in
+    icp_overrides; no cross-tenant data can land in this prompt.
     """
     persona = config_loader.get_raw().get("agent_persona", {}) or {}
+    if envelope is None:
+        envelope = _icp_envelope_for_prompt()
+    icp_ai = envelope.get("ai_agent_settings") or {}
+    icp_tone = icp_ai.get("tone") if isinstance(icp_ai, dict) else None
+    icp_rules = icp_ai.get("escalation_rules") if isinstance(icp_ai, dict) else None
     lines = []
 
-    if persona.get("tone"):
+    # J3-N2-02: ICP tone override wins
+    if isinstance(icp_tone, dict) and (icp_tone.get("tone") or "").strip():
+        lines.append(f"Tone: {icp_tone['tone'].strip()}  [ICP override]")
+        notes = (icp_tone.get("notes") or "").strip()
+        if notes:
+            lines.append(f"Tone notes: {notes}")
+    elif persona.get("tone"):
         lines.append(f"Tone: {persona['tone']}")
     if persona.get("language_register"):
         lines.append(f"Language register: {persona['language_register']}")
@@ -269,7 +343,29 @@ def _build_agent_persona_block() -> str:
     if persona.get("small_talk"):
         lines.append(f"\nSmall talk:\n{persona['small_talk']}")
 
-    if persona.get("escalation_tone"):
+    # J3-N2-02: ICP escalation_rules override wins; render both rules
+    # in the canonical 'soft escalation' / 'hard escalation' terms (NOT
+    # 'soft mode' / 'hard mode' - that wording is banned per J3-BE-19).
+    if isinstance(icp_rules, dict) and (
+            icp_rules.get("soft_escalation") or icp_rules.get("hard_escalation")):
+        soft = icp_rules.get("soft_escalation") or {}
+        hard = icp_rules.get("hard_escalation") or {}
+        lines.append("\nEscalation rules [ICP override]:")
+        if soft.get("enabled"):
+            when = (soft.get("when") or "").strip()
+            lines.append(f"- Soft escalation (Agent needs help, operator guides, "
+                          f"Agent replies): {when}" if when else
+                          "- Soft escalation: enabled (no condition specified)")
+        else:
+            lines.append("- Soft escalation: DISABLED")
+        if hard.get("enabled"):
+            when = (hard.get("when") or "").strip()
+            lines.append(f"- Hard escalation (human takeover, Agent stops, "
+                          f"operator replies directly): {when}" if when else
+                          "- Hard escalation: enabled (no condition specified)")
+        else:
+            lines.append("- Hard escalation: DISABLED")
+    elif persona.get("escalation_tone"):
         lines.append(f"\nEscalation tone:\n{persona['escalation_tone']}")
 
     if persona.get("freeform_notes"):
@@ -578,12 +674,16 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
     _knowledge_files_block = _build_knowledge_files_block()
+    # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
+    # so both persona block and SOT block see the same snapshot.
+    _icp_envelope = _icp_envelope_for_prompt()
+    _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
-{_build_agent_persona_block()}
+{_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
 
 {writing_style_block}
 
