@@ -279,13 +279,18 @@ async def get_icp_overrides_debug():
     }
     sot_view["would_apply"] = sot_view["count"] > 0
 
+    # J3-N2-04: include the in-process observability snapshot so
+    # operators can see when the last fetch happened, the cumulative
+    # counters, and whether the most-recent fetch was a cache hit.
+    obs = _icp.get_observability_state()
     return {
         "tenant_id": env.get("tenant_id"),
         "bridge_available": bool(env.get("available")),
-        "bridge_reason": env.get("reason"),  # None when available=True
+        "bridge_reason": env.get("reason"),
         "ai_tone": tone_view,
         "ai_escalation_rules": rules_view,
         "sot_entries": sot_view,
+        "observability": obs,
     }
 
 

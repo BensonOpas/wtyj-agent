@@ -102,8 +102,94 @@ def _cache_put(tenant_id: str, envelope: dict) -> None:
 
 
 def clear_cache() -> None:
-    """Test hook. Drops the entire in-process cache."""
+    """Test hook. Drops the entire in-process cache. J3-N2-04: also
+    resets the observability state so a --fresh CLI run shows clean
+    counters."""
     _cache.clear()
+    _reset_observability()
+
+
+# J3-N2-04: in-process observability state. Module-level dict captured
+# at the end of every fetch_overrides() call. Visible to any code path
+# running in the SAME process (the agent's process). A separate CLI
+# invocation via `docker exec python3 ...` is its OWN process with its
+# own _observability dict - the CLI's view is honest about per-process
+# scope; the HTTP /icp-overrides-debug endpoint (running in the agent's
+# process) shows the agent's live state.
+_observability: dict = {
+    "last_fetch_at": None,
+    "last_fetch_duration_ms": None,
+    "last_outcome": None,
+    "last_tenant_id": None,
+    "last_bridge_available": None,
+    "last_sot_count": None,
+    "last_tone_source": None,
+    "last_escalation_source": None,
+    "total_fetches": 0,
+    "total_failures": 0,
+    "total_cache_hits": 0,
+}
+
+
+def get_observability_state() -> dict:
+    """J3-N2-04: snapshot of in-process fetch state. Returns a COPY so
+    callers cannot mutate the module dict accidentally."""
+    return dict(_observability)
+
+
+def _reset_observability() -> None:
+    """Test hook."""
+    _observability.update({
+        "last_fetch_at": None,
+        "last_fetch_duration_ms": None,
+        "last_outcome": None,
+        "last_tenant_id": None,
+        "last_bridge_available": None,
+        "last_sot_count": None,
+        "last_tone_source": None,
+        "last_escalation_source": None,
+        "total_fetches": 0,
+        "total_failures": 0,
+        "total_cache_hits": 0,
+    })
+
+
+def _record_observability(envelope: dict, outcome: str,
+                            duration_ms: int, tenant_id, fetch_start_iso: str,
+                            was_cache_hit: bool = False) -> None:
+    """Update the in-process observability dict + emit one structured
+    log line per call. No token, no full response body in the log."""
+    _observability["last_fetch_at"] = fetch_start_iso
+    _observability["last_fetch_duration_ms"] = duration_ms
+    _observability["last_outcome"] = outcome
+    _observability["last_tenant_id"] = tenant_id
+    _observability["last_bridge_available"] = bool(envelope.get("available"))
+    sot = envelope.get("sot_entries") or []
+    _observability["last_sot_count"] = (
+        len(sot) if isinstance(sot, list) else 0)
+    ai = envelope.get("ai_agent_settings") or {}
+    tone = ai.get("tone") if isinstance(ai, dict) else None
+    rules = ai.get("escalation_rules") if isinstance(ai, dict) else None
+    _observability["last_tone_source"] = (
+        tone.get("source") if isinstance(tone, dict) else None)
+    _observability["last_escalation_source"] = (
+        rules.get("source") if isinstance(rules, dict) else None)
+    _observability["total_fetches"] += 1
+    if was_cache_hit:
+        _observability["total_cache_hits"] += 1
+    elif outcome != "success":
+        _observability["total_failures"] += 1
+    _log.info(
+        "icp_overrides fetch tenant=%s outcome=%s duration_ms=%d "
+        "available=%s sot_count=%s tone_source=%s escalation_source=%s "
+        "cache_hit=%s",
+        tenant_id or "(none)", outcome, duration_ms,
+        bool(envelope.get("available")),
+        _observability["last_sot_count"],
+        _observability["last_tone_source"] or "(none)",
+        _observability["last_escalation_source"] or "(none)",
+        was_cache_hit,
+    )
 
 
 def fetch_overrides() -> dict:
@@ -111,33 +197,49 @@ def fetch_overrides() -> dict:
 
     Returns one of:
     - {"available": True, "tenant_id": "...", "feature_toggles": {...},
-       "display_metadata": {...}}  on a successful bridge read
-    - {"available": False, "reason": "...", "tenant_id": "...",
-       "feature_toggles": {}, "display_metadata": {}}  on any failure
+       "display_metadata": {...}, "sot_entries": [...],
+       "ai_agent_settings": {...}}  on a successful bridge read
+    - {"available": False, "reason": "...", ...}  on any failure
 
-    NEVER raises. NEVER sends a cross-tenant request (the tenant_id is
-    always resolved locally - the caller cannot influence which tenant
-    is queried). NEVER includes the token in the returned dict.
-    """
+    NEVER raises. NEVER sends a cross-tenant request. NEVER includes
+    the token in the returned dict.
+
+    J3-N2-04: every call updates module-level _observability state and
+    emits one structured log line. See get_observability_state()."""
+    import datetime as _dt
+    fetch_start = time.time()
+    fetch_start_iso = (
+        _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+        .isoformat(timespec="microseconds"))
+
+    def _record(env, outcome, was_cache_hit=False):
+        duration_ms = int((time.time() - fetch_start) * 1000)
+        _record_observability(env, outcome, duration_ms,
+                                env.get("tenant_id"), fetch_start_iso,
+                                was_cache_hit=was_cache_hit)
+        return env
+
     tenant_id = _resolve_tenant_id()
     if not tenant_id:
-        return _empty_envelope(tenant_id, "no tenant identity configured")
+        return _record(
+            _empty_envelope(tenant_id, "no tenant identity configured"),
+            "no_tenant")
 
     # Cache check
     cached = _cache_get(tenant_id)
     if cached is not None:
-        return cached
+        return _record(cached, "cache_hit", was_cache_hit=True)
 
     base_url = os.environ.get("NR3_INTERNAL_OVERRIDES_URL", "").strip()
     token = os.environ.get("NR3_INTERNAL_API_TOKEN", "").strip()
     if not base_url:
         env = _empty_envelope(tenant_id, "NR3_INTERNAL_OVERRIDES_URL unset")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "url_unset")
     if not token:
         env = _empty_envelope(tenant_id, "NR3_INTERNAL_API_TOKEN unset")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "token_unset")
 
     # Compose URL. base_url may or may not end with a slash; rstrip then
     # append the canonical path. Tenant identity is sent in BOTH the path
@@ -155,29 +257,29 @@ def fetch_overrides() -> dict:
                       type(exc).__name__)
         env = _empty_envelope(tenant_id, "bridge unreachable")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "network_error")
 
     if resp.status_code == 401:
         _log.warning("icp_overrides bridge returned 401 - check token")
         env = _empty_envelope(tenant_id, "401 unauthorized")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "401")
     if resp.status_code == 403:
         _log.warning("icp_overrides bridge returned 403 - identity mismatch")
         env = _empty_envelope(tenant_id, "403 identity mismatch")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "403")
     if resp.status_code == 404:
         _log.warning("icp_overrides bridge returned 404 - tenant unknown")
         env = _empty_envelope(tenant_id, "404 tenant unknown")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "404")
     if resp.status_code != 200:
         _log.warning("icp_overrides bridge returned unexpected status %d",
                       resp.status_code)
         env = _empty_envelope(tenant_id, f"unexpected status {resp.status_code}")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "unexpected_status")
 
     try:
         body = resp.json()
@@ -185,7 +287,7 @@ def fetch_overrides() -> dict:
         _log.warning("icp_overrides bridge returned non-JSON body")
         env = _empty_envelope(tenant_id, "non-json body")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "non_json")
 
     # Sanity-check shape. The bridge returns {tenant_id, feature_toggles,
     # display_metadata}. If anything is missing or has the wrong type,
@@ -193,7 +295,7 @@ def fetch_overrides() -> dict:
     if not isinstance(body, dict):
         env = _empty_envelope(tenant_id, "body not a dict")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "body_not_dict")
     body_tenant = body.get("tenant_id")
     if body_tenant != tenant_id:
         # Bridge MUST echo our tenant_id back. If not, treat as
@@ -203,7 +305,7 @@ def fetch_overrides() -> dict:
             tenant_id, body_tenant)
         env = _empty_envelope(tenant_id, "tenant_id mismatch in body")
         _cache_put(tenant_id, env)
-        return env
+        return _record(env, "tenant_mismatch")
     feature_toggles = body.get("feature_toggles")
     display_metadata = body.get("display_metadata")
     sot_entries = body.get("sot_entries")
@@ -234,4 +336,4 @@ def fetch_overrides() -> dict:
         "ai_agent_settings": ai_agent_settings,
     }
     _cache_put(tenant_id, envelope)
-    return envelope
+    return _record(envelope, "success")

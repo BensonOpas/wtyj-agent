@@ -64,10 +64,15 @@ def main() -> int:
         and (e.get("content") or "").strip()
     ]
 
+    # J3-N2-04: pull the in-process observability state captured
+    # during the fetch_overrides() call above. Per-process scope: this
+    # reflects THIS CLI invocation, not the agent's process.
+    observability = icp_overrides.get_observability_state()
     summary = {
         "tenant_id": envelope.get("tenant_id"),
         "bridge_available": bool(envelope.get("available")),
         "bridge_reason": envelope.get("reason"),
+        "observability": observability,
         "ai_tone": _tone_view(tone),
         "ai_escalation_rules": _rules_view(rules),
         "sot_entries": {
@@ -133,7 +138,7 @@ def _rules_view(rules):
 
 def _print_human(s: dict) -> None:
     print("=" * 60)
-    print(" Nr 2 ICP override verification (J3-N2-03)")
+    print(" Nr 2 ICP override verification (J3-N2-03/04)")
     print("=" * 60)
     print(f" Tenant:           {s['tenant_id']!r}")
     print(f" Bridge available: {s['bridge_available']}")
@@ -143,6 +148,20 @@ def _print_human(s: dict) -> None:
     print(f" Env:              URL_set={e['NR3_INTERNAL_OVERRIDES_URL_set']}  "
             f"TOKEN_set={e['NR3_INTERNAL_API_TOKEN_set']}  "
             f"TENANT_ID={e['TENANT_ID']}")
+    print()
+    print("-- OBSERVABILITY (this CLI process only) --")
+    o = s.get("observability") or {}
+    print(f"  last_fetch_at:       {o.get('last_fetch_at')}")
+    print(f"  last_outcome:        {o.get('last_outcome')!r}")
+    print(f"  last_duration_ms:    {o.get('last_fetch_duration_ms')}")
+    print(f"  last_tone_source:    {o.get('last_tone_source')!r}")
+    print(f"  last_escalation:     {o.get('last_escalation_source')!r}")
+    print(f"  last_sot_count:      {o.get('last_sot_count')}")
+    print(f"  total_fetches:       {o.get('total_fetches')}  "
+            f"(failures: {o.get('total_failures')}, "
+            f"cache_hits: {o.get('total_cache_hits')})")
+    print("  NOTE: these counters are per-process. The agent's container")
+    print("  has its own counters; use the HTTP debug endpoint for those.")
     print()
     print("-- AI TONE --")
     t = s["ai_tone"]
