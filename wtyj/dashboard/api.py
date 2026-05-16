@@ -182,6 +182,113 @@ async def get_icp_overrides():
     return _icp.fetch_overrides()
 
 
+@router.get("/icp-overrides-debug", dependencies=[Depends(_check_auth)])
+async def get_icp_overrides_debug():
+    """J3-N2-03: read-only verification helper.
+
+    Returns a curated debug view of the current ICP override envelope
+    + per-field 'would_apply' flags showing whether the marina_agent
+    prompt builders would actually consume each override. Used by
+    Calvin / oncall to verify after a deploy that the new prompt
+    code (J3-N2-02) is reading the bridge as intended.
+
+    Gating:
+    - NR3_DEBUG_VERIFICATION_ENABLED env var must equal 'true'
+      (case-insensitive after strip). Anything else -> HTTP 404
+      (route looks like it doesn't exist).
+    - Existing dashboard bearer auth still applies (_check_auth).
+    - NO write paths. NO secrets. The token used to talk to Nr 3
+      never appears in the response body.
+
+    Disable in production by leaving NR3_DEBUG_VERIFICATION_ENABLED
+    unset or 'false'. The route stays in code but returns 404.
+    """
+    if os.environ.get("NR3_DEBUG_VERIFICATION_ENABLED", "").strip().lower() != "true":
+        raise HTTPException(status_code=404, detail="Not Found")
+    from shared import icp_overrides as _icp
+    env = _icp.fetch_overrides()
+
+    # AI tone
+    ai = env.get("ai_agent_settings") or {}
+    tone = ai.get("tone") if isinstance(ai, dict) else None
+    if isinstance(tone, dict):
+        tone_value = (tone.get("tone") or "").strip()
+        tone_view = {
+            "value": tone.get("tone"),
+            "notes": tone.get("notes"),
+            "source": tone.get("source"),
+            "updated_at": tone.get("updated_at"),
+            "updated_by": tone.get("updated_by"),
+            "would_apply": bool(tone_value),  # non-empty tone wins over backend
+        }
+    else:
+        tone_view = {"value": None, "source": "backend",
+                      "would_apply": False}
+
+    # AI escalation rules
+    rules = ai.get("escalation_rules") if isinstance(ai, dict) else None
+    if isinstance(rules, dict):
+        soft = rules.get("soft_escalation") or {}
+        hard = rules.get("hard_escalation") or {}
+        rules_view = {
+            "soft_escalation": {
+                "enabled": bool(soft.get("enabled")),
+                "when": soft.get("when"),
+            },
+            "hard_escalation": {
+                "enabled": bool(hard.get("enabled")),
+                "when": hard.get("when"),
+            },
+            "source": rules.get("source"),
+            "updated_at": rules.get("updated_at"),
+            "updated_by": rules.get("updated_by"),
+            "would_apply": bool(soft.get("enabled") or hard.get("enabled")
+                                  or (soft.get("when") or "").strip()
+                                  or (hard.get("when") or "").strip()),
+        }
+    else:
+        rules_view = {"value": None, "source": "backend",
+                       "would_apply": False}
+
+    # SoT entries
+    sot_entries = env.get("sot_entries") or []
+    if not isinstance(sot_entries, list):
+        sot_entries = []
+    sot_filtered = [
+        e for e in sot_entries
+        if isinstance(e, dict)
+        and (e.get("title") or "").strip()
+        and (e.get("content") or "").strip()
+    ]
+    sot_view = {
+        "count": len(sot_filtered),  # count = entries the agent prompt
+                                       # would actually consume (matches
+                                       # would_apply semantics)
+        "raw_count": len(sot_entries),  # surface raw bridge count too
+                                          # so operators see malformed
+                                          # entries are being skipped
+        "entries": [
+            {
+                "title": (e.get("title") or "").strip(),
+                "category": (e.get("category") or "general").strip(),
+                "source": e.get("source"),
+                "updated_by": e.get("updated_by"),
+            }
+            for e in sot_filtered
+        ],
+    }
+    sot_view["would_apply"] = sot_view["count"] > 0
+
+    return {
+        "tenant_id": env.get("tenant_id"),
+        "bridge_available": bool(env.get("available")),
+        "bridge_reason": env.get("reason"),  # None when available=True
+        "ai_tone": tone_view,
+        "ai_escalation_rules": rules_view,
+        "sot_entries": sot_view,
+    }
+
+
 # --- Drafts ---
 
 @router.get("/drafts", dependencies=[Depends(_check_auth)])
