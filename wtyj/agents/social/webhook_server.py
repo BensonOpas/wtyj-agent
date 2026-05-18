@@ -36,8 +36,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "https://api.wetakeyourjob.com", "https://wetakeyourjob.com", "https://wtyj-dashboard.replit.app", "https://unboks.org", "https://dashboard.unboks.org"],
-    allow_origin_regex=r"https://.*\.(replit\.(dev|app)|wetakeyourjob\.com|unboks\.org)$",
+    # J3-N2-13: replaced the previous mixed allow_origins + regex with
+    # the owner-specified spec. Explicit production origin +
+    # any-localhost-port via regex (Starlette does not interpret "*"
+    # inside an origin string, so "http://localhost:*" can only be
+    # honoured via allow_origin_regex).
+    allow_origins=["https://dashboard.unboks.org"],
+    allow_origin_regex=r"^http://localhost(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
