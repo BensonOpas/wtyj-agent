@@ -56,6 +56,31 @@ def test_get_your_info_returns_whitelist_only():
     assert "agent_signature" not in body
 
 
+def test_get_your_info_uses_top_level_minimal_tenant_fields(monkeypatch, tmp_path):
+    seed = {
+        "slug": "lawyer",
+        "name": "Lawyer",
+        "email": "lawyer@example.com",
+        "whatsapp": "+59996945527",
+        "website": "https://lawyer.example",
+    }
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/your-info", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "Lawyer"
+    assert body["email"] == "lawyer@example.com"
+    assert body["support_email"] == "lawyer@example.com"
+    assert body["phone"] == "+59996945527"
+    assert body["whatsapp"] == "+59996945527"
+    assert body["website"] == "https://lawyer.example"
+
+
 # ── Test 2: PUT /settings/your-info writes through to disk + invalidates cache ─
 def test_put_your_info_writes_through_to_disk(monkeypatch, tmp_path):
     seed = {

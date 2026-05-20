@@ -1212,6 +1212,7 @@ class YourInfoUpdate(BaseModel):
     support_email: str | None = None
     phone: str | None = None
     whatsapp: str | None = None
+    website: str | None = None
     location: str | None = None
     languages: list[str] | None = None
     operating_days: str | None = None
