@@ -21,7 +21,8 @@ _TIME_RE = re.compile(
 _DATE_RE = re.compile(
     r"\b(?:today|tomorrow|tonight|friday|saturday|sunday|monday|tuesday|"
     r"wednesday|thursday|maandag|dinsdag|woensdag|donderdag|vrijdag|"
-    r"zaterdag|zondag|morgen|overmorgen|vandaag|vanavond)\b",
+    r"zaterdag|zondag|morgen|overmorgen|vandaag|vanavond|"
+    r"ma(?:n|\u00f1)an|ma(?:n|\u00f1)ana)\b",
     re.IGNORECASE,
 )
 
@@ -34,7 +35,7 @@ _APPOINTMENT_RE = re.compile(
 _CONFIRM_RE = re.compile(
     r"\b(?:is fine|fine|deal|perfect|confirmed|all noted|see you|"
     r"team will be ready|expect you|noted|klopt|is goed|tot dan|"
-    r"we hebben|we have a deal)\b",
+    r"we hebben|we have a deal|bon|te ma(?:n|\u00f1)an)\b",
     re.IGNORECASE,
 )
 

@@ -25,6 +25,19 @@ def test_detects_customer_confirmed_appointment_time():
     assert signal["proposed_times"] == ["Perfect, 11:00 tomorrow it is"]
 
 
+def test_detects_papiamentu_tomorrow_confirmation():
+    from shared import appointment_detector
+
+    signal = appointment_detector.detect_appointment_signal(
+        user_text="ok bon",
+        assistant_reply="Bon! Te ma\u00f1an na 11:00",
+        history=[],
+    )
+
+    assert signal is not None
+    assert signal["date_time_label"] == "Te ma\u00f1an na 11:00"
+
+
 def test_upsert_writes_pending_appointment_from_normal_exchange(monkeypatch):
     from shared import appointment_detector
 
