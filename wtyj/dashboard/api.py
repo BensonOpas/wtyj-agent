@@ -1655,6 +1655,23 @@ _SOT_MAX_ID = 200
 _SOT_MAX_CONTENT = 4096
 _SOT_ALLOWED_BLOCK_KEYS = {"id", "title", "content", "items", "subsections"}
 _SOT_ALLOWED_SUBSECTION_KEYS = {"title", "content", "items"}
+_LEGACY_UNBOKS_DEFAULT_SOT_IDS = {
+    "core-value",
+    "clients",
+    "channels",
+    "core-functionality",
+    "escalation-system",
+    "knowledge-base",
+    "communication-style",
+    "human-handover",
+    "daily-use",
+    "structured-data",
+    "integrations",
+    "onboarding",
+    "pricing",
+    "positioning",
+    "not-unboks",
+}
 
 
 def _validate_sot_blocks(blocks) -> list:
@@ -1773,6 +1790,52 @@ def _validate_sot_blocks(blocks) -> list:
     return out
 
 
+def _current_tenant_slug() -> str:
+    """Best-effort tenant slug for guardrails that must stay tenant-safe."""
+    env_slug = os.environ.get("TENANT_ID") or os.environ.get("TENANT_SLUG")
+    if isinstance(env_slug, str) and env_slug.strip():
+        return env_slug.strip().lower()
+    try:
+        business = config_loader.get_business()
+        slug = business.get("slug") if isinstance(business, dict) else ""
+        if isinstance(slug, str) and slug.strip():
+            return slug.strip().lower()
+    except Exception:
+        pass
+    try:
+        raw = config_loader.get_raw()
+        slug = raw.get("slug") if isinstance(raw, dict) else ""
+        if isinstance(slug, str) and slug.strip():
+            return slug.strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _looks_like_legacy_unboks_default_sot(blocks: list) -> bool:
+    """Detect the old frontend seed so it cannot leak into new tenants."""
+    if not isinstance(blocks, list) or len(blocks) != len(_LEGACY_UNBOKS_DEFAULT_SOT_IDS):
+        return False
+    ids = {b.get("id") for b in blocks if isinstance(b, dict)}
+    if ids != _LEGACY_UNBOKS_DEFAULT_SOT_IDS:
+        return False
+    first = next(
+        (b for b in blocks if isinstance(b, dict) and b.get("id") == "core-value"),
+        {},
+    )
+    content = first.get("content") if isinstance(first, dict) else ""
+    return isinstance(content, str) and "Unboks Agent" in content
+
+
+def _strip_cross_tenant_default_sot(blocks: list) -> list:
+    """Fresh non-Unboks tenants must not inherit Unboks product knowledge."""
+    if _current_tenant_slug() == "unboks":
+        return blocks
+    if _looks_like_legacy_unboks_default_sot(blocks):
+        return []
+    return blocks
+
+
 class SourceOfTruthRequest(BaseModel):
     blocks: list = []
 
@@ -1795,6 +1858,7 @@ async def put_source_of_truth(req: SourceOfTruthRequest):
         cleaned = _validate_sot_blocks(req.blocks)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    cleaned = _strip_cross_tenant_default_sot(cleaned)
     saved = state_registry.source_of_truth_set(cleaned)
     return {"blocks": saved}
 

@@ -433,8 +433,8 @@ def _reset_sot():
 
 def test_brief_262_get_returns_empty_blocks_on_fresh_tenant():
     """Brief 262: GET /source-of-truth returns {"blocks": []} when no
-    row exists for the tenant. Frontend treats this as the seed-on-first-
-    load signal and PUTs its DEFAULT_SOT constant."""
+    row exists for the tenant. Fresh tenants remain blank until the
+    operator adds tenant-specific knowledge."""
     _reset_sot()
     token = _login()
     r = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
@@ -578,6 +578,79 @@ def test_brief_262_subsections_round_trip_intact():
     assert s2["title"] == "Soft escalation"
     assert s2["items"] == ["unknown product", "out-of-scope request"]
     assert "content" not in s2  # subsection without content stays without content
+
+
+def test_source_of_truth_drops_legacy_unboks_default_for_non_unboks_tenant(monkeypatch):
+    """Tenant isolation: old frontend bundles may try to seed the old
+    Unboks DEFAULT_SOT into fresh tenants. Non-Unboks tenants must stay
+    blank instead of inheriting Unboks product knowledge."""
+    _reset_sot()
+    monkeypatch.delenv("TENANT_ID", raising=False)
+    monkeypatch.delenv("TENANT_SLUG", raising=False)
+    monkeypatch.setattr(
+        "dashboard.api.config_loader.get_business",
+        lambda: {"slug": "lawyer"},
+    )
+    token = _login()
+    legacy_unboks_default = [
+        {
+            "id": "core-value",
+            "title": "Core Value",
+            "content": (
+                "We save our clients time by letting your Unboks Agent "
+                "answer routine messages."
+            ),
+        },
+        {"id": "clients", "title": "Clients", "content": "Unboks clients"},
+        {"id": "channels", "title": "Channels", "items": ["WhatsApp"]},
+        {"id": "core-functionality", "title": "Core Functionality"},
+        {"id": "escalation-system", "title": "Escalation System"},
+        {"id": "knowledge-base", "title": "Knowledge Base (SOT)"},
+        {"id": "communication-style", "title": "Communication Style"},
+        {"id": "human-handover", "title": "Human Handover"},
+        {"id": "daily-use", "title": "Daily Use"},
+        {"id": "structured-data", "title": "Structured Data Extraction"},
+        {"id": "integrations", "title": "Integrations"},
+        {"id": "onboarding", "title": "Onboarding"},
+        {"id": "pricing", "title": "Pricing"},
+        {"id": "positioning", "title": "Positioning"},
+        {"id": "not-unboks", "title": "What Unboks is NOT"},
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": legacy_unboks_default},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"blocks": []}
+    r2 = client.get("/dashboard/api/source-of-truth", headers=_auth(token))
+    assert r2.json() == {"blocks": []}
+
+
+def test_source_of_truth_allows_custom_non_unboks_blocks(monkeypatch):
+    """The guard is narrow: real tenant-specific knowledge still saves."""
+    _reset_sot()
+    monkeypatch.delenv("TENANT_ID", raising=False)
+    monkeypatch.delenv("TENANT_SLUG", raising=False)
+    monkeypatch.setattr(
+        "dashboard.api.config_loader.get_business",
+        lambda: {"slug": "lawyer"},
+    )
+    token = _login()
+    lawyer_blocks = [
+        {
+            "id": "practice",
+            "title": "Practice",
+            "content": "Lawyer tenant answers about consultations.",
+        }
+    ]
+    r = client.put(
+        "/dashboard/api/source-of-truth",
+        headers={**_auth(token), "Content-Type": "application/json"},
+        json={"blocks": lawyer_blocks},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"blocks": lawyer_blocks}
 
 
 
