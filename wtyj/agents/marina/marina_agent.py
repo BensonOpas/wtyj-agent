@@ -492,13 +492,13 @@ def _build_info_updates_block() -> str:
 
 
 def _build_knowledge_files_block() -> str:
-    """Brief 230: when features.knowledge_files_in_prompt is true and at
-    least one knowledge file has status='ready', inject the extracted
-    text as a KNOWLEDGE FILES section. Same leading-`\n\n` pattern as
-    Brief 219 / Brief 216 blocks so f-string spacing collapses cleanly
-    when off."""
+    """Brief 230: unless features.knowledge_files_in_prompt is explicitly
+    false, and at least one knowledge file has status='ready', inject
+    the extracted text as a KNOWLEDGE FILES section. Same leading-`\n\n`
+    pattern as Brief 219 / Brief 216 blocks so f-string spacing
+    collapses cleanly when off."""
     features = config_loader.get_raw().get("features", {}) or {}
-    if not features.get("knowledge_files_in_prompt"):
+    if features.get("knowledge_files_in_prompt") is False:
         return ""
     try:
         from shared import state_registry

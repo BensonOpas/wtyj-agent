@@ -1434,9 +1434,9 @@ async def data_retention_delete_customer(req: DataRetentionDeleteReq):
 
 
 # --- Brief 230: AI knowledge files Phase 1 ---
-# Upload + text extraction for PDF/DOCX/TXT. Files stored under
+# Upload + text extraction for PDF/DOCX/TXT/CSV/XLSX. Files stored under
 # wtyj/data/knowledge/. Marina reads the extracted text via
-# features.knowledge_files_in_prompt (default OFF).
+# features.knowledge_files_in_prompt unless explicitly set false.
 
 _KNOWLEDGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge")

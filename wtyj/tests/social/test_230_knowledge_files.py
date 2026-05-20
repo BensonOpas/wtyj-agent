@@ -1,4 +1,4 @@
-"""Tests for Brief 230 — AI knowledge files Phase 1 (PDF/DOCX/TXT)."""
+"""Tests for Brief 230 — AI knowledge files Phase 1."""
 import sys, os, io, zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
@@ -58,6 +58,55 @@ def _make_docx(body_text: str) -> bytes:
         zf.writestr("[Content_Types].xml", content_types)
         zf.writestr("_rels/.rels", rels)
         zf.writestr("word/document.xml", document_xml)
+    return buf.getvalue()
+
+
+def _make_xlsx(rows: list[list[str]]) -> bytes:
+    """Build a minimal XLSX workbook using shared strings."""
+    strings = []
+    indexes = {}
+    sheet_rows = []
+    for row_idx, row in enumerate(rows, start=1):
+        cells = []
+        for col_idx, value in enumerate(row):
+            if value not in indexes:
+                indexes[value] = len(strings)
+                strings.append(value)
+            col = chr(ord("A") + col_idx)
+            cells.append(
+                f'<c r="{col}{row_idx}" t="s"><v>{indexes[value]}</v></c>'
+            )
+        sheet_rows.append(f'<row r="{row_idx}">{"".join(cells)}</row>')
+    shared = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        + "".join(f"<si><t>{s}</t></si>" for s in strings)
+        + "</sst>"
+    )
+    sheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+        '</worksheet>'
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '</workbook>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '</Types>'
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/sharedStrings.xml", shared)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet)
     return buf.getvalue()
 
 
@@ -150,6 +199,35 @@ def test_upload_pdf_extracts_text():
         assert any("brief 230" in f["text"].lower() for f in files_for_prompt)
 
 
+def test_upload_csv_extracts_text():
+    _reset()
+    token = _login()
+    body = b"service,price\nBreakfast,25\nDinner,49"
+    r = client.post(
+        "/dashboard/api/knowledge/files",
+        files={"file": ("prices.csv", body, "text/csv")},
+        headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+    files_for_prompt = state_registry.get_knowledge_files_for_prompt()
+    assert any("Breakfast,25" in f["text"] for f in files_for_prompt)
+
+
+def test_upload_xlsx_extracts_text():
+    _reset()
+    token = _login()
+    xlsx = _make_xlsx([["service", "price"], ["Tour", "99"]])
+    r = client.post(
+        "/dashboard/api/knowledge/files",
+        files={"file": ("prices.xlsx", xlsx,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+    files_for_prompt = state_registry.get_knowledge_files_for_prompt()
+    assert any("Tour | 99" in f["text"] for f in files_for_prompt)
+
+
 def test_upload_unsupported_type_lands_failed():
     """Brief 230: unsupported types (PNG, etc.) are stored with
     status='failed' and a clear failure_reason. Phase 2 enables them."""
@@ -226,6 +304,32 @@ def test_get_knowledge_files_for_prompt_only_returns_ready():
     assert "ready.txt" in names
     assert "failed.txt" not in names
     assert "empty.txt" not in names
+
+
+def test_marina_uses_ready_knowledge_files_by_default(monkeypatch):
+    """Uploaded ready files should become SOT context unless explicitly disabled."""
+    _reset()
+    from agents.marina import marina_agent
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw",
+                        lambda: {"features": {}})
+    state_registry.knowledge_file_create(
+        filename="policy.txt", stored_filename="x", mime_type="text/plain",
+        size_bytes=12, status="ready",
+        extracted_text="Customers may reschedule with 24 hours notice.")
+    block = marina_agent._build_knowledge_files_block()
+    assert "KNOWLEDGE FILES" in block
+    assert "reschedule with 24 hours notice" in block
+
+
+def test_marina_can_disable_knowledge_files_prompt(monkeypatch):
+    _reset()
+    from agents.marina import marina_agent
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw",
+                        lambda: {"features": {"knowledge_files_in_prompt": False}})
+    state_registry.knowledge_file_create(
+        filename="policy.txt", stored_filename="x", mime_type="text/plain",
+        size_bytes=12, status="ready", extracted_text="Do not include this.")
+    assert marina_agent._build_knowledge_files_block() == ""
 
 
 
