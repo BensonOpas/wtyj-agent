@@ -212,6 +212,19 @@ def test_get_active_info_updates_window_filtering():
         _wipe_info_updates()
 
 
+def test_info_update_set_active_updates_row():
+    try:
+        _wipe_info_updates()
+        row_id = state_registry.info_update_create(text="temporary promo")
+        assert state_registry.info_update_set_active(row_id, False) is True
+        rows = state_registry.info_updates_list_all()
+        row = next(r for r in rows if r["id"] == row_id)
+        assert row["active"] is False
+        assert state_registry.info_update_set_active(99999999, True) is False
+    finally:
+        _wipe_info_updates()
+
+
 # ── Test 6: Marina prompt includes ACTIVE BUSINESS UPDATES when flag on ───────
 def test_marina_prompt_includes_info_updates_when_flag_on():
     from agents.marina import marina_agent

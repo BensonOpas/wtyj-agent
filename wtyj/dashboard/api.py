@@ -1260,6 +1260,10 @@ class InfoUpdateCreate(BaseModel):
     endDate: str | None = None
 
 
+class InfoUpdateActiveUpdate(BaseModel):
+    active: StrictBool
+
+
 @router.get("/settings/info-updates", dependencies=[Depends(_check_auth)])
 async def list_info_updates_endpoint():
     """Brief 216: list ALL info_updates rows (active + inactive) for the
@@ -1278,6 +1282,17 @@ async def create_info_update_endpoint(req: InfoUpdateCreate):
         text=text, type_=req.type, active=req.active,
         start_date=req.startDate, end_date=req.endDate)
     return {"id": row_id, "ok": True}
+
+
+@router.put("/settings/info-updates/{update_id}",
+            dependencies=[Depends(_check_auth)])
+async def update_info_update_endpoint(update_id: int,
+                                      req: InfoUpdateActiveUpdate):
+    """Update the active flag for a saved knowledge update."""
+    ok = state_registry.info_update_set_active(update_id, req.active)
+    if not ok:
+        raise HTTPException(status_code=404, detail="info_update not found")
+    return {"ok": True, "id": update_id, "active": req.active}
 
 
 @router.delete("/settings/info-updates/{update_id}",

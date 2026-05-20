@@ -4382,6 +4382,20 @@ def info_update_delete(update_id: int) -> bool:
     return deleted
 
 
+def info_update_set_active(update_id: int, active: bool) -> bool:
+    """Set an info_update active flag without changing its text/type."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE info_updates SET active = ?, updated_at = ? WHERE id = ?",
+        (1 if active else 0, now, update_id),
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def get_active_info_updates() -> list:
     """Brief 216: return currently-active info_updates ready for prompt
     injection. Active iff active=1 AND (no dates OR within [start, end]).
