@@ -78,6 +78,33 @@ def test_sot_block_non_list_entries_returns_empty():
     assert marina_agent._build_icp_sot_block(env) == ""
 
 
+def test_final_override_block_renders_nr3_edits_as_highest_priority():
+    env = {
+        "sot_entries": [
+            {
+                "title": "Behavior",
+                "content": "Never sound like a chatbot. Do not force appointments.",
+                "category": "tone",
+                "source": "icp_override",
+            }
+        ],
+        "ai_agent_settings": {
+            "tone": {
+                "tone": "Warm legal assistant",
+                "notes": "Answer first, then suggest a consultation only if natural.",
+                "source": "icp_override",
+            },
+            "escalation_rules": None,
+        },
+    }
+    block = marina_agent._build_icp_final_override_block(env)
+    assert "HIGHEST PRIORITY" in block
+    assert "Warm legal assistant" in block
+    assert "Never sound like a chatbot" in block
+    assert "Do not force appointments" in block
+    assert "legal-service tenants" in block
+
+
 # --- _build_agent_persona_block: tone -----------------------
 
 
@@ -256,6 +283,38 @@ def test_full_prompt_includes_icp_sot_when_present(monkeypatch):
     assert "ICP SOURCE OF TRUTH" in prompt
     assert "Test Entry" in prompt
     assert "Test body" in prompt
+
+
+def test_full_prompt_places_final_icp_override_after_generic_rules(monkeypatch):
+    """Nr3 edits must appear after generic booking/legal refusal rules so
+    tenant-specific operator instructions win in the model context."""
+    fake_env = {
+        "sot_entries": [
+            {
+                "title": "Lawyer tone",
+                "content": "Do not force appointments. Answer useful general questions first.",
+                "category": "tone",
+                "source": "icp_override",
+            }
+        ],
+        "ai_agent_settings": {
+            "tone": {
+                "tone": "Human legal assistant",
+                "notes": "Avoid chatbot openings.",
+                "source": "icp_override",
+            },
+            "escalation_rules": None,
+        },
+    }
+    monkeypatch.setattr(icp_overrides, "fetch_overrides",
+                          lambda: fake_env)
+    prompt = marina_agent._build_system_prompt(
+        thread_flags={}, channel="whatsapp")
+    final_idx = prompt.rindex("FINAL TENANT-SPECIFIC OPERATOR OVERRIDES")
+    assert final_idx > prompt.index("BOOKING BEHAVIOUR")
+    assert final_idx > prompt.index("Legal advice or opinions on legal matters")
+    assert "Do not force appointments" in prompt[final_idx:]
+    assert "Avoid chatbot openings" in prompt[final_idx:]
 
 
 def test_full_prompt_omits_sot_block_when_empty(monkeypatch):

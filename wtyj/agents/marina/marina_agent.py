@@ -282,6 +282,79 @@ def _build_icp_sot_block(envelope: dict) -> str:
     )
 
 
+def _build_icp_final_override_block(envelope: dict) -> str:
+    """Render Nr3 operator edits as the final high-priority prompt block.
+
+    The base Marina prompt still carries generic booking examples and
+    broad refusal rules. Tenant-specific ICP edits must appear after
+    those generic rules too, so Calvin's latest Nr3 edits win when
+    there is tension.
+    """
+    if not isinstance(envelope, dict):
+        return ""
+    entries = envelope.get("sot_entries") or []
+    ai_agent_settings = envelope.get("ai_agent_settings") or {}
+    if not isinstance(entries, list):
+        entries = []
+    if not isinstance(ai_agent_settings, dict):
+        ai_agent_settings = {}
+    tone = ai_agent_settings.get("tone")
+    rules = ai_agent_settings.get("escalation_rules")
+
+    has_tone = isinstance(tone, dict) and (
+        (tone.get("tone") or "").strip() or (tone.get("notes") or "").strip()
+    )
+    has_rules = isinstance(rules, dict) and (
+        rules.get("soft_escalation") or rules.get("hard_escalation")
+    )
+
+    clean_entries = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        title = (e.get("title") or "").strip()
+        content = (e.get("content") or "").strip()
+        category = (e.get("category") or "general").strip()
+        if title and content:
+            clean_entries.append((category, title, content))
+
+    if not (has_tone or has_rules or clean_entries):
+        return ""
+
+    lines = [
+        "\nFINAL TENANT-SPECIFIC OPERATOR OVERRIDES FROM NR3 (HIGHEST PRIORITY):",
+        "- These are the latest Calvin/operator instructions for this tenant.",
+        "- Follow this block over generic booking examples, old default wording, and generic platform behavior.",
+        "- Do not force appointments or bookings. Help first, answer what you can, then suggest a consultation only when it naturally fits.",
+        "- For legal-service tenants, general procedural/public information and intake questions are in scope when supported by tenant context. Avoid specific legal advice or promises.",
+        "- Apply these instructions immediately in the next reply.",
+    ]
+
+    if has_tone:
+        tone_value = (tone.get("tone") or "").strip()
+        notes = (tone.get("notes") or "").strip()
+        if tone_value:
+            lines.append(f"\nTone override: {tone_value}")
+        if notes:
+            lines.append(f"Tone notes: {notes}")
+
+    if clean_entries:
+        lines.append("\nSource of Truth overrides:")
+        for category, title, content in clean_entries:
+            lines.append(f"[{category}] {title}\n{content}")
+
+    if has_rules:
+        soft = rules.get("soft_escalation") or {}
+        hard = rules.get("hard_escalation") or {}
+        lines.append("\nEscalation rule overrides:")
+        if isinstance(soft, dict) and soft.get("enabled"):
+            lines.append(f"- Agent needs help when: {(soft.get('when') or '').strip()}")
+        if isinstance(hard, dict) and hard.get("enabled"):
+            lines.append(f"- Human takeover when: {(hard.get('when') or '').strip()}")
+
+    return "\n".join(lines)
+
+
 def _build_agent_persona_block(envelope: dict = None) -> str:
     """Build the AGENT PERSONA prompt block from the structured agent_persona
     section in client.json. Falls back to the legacy common_sense_knowledge.marina_persona
@@ -678,6 +751,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     # so both persona block and SOT block see the same snapshot.
     _icp_envelope = _icp_envelope_for_prompt()
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
+    _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
@@ -898,7 +972,8 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 
 {_build_service_alias_text()}
 
-Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask."""
+Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
+{_icp_final_override_block}"""
 
 
 def _build_user_prompt(
