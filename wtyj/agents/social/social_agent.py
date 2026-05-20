@@ -10,6 +10,7 @@ import time
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
+from shared import appointment_detector
 from shared import state_registry
 from shared import bm_logger
 from shared import config_loader
@@ -208,6 +209,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
     bm_logger.log("whatsapp_processing", phone=phone, text=text[:100],
                   from_name=from_name)
 
+    def _upsert_appointment_signal(reply_text: str):
+        _cname = fields.get("customer_name") or from_name or ""
+        appointment_detector.upsert_pending_from_exchange(
+            conversation_id=phone,
+            channel=channel,
+            customer_name=_cname,
+            user_text=text,
+            assistant_reply=reply_text or "",
+            history=history,
+        )
+
     # Brief 166: cross-channel customer lookup. Use a typed identifier so WhatsApp
     # conversation ids don't collide with IG/FB/X DMs.
     from agents.social.whatsapp_client import _is_zernio_conversation_id
@@ -286,6 +298,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
 
         # Record reply timestamp + persist (early return bypasses end-of-function persistence)
         if esc_reply:
+            _upsert_appointment_signal(esc_reply)
             _reply_times = flags.get("reply_times", [])
             _reply_times.append(int(time.time()))
             flags["reply_times"] = _reply_times
@@ -921,6 +934,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
         flags["reply_times"] = _reply_times
 
     # Persist state + log
+    _upsert_appointment_signal(reply_text)
     state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
     bm_logger.log("whatsapp_agent_reply", phone=phone,
                   intents=result.get("intents", []), reply_length=len(reply_text))

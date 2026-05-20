@@ -2549,6 +2549,41 @@ def appointment_upsert(conversation_id: str, channel: str, customer_name: str,
     return row_id
 
 
+def appointment_get_by_conversation(conversation_id: str) -> dict | None:
+    """Return the appointment row for a conversation_id, if one exists."""
+    if not conversation_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, conversation_id, channel, customer_name, title, "
+        "date_time_label, proposed_times_json, location, status, source, "
+        "created_at, updated_at "
+        "FROM appointments WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        proposed = json.loads(row[6]) if row[6] else []
+    except (json.JSONDecodeError, TypeError):
+        proposed = []
+    return {
+        "id": str(row[0]),
+        "conversationId": row[1],
+        "channel": row[2],
+        "customerName": row[3] or "",
+        "title": row[4] or "Appointment",
+        "dateTimeLabel": row[5] or "",
+        "proposedTimes": proposed,
+        "location": row[7] or None,
+        "status": row[8],
+        "source": row[9] or "conversation",
+        "createdAt": row[10],
+        "updatedAt": row[11],
+    }
+
+
 def appointment_confirm_by_id(appointment_id: int,
                                confirmed_by: str = "operator",
                                note: str | None = None) -> dict | None:
