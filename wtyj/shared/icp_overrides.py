@@ -101,6 +101,81 @@ def _cache_put(tenant_id: str, envelope: dict) -> None:
     _cache[tenant_id] = (time.time(), envelope)
 
 
+def _bridge_write_context() -> tuple[Optional[str], str, str, dict]:
+    tenant_id = _resolve_tenant_id()
+    base_url = os.environ.get("NR3_INTERNAL_OVERRIDES_URL", "").strip()
+    token = os.environ.get("NR3_INTERNAL_API_TOKEN", "").strip()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-Identity": tenant_id or "",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    return tenant_id, base_url, token, headers
+
+
+def _bridge_write(path: str, payload: dict, *, method: str = "POST") -> dict:
+    """Write one tenant-scoped override to Nr3.
+
+    Used by dashboard settings flows. The bridge token stays process-only;
+    callers receive safe success/error metadata, never the token.
+    """
+    tenant_id, base_url, token, headers = _bridge_write_context()
+    if not tenant_id:
+        return {"ok": False, "reason": "no tenant identity configured"}
+    if not base_url:
+        return {"ok": False, "reason": "NR3_INTERNAL_OVERRIDES_URL unset"}
+    if not token:
+        return {"ok": False, "reason": "NR3_INTERNAL_API_TOKEN unset"}
+    url = base_url.rstrip("/") + path.format(tenant_id=tenant_id)
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=headers,
+            json=payload,
+            timeout=_HTTP_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        _log.warning("icp_overrides bridge write unreachable: %s",
+                      type(exc).__name__)
+        return {"ok": False, "reason": "bridge unreachable"}
+    if resp.status_code < 200 or resp.status_code >= 300:
+        _log.warning(
+            "icp_overrides bridge write failed status=%s path=%s",
+            resp.status_code, path)
+        return {"ok": False, "reason": f"unexpected status {resp.status_code}"}
+    clear_cache()
+    try:
+        body = resp.json()
+    except (ValueError, json.JSONDecodeError):
+        body = {}
+    return {"ok": True, "response": body}
+
+
+def write_agent_style(*, tone: str, notes: str = "") -> dict:
+    return _bridge_write(
+        "/internal/tenants/{tenant_id}/agent-style",
+        {"tone": tone, "notes": notes},
+        method="PUT",
+    )
+
+
+def write_sot_entry(
+    *, title: str, content: str, category: str = "general", entry_id: str = ""
+) -> dict:
+    return _bridge_write(
+        "/internal/tenants/{tenant_id}/sot",
+        {
+            "id": entry_id,
+            "title": title,
+            "content": content,
+            "category": category,
+        },
+        method="POST",
+    )
+
+
 def clear_cache() -> None:
     """Test hook. Drops the entire in-process cache. J3-N2-04: also
     resets the observability state so a --fresh CLI run shows clean

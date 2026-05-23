@@ -589,6 +589,63 @@ def _build_knowledge_files_block() -> str:
     return "\n\n" + "\n".join(parts)
 
 
+def _build_dashboard_sot_block() -> str:
+    """Render Source of Truth saved in Nr2 Settings into Marina's prompt.
+
+    Nr3 bridge overrides remain the highest-priority operator path, but the
+    customer dashboard's Company knowledge tab must also affect live replies.
+    """
+    try:
+        from shared import state_registry
+        blocks = state_registry.source_of_truth_get()
+    except Exception:
+        return ""
+    if not isinstance(blocks, list) or not blocks:
+        return ""
+    parts = [
+        "DASHBOARD SOURCE OF TRUTH (tenant-saved Company knowledge — use as "
+        "current factual context):"
+    ]
+    for block in blocks[:12]:
+        if not isinstance(block, dict):
+            continue
+        title = str(block.get("title") or "").strip()
+        content = str(block.get("content") or "").strip()
+        items = block.get("items")
+        subsections = block.get("subsections")
+        if not title:
+            continue
+        lines = [f"\n{title}"]
+        if content:
+            lines.append(content[:2500])
+        if isinstance(items, list):
+            for item in items[:20]:
+                text = str(item).strip()
+                if text:
+                    lines.append(f"- {text[:800]}")
+        if isinstance(subsections, list):
+            for sub in subsections[:8]:
+                if not isinstance(sub, dict):
+                    continue
+                sub_title = str(sub.get("title") or "").strip()
+                sub_content = str(sub.get("content") or "").strip()
+                sub_items = sub.get("items")
+                if sub_title:
+                    lines.append(f"{sub_title}:")
+                if sub_content:
+                    lines.append(sub_content[:1200])
+                if isinstance(sub_items, list):
+                    for item in sub_items[:12]:
+                        text = str(item).strip()
+                        if text:
+                            lines.append(f"- {text[:600]}")
+        if len(lines) > 1:
+            parts.append("\n".join(lines))
+    if len(parts) == 1:
+        return ""
+    return "\n\n" + "\n".join(parts)
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -747,6 +804,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
     _knowledge_files_block = _build_knowledge_files_block()
+    _dashboard_sot_block = _build_dashboard_sot_block()
     # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
     # so both persona block and SOT block see the same snapshot.
     _icp_envelope = _icp_envelope_for_prompt()
@@ -757,7 +815,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_dashboard_sot_block}{_icp_sot_block}
 
 {writing_style_block}
 

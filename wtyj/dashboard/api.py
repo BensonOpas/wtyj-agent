@@ -11,6 +11,7 @@ import secrets
 import urllib.parse
 import anthropic
 import requests as http_requests
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
@@ -156,6 +157,58 @@ async def get_status():
         "pending": pending, "approved": approved, "rejected": rejected,
         "published": published, "deleted": deleted, "learnings": learnings,
         "season": season,
+    }
+
+
+def _iso_to_datetime(value: str):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+@router.get("/onboarding/status", dependencies=[Depends(_check_auth)])
+async def get_onboarding_status():
+    """Tenant onboarding state for the first-run dashboard banner.
+
+    No secrets are returned. The WhatsApp URL contains only the tenant's
+    one-purpose connect token from client.json; Zernio and bridge tokens stay
+    server-side.
+    """
+    raw = config_loader.get_raw()
+    business = config_loader.get_business()
+    slug = _current_tenant_slug()
+    now = datetime.now(timezone.utc)
+    trial_ends = _iso_to_datetime(str(raw.get("trial_ends_at") or ""))
+    trial_started = _iso_to_datetime(str(raw.get("trial_started_at") or ""))
+    days_remaining = None
+    if trial_ends is not None:
+        delta = trial_ends - now
+        days_remaining = max(0, int((delta.total_seconds() + 86399) // 86400))
+
+    connect_token = raw.get("whatsapp_connect_token")
+    whatsapp_connect_url = ""
+    if isinstance(connect_token, str) and connect_token.strip() and slug:
+        base = os.environ.get("NR3_PUBLIC_BASE_URL", "https://icp.unboks.org").rstrip("/")
+        whatsapp_connect_url = (
+            f"{base}/connect/whatsapp/customer/start?"
+            f"tenantId={urllib.parse.quote(slug)}&"
+            f"token={urllib.parse.quote(connect_token.strip())}"
+        )
+
+    return {
+        "tenantSlug": slug,
+        "businessName": business.get("name") or raw.get("name") or slug,
+        "billingStatus": raw.get("billing_status") or raw.get("trial_status") or "",
+        "trialStartedAt": trial_started.isoformat() if trial_started else None,
+        "trialEndsAt": trial_ends.isoformat() if trial_ends else None,
+        "trialDaysRemaining": days_remaining,
+        "whatsappConnectUrl": whatsapp_connect_url,
     }
 
 
@@ -1861,6 +1914,176 @@ async def put_source_of_truth(req: SourceOfTruthRequest):
     cleaned = _strip_cross_tenant_default_sot(cleaned)
     saved = state_registry.source_of_truth_set(cleaned)
     return {"blocks": saved}
+
+
+_AGENT_STYLE_SETTING_KEY = "agent_personality_style"
+_AGENT_STYLE_SOT_ID = "agent-personality-style"
+
+
+class AgentPersonalityPayload(BaseModel):
+    tone: str = ""
+    formality: str = ""
+    empathy: str = ""
+    appointmentStyle: str = ""
+    instructions: str = ""
+    examples: list[str] = []
+
+
+def _clean_agent_personality_payload(req: AgentPersonalityPayload) -> dict:
+    examples = []
+    for item in req.examples:
+        if isinstance(item, str) and item.strip():
+            examples.append(item.strip()[:1200])
+    return {
+        "tone": req.tone.strip()[:120],
+        "formality": req.formality.strip()[:120],
+        "empathy": req.empathy.strip()[:120],
+        "appointmentStyle": req.appointmentStyle.strip()[:220],
+        "instructions": req.instructions.strip()[:3000],
+        "examples": examples[:4],
+    }
+
+
+def _agent_personality_summary(payload: dict) -> str:
+    parts = []
+    if payload.get("tone"):
+        parts.append(f"Tone: {payload['tone']}")
+    if payload.get("formality"):
+        parts.append(f"Formality: {payload['formality']}")
+    if payload.get("empathy"):
+        parts.append(f"Empathy: {payload['empathy']}")
+    if payload.get("appointmentStyle"):
+        parts.append(f"Appointment style: {payload['appointmentStyle']}")
+    if payload.get("instructions"):
+        parts.append(f"Operator instructions:\n{payload['instructions']}")
+    if payload.get("examples"):
+        parts.append("Approved example replies:\n" + "\n\n".join(payload["examples"]))
+    return "\n\n".join(parts).strip()
+
+
+def _save_agent_personality_sot(payload: dict) -> list:
+    current = state_registry.source_of_truth_get()
+    block = {
+        "id": _AGENT_STYLE_SOT_ID,
+        "title": "Agent personality and tone",
+        "content": _agent_personality_summary(payload),
+    }
+    merged = [block] + [
+        item for item in current
+        if isinstance(item, dict) and item.get("id") != _AGENT_STYLE_SOT_ID
+    ]
+    cleaned = _strip_cross_tenant_default_sot(_validate_sot_blocks(merged))
+    return state_registry.source_of_truth_set(cleaned)
+
+
+@router.get("/settings/agent-personality", dependencies=[Depends(_check_auth)])
+async def get_agent_personality():
+    raw = state_registry.get_setting(_AGENT_STYLE_SETTING_KEY, "")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = {}
+    else:
+        parsed = {}
+    defaults = {
+        "tone": "",
+        "formality": "",
+        "empathy": "",
+        "appointmentStyle": "",
+        "instructions": "",
+        "examples": [],
+    }
+    if isinstance(parsed, dict):
+        defaults.update({k: parsed.get(k, defaults[k]) for k in defaults})
+    return defaults
+
+
+@router.post("/settings/agent-personality/examples",
+             dependencies=[Depends(_check_auth)])
+async def generate_agent_personality_examples(req: AgentPersonalityPayload):
+    payload = _clean_agent_personality_payload(req)
+    if not any(payload.get(key) for key in ("tone", "formality", "empathy", "instructions")):
+        raise HTTPException(status_code=400, detail="Add tone instructions first.")
+    business = config_loader.get_business()
+    prompt = f"""Create three short WhatsApp example replies for this business's AI agent.
+
+Business: {business.get('name', 'the business')}
+Tone: {payload.get('tone') or 'natural and helpful'}
+Formality: {payload.get('formality') or 'balanced'}
+Empathy: {payload.get('empathy') or 'human and practical'}
+Appointment style: {payload.get('appointmentStyle') or 'do not push appointments unless needed'}
+Operator instructions:
+{payload.get('instructions') or '(none)'}
+
+Rules:
+- Use Claude to generate examples only; do not claim these are live customer messages.
+- Keep each reply under 70 words.
+- Sound human, not like a chatbot.
+- Do not over-push appointments.
+- Return strict JSON only: {{"examples":["...","...","..."]}}"""
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(status_code=503, detail="Claude is not configured.")
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=900,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = (response.content[0].text if response.content else "").strip()
+        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+        raw_text = re.sub(r"\s*```$", "", raw_text.strip())
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        bm_logger.log("agent_personality_examples_parse_failed")
+        raise HTTPException(status_code=502, detail="Claude returned an unreadable response.") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        bm_logger.log("agent_personality_examples_failed", error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail="Could not generate tone examples.") from exc
+    examples = parsed.get("examples") if isinstance(parsed, dict) else None
+    if not isinstance(examples, list):
+        raise HTTPException(status_code=502, detail="Claude returned no examples.")
+    cleaned = [str(item).strip() for item in examples if str(item).strip()]
+    return {"examples": cleaned[:3], "model": model}
+
+
+@router.put("/settings/agent-personality", dependencies=[Depends(_check_auth)])
+async def put_agent_personality(req: AgentPersonalityPayload):
+    payload = _clean_agent_personality_payload(req)
+    summary = _agent_personality_summary(payload)
+    if not summary:
+        raise HTTPException(status_code=400, detail="Add tone instructions before saving.")
+    state_registry.set_setting(
+        _AGENT_STYLE_SETTING_KEY,
+        json.dumps(payload, ensure_ascii=False),
+    )
+    saved_blocks = _save_agent_personality_sot(payload)
+
+    from shared import icp_overrides as _icp
+    bridge_style = _icp.write_agent_style(
+        tone=payload.get("tone") or "Tenant-specific operator style",
+        notes=summary,
+    )
+    bridge_sot = _icp.write_sot_entry(
+        entry_id=_AGENT_STYLE_SOT_ID,
+        title="Agent personality and tone",
+        content=summary,
+        category="agent_style",
+    )
+    return {
+        **payload,
+        "blocks": saved_blocks,
+        "bridgeSaved": bool(bridge_style.get("ok") and bridge_sot.get("ok")),
+        "bridge": {
+            "agentStyle": bridge_style,
+            "sourceOfTruth": bridge_sot,
+        },
+    }
 
 
 # === Brief 264: Agent learning preference settings (issue #35) ===
