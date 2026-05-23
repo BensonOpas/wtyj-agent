@@ -2022,7 +2022,7 @@ Rules:
 - Sound human, not like a chatbot.
 - Do not over-push appointments.
 - Return strict JSON only: {{"examples":["...","...","..."]}}"""
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
