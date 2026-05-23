@@ -9,6 +9,7 @@ os.environ.setdefault("META_ACCESS_TOKEN", "test")
 os.environ.setdefault("LATE_API_KEY", "test")
 
 from fastapi.testclient import TestClient
+from PIL import Image
 from agents.social.webhook_server import app
 from shared import state_registry
 
@@ -27,8 +28,16 @@ def _auth(token):
 def _reset():
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM knowledge_files")
+    conn.execute("DELETE FROM knowledge_media")
+    conn.execute("DELETE FROM info_updates")
     conn.commit()
     conn.close()
+
+
+def _make_png() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 12), color=(30, 120, 200)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _make_docx(body_text: str) -> bytes:
@@ -330,6 +339,77 @@ def test_marina_can_disable_knowledge_files_prompt(monkeypatch):
         filename="policy.txt", stored_filename="x", mime_type="text/plain",
         size_bytes=12, status="ready", extracted_text="Do not include this.")
     assert marina_agent._build_knowledge_files_block() == ""
+
+
+def test_upload_knowledge_media_attaches_to_info_update():
+    _reset()
+    token = _login()
+    update_id = state_registry.info_update_create(
+        text="Oceanview Apartment P-101 has sea view and a shared pool.",
+        type_="property")
+    r = client.post(
+        "/dashboard/api/knowledge/media",
+        data={
+            "knowledge_id": str(update_id),
+            "source": "info_update",
+            "caption": "Balcony view",
+        },
+        files={"file": ("p101.png", _make_png(), "image/png")},
+        headers=_auth(token))
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["knowledgeId"] == str(update_id)
+    assert payload["caption"] == "Balcony view"
+    assert payload["mimeType"] == "image/jpeg"
+    assert "/knowledge/media/public/" in payload["url"]
+
+    listed = client.get(
+        f"/dashboard/api/knowledge/media?knowledge_id={update_id}",
+        headers=_auth(token))
+    assert listed.status_code == 200
+    assert listed.json()["media"][0]["id"] == payload["id"]
+
+    public_path = payload["url"].split("/dashboard/api", 1)[1]
+    public = client.get(f"/dashboard/api{public_path}")
+    assert public.status_code == 200
+    assert public.headers["content-type"].startswith("image/jpeg")
+
+
+def test_knowledge_media_rejects_missing_item():
+    _reset()
+    token = _login()
+    r = client.post(
+        "/dashboard/api/knowledge/media",
+        data={"knowledge_id": "999999", "source": "info_update"},
+        files={"file": ("x.png", _make_png(), "image/png")},
+        headers=_auth(token))
+    assert r.status_code == 404
+
+
+def test_marina_lists_knowledge_media_links(monkeypatch):
+    _reset()
+    from agents.marina import marina_agent
+    monkeypatch.setenv("TENANT_SLUG", "test")
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://api.unboks.org")
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw",
+                        lambda: {"features": {}})
+    update_id = state_registry.info_update_create(
+        text="Chocolate cupcakes are sold in boxes of six.",
+        type_="product")
+    state_registry.knowledge_media_create(
+        knowledge_id=str(update_id),
+        filename="cupcakes.jpg",
+        original_filename="cupcakes.jpg",
+        mime_type="image/jpeg",
+        size_bytes=123,
+        caption="Chocolate cupcake box",
+        public_token="abc123TOKEN_knowledge_media",
+    )
+    block = marina_agent._build_knowledge_media_block()
+    assert "AVAILABLE KNOWLEDGE IMAGES" in block
+    assert "Chocolate cupcake box" in block
+    assert "Chocolate cupcakes are sold in boxes of six" in block
+    assert "https://api.unboks.org/api/test/dashboard/api/knowledge/media/public/abc123TOKEN_knowledge_media" in block
 
 
 

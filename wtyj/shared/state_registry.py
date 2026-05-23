@@ -631,6 +631,25 @@ def _get_conn():
         "last_used_at TEXT"
         ")"
     )
+    # Tenant-scoped images attached to saved knowledge updates. Unlike
+    # knowledge_files, these are not OCR/indexed documents. They are visual
+    # assets Marina can reference when a customer asks for photos, examples,
+    # product images, property pictures, menus, etc.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS knowledge_media ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "knowledge_source TEXT NOT NULL DEFAULT 'info_update', "
+        "knowledge_id TEXT NOT NULL, "
+        "filename TEXT NOT NULL, "
+        "original_filename TEXT NOT NULL, "
+        "mime_type TEXT NOT NULL DEFAULT 'image/jpeg', "
+        "size_bytes INTEGER NOT NULL DEFAULT 0, "
+        "caption TEXT NOT NULL DEFAULT '', "
+        "public_token TEXT NOT NULL UNIQUE, "
+        "uploaded_at TEXT NOT NULL, "
+        "last_used_at TEXT"
+        ")"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS photo_library ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -3243,6 +3262,135 @@ def knowledge_file_delete(file_id: int) -> Optional[str]:
     return stored
 
 
+def knowledge_media_create(knowledge_id: str, filename: str,
+                           original_filename: str, mime_type: str,
+                           size_bytes: int, caption: str = "",
+                           knowledge_source: str = "info_update",
+                           public_token: str = "") -> int:
+    """Create an image/media row attached to a tenant knowledge item."""
+    now = datetime.now(timezone.utc).isoformat()
+    token = public_token or hashlib.sha256(
+        f"{knowledge_source}:{knowledge_id}:{filename}:{now}".encode()
+    ).hexdigest()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO knowledge_media "
+        "(knowledge_source, knowledge_id, filename, original_filename, "
+        "mime_type, size_bytes, caption, public_token, uploaded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (knowledge_source, str(knowledge_id), filename, original_filename,
+         mime_type, int(size_bytes or 0), caption or "", token, now))
+    row_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def knowledge_media_list(knowledge_id: str = "",
+                         knowledge_source: str = "info_update") -> list:
+    """Return knowledge-attached media rows in newest-first order."""
+    conn = _get_conn()
+    if knowledge_id:
+        rows = conn.execute(
+            "SELECT id, knowledge_source, knowledge_id, filename, "
+            "original_filename, mime_type, size_bytes, caption, public_token, "
+            "uploaded_at, last_used_at FROM knowledge_media "
+            "WHERE knowledge_source = ? AND knowledge_id = ? "
+            "ORDER BY uploaded_at DESC",
+            (knowledge_source, str(knowledge_id))).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, knowledge_source, knowledge_id, filename, "
+            "original_filename, mime_type, size_bytes, caption, public_token, "
+            "uploaded_at, last_used_at FROM knowledge_media "
+            "WHERE knowledge_source = ? ORDER BY uploaded_at DESC",
+            (knowledge_source,)).fetchall()
+    conn.close()
+    return [_knowledge_media_row_to_dict(r) for r in rows]
+
+
+def _knowledge_media_row_to_dict(r) -> dict:
+    return {
+        "id": str(r[0]),
+        "knowledgeSource": r[1],
+        "knowledgeId": r[2],
+        "filename": r[3],
+        "originalFilename": r[4],
+        "mimeType": r[5] or "image/jpeg",
+        "sizeBytes": r[6] or 0,
+        "caption": r[7] or "",
+        "publicToken": r[8] or "",
+        "uploadedAt": r[9],
+        "lastUsedAt": r[10],
+    }
+
+
+def knowledge_media_get(media_id: int) -> Optional[dict]:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, knowledge_source, knowledge_id, filename, "
+        "original_filename, mime_type, size_bytes, caption, public_token, "
+        "uploaded_at, last_used_at FROM knowledge_media WHERE id = ?",
+        (media_id,)).fetchone()
+    conn.close()
+    return _knowledge_media_row_to_dict(row) if row else None
+
+
+def knowledge_media_get_by_token(public_token: str) -> Optional[dict]:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, knowledge_source, knowledge_id, filename, "
+        "original_filename, mime_type, size_bytes, caption, public_token, "
+        "uploaded_at, last_used_at FROM knowledge_media WHERE public_token = ?",
+        (public_token,)).fetchone()
+    conn.close()
+    return _knowledge_media_row_to_dict(row) if row else None
+
+
+def knowledge_media_delete(media_id: int) -> Optional[str]:
+    """Delete a media DB row and return its stored filename for disk cleanup."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT filename FROM knowledge_media WHERE id = ?",
+        (media_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    filename = row[0]
+    conn.execute("DELETE FROM knowledge_media WHERE id = ?", (media_id,))
+    conn.commit()
+    conn.close()
+    return filename
+
+
+def get_knowledge_media_for_prompt(limit: int = 20) -> list:
+    """Return media rows joined to active info_updates for Marina's prompt."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT km.knowledge_id, km.caption, km.public_token, "
+        "km.original_filename, iu.type, iu.text "
+        "FROM knowledge_media km "
+        "LEFT JOIN info_updates iu "
+        "ON km.knowledge_source = 'info_update' "
+        "AND km.knowledge_id = CAST(iu.id AS TEXT) "
+        "WHERE km.knowledge_source = 'info_update' "
+        "AND (iu.id IS NULL OR iu.active = 1) "
+        "ORDER BY km.uploaded_at DESC LIMIT ?",
+        (limit,)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "knowledgeId": str(r[0]),
+            "caption": r[1] or "",
+            "publicToken": r[2] or "",
+            "filename": r[3] or "",
+            "type": r[4] or "general",
+            "text": r[5] or "",
+        })
+    return out
+
+
 def get_knowledge_files_for_prompt(limit: int = 5) -> list:
     """Brief 230: return up to `limit` ready knowledge files with their
     extracted text, newest first. Used by Marina's _build_knowledge_files_block."""
@@ -4365,7 +4513,10 @@ def get_approved_learnings_for_prompt(channel: str, limit: int = 20) -> list:
 
 # ── Brief 216: Your Info Updates (per-tenant temporary/permanent updates) ─────
 
-_INFO_UPDATE_TYPES = {"general", "offer", "holiday", "hours", "pricing", "other"}
+_INFO_UPDATE_TYPES = {
+    "general", "offer", "holiday", "hours", "pricing", "policy",
+    "property", "product", "other"
+}
 
 
 def info_update_create(text: str, type_: str = "general",

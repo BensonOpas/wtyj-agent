@@ -1352,6 +1352,14 @@ async def update_info_update_endpoint(update_id: int,
                dependencies=[Depends(_check_auth)])
 async def delete_info_update_endpoint(update_id: int):
     """Brief 216: hard-delete an info_update row."""
+    for media in state_registry.knowledge_media_list(
+        knowledge_id=str(update_id), knowledge_source="info_update"):
+        stored = state_registry.knowledge_media_delete(int(media["id"]))
+        if stored:
+            try:
+                os.remove(os.path.join(_KNOWLEDGE_MEDIA_DIR, stored))
+            except OSError:
+                pass
     ok = state_registry.info_update_delete(update_id)
     if not ok:
         raise HTTPException(status_code=404, detail="info_update not found")
@@ -1494,8 +1502,54 @@ async def data_retention_delete_customer(req: DataRetentionDeleteReq):
 _KNOWLEDGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge")
 os.makedirs(_KNOWLEDGE_DIR, exist_ok=True)
+_KNOWLEDGE_MEDIA_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge_media")
+os.makedirs(_KNOWLEDGE_MEDIA_DIR, exist_ok=True)
 
 _KNOWLEDGE_MAX_BYTES = 25 * 1024 * 1024  # match SR's frontend cap
+_KNOWLEDGE_MEDIA_MAX_BYTES = 10 * 1024 * 1024
+_KNOWLEDGE_MEDIA_ALLOWED = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _knowledge_media_public_url(public_token: str) -> str:
+    tenant = (
+        os.environ.get("TENANT_SLUG")
+        or os.environ.get("TENANT_ID")
+        or config_loader.get_raw().get("slug", "")
+        or "unboks"
+    )
+    base = (
+        os.environ.get("PUBLIC_API_BASE_URL")
+        or os.environ.get("DASHBOARD_PUBLIC_API_BASE_URL")
+        or "https://api.unboks.org"
+    ).rstrip("/")
+    return (
+        f"{base}/api/{urllib.parse.quote(str(tenant), safe='')}"
+        f"/dashboard/api/knowledge/media/public/{public_token}"
+    )
+
+
+def _shape_knowledge_media(row: dict) -> dict:
+    out = dict(row)
+    token = out.pop("publicToken", "")
+    out["url"] = _knowledge_media_public_url(token) if token else ""
+    return out
+
+
+def _process_knowledge_media_image(data: bytes) -> tuple[bytes, int, int]:
+    """Verify and normalize uploaded knowledge images to web-friendly JPEG."""
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.verify()
+        img = Image.open(io.BytesIO(data))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+    img = img.convert("RGB")
+    if img.width > 1600 or img.height > 1600:
+        img.thumbnail((1600, 1600))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=86, optimize=True)
+    return out.getvalue(), img.width, img.height
 
 
 @router.post("/knowledge/files", dependencies=[Depends(_check_auth)])
@@ -1553,6 +1607,111 @@ async def upload_knowledge_file(file: UploadFile = File(...)):
 async def list_knowledge_files():
     """Brief 230: return all knowledge files in SR's KnowledgeFile shape."""
     return state_registry.knowledge_files_list()
+
+
+@router.get("/knowledge/media", dependencies=[Depends(_check_auth)])
+async def list_knowledge_media(knowledge_id: str = Query(default=""),
+                               source: str = Query(default="info_update")):
+    """Return image assets attached to saved knowledge items."""
+    return {
+        "media": [
+            _shape_knowledge_media(m)
+            for m in state_registry.knowledge_media_list(
+                knowledge_id=knowledge_id, knowledge_source=source)
+        ]
+    }
+
+
+@router.post("/knowledge/media", dependencies=[Depends(_check_auth)])
+async def upload_knowledge_media(
+    knowledge_id: str = Form(...),
+    source: str = Form(default="info_update"),
+    caption: str = Form(default=""),
+    file: UploadFile = File(...),
+):
+    """Attach a tenant image to a knowledge item.
+
+    Images are visual SOT assets: property photos, product photos, menu
+    examples, cupcake pictures, before/after work, etc. They are not OCR'd.
+    Marina sees their captions + public links in the prompt.
+    """
+    cleaned_id = (knowledge_id or "").strip()
+    if not cleaned_id:
+        raise HTTPException(status_code=400, detail="knowledge_id required")
+    if source != "info_update":
+        raise HTTPException(status_code=400, detail="unsupported knowledge source")
+    if not any(
+        str(u.get("id", "")) == cleaned_id
+        for u in state_registry.info_updates_list_all()
+    ):
+        raise HTTPException(status_code=404, detail="knowledge item not found")
+
+    data = await file.read()
+    if len(data) > _KNOWLEDGE_MEDIA_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image too large. Max {_KNOWLEDGE_MEDIA_MAX_BYTES // (1024*1024)} MB.")
+    content_type = (file.content_type or "").lower()
+    if content_type not in _KNOWLEDGE_MEDIA_ALLOWED:
+        raise HTTPException(
+            status_code=400,
+            detail="Only JPG, PNG, and WebP images are supported.")
+
+    processed, _width, _height = _process_knowledge_media_image(data)
+    public_token = secrets.token_urlsafe(24)
+    stored_filename = f"knowledge_media_{public_token}.jpg"
+    with open(os.path.join(_KNOWLEDGE_MEDIA_DIR, stored_filename), "wb") as fh:
+        fh.write(processed)
+
+    row_id = state_registry.knowledge_media_create(
+        knowledge_id=cleaned_id,
+        knowledge_source=source,
+        filename=stored_filename,
+        original_filename=file.filename or "image.jpg",
+        mime_type="image/jpeg",
+        size_bytes=len(processed),
+        caption=(caption or "").strip()[:500],
+        public_token=public_token,
+    )
+    bm_logger.log("knowledge_media_uploaded",
+                  media_id=row_id,
+                  knowledge_id=cleaned_id,
+                  size_bytes=len(processed),
+                  filename=(file.filename or "")[:120])
+    media = state_registry.knowledge_media_get(row_id)
+    return _shape_knowledge_media(media) if media else {"id": str(row_id)}
+
+
+@router.delete("/knowledge/media/{media_id}",
+               dependencies=[Depends(_check_auth)])
+async def delete_knowledge_media(media_id: int):
+    stored = state_registry.knowledge_media_delete(media_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Knowledge image not found")
+    try:
+        os.remove(os.path.join(_KNOWLEDGE_MEDIA_DIR, stored))
+    except OSError:
+        pass
+    return {"ok": True, "id": media_id}
+
+
+@router.get("/knowledge/media/public/{public_token}")
+async def get_public_knowledge_media(public_token: str):
+    """Serve a knowledge image by unguessable token.
+
+    No dashboard token is required because WhatsApp recipients must be able to
+    open the image link. The token is random and not derived from tenant data.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{24,80}", public_token or ""):
+        raise HTTPException(status_code=404, detail="Image not found")
+    media = state_registry.knowledge_media_get_by_token(public_token)
+    if not media:
+        raise HTTPException(status_code=404, detail="Image not found")
+    path = os.path.abspath(os.path.join(_KNOWLEDGE_MEDIA_DIR, media["filename"]))
+    root = os.path.abspath(_KNOWLEDGE_MEDIA_DIR)
+    if not path.startswith(root + os.sep) or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path, media_type=media.get("mimeType") or "image/jpeg")
 
 
 # === Brief 260: cloud knowledge connector status endpoint ===

@@ -589,6 +589,62 @@ def _build_knowledge_files_block() -> str:
     return "\n\n" + "\n".join(parts)
 
 
+def _knowledge_media_public_url(public_token: str) -> str:
+    tenant = (
+        os.environ.get("TENANT_SLUG")
+        or os.environ.get("TENANT_ID")
+        or config_loader.get_raw().get("slug", "")
+        or "unboks"
+    )
+    base = (
+        os.environ.get("PUBLIC_API_BASE_URL")
+        or os.environ.get("DASHBOARD_PUBLIC_API_BASE_URL")
+        or "https://api.unboks.org"
+    ).rstrip("/")
+    return (
+        f"{base}/api/{tenant}/dashboard/api/knowledge/media/public/"
+        f"{public_token}"
+    )
+
+
+def _build_knowledge_media_block() -> str:
+    """List tenant-uploaded visual assets Marina can share as links."""
+    features = config_loader.get_raw().get("features", {}) or {}
+    if features.get("knowledge_media_in_prompt") is False:
+        return ""
+    try:
+        from shared import state_registry
+        rows = state_registry.get_knowledge_media_for_prompt(limit=20)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    parts = [
+        "AVAILABLE KNOWLEDGE IMAGES (tenant-uploaded visuals):",
+        "When the customer asks for pictures, photos, examples, product "
+        "images, property photos, or visual proof, use these image links. "
+        "Match the image to the relevant knowledge item. Do not invent images. "
+        "If there is no relevant image, say you do not have a photo for that yet."
+    ]
+    for row in rows:
+        token = (row.get("publicToken") or "").strip()
+        if not token:
+            continue
+        text = (row.get("text") or "").strip().replace("\n", " ")
+        caption = (row.get("caption") or "").strip()
+        filename = (row.get("filename") or "").strip()
+        label = caption or filename or "Image"
+        context = text[:260]
+        url = _knowledge_media_public_url(token)
+        if context:
+            parts.append(f"- {label}: {context} | Image: {url}")
+        else:
+            parts.append(f"- {label}: {url}")
+    if len(parts) == 2:
+        return ""
+    return "\n\n" + "\n".join(parts)
+
+
 def _build_dashboard_sot_block() -> str:
     """Render Source of Truth saved in Nr2 Settings into Marina's prompt.
 
@@ -804,6 +860,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
     _knowledge_files_block = _build_knowledge_files_block()
+    _knowledge_media_block = _build_knowledge_media_block()
     _dashboard_sot_block = _build_dashboard_sot_block()
     # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
     # so both persona block and SOT block see the same snapshot.
@@ -815,7 +872,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_dashboard_sot_block}{_icp_sot_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_knowledge_media_block}{_dashboard_sot_block}{_icp_sot_block}
 
 {writing_style_block}
 
