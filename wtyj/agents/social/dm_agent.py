@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, icp_overrides
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
@@ -209,6 +209,16 @@ def handle_incoming_dm(message: dict) -> str:
     channel = message["channel"]
     sender_name = message.get("sender_name", "")
     text = message["text"]
+
+    try:
+        if not icp_overrides.channel_is_enabled(channel):
+            bm_logger.log("icp_channel_disabled_skip",
+                          channel=channel,
+                          conversation_id=conversation_id[:20])
+            return ""
+    except Exception as e:
+        bm_logger.log("icp_channel_check_failed",
+                      channel=channel, error=str(e)[:120])
 
     # Rate limiting per conversation
     if _is_rate_limited(conversation_id, channel):

@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath
 from shared import state_registry
 from shared import bm_logger
 from shared import config_loader
+from shared import icp_overrides
 # Brief 235: register the Brief 227 escalation summary dispatcher in this
 # process. The side-effect import installs _generate_escalation_summary
 # as state_registry._summary_dispatcher so escalations created by the
@@ -717,6 +718,17 @@ def main():
                     save_json(THREAD_STATE_PATH, state)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     continue
+
+                try:
+                    if not icp_overrides.channel_is_enabled("email"):
+                        log(f"email_icp_channel_disabled from={from_email[:40]} subj={subj[:40]}")
+                        th["last_activity"] = now
+                        threads[thread_key] = th
+                        save_json(THREAD_STATE_PATH, state)
+                        im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                        continue
+                except Exception as _e:
+                    log(f"email_icp_channel_check_failed err={str(_e)[:120]}")
 
                 # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
                 if th["flags"].get("fully_escalated"):

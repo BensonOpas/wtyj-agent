@@ -23,6 +23,27 @@ def _cleanup(phone):
     conn.close()
 
 
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_icp_whatsapp_toggle_off_skips_marina(mock_process, monkeypatch):
+    from agents.social.social_agent import handle_incoming_whatsapp_message
+    phone = "135_icp_disabled"
+    _cleanup(phone)
+    monkeypatch.setattr(
+        "agents.social.social_agent._icp_overrides.channel_is_enabled",
+        lambda channel: False,
+    )
+
+    reply = handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "hello",
+        "from_name": "Test",
+    })
+
+    assert reply == ""
+    mock_process.assert_not_called()
+    _cleanup(phone)
+
+
 # --- Test 1: Booking flow OFF creates escalation instead of booking ---
 @patch("agents.social.social_agent.sheets_writer")
 @patch("agents.social.social_agent.payment_stub")

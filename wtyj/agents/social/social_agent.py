@@ -14,6 +14,7 @@ from shared import appointment_detector
 from shared import state_registry
 from shared import bm_logger
 from shared import config_loader
+from shared import icp_overrides as _icp_overrides
 from agents.marina import marina_agent
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
@@ -172,6 +173,14 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
     phone = message.get("from", "")
     text = message.get("text", "")
     from_name = message.get("from_name", "")
+    try:
+        if not _icp_overrides.channel_is_enabled(channel):
+            bm_logger.log("icp_channel_disabled_skip",
+                          channel=channel, conversation_id=phone[:20])
+            return ""
+    except Exception as _e:
+        bm_logger.log("icp_channel_check_failed",
+                      channel=channel, error=str(_e)[:120])
 
     _channel_label = {"whatsapp": "WhatsApp", "instagram_dm": "Instagram",
                       "facebook_dm": "Facebook", "twitter_dm": "X/Twitter"}.get(channel, channel)

@@ -47,6 +47,23 @@ ICP_OVERRIDES_TTL_SECONDS = int(os.environ.get("ICP_OVERRIDES_TTL_SECONDS", "60"
 # request handling.
 _HTTP_TIMEOUT_SECONDS = 3.0
 
+_CHANNEL_TOGGLE_KEYS = {
+    "whatsapp": "whatsapp_inbox",
+    "email": "email_inbox",
+    "instagram": "instagram_dms",
+    "instagram_dm": "instagram_dms",
+    "facebook": "facebook_dms",
+    "facebook_dm": "facebook_dms",
+    "messenger": "messenger_dms",
+    "messenger_dm": "messenger_dms",
+    "telegram": "telegram_alerts",
+    "tiktok": "tiktok_dms",
+    "tiktok_dm": "tiktok_dms",
+    "x": "x_dms",
+    "twitter": "x_dms",
+    "twitter_dm": "x_dms",
+}
+
 
 # Module-level cache: (tenant_id) -> (fetched_at_unix, envelope_dict)
 _cache: dict = {}
@@ -174,6 +191,26 @@ def write_sot_entry(
         },
         method="POST",
     )
+
+
+def channel_is_enabled(channel: str, envelope: Optional[dict] = None) -> bool:
+    """Return False only when Nr3 explicitly disables this channel.
+
+    Fail-open by design: if the bridge is down, the toggle is absent, or
+    the channel is unknown, preserve existing runtime behavior. The operator
+    toggle becomes authoritative only when Nr3 sends a concrete false value.
+    """
+    key = _CHANNEL_TOGGLE_KEYS.get((channel or "").strip().lower())
+    if not key:
+        return True
+    env = envelope if isinstance(envelope, dict) else fetch_overrides()
+    toggles = env.get("feature_toggles") if isinstance(env, dict) else None
+    if not isinstance(toggles, dict):
+        return True
+    state = toggles.get(key)
+    if not isinstance(state, dict) or "value" not in state:
+        return True
+    return bool(state.get("value"))
 
 
 def clear_cache() -> None:

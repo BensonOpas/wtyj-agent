@@ -152,6 +152,24 @@ def test_token_never_in_returned_envelope(monkeypatch, configured):
     assert TOKEN not in blob
 
 
+def test_channel_is_enabled_false_only_when_explicitly_disabled():
+    env = {
+        "feature_toggles": {
+            "whatsapp_inbox": {"value": False},
+            "email_inbox": {"value": True},
+        }
+    }
+    assert icp_overrides.channel_is_enabled("whatsapp", env) is False
+    assert icp_overrides.channel_is_enabled("email", env) is True
+    assert icp_overrides.channel_is_enabled("instagram_dm", env) is True
+    assert icp_overrides.channel_is_enabled("unknown", env) is True
+
+
+def test_channel_is_enabled_fails_open_on_bridge_unavailable():
+    env = {"available": False, "feature_toggles": {}}
+    assert icp_overrides.channel_is_enabled("whatsapp", env) is True
+
+
 # --- error handling --------------------------------------------------
 
 
