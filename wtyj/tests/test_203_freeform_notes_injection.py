@@ -100,6 +100,50 @@ def test_no_master_prompt_falls_back_to_hardcoded_writing_style(mock_config):
     assert 'AVOID: em dashes' in prompt
 
 
+@patch("agents.social.dm_agent.icp_overrides.fetch_overrides")
+@patch("agents.social.dm_agent.config_loader")
+def test_dm_prompt_includes_icp_sot_and_tone_overrides(mock_config, mock_fetch):
+    """Q&A-only DM prompt path must consume Nr3 SOT/tone like Marina does."""
+    from agents.social.dm_agent import _build_dm_system_prompt
+
+    mock_config.get_business.return_value = {
+        "agent_name": "Marina", "name": "Clinic", "whatsapp": "+59999999",
+        "languages": ["English"],
+    }
+    mock_config.get_common_sense_knowledge.return_value = {}
+    mock_config.get_services.return_value = {}
+    mock_config.get_faq.return_value = {}
+    mock_config.get_raw.return_value = {
+        "terminology": {},
+        "features": {"booking_flow": False},
+        "agent_persona": {"freeform_notes": "Base master prompt."},
+    }
+    mock_fetch.return_value = {
+        "available": True,
+        "sot_entries": [{
+            "title": "Roberto intake rule",
+            "content": "Collect center preference, horario, full name, phone, and reason before handoff.",
+            "category": "appointments",
+        }],
+        "ai_agent_settings": {
+            "tone": {
+                "tone": "Warm, calm Spanish clinic receptionist",
+                "notes": "Do not sound robotic.",
+                "source": "icp_override",
+            },
+            "escalation_rules": None,
+        },
+    }
+
+    prompt = _build_dm_system_prompt("instagram_dm")
+
+    assert "FINAL TENANT-SPECIFIC OPERATOR OVERRIDES FROM NR3" in prompt
+    assert "Roberto intake rule" in prompt
+    assert "Collect center preference" in prompt
+    assert "Warm, calm Spanish clinic receptionist" in prompt
+    assert "Do not sound robotic" in prompt
+
+
 # ── End-to-end: full handle_incoming_dm flow with master prompt ────────────
 
 @patch("agents.social.dm_agent.state_registry")

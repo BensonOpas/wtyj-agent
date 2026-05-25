@@ -57,6 +57,73 @@ def _build_dm_approved_answers_block(channel: str) -> str:
     )
 
 
+def _build_dm_icp_override_block(envelope: dict) -> str:
+    """Render Nr3 SOT/tone overrides for the Q&A-only DM prompt path."""
+    if not isinstance(envelope, dict):
+        return ""
+
+    entries = envelope.get("sot_entries") or []
+    ai_agent_settings = envelope.get("ai_agent_settings") or {}
+    if not isinstance(entries, list):
+        entries = []
+    if not isinstance(ai_agent_settings, dict):
+        ai_agent_settings = {}
+
+    tone = ai_agent_settings.get("tone")
+    rules = ai_agent_settings.get("escalation_rules")
+
+    has_tone = isinstance(tone, dict) and (
+        (tone.get("tone") or "").strip() or (tone.get("notes") or "").strip()
+    )
+    has_rules = isinstance(rules, dict) and (
+        rules.get("soft_escalation") or rules.get("hard_escalation")
+    )
+
+    clean_entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = (entry.get("title") or "").strip()
+        content = (entry.get("content") or "").strip()
+        category = (entry.get("category") or "general").strip()
+        if title and content:
+            clean_entries.append((category, title, content))
+
+    if not (has_tone or has_rules or clean_entries):
+        return ""
+
+    lines = [
+        "FINAL TENANT-SPECIFIC OPERATOR OVERRIDES FROM NR3 (HIGHEST PRIORITY):",
+        "- These are the latest Calvin/operator instructions for this tenant.",
+        "- Follow this block over generic DM examples, old default wording, and generic platform behavior.",
+        "- Apply these instructions immediately in the next reply.",
+    ]
+
+    if has_tone:
+        tone_value = (tone.get("tone") or "").strip()
+        notes = (tone.get("notes") or "").strip()
+        if tone_value:
+            lines.append(f"\nTone override: {tone_value}")
+        if notes:
+            lines.append(f"Tone notes: {notes}")
+
+    if clean_entries:
+        lines.append("\nSource of Truth overrides:")
+        for category, title, content in clean_entries:
+            lines.append(f"[{category}] {title}\n{content}")
+
+    if has_rules:
+        soft = rules.get("soft_escalation") or {}
+        hard = rules.get("hard_escalation") or {}
+        lines.append("\nEscalation rule overrides:")
+        if isinstance(soft, dict) and soft.get("enabled"):
+            lines.append(f"- Agent needs help when: {(soft.get('when') or '').strip()}")
+        if isinstance(hard, dict) and hard.get("enabled"):
+            lines.append(f"- Human takeover when: {(hard.get('when') or '').strip()}")
+
+    return "\n".join(lines)
+
+
 def _build_dm_system_prompt(channel: str) -> str:
     """Build a Q&A-focused system prompt for DM channels. No booking logic.
     Brief 203: when client.json's agent_persona.freeform_notes is set, the
@@ -131,6 +198,11 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
     # features.approved_learnings_in_prompt). Computed once, used by
     # both the master_prompt branch and the fallback branch below.
     approved_answers_block = _build_dm_approved_answers_block(channel)
+    try:
+        icp_override_block = _build_dm_icp_override_block(
+            icp_overrides.fetch_overrides())
+    except Exception:
+        icp_override_block = ""
 
     if master_prompt:
         # Brief 203: master prompt mode. Drop the "friendly, casual, and human"
@@ -145,7 +217,10 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         parts.extend([services_block, faq_block])
         if booking_flow:
             parts.append(booking_redirect_block)
-        parts.extend([language_block, emoji_block, output_rule])
+        parts.extend([language_block, emoji_block])
+        if icp_override_block:
+            parts.append(icp_override_block)
+        parts.append(output_rule)
         return "\n\n".join(parts)
 
     # Fallback: no master prompt set — use hardcoded WRITING STYLE / AVOID blocks.
@@ -168,6 +243,8 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         booking_redirect_block, language_block, avoid_block,
         emoji_block, output_rule,
     ])
+    if icp_override_block:
+        fallback_parts.insert(-1, icp_override_block)
     return "\n\n".join(fallback_parts)
 
 
