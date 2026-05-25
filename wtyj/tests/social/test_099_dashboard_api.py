@@ -56,6 +56,38 @@ def test_login_wrong_password():
     assert resp.status_code == 401
 
 
+def test_login_rate_limits_failed_attempts(monkeypatch):
+    from dashboard import api as dashboard_api
+
+    dashboard_api._LOGIN_FAILURES.clear()
+    monkeypatch.setenv("DASHBOARD_LOGIN_MAX_FAILURES", "2")
+    monkeypatch.setenv("DASHBOARD_LOGIN_WINDOW_SECONDS", "60")
+
+    headers = {"x-forwarded-for": "203.0.113.10"}
+    assert client.post(
+        "/dashboard/api/login",
+        json={"password": "wrong-1"},
+        headers=headers,
+    ).status_code == 401
+    assert client.post(
+        "/dashboard/api/login",
+        json={"password": "wrong-2"},
+        headers=headers,
+    ).status_code == 401
+    assert client.post(
+        "/dashboard/api/login",
+        json={"password": "wrong-3"},
+        headers=headers,
+    ).status_code == 429
+
+    dashboard_api._LOGIN_FAILURES.clear()
+    assert client.post(
+        "/dashboard/api/login",
+        json={"password": "testpass"},
+        headers=headers,
+    ).status_code == 200
+
+
 def test_status_requires_auth():
     resp = client.get("/dashboard/api/status")
     assert resp.status_code == 401

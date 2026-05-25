@@ -8,11 +8,14 @@ import json
 import os
 import re
 import secrets
+import hmac
+import time
 import urllib.parse
 import anthropic
 import requests as http_requests
+from collections import deque
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
@@ -57,6 +60,7 @@ def _init_session_token() -> str:
 
 
 _SESSION_TOKEN = _init_session_token()
+_LOGIN_FAILURES: dict[str, deque[float]] = {}
 
 
 def _check_auth(authorization: str = Header(default="")):
@@ -132,13 +136,62 @@ router = APIRouter(prefix="/dashboard/api", tags=["dashboard"])
 
 # --- Auth ---
 
+def _login_limit_config() -> tuple[int, float]:
+    try:
+        max_failures = int(os.environ.get("DASHBOARD_LOGIN_MAX_FAILURES", "8"))
+    except ValueError:
+        max_failures = 8
+    try:
+        window_seconds = float(os.environ.get("DASHBOARD_LOGIN_WINDOW_SECONDS", "300"))
+    except ValueError:
+        window_seconds = 300.0
+    return max(1, max_failures), max(1.0, min(window_seconds, 3600.0))
+
+
+def _login_client_key(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
+def _prune_login_failures(key: str, now: float, window_seconds: float) -> deque[float]:
+    failures = _LOGIN_FAILURES.setdefault(key, deque())
+    cutoff = now - window_seconds
+    while failures and failures[0] < cutoff:
+        failures.popleft()
+    return failures
+
+
+def _login_is_limited(key: str, now: float | None = None) -> bool:
+    max_failures, window_seconds = _login_limit_config()
+    failures = _prune_login_failures(key, now or time.monotonic(), window_seconds)
+    return len(failures) >= max_failures
+
+
+def _record_failed_login(key: str) -> None:
+    _, window_seconds = _login_limit_config()
+    now = time.monotonic()
+    failures = _prune_login_failures(key, now, window_seconds)
+    failures.append(now)
+
+
+def _clear_login_failures(key: str) -> None:
+    _LOGIN_FAILURES.pop(key, None)
+
+
 @router.post("/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
+    client_key = _login_client_key(request)
+    if _login_is_limited(client_key):
+        raise HTTPException(status_code=429, detail="Too many login attempts")
     password = os.environ.get("DASHBOARD_PASSWORD", "")
     if not password:
         raise HTTPException(status_code=500, detail="Dashboard password not configured")
-    if req.password != password:
+    if not hmac.compare_digest(req.password, password):
+        _record_failed_login(client_key)
         raise HTTPException(status_code=401, detail="Wrong password")
+    _clear_login_failures(client_key)
     return {"token": _SESSION_TOKEN}
 
 

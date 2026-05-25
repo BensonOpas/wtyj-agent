@@ -30,6 +30,7 @@ wtyj/logs/*
 !wtyj/logs/.gitkeep
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 
