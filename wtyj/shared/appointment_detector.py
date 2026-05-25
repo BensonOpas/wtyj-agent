@@ -5,9 +5,11 @@ classifies a thread as scheduling. This module covers the normal chat path:
 when a customer and Marina explicitly settle a time, write/update the
 appointment row immediately without waiting for an escalation summary.
 """
+import os
 import re
 
 from shared import bm_logger
+from shared import config_loader
 from shared import state_registry
 
 
@@ -45,6 +47,49 @@ _NEGATIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ROBERTO_APPOINTMENT_TENANTS = {"clinica-roberto"}
+
+_ROBERTO_BOOKING_INTENT_RE = re.compile(
+    r"\b(?:"
+    r"pedir\s+cita|solicitar\s+(?:una\s+)?cita|quiero\s+(?:una\s+)?cita|"
+    r"me\s+gustar(?:i|\u00ed)a\s+(?:pedir|solicitar|reservar)|"
+    r"reservar\s+(?:una\s+)?cita|concertar\s+(?:una\s+)?cita|"
+    r"coger\s+(?:una\s+)?cita|agendar\s+(?:una\s+)?cita|"
+    r"dar\s+cita|dais\s+cita|disponibilidad|huecos?\s+libres?|"
+    r"primera\s+sesi[o\u00f3]n|sesi[o\u00f3]n\s+gratis|prueba\s+de\s+una\s+sesi[o\u00f3]n\s+gratis"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_ROBERTO_SERVICE_RE = re.compile(
+    r"\b(?:"
+    r"terapia|psic[o\u00f3]log[oa]|psicolog[i\u00ed]a|emdr|pareja|individual|"
+    r"familiar|infantil|adolescente|online|presencial|coaching|"
+    r"depresi[o\u00f3]n|ansiedad|ira|estr[e\u00e9]s|embarazo|trauma|"
+    r"shock\s+post[-\s]?traum[a\u00e1]tico"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_ROBERTO_CENTER_RE = re.compile(
+    r"\b(?:retiro|atocha|legan[e\u00e9]s|carrascal|m[o\u00f3]stoles|"
+    r"getafe|alcobendas|fuenlabrada|online|presencial)\b",
+    re.IGNORECASE,
+)
+
+_ROBERTO_QUALIFIER_RE = re.compile(
+    r"\b(?:"
+    r"centro|ma\u00f1ana|tarde|horario|nombre|apellidos?|tel[e\u00e9]fono|"
+    r"correo|email|motivo|consulta|informaci[o\u00f3]n|contactarme|llamar"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_ROBERTO_PRICE_ONLY_RE = re.compile(
+    r"\b(?:precio|precios|tarifa|tarifas|cu[a\u00e1]nto\s+cuesta|coste)\b",
+    re.IGNORECASE,
+)
+
 
 def _compact(text: str, limit: int = 160) -> str:
     value = re.sub(r"\s+", " ", (text or "")).strip(" .")
@@ -56,6 +101,109 @@ def _compact(text: str, limit: int = 160) -> str:
 def _sentences(text: str) -> list:
     chunks = re.split(r"(?<=[.!?])\s+|\n+", text or "")
     return [_compact(chunk) for chunk in chunks if chunk and chunk.strip()]
+
+
+def _current_tenant_slug() -> str:
+    explicit = (os.environ.get("TENANT_SLUG") or os.environ.get("TENANT_ID") or "").strip()
+    if explicit:
+        return explicit.lower()
+    try:
+        business = config_loader.get_business() or {}
+        slug = str(business.get("slug") or "").strip()
+        if slug:
+            return slug.lower()
+    except Exception:
+        pass
+    try:
+        raw = config_loader.get_raw() or {}
+        slug = str(raw.get("slug") or "").strip()
+        if slug:
+            return slug.lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _history_text(history: list, limit: int = 8) -> str:
+    return " ".join(
+        (m.get("text") or m.get("content") or "")
+        for m in (history or [])[-limit:]
+        if isinstance(m, dict)
+    )
+
+
+def _first_match(pattern: re.Pattern, text: str) -> str:
+    match = pattern.search(text or "")
+    return match.group(0).strip() if match else ""
+
+
+def _label_from_candidates(candidates: list, required_pattern: re.Pattern) -> str:
+    for text in candidates:
+        for sentence in _sentences(text or ""):
+            if required_pattern.search(sentence):
+                return sentence
+    return ""
+
+
+def detect_roberto_appointment_request(user_text: str, assistant_reply: str,
+                                       history: list = None,
+                                       tenant_slug: str = None) -> dict | None:
+    """Detect Roberto/Consulta Despertares appointment leads without a fixed time.
+
+    Roberto's current process is manual scheduling: Marina should collect
+    initial patient details and hand qualified requests to the team, not
+    auto-confirm a slot. This detector is tenant-gated so other tenants keep
+    their own KPI/booking logic.
+    """
+    slug = (tenant_slug or _current_tenant_slug()).strip().lower()
+    if slug not in _ROBERTO_APPOINTMENT_TENANTS:
+        return None
+
+    history_text = _history_text(history)
+    latest = " ".join([user_text or "", assistant_reply or ""])
+    combined = " ".join([history_text, latest])
+
+    if _NEGATIVE_RE.search(user_text or ""):
+        return None
+
+    has_booking_intent = bool(_ROBERTO_BOOKING_INTENT_RE.search(combined))
+    has_service_need = bool(_ROBERTO_SERVICE_RE.search(combined))
+    has_qualifier = bool(_ROBERTO_QUALIFIER_RE.search(combined))
+
+    if not has_booking_intent and not (has_service_need and has_qualifier):
+        return None
+
+    if (
+        _ROBERTO_PRICE_ONLY_RE.search(user_text or "")
+        and not _ROBERTO_BOOKING_INTENT_RE.search(combined)
+    ):
+        return None
+
+    candidates = [user_text or "", assistant_reply or "", history_text]
+    label = _label_from_candidates(candidates, _ROBERTO_BOOKING_INTENT_RE)
+    if not label:
+        label = _label_from_candidates(candidates, _ROBERTO_SERVICE_RE)
+    label = label or "Needs manual scheduling"
+
+    center = _first_match(_ROBERTO_CENTER_RE, combined)
+    service = _first_match(_ROBERTO_SERVICE_RE, combined)
+    title_bits = ["Consulta Despertares appointment request"]
+    if service:
+        title_bits.append(service)
+    if center:
+        title_bits.append(center)
+
+    proposed_times = []
+    time_or_date = _first_match(_TIME_RE, combined) or _first_match(_DATE_RE, combined)
+    if time_or_date:
+        proposed_times.append(label)
+
+    return {
+        "title": " - ".join(title_bits),
+        "date_time_label": label,
+        "proposed_times": proposed_times,
+        "location": center,
+    }
 
 
 def detect_appointment_signal(user_text: str, assistant_reply: str,
@@ -133,6 +281,8 @@ def upsert_pending_from_exchange(conversation_id: str, channel: str,
 
     signal = detect_appointment_signal(user_text, assistant_reply, history)
     if not signal:
+        signal = detect_roberto_appointment_request(user_text, assistant_reply, history)
+    if not signal:
         return 0
 
     try:
@@ -145,6 +295,7 @@ def upsert_pending_from_exchange(conversation_id: str, channel: str,
             customer_name=customer_name or "",
             title=signal["title"],
             proposed_times=signal["proposed_times"],
+            location=signal.get("location", ""),
             status="pending_team_confirmation",
             date_time_label=signal["date_time_label"],
         )
@@ -152,6 +303,7 @@ def upsert_pending_from_exchange(conversation_id: str, channel: str,
             "appointment_signal_detected",
             conversation_id=conversation_id,
             channel=channel,
+            title=signal["title"],
             date_time_label=signal["date_time_label"],
         )
         return row_id

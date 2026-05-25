@@ -70,6 +70,103 @@ def test_upsert_writes_pending_appointment_from_normal_exchange(monkeypatch):
     assert captured["date_time_label"] == "See you tomorrow at 11:00"
 
 
+def test_roberto_cita_request_creates_pending_without_fixed_time(monkeypatch):
+    from shared import appointment_detector
+
+    captured = {}
+    monkeypatch.setenv("TENANT_SLUG", "clinica-roberto")
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_get_by_conversation",
+        lambda conversation_id: None,
+    )
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_upsert",
+        lambda **kw: captured.update(kw) or 321,
+    )
+
+    row_id = appointment_detector.upsert_pending_from_exchange(
+        conversation_id="roberto-wa-1",
+        channel="whatsapp",
+        customer_name="Paciente",
+        user_text=(
+            "Hola, estoy interesada en terapia EMDR. "
+            "Me gustaria pedir cita en Leganes por la tarde."
+        ),
+        assistant_reply=(
+            "Claro. Para revisar disponibilidad, dime tu nombre, "
+            "telefono y el motivo de consulta."
+        ),
+        history=[],
+    )
+
+    assert row_id == 321
+    assert captured["conversation_id"] == "roberto-wa-1"
+    assert captured["status"] == "pending_team_confirmation"
+    assert captured["title"].startswith("Consulta Despertares appointment request")
+    assert captured["location"].lower() == "leganes"
+    assert "pedir cita" in captured["date_time_label"].lower()
+
+
+def test_roberto_cita_logic_is_tenant_scoped(monkeypatch):
+    from shared import appointment_detector
+
+    calls = []
+    monkeypatch.setenv("TENANT_SLUG", "unboks")
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_get_by_conversation",
+        lambda conversation_id: None,
+    )
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_upsert",
+        lambda **kw: calls.append(kw) or 321,
+    )
+
+    row_id = appointment_detector.upsert_pending_from_exchange(
+        conversation_id="non-roberto-wa-1",
+        channel="whatsapp",
+        customer_name="Paciente",
+        user_text="Hola, estoy interesada en terapia EMDR. Me gustaria pedir cita.",
+        assistant_reply="Claro, te ayudo.",
+        history=[],
+    )
+
+    assert row_id == 0
+    assert calls == []
+
+
+def test_roberto_price_only_question_does_not_create_booking(monkeypatch):
+    from shared import appointment_detector
+
+    calls = []
+    monkeypatch.setenv("TENANT_SLUG", "clinica-roberto")
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_get_by_conversation",
+        lambda conversation_id: None,
+    )
+    monkeypatch.setattr(
+        appointment_detector.state_registry,
+        "appointment_upsert",
+        lambda **kw: calls.append(kw) or 321,
+    )
+
+    row_id = appointment_detector.upsert_pending_from_exchange(
+        conversation_id="roberto-wa-price",
+        channel="whatsapp",
+        customer_name="Paciente",
+        user_text="Hola, cuanto cuesta la terapia individual?",
+        assistant_reply="La terapia individual cuesta 50 euros.",
+        history=[],
+    )
+
+    assert row_id == 0
+    assert calls == []
+
+
 def test_upsert_does_not_downgrade_confirmed_appointment(monkeypatch):
     from shared import appointment_detector
 
