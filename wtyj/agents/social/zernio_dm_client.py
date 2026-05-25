@@ -26,7 +26,31 @@ def verify_webhook_signature(payload_bytes: bytes, signature: str) -> bool:
         bm_logger.log("zernio_webhook_no_secret")
         return False
     expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    for candidate in _signature_candidates(signature):
+        if hmac.compare_digest(expected, candidate):
+            return True
+    return False
+
+
+def _signature_candidates(signature: str) -> list[str]:
+    """Return likely hex digest values from common webhook header formats."""
+    if not signature:
+        return []
+
+    values = []
+    for part in str(signature).split(","):
+        value = part.strip()
+        if not value:
+            continue
+        if "=" in value:
+            prefix, raw_value = value.split("=", 1)
+            if prefix.strip().lower() not in {"sha256", "v1"}:
+                continue
+            value = raw_value.strip()
+        value = value.lower()
+        if len(value) == 64 and all(ch in "0123456789abcdef" for ch in value):
+            values.append(value)
+    return values
 
 
 def parse_zernio_webhook(payload: dict) -> dict | None:

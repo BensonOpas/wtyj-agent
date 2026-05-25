@@ -52,6 +52,23 @@ def test_verify_signature_valid():
     assert verify_webhook_signature(payload, expected_sig) is True
 
 
+def test_verify_signature_accepts_sha256_prefixed_header():
+    secret = "test-secret-key-abc123"
+    os.environ["ZERNIO_WEBHOOK_SECRET"] = secret
+    payload = b'{"event": "message.received"}'
+    expected_sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    assert verify_webhook_signature(payload, f"sha256={expected_sig}") is True
+
+
+def test_verify_signature_accepts_compound_v1_header():
+    secret = "test-secret-key-abc123"
+    os.environ["ZERNIO_WEBHOOK_SECRET"] = secret
+    payload = b'{"event": "message.received"}'
+    expected_sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    header = f"t=1714567800,v1={expected_sig}"
+    assert verify_webhook_signature(payload, header) is True
+
+
 # --- Test 2: HMAC verification with wrong signature ---
 def test_verify_signature_invalid():
     os.environ["ZERNIO_WEBHOOK_SECRET"] = "test-secret-key-abc123"
