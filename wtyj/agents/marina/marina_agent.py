@@ -1307,6 +1307,58 @@ def _build_contextual_fallback_reply(
     )
 
 
+_ENTERTAINMENT_REQUEST_MARKERS = (
+    "tell me a joke",
+    "tell us a joke",
+    "make me laugh",
+    "say something funny",
+    "be funny",
+    "give me a joke",
+    "another joke",
+    "joke please",
+    "roleplay",
+    "role play",
+    "pretend to be",
+    "entertain me",
+    "sing a song",
+    "write me a song",
+    "write a poem",
+    "do comedy",
+    "comedy bit",
+)
+
+
+def _is_direct_entertainment_request(text: str) -> bool:
+    """Deterministic guard for requests Marina must never fulfill.
+
+    Prompt instructions alone are not strong enough here because old
+    conversation context and the WhatsApp "always respond naturally" rule can
+    pull the model toward banter. Direct entertainment requests are outside
+    the business agent's scope, so we refuse before calling Claude.
+    """
+    clean = f" {(text or '').strip().lower()} "
+    if not clean.strip():
+        return False
+    return any(marker in clean for marker in _ENTERTAINMENT_REQUEST_MARKERS)
+
+
+def _scope_refusal_reply() -> str:
+    business = config_loader.get_business()
+    name = (business.get("name") or "").strip()
+    slug = (business.get("slug") or "").strip().lower()
+    if slug == "unboks" or name.lower().startswith("unboks"):
+        return (
+            "Sorry, I can only help with Unboks-related questions. "
+            "How can I help you with your inbox, messages, escalations, "
+            "channels, or setup?"
+        )
+    business_name = name or "this business"
+    return (
+        f"Sorry, I can only help with questions related to {business_name}. "
+        "How can I help with services, appointments, messages, or setup?"
+    )
+
+
 def process_message(
     from_email: str,
     subject: str,
@@ -1345,6 +1397,21 @@ def process_message(
         "flags": {},
         "internal_note": "Fallback response — Claude API call failed or returned unparseable output.",
     }
+
+    if _is_direct_entertainment_request(body):
+        return {
+            "intents": ["off_topic"],
+            "fields": {},
+            "confidence": "high",
+            "reply": _scope_refusal_reply(),
+            "clarifications_needed": [],
+            "requires_human": False,
+            "flags": {},
+            "internal_note": (
+                "Deterministic refusal — direct entertainment request outside "
+                "business agent scope."
+            ),
+        }
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

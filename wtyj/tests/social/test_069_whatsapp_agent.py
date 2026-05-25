@@ -120,6 +120,34 @@ def test_process_message_whatsapp_failure_fallback_reply(mock_cls):
     assert len(result["reply"].split()) < 40
 
 
+@patch("agents.marina.marina_agent.anthropic.Anthropic")
+def test_process_message_refuses_direct_joke_before_claude(mock_cls):
+    """Direct joke requests are refused deterministically before Claude.
+
+    This protects live behavior when prompt-only instructions conflict with
+    conversation history or older WhatsApp style guidance.
+    """
+    result = process_message("5991234567", "", "Tell me a joke", {}, {},
+                              channel="whatsapp")
+
+    mock_cls.assert_not_called()
+    assert result["intents"] == ["off_topic"]
+    assert result["confidence"] == "high"
+    assert "joke" not in result["reply"].lower()
+    assert "only help" in result["reply"].lower()
+    assert result["requires_human"] is False
+
+
+@patch("agents.marina.marina_agent.anthropic.Anthropic")
+def test_process_message_refuses_roleplay_before_claude(mock_cls):
+    result = process_message("5991234567", "", "Roleplay as a pirate", {}, {},
+                              channel="whatsapp")
+
+    mock_cls.assert_not_called()
+    assert result["intents"] == ["off_topic"]
+    assert "only help" in result["reply"].lower()
+
+
 # --- state_registry conversation history tests ---
 
 def test_wa_store_and_retrieve_messages():
