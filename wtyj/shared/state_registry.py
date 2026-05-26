@@ -733,6 +733,21 @@ def _get_conn():
         "fallback_used INTEGER DEFAULT 0"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS api_usage_alerts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "alert_key TEXT NOT NULL UNIQUE, "
+        "tenant_id TEXT NOT NULL DEFAULT '', "
+        "provider TEXT NOT NULL DEFAULT '', "
+        "severity TEXT NOT NULL DEFAULT 'warning', "
+        "category TEXT NOT NULL DEFAULT '', "
+        "message TEXT NOT NULL DEFAULT '', "
+        "details_json TEXT NOT NULL DEFAULT '{}', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "active INTEGER DEFAULT 1"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -4000,9 +4015,91 @@ def record_api_usage_event(event: dict) -> None:
     conn.close()
 
 
-def api_usage_summary(days: int = 30) -> dict:
+def record_api_usage_alert(alert: dict) -> None:
+    """Persist an active provider/usage alert for Nr3/operator visibility."""
+    now = datetime.now(timezone.utc).isoformat()
+    alert_key = str(alert.get("alert_key") or "").strip()
+    if not alert_key:
+        return
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO api_usage_alerts ("
+        "alert_key, tenant_id, provider, severity, category, message, "
+        "details_json, created_at, updated_at, active"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) "
+        "ON CONFLICT(alert_key) DO UPDATE SET "
+        "tenant_id=excluded.tenant_id, provider=excluded.provider, "
+        "severity=excluded.severity, category=excluded.category, "
+        "message=excluded.message, details_json=excluded.details_json, "
+        "updated_at=excluded.updated_at, active=1",
+        (
+            alert_key,
+            str(alert.get("tenant_id") or ""),
+            str(alert.get("provider") or ""),
+            str(alert.get("severity") or "warning"),
+            str(alert.get("category") or ""),
+            str(alert.get("message") or "")[:500],
+            json.dumps(alert.get("details") or {}, sort_keys=True),
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def api_usage_active_alerts(days: int = 30, tenant_id: str | None = None, provider: str | None = None) -> list[dict]:
     days = max(1, min(int(days or 30), 90))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    filters = ["active = 1", "updated_at >= ?"]
+    params: list[str] = [since]
+    if tenant_id:
+        filters.append("tenant_id = ?")
+        params.append(str(tenant_id))
+    if provider:
+        filters.append("provider = ?")
+        params.append(str(provider))
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT alert_key, tenant_id, provider, severity, category, message, "
+        "details_json, updated_at FROM api_usage_alerts "
+        f"WHERE {' AND '.join(filters)} "
+        "ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
+        "updated_at DESC LIMIT 20",
+        params,
+    ).fetchall()
+    conn.close()
+    alerts = []
+    for row in rows:
+        try:
+            details = json.loads(row[6] or "{}")
+        except Exception:
+            details = {}
+        alerts.append({
+            "alert_key": row[0],
+            "tenant_id": row[1],
+            "provider": row[2],
+            "severity": row[3],
+            "category": row[4],
+            "message": row[5],
+            "details": details,
+            "updated_at": row[7],
+        })
+    return alerts
+
+
+def api_usage_summary(days: int = 30, tenant_id: str | None = None, provider: str | None = None) -> dict:
+    days = max(1, min(int(days or 30), 90))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    filters = ["timestamp >= ?"]
+    params: list[str] = [since]
+    if tenant_id:
+        filters.append("tenant_id = ?")
+        params.append(str(tenant_id))
+    if provider:
+        filters.append("provider = ?")
+        params.append(str(provider))
+    where_clause = " AND ".join(filters)
     conn = _get_conn()
     row = conn.execute(
         "SELECT COUNT(*) AS calls, "
@@ -4012,13 +4109,13 @@ def api_usage_summary(days: int = 30) -> dict:
         "SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END), "
         "MAX(CASE WHEN success = 1 THEN timestamp ELSE '' END), "
         "MAX(CASE WHEN success = 0 THEN timestamp ELSE '' END) "
-        "FROM api_usage_events WHERE timestamp >= ?",
-        (since,),
+        f"FROM api_usage_events WHERE {where_clause}",
+        params,
     ).fetchone()
     last_error = conn.execute(
         "SELECT timestamp, error_category, error_message FROM api_usage_events "
-        "WHERE timestamp >= ? AND success = 0 ORDER BY timestamp DESC LIMIT 1",
-        (since,),
+        f"WHERE {where_clause} AND success = 0 ORDER BY timestamp DESC LIMIT 1",
+        params,
     ).fetchone()
     conn.close()
     calls = int(row[0] or 0) if row else 0
@@ -4045,6 +4142,7 @@ def api_usage_summary(days: int = 30) -> dict:
             "category": last_error[1],
             "message": last_error[2],
         } if last_error else None,
+        "active_alerts": api_usage_active_alerts(days, tenant_id=tenant_id, provider=provider),
         "status": status,
     }
 

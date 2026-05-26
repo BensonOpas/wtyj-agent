@@ -58,6 +58,11 @@ Don't try to "fix" header comments or old brief text. Treat them as historical a
 After Briefs 150-152, source code lives at `/root/wtyj/` and each client's runtime
 state lives under `/root/clients/<client>/`. The repo root is `/root/`.
 
+**Live reality check, 2026-05-26:** `docker ps` on `108.61.192.52` shows the
+active containers listed in the Services table below. Older BlueMarlin, Adamus,
+and Consulta Despertares entries in historical briefs are not live as named on
+the host unless their containers are recreated later.
+
 | Item | Value |
 |------|-------|
 | Repo root | `/root/` |
@@ -66,8 +71,10 @@ state lives under `/root/clients/<client>/`. The repo root is `/root/`.
 | Social agent (source) | `/root/wtyj/agents/social/` |
 | Dashboard API (source) | `/root/wtyj/dashboard/` |
 | Shared libs (source) | `/root/wtyj/shared/` |
-| BlueMarlin runtime | `/root/clients/bluemarlin/` (config, data, logs, docker-compose) |
-| Adamus runtime | `/root/clients/adamus/` (config, data, logs, docker-compose) |
+| Roberto runtime | `/root/clients/clinica-roberto/` (config, data, logs, docker-compose) |
+| Test runtime | `/root/clients/test/` (config, data, logs, docker-compose) |
+| Unboks runtime | `/root/clients/unboks/` (config, data, logs, docker-compose) |
+| Control panel runtime | `/root/unboks-internal-control-panel/` |
 | Inside container | `/app/` (working dir, mounts at `/app/config`, `/app/data`, `/app/logs`) |
 
 ---
@@ -75,8 +82,9 @@ state lives under `/root/clients/<client>/`. The repo root is `/root/`.
 ## Environment Variables
 
 Each client has its own secrets file:
-- BlueMarlin: `/root/clients/bluemarlin/config/platform.env`
-- Adamus: `/root/clients/adamus/config/platform.env`
+- Roberto / Clinica Roberto: `/root/clients/clinica-roberto/config/platform.env`
+- Test tenant: `/root/clients/test/config/platform.env`
+- Unboks: `/root/clients/unboks/config/platform.env`
 
 Loaded by docker-compose's `env_file:` directive at container start.
 **NOT in `.bashrc`, `.zshrc`, or `.profile`** — never look there.
@@ -86,7 +94,12 @@ Loaded by docker-compose's `env_file:` directive at container start.
 
 | Env Var | Service | Purpose |
 |---------|---------|---------|
-| `ANTHROPIC_API_KEY` | Claude API | LLM calls for Marina, DM agent, content agent, dashboard suggest-reply |
+| `ANTHROPIC_API_KEY` | Claude API | LLM calls for Marina, DM agent, content agent, dashboard suggest-reply. Currently shared unless a tenant-specific key is configured later; usage is tracked per tenant in `api_usage_events`. |
+| `API_USAGE_FAILURE_RATE_ALERT` | Provider health | Optional failure/fallback rate threshold for alert creation. Default `0.2`. |
+| `API_USAGE_TENANT_FALLBACK_ALERT` | Provider health | Optional daily fallback count threshold per tenant. Default `3`. |
+| `API_USAGE_MONTHLY_SPEND_ALERT` | Provider health | Optional projected monthly spend threshold. Default `100.0`. |
+| `API_USAGE_SPIKE_MIN_CALLS` | Provider health | Optional minimum daily call count before spike detection. Default `20`. |
+| `API_USAGE_SPIKE_MULTIPLIER` | Provider health | Optional multiplier over 7-day average for spike detection. Default `3.0`. |
 | `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API | Bearer token for sending WhatsApp messages |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API | Phone number ID (`990622044139349`) for WA send endpoint |
 | `WHATSAPP_VERIFY_TOKEN` | Meta Cloud API | Token for webhook verification handshake |
@@ -130,17 +143,25 @@ GoDaddy email plan currently has 2 seats total.
 
 ---
 
-## Services (Docker — post Brief 152)
+## Services (Docker — live reality 2026-05-26)
 
-Four containers (3 production + 1 staging). Production uses `wtyj-agent:latest`, staging uses `wtyj-agent:staging` (separate image tag, never overwrites production).
+Live containers from `docker ps` on `108.61.192.52`:
 
-| Client | Container name | Port | Compose file | Runtime dir |
-|--------|----------------|------|--------------|-------------|
-| BlueMarlin Charters (demo #1) | `wtyj-bluemarlin` | 8001 | `/root/clients/bluemarlin/docker-compose.yml` | `/root/clients/bluemarlin/` |
-| Restaurant Adamus (demo #2) | `wtyj-adamus` | 8002 | `/root/clients/adamus/docker-compose.yml` | `/root/clients/adamus/` |
-| Consulta Despertares (demo #3) | `wtyj-consultadespertares` | 8003 | `/root/clients/consultadespertares/docker-compose.yml` | `/root/clients/consultadespertares/` |
-| Unboks (own product, customer-facing) | `wtyj-unboks` | 8004 | `/root/clients/unboks/docker-compose.yml` | `/root/clients/unboks/` |
-| **Staging** | `wtyj-staging` | 9001 | `/root/staging/docker-compose.yml` | `/root/staging/` |
+| Client / service | Container name | Host port -> container port | Image | Compose file | Runtime dir |
+|--------|----------------|-----------------------------|-------|--------------|-------------|
+| Clinica Roberto | `wtyj-clinica-roberto` | `8153 -> 8001` | `wtyj-agent` | `/root/clients/clinica-roberto/docker-compose.yml` | `/root/clients/clinica-roberto/` |
+| Test tenant | `wtyj-test` | `8145 -> 8001` | `wtyj-agent` | `/root/clients/test/docker-compose.yml` | `/root/clients/test/` |
+| Unboks | `wtyj-unboks` | `8004 -> 8001` | `wtyj-agent` | `/root/clients/unboks/docker-compose.yml` | `/root/clients/unboks/` |
+| Staging | `wtyj-staging` | `9001 -> 8001` | `wtyj-agent:staging` | `/root/staging/docker-compose.yml` | `/root/staging/` |
+| Control panel | `unboks-internal-control-panel-wtyj-admin-1` | `8010 -> 8010` | `unboks-internal-control-panel-wtyj-admin` | `/root/unboks-internal-control-panel/docker-compose.yml` | `/root/unboks-internal-control-panel/` |
+
+Stale/not live as named on 2026-05-26:
+- `wtyj-bluemarlin`
+- `wtyj-adamus`
+- `wtyj-consultadespertares`
+
+Those names remain in older briefs as historical context only. Do not use them
+as current deployment proof without first checking `docker ps`.
 
 **2026-05-03 update (Brief 199):** WhatsApp/Zernio/Meta/Late credentials moved from `bluemarlin/config/platform.env` to `unboks/config/platform.env`. The number `+599 968 81585` (Calvin's WhatsApp, used for Unboks's FB-group promo) now routes to the `wtyj-unboks` tenant where the AI is configured as "Calvin" answering questions about Unboks itself. The `wtyj-bluemarlin` tenant retains zero channel credentials and runs as a code-only demo (no live channels). Webhook URL on Meta/Zernio side must be repointed from `/bluemarlin/webhook/whatsapp` → `/unboks/webhook/whatsapp` for the routing to take effect — Calvin/SR's manual operation outside this brief.
 

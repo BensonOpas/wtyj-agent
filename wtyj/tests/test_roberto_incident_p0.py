@@ -104,3 +104,33 @@ def test_usage_summary_records_provider_failure(monkeypatch, tmp_path):
     assert summary["errors"] == 1
     assert summary["fallbacks"] == 1
     assert summary["status"] == "critical"
+    assert summary["active_alerts"]
+    assert any(alert["category"] == "billing_quota" for alert in summary["active_alerts"])
+
+
+def test_usage_summary_can_scope_to_tenant(monkeypatch, tmp_path):
+    from shared import state_registry
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state_registry.db"))
+    state_registry.record_api_usage_event({
+        "tenant_id": "clinica-roberto",
+        "client_slug": "clinica-roberto",
+        "provider": "anthropic",
+        "timestamp": "2026-05-26T12:00:00+00:00",
+        "success": False,
+        "error_category": "billing_quota",
+        "error_message": "insufficient credits",
+        "fallback_used": True,
+    })
+    state_registry.record_api_usage_event({
+        "tenant_id": "test",
+        "client_slug": "test",
+        "provider": "anthropic",
+        "timestamp": "2026-05-26T12:00:01+00:00",
+        "success": True,
+    })
+    roberto = state_registry.api_usage_summary(30, tenant_id="clinica-roberto", provider="anthropic")
+    test = state_registry.api_usage_summary(30, tenant_id="test", provider="anthropic")
+    assert roberto["calls"] == 1
+    assert roberto["errors"] == 1
+    assert test["calls"] == 1
+    assert test["errors"] == 0
