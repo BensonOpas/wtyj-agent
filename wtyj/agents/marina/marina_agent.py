@@ -4,11 +4,13 @@
 
 import json
 import os
+import time
 from datetime import datetime, timezone, timedelta
 
 import anthropic
 from shared import config_loader
 from shared import bm_logger
+from shared import llm_telemetry, tenant_context
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 
@@ -867,6 +869,8 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_envelope = _icp_envelope_for_prompt()
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
+    _tenant_language_block = tenant_context.language_prompt_block(channel)
+    _tenant_safety_block = tenant_context.safety_prompt_block()
     return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
@@ -874,7 +878,11 @@ AGENT PERSONA:
 
 {_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_knowledge_media_block}{_dashboard_sot_block}{_icp_sot_block}
 
+{_tenant_safety_block}
+
 {writing_style_block}
+
+{_tenant_language_block}
 
 {_language_rule_block}
 
@@ -1222,88 +1230,17 @@ def _build_contextual_fallback_reply(
     signature: str,
     svc_label: str,
     party_label: str,
+    message_text: str = "",
 ) -> str:
-    """Brief 176: construct the fallback reply based on what Marina already knows
-    about this customer from the current thread state. Used ONLY on API-level
-    failures (timeout, rate limit, Anthropic outage, defensive guard) — not in
-    the normal Claude-succeeds path. Rule 3 accepted exception (documented in
-    CLAUDE.md KNOWN OPEN ISSUES).
+    """Construct a short tenant-localized fallback reply.
 
-    Principles:
-    - Acknowledge the hiccup (not the customer's fault)
-    - Use the customer's name when known
-    - Only ask for missing fields (service / date / guests)
-    - WhatsApp stays under 40 words; email can be slightly longer
-    - If all fields present, acknowledge the full context and ask the customer
-      to resend their last message (the one that triggered the fallback)
+    Used ONLY on API-level failures (timeout, rate limit, provider outage,
+    quota/billing error, defensive guard). This must not mention internal
+    provider names and must not default to English for non-English tenants.
     """
-    fields = thread_fields or {}
-    name = (fields.get("customer_name") or "").strip()
-    guests = fields.get("guests")
-    service = (fields.get("service_name") or "").strip()
-    date = (fields.get("date") or "").strip()
-
-    has_name = bool(name)
-    has_guests = bool(guests)
-    has_service = bool(service)
-    has_date = bool(date)
-
-    known_parts = []
-    if has_guests and has_service:
-        known_parts.append(f"you as a group of {guests} for {service}")
-    elif has_guests:
-        known_parts.append(f"you as a group of {guests}")
-    elif has_service:
-        known_parts.append(f"the {service} booking")
-    if has_date:
-        if known_parts:
-            known_parts[-1] = known_parts[-1] + f" on {date}"
-        else:
-            known_parts.append(f"a booking for {date}")
-    known_str = " and ".join(known_parts)
-
-    missing_parts = []
-    if not has_service:
-        missing_parts.append(f"which {svc_label} you're looking at")
-    if not has_date:
-        missing_parts.append("what date works")
-    if not has_guests:
-        missing_parts.append(f"how many {party_label}")
-    missing_str = " and ".join(missing_parts)
-
-    name_prefix = f"{name}, " if has_name else ""
-
-    if channel == "whatsapp":
-        if not known_parts and not missing_parts:
-            return f"Sorry{', ' + name if has_name else ''}, had a brief hiccup. Could you resend your last message?"
-        if not missing_parts:
-            return f"Sorry {name_prefix}had a brief hiccup. I have {known_str} on file — could you resend your last message?"
-        if not known_parts:
-            return f"Sorry {name_prefix}had a hiccup. Could you let me know {missing_str}?"
-        return f"Sorry {name_prefix}had a hiccup. I've got {known_str} — could you remind me {missing_str}?"
-
-    signoff = f"\n\nWarm regards,\n{signature}"
-    if not known_parts and not missing_parts:
-        return (
-            f"Hi{' ' + name if has_name else ''},\n\n"
-            f"Sorry, I had a brief hiccup on my end — could you resend your "
-            f"last message and I'll get right back to you?{signoff}"
-        )
-    if not missing_parts:
-        return (
-            f"Hi{' ' + name if has_name else ''},\n\n"
-            f"Sorry, I had a brief hiccup on my end. I have {known_str} on "
-            f"file — could you resend your last message so I can pick up "
-            f"where we left off?{signoff}"
-        )
-    if not known_parts:
-        return (
-            f"Hi{' ' + name if has_name else ''}! Could you let me know "
-            f"{missing_str}? I'll get you sorted from there.{signoff}"
-        )
-    return (
-        f"Hi {name_prefix}sorry for the brief hiccup on my end. I have "
-        f"{known_str} — could you remind me {missing_str}?{signoff}"
+    return tenant_context.localized_fallback_reply(
+        message_text=message_text,
+        channel=channel,
     )
 
 
@@ -1386,6 +1323,7 @@ def process_message(
         signature=signature,
         svc_label=_svc_label,
         party_label=_party_label,
+        message_text=body,
     )
     fallback = {
         "intents": ["inquiry"],
@@ -1420,6 +1358,7 @@ def process_message(
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
 
+        _started_at = time.monotonic()
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -1428,7 +1367,6 @@ def process_message(
             tool_choice={"type": "tool", "name": "marina_response"},
             messages=[{"role": "user", "content": user_prompt}],
         )
-
         # Log API token usage
         _usage = getattr(response, "usage", None)
         if _usage:
@@ -1450,6 +1388,17 @@ def process_message(
             bm_logger.log("claude_no_tool_use_block",
                           content_types=[b.type for b in response.content],
                           channel=channel, from_id=from_email[:50])
+            llm_telemetry.log_llm_event(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                feature_path="WhatsApp Marina" if channel == "whatsapp" else "Marina reply",
+                channel=channel,
+                started_at=_started_at,
+                success=False,
+                response=response,
+                error="no_tool_use_block",
+                fallback_used=True,
+            )
             return fallback
         result = dict(tool_use_block.input)
 
@@ -1466,6 +1415,17 @@ def process_message(
                           intents=result.get("intents", []),
                           channel=channel, from_id=from_email[:50],
                           input_preview=str(result)[:200])
+            llm_telemetry.log_llm_event(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                feature_path="WhatsApp Marina" if channel == "whatsapp" else "Marina reply",
+                channel=channel,
+                started_at=_started_at,
+                success=False,
+                response=response,
+                error="empty_reply",
+                fallback_used=True,
+            )
             return fallback
 
         # Brief 224: sanitize customer-facing text fields before returning.
@@ -1477,9 +1437,29 @@ def process_message(
             result["reply_hold_failed"] = _strip_internal_tokens(
                 result["reply_hold_failed"]).replace("—", ",")
 
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="WhatsApp Marina" if channel == "whatsapp" else "Marina reply",
+            channel=channel,
+            started_at=_started_at,
+            success=True,
+            response=response,
+        )
         return result
 
     except Exception as _exc:
+        _started_at = locals().get("_started_at", time.monotonic())
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="WhatsApp Marina" if channel == "whatsapp" else "Marina reply",
+            channel=channel,
+            started_at=_started_at,
+            success=False,
+            error=_exc,
+            fallback_used=True,
+        )
         bm_logger.log("claude_api_error",
                       error=str(_exc)[:200],
                       channel=channel, from_id=from_email[:50])

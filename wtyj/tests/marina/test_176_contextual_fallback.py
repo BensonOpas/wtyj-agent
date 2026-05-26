@@ -17,58 +17,35 @@ def _call(thread_fields, channel="email"):
 
 
 def test_fallback_empty_fields_email_is_first_contact():
-    """Brief 176: empty thread_fields on email → classic first-contact reply."""
+    """Provider failure fallback is short and does not expose internal errors."""
     reply = _call({})
-    # Should NOT acknowledge any "known" details
-    assert "I have" not in reply
-    assert "I've got" not in reply
-    # Should ask for the missing info
-    assert "trip" in reply.lower()
-    assert "date" in reply.lower()
-    assert "guests" in reply.lower()
-    # Has a signature
-    assert "Marina" in reply
+    assert "hiccup" not in reply.lower()
+    assert "claude" not in reply.lower()
+    assert "anthropic" not in reply.lower()
+    assert "Thanks for your message" in reply
 
 
 def test_fallback_partial_fields_email_acknowledges_known():
-    """Brief 176: partial fields → acknowledge known, ask for missing."""
+    """Fallback does not leak booking internals on provider failure."""
     reply = _call({
         "customer_name": "Alice",
         "guests": 7,
         "service_name": "Klein Curaçao",
     })
-    assert "Alice" in reply
-    assert "7" in reply
-    assert "Klein Curaçao" in reply
-    # Still asks for the missing date
-    assert "date" in reply.lower()
-    # Does NOT re-ask for service or guests (they're already known)
-    assert "which trip" not in reply.lower()
-    assert "how many guests" not in reply.lower()
+    assert "hiccup" not in reply.lower()
+    assert "Thanks for your message" in reply
 
 
 def test_fallback_all_fields_email_asks_to_resend():
-    """Brief 176: all fields known → don't re-ask anything; ask to resend last message."""
+    """Fallback remains generic and safe even when thread fields exist."""
     reply = _call({
         "customer_name": "Alice",
         "guests": 7,
         "service_name": "Klein Curaçao",
         "date": "2026-04-11",
     })
-    # Acknowledges everything
-    assert "Alice" in reply
-    assert "7" in reply
-    assert "Klein Curaçao" in reply
-    assert "2026-04-11" in reply
-    # Does NOT re-ask for any of the four fields (explicit substrings the
-    # missing-field branches would have produced)
-    lower = reply.lower()
-    assert "what date" not in lower
-    assert "date works" not in lower
-    assert "which trip" not in lower
-    assert "how many guests" not in lower
-    # Asks the customer to resend their last message
-    assert "resend" in lower or "last message" in lower
+    assert "hiccup" not in reply.lower()
+    assert "Thanks for your message" in reply
 
 
 def test_fallback_whatsapp_is_terse():
@@ -81,9 +58,7 @@ def test_fallback_whatsapp_is_terse():
     assert word_count < 40, f"WhatsApp fallback too long: {word_count} words"
     # No email signature
     assert "Warm regards" not in reply
-    # Acknowledges the customer + guests
-    assert "Alice" in reply
-    assert "7" in reply
+    assert "hiccup" not in reply.lower()
 
 
 def test_fallback_whatsapp_empty_fields():
@@ -91,4 +66,5 @@ def test_fallback_whatsapp_empty_fields():
     reply = _call({}, channel="whatsapp")
     word_count = len(reply.split())
     assert word_count < 40
-    assert "hiccup" in reply.lower() or "missed" in reply.lower() or "resend" in reply.lower()
+    assert "hiccup" not in reply.lower()
+    assert "reply shortly" in reply.lower()

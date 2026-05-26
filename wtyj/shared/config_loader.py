@@ -45,6 +45,11 @@ def _business_with_top_level_fallbacks(raw: dict) -> dict:
     should show the tenant's own values in both shapes.
     """
     business = dict(raw.get("business", {}) or {})
+    top_level_languages = raw.get("languages")
+    if isinstance(top_level_languages, str):
+        top_level_languages = [
+            item.strip() for item in top_level_languages.split(",") if item.strip()
+        ]
     fallbacks = {
         "name": _first_text(
             business.get("name"),
@@ -66,10 +71,39 @@ def _business_with_top_level_fallbacks(raw: dict) -> dict:
         "whatsapp": _first_text(business.get("whatsapp"), raw.get("whatsapp")),
         "website": _first_text(business.get("website"), raw.get("website")),
         "slug": _first_text(business.get("slug"), raw.get("slug")),
+        "primary_language": _first_text(
+            business.get("primary_language"),
+            raw.get("primary_language"),
+            raw.get("language"),
+        ),
+        "agent_name": _first_text(
+            business.get("agent_name"),
+            raw.get("agent_name"),
+        ),
+        "agent_tone": _first_text(
+            business.get("agent_tone"),
+            raw.get("agent_tone"),
+        ),
+        "notes": _first_text(
+            business.get("notes"),
+            business.get("business_brief"),
+            raw.get("business_brief"),
+            raw.get("notes"),
+        ),
+        "country": _first_text(business.get("country"), raw.get("country")),
+        "locale": _first_text(business.get("locale"), raw.get("locale")),
     }
     for key, value in fallbacks.items():
         if value and not _first_text(business.get(key)):
             business[key] = value
+    if not business.get("languages") and isinstance(top_level_languages, list):
+        business["languages"] = top_level_languages
+    if (
+        not business.get("primary_language")
+        and isinstance(business.get("languages"), list)
+        and business["languages"]
+    ):
+        business["primary_language"] = business["languages"][0]
     return business
 
 

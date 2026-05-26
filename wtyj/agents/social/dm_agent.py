@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import anthropic
 from shared import state_registry, config_loader, bm_logger, icp_overrides
+from shared import llm_telemetry, tenant_context
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
@@ -191,6 +192,8 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
 - You may answer a general question about the service first, then redirect
 - If they insist on booking here, repeat the redirect once more. Do not cave."""
     language_block = f"LANGUAGE: Reply in the same language the customer writes in. Supported: {languages}. Default to English if unclear."
+    tenant_language_block = tenant_context.language_prompt_block(channel)
+    tenant_safety_block = tenant_context.safety_prompt_block()
     emoji_block = "Emojis: sparingly, only if the customer used them first."
     output_rule = "Reply with ONLY your message text. No JSON. No code fences. No metadata. Just the reply."
 
@@ -212,12 +215,14 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         # Brief 206: only include BOOKING REDIRECT block when booking_flow is
         # true. Non-booking tenants don't have bookings to redirect to.
         parts = [intro, qa_role_short, master_prompt]
+        if tenant_safety_block:
+            parts.append(tenant_safety_block)
         if approved_answers_block:
             parts.append(approved_answers_block)
         parts.extend([services_block, faq_block])
         if booking_flow:
             parts.append(booking_redirect_block)
-        parts.extend([language_block, emoji_block])
+        parts.extend([tenant_language_block, language_block, emoji_block])
         if icp_override_block:
             parts.append(icp_override_block)
         parts.append(output_rule)
@@ -236,11 +241,13 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
     avoid_block = "AVOID: em dashes, \"Shall I\", \"I'd be happy to\", \"Great choice\", \"Nice choice\", \"Amazing\", \"Absolutely\", \"certainly\", \"wonderful\", \"fantastic\", forced enthusiasm, reasoning out loud."
 
     fallback_parts = [intro, qa_role_full]
+    if tenant_safety_block:
+        fallback_parts.append(tenant_safety_block)
     if approved_answers_block:
         fallback_parts.append(approved_answers_block)
     fallback_parts.extend([
         services_block, faq_block, writing_style_block,
-        booking_redirect_block, language_block, avoid_block,
+        booking_redirect_block, tenant_language_block, language_block, avoid_block,
         emoji_block, output_rule,
     ])
     if icp_override_block:
@@ -311,17 +318,38 @@ def handle_incoming_dm(message: dict) -> str:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             bm_logger.log("dm_no_api_key", conversation_id=conversation_id[:20])
-            return _DM_FALLBACK
+            llm_telemetry.log_llm_event(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                feature_path="DM agent",
+                channel=channel,
+                started_at=time.monotonic(),
+                success=False,
+                error="missing_api_key",
+                fallback_used=True,
+            )
+            return tenant_context.localized_fallback_reply(
+                message_text=text, channel=channel)
 
         client = anthropic.Anthropic(api_key=api_key)
         system_prompt = _build_dm_system_prompt(channel)
         user_prompt = _build_dm_user_prompt(text, sender_name, messages)
 
+        _started_at = time.monotonic()
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+        )
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="DM agent",
+            channel=channel,
+            started_at=_started_at,
+            success=True,
+            response=response,
         )
         reply = response.content[0].text.strip()
 
@@ -389,15 +417,24 @@ def handle_incoming_dm(message: dict) -> str:
         return reply
 
     except Exception as e:
+        _started_at = locals().get("_started_at", time.monotonic())
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="DM agent",
+            channel=channel,
+            started_at=_started_at,
+            success=False,
+            error=e,
+            fallback_used=True,
+        )
         bm_logger.log("dm_agent_error", conversation_id=conversation_id[:20],
                        channel=channel, error=str(e)[:200])
-        # ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
-        return _DM_FALLBACK
+        return tenant_context.localized_fallback_reply(
+            message_text=text, channel=channel)
 
 
-# ⚠️  HARDCODED FALLBACK — Rule 3 accepted exception (API failure path only)
-# If agent name changes from Marina, update this message.
-_DM_FALLBACK = "Sorry, could you send that again? I missed it."
+_DM_FALLBACK = "Thanks for your message. The team will review it and reply shortly."
 
 
 def _is_rate_limited(conversation_id: str, channel: str) -> bool:
