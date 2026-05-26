@@ -18,10 +18,12 @@ Frontend contract (from EscalationReasonPanel + escalation-summary.ts):
 }
 """
 import os
+import time
 from typing import Optional
 
 import anthropic
 from shared import bm_logger
+from shared import llm_telemetry, tenant_context
 
 
 SUMMARY_TOOL = {
@@ -169,6 +171,7 @@ def _build_system_prompt() -> str:
     prompt is constant per-call (does not depend on customer/channel/
     history) so no parameters are needed today; if future briefs add
     per-channel adaptation, this helper grows parameters."""
+    safety_block = tenant_context.safety_prompt_block()
     return (
         "You are an operator-facing assistant. Your job is to read a "
         "conversation between a CUSTOMER and an AI AGENT, then summarize "
@@ -234,6 +237,7 @@ def _build_system_prompt() -> str:
         "X\"), INCLUDE THE REASON. The summary box exists so the "
         "operator does NOT have to read the message themselves -- if "
         "your output forces them to read it, you have failed."
+        + (f"\n\n{safety_block}" if safety_block else "")
     )
 
 
@@ -262,6 +266,7 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             "Emit your structured operator briefing now."
         )
 
+        _started_at = time.monotonic()
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
@@ -270,7 +275,6 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             tool_choice={"type": "tool", "name": "escalation_summary"},
             messages=[{"role": "user", "content": user_prompt}],
         )
-
         _usage = getattr(response, "usage", None)
         if _usage:
             bm_logger.log("escalation_summary_usage",
@@ -284,11 +288,41 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             None,
         )
         if block is None:
+            llm_telemetry.log_llm_event(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                feature_path="escalation summary",
+                channel=channel,
+                started_at=_started_at,
+                success=False,
+                response=response,
+                error="no_tool_use_block",
+                fallback_used=True,
+            )
             bm_logger.log("escalation_summary_no_tool_use",
                           channel=channel, customer_id=customer_id[:50])
             return None
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="escalation summary",
+            channel=channel,
+            started_at=_started_at,
+            success=True,
+            response=response,
+        )
         return dict(block.input)
     except Exception as exc:
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="escalation summary",
+            channel=channel,
+            started_at=locals().get("_started_at", time.monotonic()),
+            success=False,
+            error=exc,
+            fallback_used=True,
+        )
         bm_logger.log("escalation_summary_failed",
                       error=str(exc)[:200],
                       channel=channel,

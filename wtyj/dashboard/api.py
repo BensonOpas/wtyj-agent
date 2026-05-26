@@ -21,6 +21,7 @@ from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger
+from shared import llm_telemetry
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -3955,6 +3956,24 @@ class SuggestReplyRequest(BaseModel):
     phone: str
     draft_text: str = ""
 
+
+@router.get("/api-usage-health", dependencies=[Depends(_check_auth)])
+async def api_usage_health(days: int = Query(default=30, ge=1, le=90)):
+    """Tenant-local LLM provider usage/health summary for Nr3 and operators."""
+    summary = state_registry.api_usage_summary(days)
+    warnings = []
+    try:
+        from shared import tenant_context
+        warnings = tenant_context.config_warnings()
+    except Exception:
+        warnings = ["Tenant config validation failed."]
+    return {
+        "tenant": config_loader.get_business().get("slug") or config_loader.get_raw().get("slug", ""),
+        "provider": "anthropic",
+        "summary": summary,
+        "configWarnings": warnings,
+    }
+
 @router.post("/messages/suggest-reply", dependencies=[Depends(_check_auth)])
 async def suggest_reply(req: SuggestReplyRequest):
     """Generate an AI-suggested email reply based on WhatsApp conversation."""
@@ -3967,7 +3986,6 @@ async def suggest_reply(req: SuggestReplyRequest):
 
     booking_state = state_registry.wa_get_booking_state(req.phone)
     business = config_loader.get_business()
-    trips = config_loader.get_services()
     signature = config_loader.get_agent_signature()
 
     # Format conversation
@@ -3987,35 +4005,18 @@ async def suggest_reply(req: SuggestReplyRequest):
         booking_parts.append("Completed bookings: " + json.dumps(completed, default=str))
     booking_context = "\n".join(booking_parts)
 
-    # Format trips
-    trip_lines = []
-    for key, data in trips.items():
-        name = data.get("display_name", key)
-        price = data.get("price_pp", "")
-        trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
-
     agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
-    persona_block = marina_agent._build_agent_persona_block()
+    system_prompt = marina_agent._build_system_prompt(
+        booking_state.get("flags", {}),
+        channel="email",
+    ) + f"""
 
-    system_prompt = f"""You are {agent_name}, the booking agent for {company_name}.
-
-AGENT PERSONA:
-{persona_block}
-
-WRITING STYLE FOR EMAIL:
-Write as a real member of the {company_name} team. Warm, practical, human.
-Mirror the customer's tone. Use contractions. Plain language.
-No em dashes, no forced enthusiasm, no "I'd be happy to" or "Great choice".
-Emails are slightly longer and more structured than WhatsApp but still conversational.
-
-AVAILABLE TRIPS:
-{chr(10).join(trip_lines)}
-
-AGENT SIGNATURE:
-{signature}
-
-Return a JSON object with exactly two keys:
+DASHBOARD SUGGEST REPLY MODE:
+- You are drafting an operator-reviewed email suggestion, not sending directly.
+- Use the same tenant language, tone, Source of Truth, and safety rules above.
+- Include the signature exactly as configured when appropriate: {signature}
+- Return a JSON object with exactly two keys:
 - "subject": a short email subject line (no "Re:" prefix)
 - "body": the full email body including signature at the end
 
@@ -4044,11 +4045,21 @@ Write an email reply from {agent_name} to this customer. Address open questions,
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
+        _started_at = time.monotonic()
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+        )
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="dashboard suggest reply",
+            channel="dashboard",
+            started_at=_started_at,
+            success=True,
+            response=response,
         )
         raw = response.content[0].text.strip()
         # Strip markdown fences if present
@@ -4060,11 +4071,31 @@ Write an email reply from {agent_name} to this customer. Address open questions,
             "body": result.get("body", ""),
         }
     except json.JSONDecodeError:
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="dashboard suggest reply",
+            channel="dashboard",
+            started_at=locals().get("_started_at", time.monotonic()),
+            success=False,
+            error="json_decode_error",
+            fallback_used=True,
+        )
         return {
             "subject": f"{company_name} — Follow-up",
             "body": raw if raw else "Could not generate suggestion.",
         }
     except Exception as exc:
+        llm_telemetry.log_llm_event(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            feature_path="dashboard suggest reply",
+            channel="dashboard",
+            started_at=locals().get("_started_at", time.monotonic()),
+            success=False,
+            error=exc,
+            fallback_used=False,
+        )
         bm_logger.log("suggest_reply_error", error=str(exc)[:200])
         raise HTTPException(status_code=500, detail="Failed to generate suggestion")
 

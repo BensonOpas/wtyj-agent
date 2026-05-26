@@ -712,6 +712,27 @@ def _get_conn():
         "updated_at TEXT NOT NULL DEFAULT ''"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS api_usage_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "tenant_id TEXT NOT NULL DEFAULT '', "
+        "client_slug TEXT NOT NULL DEFAULT '', "
+        "provider TEXT NOT NULL DEFAULT '', "
+        "model TEXT NOT NULL DEFAULT '', "
+        "feature_path TEXT NOT NULL DEFAULT '', "
+        "channel TEXT NOT NULL DEFAULT '', "
+        "timestamp TEXT NOT NULL, "
+        "input_tokens INTEGER DEFAULT 0, "
+        "output_tokens INTEGER DEFAULT 0, "
+        "total_tokens INTEGER DEFAULT 0, "
+        "estimated_cost REAL DEFAULT 0, "
+        "latency_ms INTEGER DEFAULT 0, "
+        "success INTEGER DEFAULT 0, "
+        "error_category TEXT NOT NULL DEFAULT '', "
+        "error_message TEXT NOT NULL DEFAULT '', "
+        "fallback_used INTEGER DEFAULT 0"
+        ")"
+    )
     try:
         conn.execute("ALTER TABLE content_drafts ADD COLUMN image_path TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -3943,6 +3964,89 @@ def set_setting(key: str, value: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# --- API Usage / Provider Health ---
+
+
+def record_api_usage_event(event: dict) -> None:
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO api_usage_events ("
+        "tenant_id, client_slug, provider, model, feature_path, channel, "
+        "timestamp, input_tokens, output_tokens, total_tokens, estimated_cost, "
+        "latency_ms, success, error_category, error_message, fallback_used"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            str(event.get("tenant_id") or ""),
+            str(event.get("client_slug") or ""),
+            str(event.get("provider") or ""),
+            str(event.get("model") or ""),
+            str(event.get("feature_path") or ""),
+            str(event.get("channel") or ""),
+            str(event.get("timestamp") or datetime.now(timezone.utc).isoformat()),
+            int(event.get("input_tokens") or 0),
+            int(event.get("output_tokens") or 0),
+            int(event.get("total_tokens") or 0),
+            float(event.get("estimated_cost") or 0),
+            int(event.get("latency_ms") or 0),
+            1 if event.get("success") else 0,
+            str(event.get("error_category") or ""),
+            str(event.get("error_message") or "")[:500],
+            1 if event.get("fallback_used") else 0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def api_usage_summary(days: int = 30) -> dict:
+    days = max(1, min(int(days or 30), 90))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS calls, "
+        "COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "
+        "COALESCE(SUM(total_tokens),0), COALESCE(SUM(estimated_cost),0), "
+        "SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), "
+        "SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END), "
+        "MAX(CASE WHEN success = 1 THEN timestamp ELSE '' END), "
+        "MAX(CASE WHEN success = 0 THEN timestamp ELSE '' END) "
+        "FROM api_usage_events WHERE timestamp >= ?",
+        (since,),
+    ).fetchone()
+    last_error = conn.execute(
+        "SELECT timestamp, error_category, error_message FROM api_usage_events "
+        "WHERE timestamp >= ? AND success = 0 ORDER BY timestamp DESC LIMIT 1",
+        (since,),
+    ).fetchone()
+    conn.close()
+    calls = int(row[0] or 0) if row else 0
+    errors = int(row[5] or 0) if row else 0
+    fallbacks = int(row[6] or 0) if row else 0
+    status = "healthy"
+    if errors or fallbacks:
+        status = "warning"
+    if calls and ((errors + fallbacks) / calls) >= 0.2:
+        status = "critical"
+    return {
+        "days": days,
+        "calls": calls,
+        "input_tokens": int(row[1] or 0) if row else 0,
+        "output_tokens": int(row[2] or 0) if row else 0,
+        "total_tokens": int(row[3] or 0) if row else 0,
+        "estimated_cost": float(row[4] or 0) if row else 0.0,
+        "errors": errors,
+        "fallbacks": fallbacks,
+        "last_success": row[7] or "" if row else "",
+        "last_error_at": row[8] or "" if row else "",
+        "last_error": {
+            "timestamp": last_error[0],
+            "category": last_error[1],
+            "message": last_error[2],
+        } if last_error else None,
+        "status": status,
+    }
 
 
 def is_dry_run() -> bool:
