@@ -11,6 +11,7 @@ import secrets
 import urllib.parse
 import anthropic
 import requests as http_requests
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
@@ -156,6 +157,77 @@ async def get_status():
         "pending": pending, "approved": approved, "rejected": rejected,
         "published": published, "deleted": deleted, "learnings": learnings,
         "season": season,
+    }
+
+
+def _iso_to_datetime(value: str):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _whatsapp_connection_from_overrides(envelope: dict) -> tuple[bool, str]:
+    channels = envelope.get("channel_connections") if isinstance(envelope, dict) else None
+    whatsapp = channels.get("whatsapp") if isinstance(channels, dict) else None
+    if not isinstance(whatsapp, dict):
+        return False, "unknown"
+    status = str(whatsapp.get("status") or "").strip().lower()
+    connected = whatsapp.get("connected") is True or status == "connected"
+    return connected, status or ("connected" if connected else "unknown")
+
+
+@router.get("/onboarding/status", dependencies=[Depends(_check_auth)])
+async def get_onboarding_status():
+    """Tenant onboarding state for the first-run dashboard banner.
+
+    No secrets are returned. The WhatsApp URL contains only the tenant's
+    one-purpose connect token from client.json; Zernio and bridge tokens stay
+    server-side.
+    """
+    raw = config_loader.get_raw()
+    business = config_loader.get_business()
+    slug = _current_tenant_slug()
+    now = datetime.now(timezone.utc)
+    trial_ends = _iso_to_datetime(str(raw.get("trial_ends_at") or ""))
+    trial_started = _iso_to_datetime(str(raw.get("trial_started_at") or ""))
+    days_remaining = None
+    if trial_ends is not None:
+        delta = trial_ends - now
+        days_remaining = max(0, int((delta.total_seconds() + 86399) // 86400))
+
+    connect_token = raw.get("whatsapp_connect_token")
+    whatsapp_connect_url = ""
+    if isinstance(connect_token, str) and connect_token.strip() and slug:
+        base = os.environ.get("NR3_PUBLIC_BASE_URL", "https://icp.unboks.org").rstrip("/")
+        whatsapp_connect_url = (
+            f"{base}/connect/whatsapp/customer/start?"
+            f"tenantId={urllib.parse.quote(slug)}&"
+            f"token={urllib.parse.quote(connect_token.strip())}"
+        )
+
+    from shared import icp_overrides as _icp
+    whatsapp_connected, whatsapp_connection_status = _whatsapp_connection_from_overrides(
+        _icp.fetch_overrides()
+    )
+    if whatsapp_connected:
+        whatsapp_connect_url = ""
+
+    return {
+        "tenantSlug": slug,
+        "businessName": business.get("name") or raw.get("name") or slug,
+        "billingStatus": raw.get("billing_status") or raw.get("trial_status") or "",
+        "trialStartedAt": trial_started.isoformat() if trial_started else None,
+        "trialEndsAt": trial_ends.isoformat() if trial_ends else None,
+        "trialDaysRemaining": days_remaining,
+        "whatsappConnected": whatsapp_connected,
+        "whatsappConnectionStatus": whatsapp_connection_status,
+        "whatsappConnectUrl": whatsapp_connect_url,
     }
 
 
