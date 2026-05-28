@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 import anthropic
 from shared import config_loader
+from shared import agent_identity
 from shared import bm_logger
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
@@ -622,13 +623,17 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
         "to Dutch, reply in Dutch. Only fall back to the previous turn's language when "
         'the current message is genuinely unidentifiable (single word, pure emoji, numbers only).'
     )
+    # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
+    # so persona, identity, SOT, and final override blocks see the same snapshot.
+    _icp_envelope = _icp_envelope_for_prompt()
 
     relay_mode_section = ""
     if thread_flags.get("awaiting_relay"):
+        relay_agent_name = agent_identity.effective_agent_name(_icp_envelope)
         relay_mode_section = (
             "\nRELAY MODE: A human team member has answered the customer's pending question. "
             "Their answer is in the INBOUND MESSAGE body below. "
-            "Reformulate it in Marina's warm voice, using the same language the customer used. "
+            f"Reformulate it in {relay_agent_name}'s warm voice, using the same language the customer used. "
             "Do not add information the human did not provide. Do not make promises beyond what was stated. "
             "Set intents to [\"inquiry\"]. Do not set any booking or escalation flags.\n"
         )
@@ -747,12 +752,12 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
     _knowledge_files_block = _build_knowledge_files_block()
-    # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
-    # so both persona block and SOT block see the same snapshot.
-    _icp_envelope = _icp_envelope_for_prompt()
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
-    return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
+    _agent_name = agent_identity.effective_agent_name(_icp_envelope)
+    return f"""You are {_agent_name}, the booking agent for {business.get('name', 'the business')}.
+Your customer-facing name is {_agent_name}. Use this name only when natural; do not overuse it.
+Do not claim to be human, do not pretend to be a licensed professional, and do not mention internal model/provider names.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
@@ -1039,9 +1044,10 @@ def _build_user_prompt(
     history_section = ""
     if channel == "whatsapp":
         if messages:
+            active_agent_name = agent_identity.effective_agent_name(_icp_envelope_for_prompt())
             history_lines = []
             for m in messages:
-                role_label = "Customer" if m.get("role") == "user" else config_loader.get_business().get("agent_name", "CSA")
+                role_label = "Customer" if m.get("role") == "user" else active_agent_name
                 history_lines.append(f"  {role_label}: {m.get('text', '')}")
             history_section = (
                 "CONVERSATION HISTORY (recent messages):\n"

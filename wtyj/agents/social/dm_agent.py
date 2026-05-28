@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, agent_identity
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
@@ -76,7 +76,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     # wa.me/<same-number-the-customer-is-on> redirect.
     booking_flow = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 
-    agent_name = business.get("agent_name", "CSA")
+    agent_name = agent_identity.effective_agent_name()
     company_name = business.get("name", "the business")
     wa_number = business.get("whatsapp", "")
     wa_link = wa_number.replace("+", "").replace(" ", "")
@@ -111,7 +111,11 @@ def _build_dm_system_prompt(channel: str) -> str:
     # Common structural blocks (data injection, not voice).
     # Empty services/faq lists render as bare "SERVICES:\n" / "FAQ:\n" — same as
     # existing behavior (chr(10).join on an empty list = ""). No empty-state change.
-    intro = f"You are {agent_name}, answering {platform_name} DMs for {company_name}."
+    intro = (
+        f"You are {agent_name}, answering {platform_name} DMs for {company_name}.\n"
+        f"Your customer-facing name is {agent_name}. Use this name only when natural; "
+        "do not claim to be human or a licensed professional, and do not mention internal model/provider names."
+    )
     qa_role_short = f"You are a Q&A helper. You answer questions about {service_label}s, pricing, availability, and general info."
     qa_role_full = qa_role_short + " You are friendly, casual, and human."
     services_block = f"{service_label.upper()}S:\n{chr(10).join(service_lines)}"
@@ -178,9 +182,10 @@ def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
 
     history_section = ""
     if messages:
+        agent_name = agent_identity.effective_agent_name()
         history_lines = []
         for m in messages:
-            role_label = "Customer" if m.get("role") == "user" else business.get("agent_name", "CSA")
+            role_label = "Customer" if m.get("role") == "user" else agent_name
             history_lines.append(f"  {role_label}: {m.get('text', '')}")
         history_section = (
             "CONVERSATION HISTORY (recent messages):\n"
@@ -268,7 +273,7 @@ def handle_incoming_dm(message: dict) -> str:
             reply = reply.replace("[ESCALATE]", "").rstrip()
             try:
                 _company = config_loader.get_business().get("name", "the business")
-                _agent = config_loader.get_business().get("agent_name", "CSA")
+                _agent = agent_identity.effective_agent_name()
                 state_registry.create_pending_notification(
                     notification_type="escalation",
                     channel=channel,
