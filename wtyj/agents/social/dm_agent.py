@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, auto_block
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
@@ -209,6 +209,21 @@ def handle_incoming_dm(message: dict) -> str:
     channel = message["channel"]
     sender_name = message.get("sender_name", "")
     text = message["text"]
+
+    moderation = auto_block.evaluate_inbound(
+        channel=channel,
+        user_identifier=conversation_id,
+        text=text,
+        customer_name=sender_name,
+    )
+    if moderation.get("action") == "blocked":
+        bm_logger.log("dm_auto_blocked", conversation_id=conversation_id[:50],
+                      category=moderation.get("category"), channel=channel)
+        return ""
+    if moderation.get("action") == "warn":
+        bm_logger.log("dm_auto_block_warning", conversation_id=conversation_id[:50],
+                      channel=channel)
+        return moderation.get("reply", "")
 
     # Rate limiting per conversation
     if _is_rate_limited(conversation_id, channel):

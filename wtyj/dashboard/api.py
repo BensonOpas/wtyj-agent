@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, auto_block
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -3409,6 +3409,21 @@ class BlockRequest(BaseModel):
     blocked_by: str = ""
 
 
+class AutoBlockSettingsRequest(BaseModel):
+    enabled: bool = True
+    zero_tolerance: dict = {}
+    repeated_profanity: dict = {}
+    final_block_notice_enabled: bool = False
+
+
+class ManualBlockRequest(BaseModel):
+    conversation_id: str
+    channel: str = "whatsapp"
+    reason: str = "manual"
+    note: str = ""
+    blocked_by: str = "operator"
+
+
 @router.post("/messages/conversations/{conversation_id:path}/block",
              dependencies=[Depends(_check_auth)])
 async def block_conversation(conversation_id: str,
@@ -3426,6 +3441,16 @@ async def block_conversation(conversation_id: str,
     state_registry.set_blocked(conversation_id, True,
                                 reason=req.reason,
                                 blocked_by=req.blocked_by)
+    auto_block.block_user(
+        channel="unknown",
+        user_identifier=conversation_id,
+        category=req.reason or "manual",
+        category_label=req.reason or "manual block",
+        trigger="Manual block from Nr2",
+        rule_type="manual",
+        evidence_text="Manual block from dashboard.",
+        actor=req.blocked_by or "operator",
+    )
     bm_logger.log("conversation_blocked",
                    conversation_id=conversation_id[:50],
                    reason=(req.reason or "")[:50],
@@ -3447,9 +3472,47 @@ async def unblock_conversation(conversation_id: str):
     future re-block doesn't inherit stale context."""
     if not conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id required")
-    state_registry.set_blocked(conversation_id, False)
+    auto_block.unblock_user(conversation_id, actor="operator")
     bm_logger.log("conversation_unblocked", conversation_id=conversation_id[:50])
     return {"ok": True, "conversationId": conversation_id, "blocked": False}
+
+
+@router.get("/settings/auto-block", dependencies=[Depends(_check_auth)])
+async def get_auto_block_settings():
+    return auto_block.get_settings()
+
+
+@router.put("/settings/auto-block", dependencies=[Depends(_check_auth)])
+async def update_auto_block_settings(req: AutoBlockSettingsRequest):
+    return auto_block.save_settings(req.model_dump())
+
+
+@router.get("/moderation/events", dependencies=[Depends(_check_auth)])
+async def get_moderation_events(limit: int = Query(default=100, ge=1, le=500)):
+    return {"events": auto_block.list_events(limit=limit)}
+
+
+@router.post("/blocked-senders/manual", dependencies=[Depends(_check_auth)])
+async def manual_block_sender(req: ManualBlockRequest):
+    if not req.conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id required")
+    result = auto_block.block_user(
+        channel=req.channel or "unknown",
+        user_identifier=req.conversation_id,
+        category=req.reason or "manual",
+        category_label=req.reason or "manual block",
+        trigger=req.note or "Manual block from dashboard",
+        rule_type="manual",
+        evidence_text=req.note or "Manual block from dashboard.",
+        actor=req.blocked_by or "operator",
+    )
+    return {
+        "ok": result.get("action") == "blocked",
+        "conversationId": req.conversation_id,
+        "blocked": True,
+        "reason": req.reason,
+        "blockedBy": req.blocked_by,
+    }
 
 
 @router.get("/settings/blocked-conversations",
