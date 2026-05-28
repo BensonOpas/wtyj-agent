@@ -3396,6 +3396,34 @@ async def resolve_escalation(escalation_id: int, req: ResolveRequest = None):
     return {"ok": True, "learningEntryId": learning_entry_id}
 
 
+@router.post("/escalations/{escalation_id}/unresolve", dependencies=[Depends(_check_auth)])
+async def unresolve_escalation(escalation_id: int):
+    """Reopen a resolved escalation without deleting conversation history.
+
+    The pending_notifications.mode field is preserved, so reopened soft rows
+    return to Agent needs help and hard rows return to Human takeover.
+    """
+    before = next((e for e in state_registry.get_all_escalations()
+                   if e["id"] == escalation_id), None)
+    if not before:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    previous_status = before.get("status")
+    ok = state_registry.reopen_conversation_from_escalation(escalation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    bm_logger.log(
+        "escalation_reopened",
+        escalation_id=escalation_id,
+        customer_id=(before.get("customer_id") or "")[:30],
+        channel=before.get("channel"),
+        mode=before.get("mode"),
+        previous_status=previous_status,
+        actor="dashboard",
+    )
+    refreshed = _refresh_and_stringify_escalation(escalation_id)
+    return refreshed or {"ok": True, "id": str(escalation_id), "status": "sent"}
+
+
 @router.delete("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
 async def delete_escalation_endpoint(escalation_id: int):
     """Brief 172: hard-delete an escalation. SR built an archive-first UX
