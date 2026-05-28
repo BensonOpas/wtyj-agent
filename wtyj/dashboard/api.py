@@ -11,12 +11,12 @@ import secrets
 import urllib.parse
 import anthropic
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, password_recovery
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -32,10 +32,14 @@ _GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.readonly"
 # Path lives in /app/data/ which is mounted from the per-tenant data volume,
 # so it persists across `docker compose down/up`. File perms 0600 (it's a
 # credential). Delete the file to force token rotation.
-def _init_session_token() -> str:
-    token_path = os.path.normpath(os.path.join(
+def _session_token_path() -> str:
+    return os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "data", "session_token"
     ))
+
+
+def _init_session_token() -> str:
+    token_path = _session_token_path()
     if os.path.exists(token_path):
         try:
             with open(token_path, "r") as f:
@@ -58,6 +62,21 @@ def _init_session_token() -> str:
 _SESSION_TOKEN = _init_session_token()
 
 
+def _rotate_session_token() -> str:
+    global _SESSION_TOKEN
+    new_token = secrets.token_hex(32)
+    token_path = _session_token_path()
+    try:
+        os.makedirs(os.path.dirname(token_path), exist_ok=True)
+        with open(token_path, "w") as f:
+            f.write(new_token)
+        os.chmod(token_path, 0o600)
+    except OSError:
+        pass
+    _SESSION_TOKEN = new_token
+    return new_token
+
+
 def _check_auth(authorization: str = Header(default="")):
     """Verify bearer token on all dashboard endpoints."""
     if not authorization.startswith("Bearer "):
@@ -69,6 +88,16 @@ def _check_auth(authorization: str = Header(default="")):
 
 class LoginRequest(BaseModel):
     password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    newPassword: str
+    confirmPassword: str
 
 
 class GenerateRequest(BaseModel):
@@ -134,11 +163,36 @@ router = APIRouter(prefix="/dashboard/api", tags=["dashboard"])
 @router.post("/login")
 async def login(req: LoginRequest):
     password = os.environ.get("DASHBOARD_PASSWORD", "")
-    if not password:
+    if not password and not password_recovery.password_override_is_configured():
         raise HTTPException(status_code=500, detail="Dashboard password not configured")
-    if req.password != password:
+    if not password_recovery.verify_dashboard_password(req.password, password):
         raise HTTPException(status_code=401, detail="Wrong password")
     return {"token": _SESSION_TOKEN}
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest, request: Request):
+    ip = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    if not ip and request.client:
+        ip = request.client.host
+    password_recovery.request_reset(req.email, ip)
+    return {"ok": True, "message": password_recovery.GENERIC_RESPONSE}
+
+
+@router.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    ok, message = password_recovery.reset_password(
+        req.token,
+        req.newPassword,
+        req.confirmPassword,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    _rotate_session_token()
+    return {
+        "ok": True,
+        "message": "Password reset. You can sign in with your new password.",
+    }
 
 
 # --- Status ---
