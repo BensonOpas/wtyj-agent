@@ -277,3 +277,46 @@ def test_legacy_icp_overrides_endpoint_still_works(client, dashboard_token):
     r = client.get("/dashboard/api/icp-overrides",
                     headers=_auth(dashboard_token))
     assert r.status_code == 200
+
+
+def test_onboarding_status_hides_whatsapp_connect_when_connected(
+    monkeypatch, client, dashboard_token
+):
+    from shared import config_loader
+
+    monkeypatch.setattr(
+        config_loader,
+        "get_raw",
+        lambda: {
+            "slug": "clinica-roberto",
+            "name": "Clínica Roberto",
+            "whatsapp_connect_token": "connect-token",
+        },
+    )
+    monkeypatch.setattr(
+        config_loader,
+        "get_business",
+        lambda: {"slug": "clinica-roberto", "name": "Clínica Roberto"},
+    )
+    monkeypatch.setattr(
+        icp_overrides,
+        "fetch_overrides",
+        lambda: {
+            "available": True,
+            "tenant_id": "clinica-roberto",
+            "channel_connections": {
+                "whatsapp": {
+                    "status": "connected",
+                    "connected": True,
+                },
+            },
+        },
+    )
+
+    r = client.get("/dashboard/api/onboarding/status",
+                   headers=_auth(dashboard_token))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["whatsappConnected"] is True
+    assert body["whatsappConnectionStatus"] == "connected"
+    assert body["whatsappConnectUrl"] == ""

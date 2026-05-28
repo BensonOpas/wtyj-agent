@@ -81,6 +81,7 @@ def _empty_envelope(tenant_id: Optional[str], reason: str) -> dict:
         "reason": reason,
         "tenant_id": tenant_id,
         "feature_toggles": {},
+        "channel_connections": {},
         "display_metadata": {},
         "sot_entries": [],
         "ai_agent_settings": {"tone": None, "escalation_rules": None},
