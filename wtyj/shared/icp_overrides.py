@@ -308,11 +308,14 @@ def fetch_overrides() -> dict:
         _cache_put(tenant_id, env)
         return _record(env, "tenant_mismatch")
     feature_toggles = body.get("feature_toggles")
+    channel_connections = body.get("channel_connections")
     display_metadata = body.get("display_metadata")
     sot_entries = body.get("sot_entries")
     ai_agent_settings = body.get("ai_agent_settings")
     if not isinstance(feature_toggles, dict):
         feature_toggles = {}
+    if not isinstance(channel_connections, dict):
+        channel_connections = {}
     if not isinstance(display_metadata, dict):
         display_metadata = {}
     # J3-N2-02: sot_entries should be a list; AI settings should be a
@@ -332,6 +335,7 @@ def fetch_overrides() -> dict:
         "available": True,
         "tenant_id": tenant_id,
         "feature_toggles": feature_toggles,
+        "channel_connections": channel_connections,
         "display_metadata": display_metadata,
         "sot_entries": sot_entries,
         "ai_agent_settings": ai_agent_settings,
