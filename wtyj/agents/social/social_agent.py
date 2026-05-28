@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from shared import appointment_detector
 from shared import state_registry
+from shared import auto_block
 from shared import bm_logger
 from shared import config_loader
 from agents.marina import marina_agent
@@ -175,6 +176,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
 
     _channel_label = {"whatsapp": "WhatsApp", "instagram_dm": "Instagram",
                       "facebook_dm": "Facebook", "twitter_dm": "X/Twitter"}.get(channel, channel)
+
+    _moderation = auto_block.evaluate_inbound(
+        channel=channel,
+        user_identifier=phone,
+        text=text,
+        customer_name=from_name,
+    )
+    if _moderation.get("action") == "blocked":
+        bm_logger.log("whatsapp_auto_blocked", phone=phone[:50],
+                      category=_moderation.get("category"))
+        return ""
+    if _moderation.get("action") == "warn":
+        bm_logger.log("whatsapp_auto_block_warning", phone=phone[:50])
+        return _moderation.get("reply", "")
 
     # Get existing booking state
     state = state_registry.wa_get_booking_state(phone)
