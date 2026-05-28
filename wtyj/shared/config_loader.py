@@ -66,6 +66,10 @@ def _business_with_top_level_fallbacks(raw: dict) -> dict:
         "whatsapp": _first_text(business.get("whatsapp"), raw.get("whatsapp")),
         "website": _first_text(business.get("website"), raw.get("website")),
         "slug": _first_text(business.get("slug"), raw.get("slug")),
+        "agent_name": _first_text(
+            business.get("agent_name"),
+            raw.get("agent_name"),
+        ),
     }
     for key, value in fallbacks.items():
         if value and not _first_text(business.get(key)):
@@ -164,7 +168,7 @@ import tempfile as _tempfile
 
 _YOUR_INFO_WHITELIST = (
     "name", "email", "support_email", "phone", "whatsapp",
-    "website", "location", "languages", "operating_days",
+    "website", "location", "languages", "operating_days", "agent_name",
 )
 
 

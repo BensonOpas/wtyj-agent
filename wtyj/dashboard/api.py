@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger
+from shared import state_registry, config_loader, bm_logger, agent_identity
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -1218,6 +1218,10 @@ class YourInfoUpdate(BaseModel):
     operating_days: str | None = None
 
 
+class AgentIdentityUpdate(BaseModel):
+    agentName: str
+
+
 @router.get("/settings/your-info", dependencies=[Depends(_check_auth)])
 async def get_your_info():
     """Brief 216: return only the whitelisted business fields the
@@ -1248,6 +1252,34 @@ async def put_your_info(req: YourInfoUpdate):
     biz = config_loader.get_business() or {}
     whitelist = config_loader.your_info_whitelist()
     return {k: biz.get(k) for k in whitelist}
+
+
+@router.get("/settings/agent-identity", dependencies=[Depends(_check_auth)])
+async def get_agent_identity_settings():
+    """Return the effective customer-facing AI Agent name.
+
+    Nr2 may set only the tenant value. Nr3 admin overrides arrive through the
+    ICP bridge and win at runtime.
+    """
+    from shared import icp_overrides as _icp
+    return agent_identity.get_agent_identity(_icp.fetch_overrides())
+
+
+@router.put("/settings/agent-identity", dependencies=[Depends(_check_auth)])
+async def put_agent_identity_settings(req: AgentIdentityUpdate):
+    ok, clean_name, error = agent_identity.validate_agent_name(req.agentName)
+    if not ok:
+        raise HTTPException(status_code=400, detail=error)
+    if not config_loader.update_business_field("agent_name", clean_name):
+        raise HTTPException(status_code=500, detail="failed to update AI Agent name")
+    bm_logger.log(
+        "agent_identity_updated",
+        source="nr2",
+        new_value=clean_name,
+    )
+    from shared import icp_overrides as _icp
+    _icp.clear_cache()
+    return agent_identity.get_agent_identity(_icp.fetch_overrides())
 
 
 # --- Brief 216: Your Info Updates (per-tenant temporary/permanent updates) ---
@@ -3536,9 +3568,12 @@ async def suggest_reply(req: SuggestReplyRequest):
     signature = config_loader.get_agent_signature()
 
     # Format conversation
+    from shared import icp_overrides as _icp
+    identity = agent_identity.get_agent_identity(_icp.fetch_overrides())
+    agent_name = identity["effectiveName"]
     thread_lines = []
     for msg in messages:
-        label = "Customer" if msg["role"] == "user" else config_loader.get_business().get("agent_name", "CSA")
+        label = "Customer" if msg["role"] == "user" else agent_name
         thread_lines.append(f"{label}: {msg['text']}")
     thread_text = "\n\n".join(thread_lines)
 
@@ -3559,7 +3594,6 @@ async def suggest_reply(req: SuggestReplyRequest):
         price = data.get("price_pp", "")
         trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
 
-    agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
     persona_block = marina_agent._build_agent_persona_block()
 
