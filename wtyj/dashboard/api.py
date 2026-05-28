@@ -225,6 +225,16 @@ def _iso_to_datetime(value: str):
     return parsed
 
 
+def _whatsapp_connection_from_overrides(envelope: dict) -> tuple[bool, str]:
+    channels = envelope.get("channel_connections") if isinstance(envelope, dict) else None
+    whatsapp = channels.get("whatsapp") if isinstance(channels, dict) else None
+    if not isinstance(whatsapp, dict):
+        return False, "unknown"
+    status = str(whatsapp.get("status") or "").strip().lower()
+    connected = whatsapp.get("connected") is True or status == "connected"
+    return connected, status or ("connected" if connected else "unknown")
+
+
 @router.get("/onboarding/status", dependencies=[Depends(_check_auth)])
 async def get_onboarding_status():
     """Tenant onboarding state for the first-run dashboard banner.
@@ -253,6 +263,12 @@ async def get_onboarding_status():
             f"tenantId={urllib.parse.quote(slug)}&"
             f"token={urllib.parse.quote(connect_token.strip())}"
         )
+    from shared import icp_overrides as _icp
+    whatsapp_connected, whatsapp_connection_status = _whatsapp_connection_from_overrides(
+        _icp.fetch_overrides()
+    )
+    if whatsapp_connected:
+        whatsapp_connect_url = ""
 
     return {
         "tenantSlug": slug,
@@ -261,6 +277,8 @@ async def get_onboarding_status():
         "trialStartedAt": trial_started.isoformat() if trial_started else None,
         "trialEndsAt": trial_ends.isoformat() if trial_ends else None,
         "trialDaysRemaining": days_remaining,
+        "whatsappConnected": whatsapp_connected,
+        "whatsappConnectionStatus": whatsapp_connection_status,
         "whatsappConnectUrl": whatsapp_connect_url,
     }
 
