@@ -157,6 +157,49 @@ def test_get_escalations_response_includes_mode_field():
     _cleanup(esc_id, customer_id)
 
 
+def test_post_unresolve_reopens_resolved_soft_escalation():
+    from shared import state_registry
+    customer_id = "213_unresolve_soft_phone"
+    esc_id = _seed_escalation("whatsapp", customer_id, mode="soft")
+    state_registry.update_notification_status(esc_id, "resolved")
+    state_registry.resolve_conversation_from_escalation(esc_id)
+    assert state_registry.get_conversation_status(customer_id) == "resolved"
+
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/unresolve",
+                    headers=_auth(token))
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == str(esc_id)
+    assert body["status"] == "sent"
+    assert body["mode"] == "soft"
+    assert state_registry.get_conversation_status(customer_id) == "open"
+    reopened = next(e for e in state_registry.get_all_escalations()
+                    if e["id"] == esc_id)
+    assert reopened["status"] == "sent"
+    assert reopened["mode"] == "soft"
+    _cleanup(esc_id, customer_id)
+
+
+def test_post_unresolve_reopens_resolved_hard_escalation_in_hard_mode():
+    from shared import state_registry
+    customer_id = "213_unresolve_hard_phone"
+    esc_id = _seed_escalation("whatsapp", customer_id, mode="hard")
+    state_registry.update_notification_status(esc_id, "resolved")
+    state_registry.resolve_conversation_from_escalation(esc_id)
+
+    token = _login()
+    r = client.post(f"/dashboard/api/escalations/{esc_id}/unresolve",
+                    headers=_auth(token))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "sent"
+    assert r.json()["mode"] == "hard"
+    assert state_registry.get_conversation_status(customer_id) == "open"
+    _cleanup(esc_id, customer_id)
+
+
 # --- Test 7: Conversation detail returns real escalationMode
 def test_conversation_detail_returns_real_escalation_mode():
     customer_id = "213_detail_mode_phone"
