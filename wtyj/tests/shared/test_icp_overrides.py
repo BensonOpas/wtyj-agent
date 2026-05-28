@@ -55,6 +55,14 @@ def _bridge_envelope(tenant=TENANT):
                 "updated_by": "op@example.com",
             },
         },
+        "channel_connections": {
+            "whatsapp": {
+                "provider": "zernio",
+                "status": "connected",
+                "connected": True,
+                "display_phone_number": "+599 9 694 5527",
+            },
+        },
         "display_metadata": {
             "display_name": {
                 "value": "Demo Tenant",
@@ -136,6 +144,8 @@ def test_successful_200_returns_envelope(monkeypatch, configured):
     assert env["available"] is True
     assert env["tenant_id"] == TENANT
     assert env["feature_toggles"]["ai_auto_reply"]["source"] == "icp_override"
+    assert env["channel_connections"]["whatsapp"]["connected"] is True
+    assert env["channel_connections"]["whatsapp"]["status"] == "connected"
     # Outbound URL composed correctly
     assert captured["url"] == f"{URL}/internal/tenants/{TENANT}/overrides"
     assert captured["headers"]["Authorization"] == f"Bearer {TOKEN}"
