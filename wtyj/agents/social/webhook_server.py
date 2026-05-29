@@ -154,9 +154,10 @@ def _buffer_message(msg):
     """Add message to per-phone debounce buffer. Schedule flush after window."""
     phone = msg["from"]
     now = time.time()
-    timing = _response_timing_for_message(msg)
+    effective_timing = _response_timing_for_message(msg)
     with _buffer_lock:
         if phone not in _message_buffers:
+            timing = response_timing.runtime_response_timing(effective_timing)
             _message_buffers[phone] = {
                 "messages": [],
                 "timer": None,
@@ -164,13 +165,18 @@ def _buffer_message(msg):
                 "timing": timing,
             }
         buf = _message_buffers[phone]
-        buf["timing"] = timing
+        timing = buf.get("timing") or response_timing.runtime_response_timing(effective_timing)
+        if timing.get("mode") != "random":
+            timing = response_timing.runtime_response_timing(effective_timing)
+            buf["timing"] = timing
         buf["messages"].append(msg)
         log("whatsapp_message_buffered", phone=phone,
             buffered_count=len(buf["messages"]),
             batch_delay_seconds=timing["delay_seconds"],
             batch_max_wait_seconds=timing["max_wait_seconds"],
-            batch_source=timing.get("source"))
+            batch_source=timing.get("source"),
+            batch_mode=timing.get("mode"),
+            batch_random_picked_seconds=timing.get("random_picked_seconds"))
 
         # Cancel existing timer
         if buf["timer"] is not None:

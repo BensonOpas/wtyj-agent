@@ -249,16 +249,38 @@ def test_response_timing_settings_save_and_validate(monkeypatch, tmp_path):
         "/dashboard/api/settings/response-timing",
         json={
             "message_batching_enabled": True,
-            "preset": "fast",
+            "mode": "custom",
+            "preset": "balanced",
             "delay_seconds": 99,
+            "custom_delay_seconds": 99,
             "max_wait_seconds": 1,
         },
         headers=_auth(token),
     )
     assert r.status_code == 200, r.text
     body = r.json()["effective"]
-    assert body["delay_seconds"] == 20.0
-    assert body["max_wait_seconds"] == 20.0
+    assert body["delay_seconds"] == 99.0
+    assert body["custom_delay_seconds"] == 99.0
+    assert body["max_wait_seconds"] == 99.0
+
+    r = client.put(
+        "/dashboard/api/settings/response-timing",
+        json={
+            "message_batching_enabled": True,
+            "mode": "random",
+            "preset": "balanced",
+            "delay_seconds": 12,
+            "max_wait_seconds": 25,
+            "random_min_seconds": 5,
+            "random_max_seconds": 300,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["effective"]
+    assert body["mode"] == "random"
+    assert body["random_min_seconds"] == 5.0
+    assert body["random_max_seconds"] == 300.0
 
 
 def test_response_timing_settings_respects_admin_override(monkeypatch, tmp_path):

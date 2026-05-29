@@ -1313,9 +1313,13 @@ class AgentNameUpdate(BaseModel):
 
 class ResponseTimingUpdate(BaseModel):
     message_batching_enabled: StrictBool = True
+    mode: str = "preset"
     preset: str = "balanced"
     delay_seconds: float = response_timing.DEFAULT_DELAY_SECONDS
     max_wait_seconds: float = response_timing.DEFAULT_MAX_WAIT_SECONDS
+    custom_delay_seconds: float = response_timing.DEFAULT_CUSTOM_DELAY_SECONDS
+    random_min_seconds: float = response_timing.DEFAULT_RANDOM_MIN_SECONDS
+    random_max_seconds: float = response_timing.DEFAULT_RANDOM_MAX_SECONDS
 
 
 @router.get("/settings/agent-name", dependencies=[Depends(_check_auth)])

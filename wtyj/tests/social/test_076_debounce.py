@@ -143,6 +143,36 @@ def test_blocked_conversation_flushes_immediately(monkeypatch):
     assert timing["delay_seconds"] == 0.1
 
 
+def test_random_timing_is_sampled_once_per_batch(monkeypatch):
+    phone = "TEST_076_RANDOM_TIMING"
+    monkeypatch.setattr(
+        "agents.social.webhook_server.icp_overrides.fetch_overrides",
+        lambda: {
+            "response_timing": {
+                "settings": {
+                    "message_batching_enabled": True,
+                    "mode": "random",
+                    "preset": "balanced",
+                    "delay_seconds": 12,
+                    "max_wait_seconds": 25,
+                    "random_min_seconds": 100,
+                    "random_max_seconds": 100,
+                },
+                "source": "icp_override",
+            }
+        },
+    )
+    _buffer_message({"from": phone, "text": "one", "from_name": "Test", "message_type": "text"})
+    _buffer_message({"from": phone, "text": "two", "from_name": "Test", "message_type": "text"})
+    with _buffer_lock:
+        timer = _message_buffers[phone]["timer"]
+        timing = _message_buffers[phone]["timing"]
+        timer.cancel()
+    assert timing["mode"] == "random"
+    assert timing["delay_seconds"] == 100.0
+    assert timing["random_picked_seconds"] == 100.0
+
+
 # --- Test 3: Different phones don't batch together ---
 
 @patch("agents.social.webhook_server.send_text_message")
