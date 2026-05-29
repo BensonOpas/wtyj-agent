@@ -2313,6 +2313,42 @@ def resolve_conversation_from_escalation(escalation_id: int) -> None:
         email_clear_fully_escalated_flag(customer_id)
 
 
+def reopen_conversation_from_escalation(escalation_id: int) -> bool:
+    """Reopen a previously resolved escalation.
+
+    This is the inverse of ``resolve_conversation_from_escalation`` for the
+    operator dashboard's Unresolve action. It intentionally does not delete
+    messages, learning entries, or alert delivery history. The escalation row
+    returns to status='sent' so it is active again, while the stored mode
+    ('soft'/'hard') remains untouched and continues to drive the correct UI tab.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
+        (escalation_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+    customer_id, esc_channel = row
+    cur = conn.execute(
+        "UPDATE pending_notifications SET status = 'sent' WHERE id = ?",
+        (escalation_id,)
+    )
+    conn.execute(
+        "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
+        "VALUES (?, ?, 'open', ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET status = 'open', "
+        "updated_at = excluded.updated_at",
+        (customer_id, esc_channel or "whatsapp",
+         datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
+
+
 def _lookup_customer_contact(customer_id: str, contact_type: str) -> dict:
     """Brief 183: look up the customer's real email and phone from customer_identifiers
     via the customer_id stored in the escalation. Returns {'email': ..., 'phone': ...}
