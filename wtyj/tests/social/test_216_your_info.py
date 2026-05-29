@@ -146,6 +146,36 @@ def test_update_business_field_rejects_non_whitelisted_keys(monkeypatch, tmp_pat
     assert on_disk["business"]["name"] == "New Co"
 
 
+def test_agent_name_settings_save_and_validate(monkeypatch, tmp_path):
+    seed = {"business": {"name": "Co", "agent_name": "Marina"}}
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/agent-name", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["effectiveName"] == "Marina"
+
+    r = client.put(
+        "/dashboard/api/settings/agent-name",
+        json={"agent_name": "Sofia"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["effectiveName"] == "Sofia"
+    on_disk = json.loads(cfg_path.read_text())
+    assert on_disk["business"]["agent_name"] == "Sofia"
+
+    r = client.put(
+        "/dashboard/api/settings/agent-name",
+        json={"agent_name": "Official Meta Support"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+
+
 # ── Test 4: info_update_create permanent + scheduled rows ─────────────────────
 def test_info_update_create_permanent_and_scheduled():
     try:

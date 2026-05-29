@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger, auto_block
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -1297,6 +1297,30 @@ async def get_your_info():
     biz = config_loader.get_business() or {}
     whitelist = config_loader.your_info_whitelist()
     return {k: biz.get(k) for k in whitelist}
+
+
+class AgentNameUpdate(BaseModel):
+    agent_name: str
+
+
+@router.get("/settings/agent-name", dependencies=[Depends(_check_auth)])
+async def get_agent_name_settings():
+    from shared import icp_overrides as _icp
+    return agent_identity.agent_name_config(_icp.fetch_overrides())
+
+
+@router.put("/settings/agent-name", dependencies=[Depends(_check_auth)])
+async def put_agent_name_settings(req: AgentNameUpdate):
+    try:
+        clean_name = agent_identity.validate_agent_name(req.agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    ok = config_loader.update_business_field("agent_name", clean_name)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to update AI Agent name")
+    from shared import icp_overrides as _icp
+    _icp.clear_cache()
+    return agent_identity.agent_name_config(_icp.fetch_overrides())
 
 
 @router.put("/settings/your-info", dependencies=[Depends(_check_auth)])
@@ -3698,10 +3722,14 @@ async def suggest_reply(req: SuggestReplyRequest):
     trips = config_loader.get_services()
     signature = config_loader.get_agent_signature()
 
+    from shared import icp_overrides as _icp
+    override_envelope = _icp.fetch_overrides()
+    agent_name = agent_identity.effective_agent_name(override_envelope)
+
     # Format conversation
     thread_lines = []
     for msg in messages:
-        label = "Customer" if msg["role"] == "user" else config_loader.get_business().get("agent_name", "CSA")
+        label = "Customer" if msg["role"] == "user" else agent_name
         thread_lines.append(f"{label}: {msg['text']}")
     thread_text = "\n\n".join(thread_lines)
 
@@ -3722,7 +3750,6 @@ async def suggest_reply(req: SuggestReplyRequest):
         price = data.get("price_pp", "")
         trip_lines.append(f"- {name}: ${price}/person" if price else f"- {name}")
 
-    agent_name = business.get("agent_name", "CSA")
     company_name = business.get("name", "the business")
     persona_block = marina_agent._build_agent_persona_block()
 
