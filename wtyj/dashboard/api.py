@@ -18,6 +18,7 @@ from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity
+from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
 from agents.marina import marina_agent
@@ -252,6 +253,13 @@ async def get_icp_overrides():
     # the module-level fast path.
     from shared import icp_overrides as _icp
     return _icp.fetch_overrides()
+
+
+@router.get("/runtime-prompt-manifest", dependencies=[Depends(_check_auth)])
+async def get_runtime_prompt_manifest():
+    """Expose real runtime prompt builders for Nr3 conflict checks."""
+    from shared.runtime_prompt_manifest import build_runtime_prompt_manifest
+    return build_runtime_prompt_manifest()
 
 
 @router.get("/icp-overrides-debug", dependencies=[Depends(_check_auth)])
@@ -3753,28 +3761,13 @@ async def suggest_reply(req: SuggestReplyRequest):
     company_name = business.get("name", "the business")
     persona_block = marina_agent._build_agent_persona_block()
 
-    system_prompt = f"""You are {agent_name}, the booking agent for {company_name}.
-
-AGENT PERSONA:
-{persona_block}
-
-WRITING STYLE FOR EMAIL:
-Write as a real member of the {company_name} team. Warm, practical, human.
-Mirror the customer's tone. Use contractions. Plain language.
-No em dashes, no forced enthusiasm, no "I'd be happy to" or "Great choice".
-Emails are slightly longer and more structured than WhatsApp but still conversational.
-
-AVAILABLE TRIPS:
-{chr(10).join(trip_lines)}
-
-AGENT SIGNATURE:
-{signature}
-
-Return a JSON object with exactly two keys:
-- "subject": a short email subject line (no "Re:" prefix)
-- "body": the full email body including signature at the end
-
-Return ONLY the JSON object. No markdown fences, no extra text."""
+    system_prompt = build_suggest_reply_system_prompt(
+        agent_name=agent_name,
+        company_name=company_name,
+        persona_block=persona_block,
+        trip_lines=trip_lines,
+        signature=signature,
+    )
 
     if req.draft_text:
         user_prompt = f"""WHATSAPP CONVERSATION:
