@@ -65,3 +65,40 @@ def test_runtime_prompt_manifest_indexes_known_prompt_paths(monkeypatch, tmp_pat
     assert "Sofia" in combined
     assert "Always reply in Spanish" in combined
 
+
+def test_runtime_prompt_manifest_indexes_clinica_roberto_phone_privacy_rule(monkeypatch, tmp_path):
+    config_path = tmp_path / "client.json"
+    config_path.write_text(
+        json.dumps({
+            "slug": "clinica-roberto",
+            "business": {
+                "slug": "clinica-roberto",
+                "name": "Clinica Roberto",
+                "agent_name": "Marina",
+                "languages": ["Spanish"],
+            },
+            "agent_persona": {
+                "tone": "Profesional y empático",
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+    monkeypatch.delenv("NR3_INTERNAL_OVERRIDES_URL", raising=False)
+    monkeypatch.delenv("NR3_INTERNAL_API_TOKEN", raising=False)
+
+    app = FastAPI()
+    app.include_router(dashboard_router)
+    client = TestClient(app)
+
+    response = client.get("/dashboard/api/runtime-prompt-manifest", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    source_ids = {source["id"] for source in body["sources"]}
+    assert "runtime.tenant_hard_rules.clinica_roberto.phone_privacy" in source_ids
+    combined = json.dumps(body, ensure_ascii=False)
+    assert "TENANT HARD PRIVACY RULE - CLINICA ROBERTO" in combined
+    assert "no puedo tomar ni guardar automáticamente tu número desde WhatsApp" in combined
+    assert "Dashboard suggest-reply system prompt" in combined

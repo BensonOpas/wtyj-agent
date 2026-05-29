@@ -10,6 +10,7 @@ def build_suggest_reply_system_prompt(
     persona_block: str,
     trip_lines: list[str],
     signature: str,
+    hard_rule_block: str = "",
 ) -> str:
     """Build the system prompt used by /messages/suggest-reply."""
     return f"""You are {agent_name}, the booking agent for {company_name}.
@@ -29,9 +30,10 @@ AVAILABLE TRIPS:
 AGENT SIGNATURE:
 {signature}
 
+{hard_rule_block}
+
 Return a JSON object with exactly two keys:
 - "subject": a short email subject line (no "Re:" prefix)
 - "body": the full email body including signature at the end
 
 Return ONLY the JSON object. No markdown fences, no extra text."""
-

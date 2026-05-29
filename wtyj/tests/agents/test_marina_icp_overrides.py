@@ -372,3 +372,85 @@ def test_full_prompt_applies_icp_tone_override(monkeypatch):
         thread_flags={}, channel="email")
     assert "MY_TEST_TONE_MARKER" in prompt
     assert "ICP override" in prompt
+
+
+def test_clinica_roberto_prompt_includes_phone_privacy_hard_rule(monkeypatch):
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_business",
+        lambda: {
+            "slug": "clinica-roberto",
+            "name": "Clinica Roberto",
+            "agent_name": "Marina",
+            "languages": ["Spanish"],
+        },
+    )
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_raw",
+        lambda: {"slug": "clinica-roberto", "business": {"slug": "clinica-roberto"}},
+    )
+    monkeypatch.setattr(marina_agent.config_loader, "get_common_sense_knowledge", lambda: {})
+    monkeypatch.setattr(marina_agent.config_loader, "get_agent_signature", lambda: "Clinica Roberto")
+    monkeypatch.setattr(marina_agent.config_loader, "get_service_aliases", lambda: {})
+    monkeypatch.setattr(
+        icp_overrides,
+        "fetch_overrides",
+        lambda: {"sot_entries": [], "ai_agent_settings": {"tone": None, "escalation_rules": None}},
+    )
+
+    prompt = marina_agent._build_system_prompt(thread_flags={}, channel="whatsapp")
+
+    assert "TENANT HARD PRIVACY RULE - CLINICA ROBERTO" in prompt
+    assert "no puedo tomar ni guardar automáticamente tu número desde WhatsApp" in prompt
+    assert "Please type the phone number you want us to use" in prompt
+
+
+def test_clinica_roberto_whatsapp_sender_metadata_is_hidden(monkeypatch):
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_business",
+        lambda: {"slug": "clinica-roberto", "name": "Clinica Roberto"},
+    )
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_raw",
+        lambda: {"slug": "clinica-roberto", "business": {"slug": "clinica-roberto"}},
+    )
+    prompt = marina_agent._build_user_prompt(
+        from_email="+34 600 111 222",
+        subject="",
+        body="usa mi numero de WhatsApp",
+        thread_fields={},
+        thread_flags={},
+        channel="whatsapp",
+        messages=[],
+    )
+
+    assert "+34 600 111 222" not in prompt
+    assert "From: [WhatsApp sender withheld for privacy]" in prompt
+    assert "usa mi numero de WhatsApp" in prompt
+
+
+def test_other_tenants_keep_whatsapp_sender_visible(monkeypatch):
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_business",
+        lambda: {"slug": "unboks", "name": "Unboks"},
+    )
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_raw",
+        lambda: {"slug": "unboks", "business": {"slug": "unboks"}},
+    )
+    prompt = marina_agent._build_user_prompt(
+        from_email="+599 9 688 1585",
+        subject="",
+        body="hello",
+        thread_fields={},
+        thread_flags={},
+        channel="whatsapp",
+        messages=[],
+    )
+
+    assert "From: +599 9 688 1585" in prompt

@@ -13,7 +13,7 @@ from typing import Any
 from agents.marina import marina_agent
 from agents.social import dm_agent
 from dashboard import escalation_summary
-from shared import agent_identity, config_loader
+from shared import agent_identity, config_loader, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 
 _SECRET_KEY_RE = re.compile(
@@ -86,6 +86,7 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
     agent_name = agent_identity.effective_agent_name(override_envelope)
     signature = config_loader.get_agent_signature()
     persona_block = marina_agent._build_agent_persona_block(override_envelope)
+    hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
 
     sources: list[dict[str, Any]] = []
     sources.append(_source(
@@ -149,8 +150,19 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
             persona_block=persona_block,
             trip_lines=_trip_lines(),
             signature=signature,
+            hard_rule_block=hard_rule_block,
         ),
     ))
+    if hard_rule_block:
+        sources.append(_source(
+            source_id="runtime.tenant_hard_rules.clinica_roberto.phone_privacy",
+            name="Clinica Roberto WhatsApp phone privacy hard rule",
+            location="wtyj/shared/tenant_hard_rules.py::CLINICA_ROBERTO_PHONE_PRIVACY_RULE",
+            used_in=["whatsapp", "dashboard_suggest_reply"],
+            prompt_kind="tenant_hard_rule",
+            priority="tenant_hard_restrictions",
+            text=hard_rule_block,
+        ))
     sources.append(_source(
         source_id="runtime.escalation_summary.system",
         name="Escalation summary system prompt",
@@ -182,4 +194,3 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
         "partial": False,
         "limitations": [],
     }
-

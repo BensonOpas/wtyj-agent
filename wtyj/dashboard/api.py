@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
@@ -3809,6 +3809,7 @@ async def suggest_reply(req: SuggestReplyRequest):
         persona_block=persona_block,
         trip_lines=trip_lines,
         signature=signature,
+        hard_rule_block=tenant_hard_rules.phone_privacy_rule_block(),
     )
 
     if req.draft_text:

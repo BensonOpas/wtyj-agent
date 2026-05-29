@@ -10,6 +10,7 @@ import anthropic
 from shared import config_loader
 from shared import agent_identity
 from shared import bm_logger
+from shared import tenant_hard_rules
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 
@@ -753,6 +754,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_envelope = _icp_envelope_for_prompt()
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
+    _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
     agent_name = agent_identity.effective_agent_name(_icp_envelope)
     return f"""You are {agent_name}, the customer-facing AI Agent for {business.get('name', 'the business')}.
 Your customer-facing name is {agent_name}. Use this name only when natural. Do not overuse it, do not claim to be human, and do not imply any professional license or authority.
@@ -947,6 +949,8 @@ FIELD EXTRACTION RULES (apply when populating the `fields` argument of your mari
 
 - date: MUST be in YYYY-MM-DD format. Convert any natural language date (e.g. "April 20", "next Saturday", "in two weeks") to YYYY-MM-DD using today's date as reference. If the customer has given a vague or unresolvable date (e.g. "sometime next month", "in the summer", "soon") you MUST omit this field and ask for a specific date in clarifications_needed. Never infer, guess, or pick a date the customer has not explicitly stated or clearly implied. When in doubt, ask. If the customer explicitly rejects or cancels a previously stated date (e.g. "nvm the 28th", "not that date", "change the date"), set date to "" (empty string) so the old date is cleared, then ask for a specific new date in clarifications_needed.
 
+- phone: customer's phone number - only if explicitly typed by the customer inside the message text or conversation history. Never copy it from WhatsApp metadata, sender id, caller id, profile data, or the "From" line.
+
 - guests: exact integer ONLY when the customer explicitly states a number. "We", "us", "our family" without a number does NOT count — omit this field entirely. Never infer a guest count from context or business rules.
 
 - email: customer's email address — only if explicitly provided.
@@ -976,6 +980,7 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 {_build_service_alias_text()}
 
 Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
+{_tenant_hard_rule_block}
 {_icp_final_override_block}"""
 
 
@@ -1054,10 +1059,11 @@ def _build_user_prompt(
             history_section = "CONVERSATION HISTORY (recent messages):\n  (new conversation)\n\n"
 
     # Build inbound message section
+    visible_sender = tenant_hard_rules.prompt_sender_label(channel, from_email)
     if channel == "whatsapp":
         inbound_section = (
             f"INBOUND MESSAGE:\n"
-            f"  From: {from_email}\n"
+            f"  From: {visible_sender}\n"
             f"  Text: {body}"
         )
     else:
