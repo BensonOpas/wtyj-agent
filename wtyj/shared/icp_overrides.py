@@ -84,7 +84,7 @@ def _empty_envelope(tenant_id: Optional[str], reason: str) -> dict:
         "channel_connections": {},
         "display_metadata": {},
         "sot_entries": [],
-        "ai_agent_settings": {"tone": None, "escalation_rules": None},
+        "ai_agent_settings": {"tone": None, "escalation_rules": None, "agent_name": None},
     }
 
 
@@ -323,12 +323,13 @@ def fetch_overrides() -> dict:
     if not isinstance(sot_entries, list):
         sot_entries = []
     if not isinstance(ai_agent_settings, dict):
-        ai_agent_settings = {"tone": None, "escalation_rules": None}
+        ai_agent_settings = {"tone": None, "escalation_rules": None, "agent_name": None}
     else:
         # Ensure both nested keys exist (None when not configured)
         ai_agent_settings = {
             "tone": ai_agent_settings.get("tone"),
             "escalation_rules": ai_agent_settings.get("escalation_rules"),
+            "agent_name": ai_agent_settings.get("agent_name"),
         }
 
     envelope = {

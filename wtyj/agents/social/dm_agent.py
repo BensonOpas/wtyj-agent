@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
-from shared import state_registry, config_loader, bm_logger, auto_block
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
@@ -76,7 +76,12 @@ def _build_dm_system_prompt(channel: str) -> str:
     # wa.me/<same-number-the-customer-is-on> redirect.
     booking_flow = config_loader.get_raw().get("features", {}).get("booking_flow", True)
 
-    agent_name = business.get("agent_name", "CSA")
+    try:
+        from shared import icp_overrides
+        override_envelope = icp_overrides.fetch_overrides()
+    except Exception:
+        override_envelope = None
+    agent_name = agent_identity.effective_agent_name(override_envelope)
     company_name = business.get("name", "the business")
     wa_number = business.get("whatsapp", "")
     wa_link = wa_number.replace("+", "").replace(" ", "")

@@ -105,6 +105,35 @@ def test_final_override_block_renders_nr3_edits_as_highest_priority():
     assert "legal-service tenants" in block
 
 
+def test_system_prompt_uses_icp_agent_name_override(monkeypatch):
+    monkeypatch.setattr(
+        marina_agent.config_loader,
+        "get_business",
+        lambda: {"name": "Demo Co", "agent_name": "Marina", "languages": ["English"]},
+    )
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: {"business": {}})
+    monkeypatch.setattr(marina_agent.config_loader, "get_common_sense_knowledge", lambda: {})
+    monkeypatch.setattr(marina_agent.config_loader, "get_agent_signature", lambda: "The Team")
+    monkeypatch.setattr(marina_agent.config_loader, "get_service_aliases", lambda: {})
+    monkeypatch.setattr(
+        marina_agent,
+        "_icp_envelope_for_prompt",
+        lambda: {
+            "sot_entries": [],
+            "ai_agent_settings": {
+                "tone": None,
+                "escalation_rules": None,
+                "agent_name": {"name": "Sofia", "source": "icp_override"},
+            },
+        },
+    )
+
+    prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
+    assert "You are Sofia" in prompt
+    assert "Your customer-facing name is Sofia" in prompt
+    assert "You are Marina" not in prompt
+
+
 # --- _build_agent_persona_block: tone -----------------------
 
 

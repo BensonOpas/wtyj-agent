@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 import anthropic
 from shared import config_loader
+from shared import agent_identity
 from shared import bm_logger
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
@@ -752,7 +753,9 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_envelope = _icp_envelope_for_prompt()
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
-    return f"""You are {business.get('agent_name', 'CSA')}, the booking agent for {business.get('name', 'the business')}.
+    agent_name = agent_identity.effective_agent_name(_icp_envelope)
+    return f"""You are {agent_name}, the customer-facing AI Agent for {business.get('name', 'the business')}.
+Your customer-facing name is {agent_name}. Use this name only when natural. Do not overuse it, do not claim to be human, and do not imply any professional license or authority.
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
