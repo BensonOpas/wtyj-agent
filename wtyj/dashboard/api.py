@@ -1319,6 +1319,14 @@ async def get_agent_name_settings():
 
 @router.put("/settings/agent-name", dependencies=[Depends(_check_auth)])
 async def put_agent_name_settings(req: AgentNameUpdate):
+    from shared import icp_overrides as _icp
+    envelope = _icp.fetch_overrides()
+    current = agent_identity.agent_name_config(envelope)
+    if current.get("source") == "admin_override":
+        raise HTTPException(
+            status_code=409,
+            detail="Admin override active. Contact Unboks to change this name.",
+        )
     try:
         clean_name = agent_identity.validate_agent_name(req.agent_name)
     except ValueError as exc:
@@ -1326,7 +1334,6 @@ async def put_agent_name_settings(req: AgentNameUpdate):
     ok = config_loader.update_business_field("agent_name", clean_name)
     if not ok:
         raise HTTPException(status_code=500, detail="failed to update AI Agent name")
-    from shared import icp_overrides as _icp
     _icp.clear_cache()
     return agent_identity.agent_name_config(_icp.fetch_overrides())
 

@@ -175,6 +175,47 @@ def test_agent_name_settings_save_and_validate(monkeypatch, tmp_path):
     )
     assert r.status_code == 400
 
+    r = client.put(
+        "/dashboard/api/settings/agent-name",
+        json={"agent_name": "ChatGPT"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+
+
+def test_agent_name_settings_respects_admin_override(monkeypatch, tmp_path):
+    seed = {"business": {"name": "Co", "agent_name": "Marina"}}
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    from shared import icp_overrides
+
+    envelope = {
+        "ai_agent_settings": {
+            "tone": None,
+            "escalation_rules": None,
+            "agent_name": {"name": "Sofia", "source": "icp_override"},
+        }
+    }
+    monkeypatch.setattr(icp_overrides, "fetch_overrides", lambda: envelope)
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/agent-name", headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["source"] == "admin_override"
+    assert r.json()["effectiveName"] == "Sofia"
+
+    r = client.put(
+        "/dashboard/api/settings/agent-name",
+        json={"agent_name": "Pepa"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 409
+    on_disk = json.loads(cfg_path.read_text())
+    assert on_disk["business"]["agent_name"] == "Marina"
+
 
 # ── Test 4: info_update_create permanent + scheduled rows ─────────────────────
 def test_info_update_create_permanent_and_scheduled():

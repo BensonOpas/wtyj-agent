@@ -24,6 +24,10 @@ _EMOJI_RE = re.compile(
     "]"
 )
 _UNSAFE_TERMS = (
+    "claude",
+    "anthropic",
+    "openai",
+    "chatgpt",
     "human support",
     "doctor",
     "dr.",
@@ -104,4 +108,3 @@ def agent_name_config(envelope: dict | None = None) -> dict[str, Any]:
         "source": "admin_override" if override else ("tenant" if tenant_value != DEFAULT_AGENT_NAME else "default"),
         "overrideMeta": override_meta,
     }
-
