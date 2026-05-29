@@ -212,6 +212,38 @@ def update_business_field(key: str, value) -> bool:
     return True
 
 
+def update_response_timing(value: dict) -> bool:
+    """Persist tenant response timing under top-level response_timing."""
+    global _cache
+    if not isinstance(value, dict):
+        return False
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = json.load(f)
+    except Exception:
+        return False
+    current["response_timing"] = dict(value)
+    tmp_path = None
+    try:
+        dir_path = os.path.dirname(_CONFIG_PATH) or "."
+        with _tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False,
+            dir=dir_path, prefix=".client.", suffix=".tmp",
+        ) as tf:
+            json.dump(current, tf, indent=2, ensure_ascii=False)
+            tmp_path = tf.name
+        os.replace(tmp_path, _CONFIG_PATH)
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return False
+    _cache = {}
+    return True
+
+
 def your_info_whitelist() -> tuple:
     """Brief 216: expose the whitelist so the GET endpoint returns only
     the editable fields and the PUT endpoint validates inputs."""

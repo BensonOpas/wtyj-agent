@@ -85,6 +85,7 @@ def _empty_envelope(tenant_id: Optional[str], reason: str) -> dict:
         "display_metadata": {},
         "sot_entries": [],
         "ai_agent_settings": {"tone": None, "escalation_rules": None, "agent_name": None},
+        "response_timing": None,
     }
 
 
@@ -312,6 +313,7 @@ def fetch_overrides() -> dict:
     display_metadata = body.get("display_metadata")
     sot_entries = body.get("sot_entries")
     ai_agent_settings = body.get("ai_agent_settings")
+    response_timing = body.get("response_timing")
     if not isinstance(feature_toggles, dict):
         feature_toggles = {}
     if not isinstance(channel_connections, dict):
@@ -331,6 +333,8 @@ def fetch_overrides() -> dict:
             "escalation_rules": ai_agent_settings.get("escalation_rules"),
             "agent_name": ai_agent_settings.get("agent_name"),
         }
+    if not isinstance(response_timing, dict):
+        response_timing = None
 
     envelope = {
         "available": True,
@@ -340,6 +344,7 @@ def fetch_overrides() -> dict:
         "display_metadata": display_metadata,
         "sot_entries": sot_entries,
         "ai_agent_settings": ai_agent_settings,
+        "response_timing": response_timing,
     }
     _cache_put(tenant_id, envelope)
     return _record(envelope, "success")

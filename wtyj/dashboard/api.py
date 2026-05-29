@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message
@@ -1311,6 +1311,13 @@ class AgentNameUpdate(BaseModel):
     agent_name: str
 
 
+class ResponseTimingUpdate(BaseModel):
+    message_batching_enabled: StrictBool = True
+    preset: str = "balanced"
+    delay_seconds: float = response_timing.DEFAULT_DELAY_SECONDS
+    max_wait_seconds: float = response_timing.DEFAULT_MAX_WAIT_SECONDS
+
+
 @router.get("/settings/agent-name", dependencies=[Depends(_check_auth)])
 async def get_agent_name_settings():
     from shared import icp_overrides as _icp
@@ -1336,6 +1343,30 @@ async def put_agent_name_settings(req: AgentNameUpdate):
         raise HTTPException(status_code=500, detail="failed to update AI Agent name")
     _icp.clear_cache()
     return agent_identity.agent_name_config(_icp.fetch_overrides())
+
+
+@router.get("/settings/response-timing", dependencies=[Depends(_check_auth)])
+async def get_response_timing_settings():
+    from shared import icp_overrides as _icp
+    return response_timing.response_timing_config(_icp.fetch_overrides())
+
+
+@router.put("/settings/response-timing", dependencies=[Depends(_check_auth)])
+async def put_response_timing_settings(req: ResponseTimingUpdate):
+    from shared import icp_overrides as _icp
+    envelope = _icp.fetch_overrides()
+    current = response_timing.response_timing_config(envelope)
+    if current.get("source") == "admin_override":
+        raise HTTPException(
+            status_code=409,
+            detail="Admin override active. Contact Unboks to change response timing.",
+        )
+    normalized = response_timing.normalize_response_timing(req.model_dump())
+    ok = config_loader.update_response_timing(normalized)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to update response timing")
+    _icp.clear_cache()
+    return response_timing.response_timing_config(_icp.fetch_overrides())
 
 
 @router.put("/settings/your-info", dependencies=[Depends(_check_auth)])

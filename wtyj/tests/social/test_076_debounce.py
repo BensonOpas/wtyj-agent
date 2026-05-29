@@ -102,6 +102,47 @@ def test_rapid_fire_batched(mock_handle, mock_send):
     assert mock_handle.call_args[0][0]["text"] == "book snorkeling\nfor 4 people\nmarch 27"
 
 
+def test_buffer_uses_tenant_response_timing(monkeypatch):
+    """Timer delay comes from tenant/Nr3 response timing, not hardcoded 2s."""
+    phone = "TEST_076_TIMING_001"
+    monkeypatch.setattr(
+        "agents.social.webhook_server.icp_overrides.fetch_overrides",
+        lambda: {
+            "response_timing": {
+                "settings": {
+                    "message_batching_enabled": True,
+                    "preset": "patient",
+                    "delay_seconds": 15,
+                    "max_wait_seconds": 25,
+                },
+                "source": "icp_override",
+            }
+        },
+    )
+    _buffer_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
+    with _buffer_lock:
+        timer = _message_buffers[phone]["timer"]
+        timing = _message_buffers[phone]["timing"]
+        timer.cancel()
+    assert timing["delay_seconds"] == 15.0
+    assert timing["max_wait_seconds"] == 25.0
+
+
+def test_blocked_conversation_flushes_immediately(monkeypatch):
+    phone = "TEST_076_BLOCKED_TIMING"
+    monkeypatch.setattr(
+        "agents.social.webhook_server.state_registry.get_blocked",
+        lambda conversation_id: True,
+    )
+    _buffer_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
+    with _buffer_lock:
+        timer = _message_buffers[phone]["timer"]
+        timing = _message_buffers[phone]["timing"]
+        timer.cancel()
+    assert timing["source"] == "immediate_runtime_state"
+    assert timing["delay_seconds"] == 0.1
+
+
 # --- Test 3: Different phones don't batch together ---
 
 @patch("agents.social.webhook_server.send_text_message")

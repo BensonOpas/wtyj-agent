@@ -13,6 +13,8 @@ from fastapi.responses import PlainTextResponse
 from shared.bm_logger import log
 from shared import state_registry
 from shared import config_loader
+from shared import response_timing
+from shared import icp_overrides
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
 from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
@@ -59,11 +61,10 @@ app.include_router(tasks_router)
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
 
-# Brief 161: _DEBOUNCE_SECONDS coalesces rapid customer messages into a single
-# Claude call. It does NOT protect against concurrent orchestrator access —
-# that's what the per-phone lock below is for. Two different problems.
-_DEBOUNCE_SECONDS = 2.0
-_MAX_BATCH_SECONDS = 5.0
+# Message batching coalesces rapid customer messages into one Marina call. It
+# does NOT protect against concurrent orchestrator access - the per-phone lock
+# below solves that different problem. Timing is tenant-configurable via
+# client.json/Nr2 and optional Nr3 admin override.
 
 _message_buffers = {}   # phone -> {"messages": [...], "timer": Timer, "started": float}
 _buffer_lock = threading.Lock()
@@ -153,17 +154,23 @@ def _buffer_message(msg):
     """Add message to per-phone debounce buffer. Schedule flush after window."""
     phone = msg["from"]
     now = time.time()
+    timing = _response_timing_for_message(msg)
     with _buffer_lock:
         if phone not in _message_buffers:
             _message_buffers[phone] = {
                 "messages": [],
                 "timer": None,
                 "started": now,
+                "timing": timing,
             }
         buf = _message_buffers[phone]
+        buf["timing"] = timing
         buf["messages"].append(msg)
         log("whatsapp_message_buffered", phone=phone,
-            buffered_count=len(buf["messages"]))
+            buffered_count=len(buf["messages"]),
+            batch_delay_seconds=timing["delay_seconds"],
+            batch_max_wait_seconds=timing["max_wait_seconds"],
+            batch_source=timing.get("source"))
 
         # Cancel existing timer
         if buf["timer"] is not None:
@@ -171,12 +178,39 @@ def _buffer_message(msg):
 
         # Calculate delay: min of debounce window or remaining hard cap
         elapsed = now - buf["started"]
-        remaining_cap = max(0.1, _MAX_BATCH_SECONDS - elapsed)
-        delay = min(_DEBOUNCE_SECONDS, remaining_cap)
+        remaining_cap = max(0.1, float(timing["max_wait_seconds"]) - elapsed)
+        delay = min(float(timing["delay_seconds"]), remaining_cap)
 
         buf["timer"] = threading.Timer(delay, _flush_buffer, args=[phone])
         buf["timer"].daemon = True
         buf["timer"].start()
+
+
+def _response_timing_for_message(msg: dict) -> dict:
+    """Return effective response timing for this message.
+
+    Human takeover and already-blocked conversations should not sit in the
+    customer-facing debounce window. They still flow through the same flush
+    path so storage/blocked handling remains centralized.
+    """
+    phone = msg.get("from", "")
+    conversation_id = msg.get("_zernio_conversation_id") or phone
+    if conversation_id and (
+        state_registry.get_blocked(conversation_id)
+        or state_registry.get_ai_muted(conversation_id)
+    ):
+        return {
+            "message_batching_enabled": False,
+            "preset": "immediate",
+            "delay_seconds": 0.1,
+            "max_wait_seconds": 0.1,
+            "source": "immediate_runtime_state",
+        }
+    try:
+        envelope = icp_overrides.fetch_overrides()
+    except Exception:
+        envelope = None
+    return response_timing.effective_response_timing(envelope)
 
 
 def _flush_buffer(phone):
@@ -193,9 +227,11 @@ def _flush_buffer(phone):
     final_msg = messages[-1].copy()
     final_msg["text"] = combined_text
     batched_count = len(messages)
+    timing = buf.get("timing") if isinstance(buf, dict) else {}
     if batched_count > 1:
         log("whatsapp_batch_flushed", phone=phone, count=batched_count,
-            combined_length=len(combined_text))
+            combined_length=len(combined_text),
+            batch_source=timing.get("source") if isinstance(timing, dict) else None)
     # Brief 161: acquire per-phone lock BEFORE the try block so both Zernio
     # and legacy Meta paths are serialized. Lock key: zernio conv id (if
     # present) or phone. Fixes race where msg 2 starts processing while msg

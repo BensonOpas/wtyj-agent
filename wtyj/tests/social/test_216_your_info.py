@@ -217,6 +217,100 @@ def test_agent_name_settings_respects_admin_override(monkeypatch, tmp_path):
     assert on_disk["business"]["agent_name"] == "Marina"
 
 
+def test_response_timing_settings_save_and_validate(monkeypatch, tmp_path):
+    seed = {"business": {"name": "Co"}}
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/response-timing", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"]["preset"] == "balanced"
+    assert r.json()["effective"]["delay_seconds"] == 12.0
+
+    r = client.put(
+        "/dashboard/api/settings/response-timing",
+        json={
+            "message_batching_enabled": True,
+            "preset": "patient",
+            "delay_seconds": 15,
+            "max_wait_seconds": 30,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"]["preset"] == "patient"
+    on_disk = json.loads(cfg_path.read_text())
+    assert on_disk["response_timing"]["delay_seconds"] == 15.0
+
+    r = client.put(
+        "/dashboard/api/settings/response-timing",
+        json={
+            "message_batching_enabled": True,
+            "preset": "fast",
+            "delay_seconds": 99,
+            "max_wait_seconds": 1,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["effective"]
+    assert body["delay_seconds"] == 20.0
+    assert body["max_wait_seconds"] == 20.0
+
+
+def test_response_timing_settings_respects_admin_override(monkeypatch, tmp_path):
+    seed = {
+        "business": {"name": "Co"},
+        "response_timing": {
+            "message_batching_enabled": True,
+            "preset": "fast",
+            "delay_seconds": 5,
+            "max_wait_seconds": 25,
+        },
+    }
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    from shared import icp_overrides
+
+    envelope = {
+        "response_timing": {
+            "settings": {
+                "message_batching_enabled": True,
+                "preset": "patient",
+                "delay_seconds": 15,
+                "max_wait_seconds": 30,
+            },
+            "source": "icp_override",
+        }
+    }
+    monkeypatch.setattr(icp_overrides, "fetch_overrides", lambda: envelope)
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/response-timing", headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["source"] == "admin_override"
+    assert r.json()["effective"]["delay_seconds"] == 15.0
+
+    r = client.put(
+        "/dashboard/api/settings/response-timing",
+        json={
+            "message_batching_enabled": True,
+            "preset": "balanced",
+            "delay_seconds": 12,
+            "max_wait_seconds": 25,
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 409
+    assert json.loads(cfg_path.read_text())["response_timing"]["preset"] == "fast"
+
+
 # ── Test 4: info_update_create permanent + scheduled rows ─────────────────────
 def test_info_update_create_permanent_and_scheduled():
     try:
