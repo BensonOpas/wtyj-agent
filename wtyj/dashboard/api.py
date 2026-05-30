@@ -944,6 +944,40 @@ async def get_config():
     return {"context": _build_client_context()}
 
 
+@router.get("/client/profile", dependencies=[Depends(_check_auth)])
+async def get_client_profile():
+    """Safe tenant display profile for the Nr2 dashboard shell.
+
+    This endpoint intentionally exposes only workspace identity fields used by
+    the UI. Raw client.json secrets, provider tokens, and internal bridge
+    credentials are never returned.
+    """
+    raw = config_loader.get_raw()
+    business = config_loader.get_business()
+    slug = _current_tenant_slug() or str(raw.get("slug") or "").strip().lower()
+    name = (
+        str(business.get("name") or "").strip()
+        or str(raw.get("business_name") or "").strip()
+        or str(raw.get("name") or "").strip()
+        or slug
+    )
+    status = str(raw.get("status") or "").strip().lower() or "unknown"
+    allowed_statuses = {"active", "trial", "suspended", "paused", "inactive"}
+    if status not in allowed_statuses:
+        status = "unknown"
+    return {
+        "slug": slug,
+        "name": name,
+        "business_name": name,
+        "display_name": name,
+        "status": status,
+        "business": {
+            "name": name,
+            "display_name": name,
+        },
+    }
+
+
 # --- Photos ---
 
 @router.post("/photos/upload", dependencies=[Depends(_check_auth)])
