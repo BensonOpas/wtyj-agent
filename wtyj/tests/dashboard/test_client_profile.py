@@ -87,3 +87,60 @@ def test_client_profile_falls_back_to_top_level_name(monkeypatch):
     assert body["name"] == "Test Workspace"
     assert body["status"] == "active"
 
+
+def test_client_profile_marks_legacy_unboks_config_active(monkeypatch):
+    monkeypatch.delenv("TENANT_ID", raising=False)
+    monkeypatch.setattr(
+        config_loader,
+        "get_raw",
+        lambda: {
+            "business": {
+                "slug": "unboks",
+                "name": "Unboks",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        config_loader,
+        "get_business",
+        lambda: {
+            "slug": "unboks",
+            "name": "Unboks",
+        },
+    )
+
+    response = _client().get("/dashboard/api/client/profile", headers=_auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["slug"] == "unboks"
+    assert body["name"] == "Unboks"
+    assert body["status"] == "active"
+
+
+def test_client_profile_keeps_explicit_unboks_suspended_status(monkeypatch):
+    monkeypatch.delenv("TENANT_ID", raising=False)
+    monkeypatch.setattr(
+        config_loader,
+        "get_raw",
+        lambda: {
+            "status": "suspended",
+            "business": {
+                "slug": "unboks",
+                "name": "Unboks",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        config_loader,
+        "get_business",
+        lambda: {
+            "slug": "unboks",
+            "name": "Unboks",
+        },
+    )
+
+    response = _client().get("/dashboard/api/client/profile", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "suspended"

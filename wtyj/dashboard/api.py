@@ -961,7 +961,10 @@ async def get_client_profile():
         or str(raw.get("name") or "").strip()
         or slug
     )
-    status = str(raw.get("status") or "").strip().lower() or "unknown"
+    raw_status = str(raw.get("status") or "").strip().lower()
+    if not raw_status and slug == "unboks":
+        raw_status = "active"
+    status = raw_status or "unknown"
     allowed_statuses = {"active", "trial", "suspended", "paused", "inactive"}
     if status not in allowed_statuses:
         status = "unknown"
