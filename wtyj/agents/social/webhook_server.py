@@ -145,6 +145,24 @@ def _process_whatsapp_event(payload: dict):
                 log("whatsapp_non_text_skipped", source="meta_whatsapp",
                     message_type=msg.get("message_type"), message_id=message_id)
                 continue
+            ignored = state_registry.match_ignored_contact(
+                channel="whatsapp",
+                sender_id=msg.get("from", ""),
+                phone=msg.get("from", ""),
+            )
+            if ignored:
+                state_registry.record_ignored_contact_event(
+                    contact_id=ignored.get("id"),
+                    channel="whatsapp",
+                    sender_identifier=msg.get("from", ""),
+                    message_id=message_id,
+                )
+                log("ignored_contact_inbound_suppressed",
+                    channel="whatsapp",
+                    sender=(msg.get("from", "") or "")[:50],
+                    message_id=message_id,
+                    reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+                continue
             _buffer_message(msg)
     except Exception as e:
         log("webhook_process_error", source="meta_whatsapp", error=str(e))
@@ -252,6 +270,25 @@ def _flush_buffer(phone):
             _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
             _zernio_sender = final_msg.get("_zernio_sender_name", "")
             if _zernio_conv:
+                ignored = state_registry.match_ignored_contact(
+                    channel=_zernio_channel,
+                    sender_id=final_msg.get("from", ""),
+                    phone=final_msg.get("from", ""),
+                ) or state_registry.match_ignored_contact(
+                    channel=_zernio_channel,
+                    sender_id=_zernio_conv,
+                )
+                if ignored:
+                    state_registry.record_ignored_contact_event(
+                        contact_id=ignored.get("id"),
+                        channel=_zernio_channel,
+                        sender_identifier=final_msg.get("from", "") or _zernio_conv,
+                    )
+                    log("ignored_contact_inbound_suppressed",
+                        channel=_zernio_channel,
+                        sender=(final_msg.get("from", "") or _zernio_conv)[:50],
+                        reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+                    return
                 # Brief 220: per-conversation runtime block. Drop BEFORE
                 # storage so the conversation doesn't appear in the inbox.
                 if state_registry.get_blocked(_zernio_conv):
@@ -375,6 +412,28 @@ def _process_zernio_event(payload: dict):
             log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
             return
         state_registry.wa_mark_as_processed(message_id)
+
+        ignored = state_registry.match_ignored_contact(
+            channel=msg.get("channel", ""),
+            sender_id=msg.get("sender_id", ""),
+            phone=msg.get("sender_id", ""),
+        ) or state_registry.match_ignored_contact(
+            channel=msg.get("channel", ""),
+            sender_id=msg.get("conversation_id", ""),
+        )
+        if ignored:
+            state_registry.record_ignored_contact_event(
+                contact_id=ignored.get("id"),
+                channel=msg.get("channel", ""),
+                sender_identifier=msg.get("sender_id") or msg.get("conversation_id", ""),
+                message_id=message_id,
+            )
+            log("ignored_contact_inbound_suppressed",
+                channel=msg.get("channel", ""),
+                sender=(msg.get("sender_id") or msg.get("conversation_id") or "")[:50],
+                message_id=message_id,
+                reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+            return
 
         # Brief 208: per-tenant ignored_phones list. Drop messages from
         # configured numbers BEFORE any reply-generation path runs.

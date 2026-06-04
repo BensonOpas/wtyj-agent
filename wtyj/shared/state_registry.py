@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -47,6 +48,44 @@ def is_system_email_sender(email_addr: str) -> bool:
         return False
     domain = value.rsplit("@", 1)[-1]
     return domain in _SYSTEM_EMAIL_DOMAINS
+
+
+def _current_tenant_id() -> str:
+    for name in ("TENANT_ID", "TENANT_SLUG"):
+        value = os.environ.get(name, "").strip().lower()
+        if value:
+            return value
+    try:
+        from shared import config_loader
+        raw = config_loader.get_raw()
+        slug = raw.get("slug") if isinstance(raw, dict) else ""
+        if isinstance(slug, str) and slug.strip():
+            return slug.strip().lower()
+    except Exception:
+        pass
+    return "default"
+
+
+def normalize_phone_identifier(value: str | None) -> str:
+    """Normalize phone-like sender ids for exact matching.
+
+    Keep this conservative: strip common extension suffixes and ASCII
+    non-digits only. We do not do partial matching or country guessing.
+    """
+    if not value:
+        return ""
+    raw = str(value).strip()
+    raw = re.split(r"(?:ext\.?|x|#)\s*\d+\s*$", raw, flags=re.IGNORECASE)[0]
+    return re.sub(r"[^0-9]", "", raw)
+
+
+def normalize_email_identifier(value: str | None) -> str:
+    if not value:
+        return ""
+    raw = str(value).strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", raw):
+        return ""
+    return raw
 
 
 def set_summary_dispatcher(fn):
@@ -329,6 +368,49 @@ def _get_conn():
         "channel TEXT NOT NULL DEFAULT 'whatsapp', "
         "status TEXT NOT NULL DEFAULT 'pending', "
         "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ignored_contacts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "tenant_id TEXT NOT NULL DEFAULT '', "
+        "name TEXT DEFAULT '', "
+        "phone_original TEXT DEFAULT '', "
+        "phone_normalized TEXT DEFAULT '', "
+        "email_original TEXT DEFAULT '', "
+        "email_normalized TEXT DEFAULT '', "
+        "channel TEXT DEFAULT '', "
+        "external_sender_id TEXT DEFAULT '', "
+        "label TEXT DEFAULT '', "
+        "note TEXT DEFAULT '', "
+        "created_by TEXT DEFAULT '', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "deleted_at TEXT"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ignored_contacts_phone "
+        "ON ignored_contacts(tenant_id, phone_normalized)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ignored_contacts_email "
+        "ON ignored_contacts(tenant_id, email_normalized)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ignored_contacts_external "
+        "ON ignored_contacts(tenant_id, channel, external_sender_id)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ignored_contact_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "tenant_id TEXT NOT NULL DEFAULT '', "
+        "ignored_contact_id INTEGER, "
+        "channel TEXT DEFAULT '', "
+        "sender_identifier TEXT DEFAULT '', "
+        "message_id TEXT DEFAULT '', "
+        "reason TEXT DEFAULT '', "
+        "created_at TEXT NOT NULL"
         ")"
     )
     # Brief 213: pending_notifications.mode (per-escalation soft/hard)
@@ -1996,6 +2078,340 @@ def list_blocked_conversations() -> list:
             "updatedAt": r[2],
             "reason": r[3] or "",
             "blockedBy": r[4] or "",
+        }
+        for r in rows
+    ]
+
+
+_IGNORE_LABELS = {
+    "Owner",
+    "Staff",
+    "VIP",
+    "Supplier",
+    "Private",
+    "Family",
+    "Lawyer / Accountant",
+    "Test Contact",
+    "Other",
+}
+
+
+def _ignored_contact_row_to_dict(row) -> dict:
+    return {
+        "id": int(row[0]),
+        "tenant_id": row[1] or "",
+        "name": row[2] or "",
+        "phone_original": row[3] or "",
+        "phone_normalized": row[4] or "",
+        "email_original": row[5] or "",
+        "email_normalized": row[6] or "",
+        "channel": row[7] or "",
+        "external_sender_id": row[8] or "",
+        "label": row[9] or "",
+        "note": row[10] or "",
+        "created_by": row[11] or "",
+        "created_at": row[12] or "",
+        "updated_at": row[13] or "",
+        "deleted_at": row[14] or None,
+    }
+
+
+def _sanitize_ignore_label(label: str) -> str:
+    clean = (label or "").strip()
+    return clean if clean in _IGNORE_LABELS else ("Other" if clean else "")
+
+
+def _sanitize_channel(channel: str) -> str:
+    return re.sub(r"[^a-z0-9_-]", "", (channel or "").strip().lower())[:40]
+
+
+def list_ignored_contacts(include_deleted: bool = False) -> list[dict]:
+    tenant_id = _current_tenant_id()
+    conn = _get_conn()
+    sql = (
+        "SELECT id, tenant_id, name, phone_original, phone_normalized, "
+        "email_original, email_normalized, channel, external_sender_id, "
+        "label, note, created_by, created_at, updated_at, deleted_at "
+        "FROM ignored_contacts WHERE tenant_id = ? "
+    )
+    params: list = [tenant_id]
+    if not include_deleted:
+        sql += "AND deleted_at IS NULL "
+    sql += "ORDER BY updated_at DESC, id DESC"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [_ignored_contact_row_to_dict(r) for r in rows]
+
+
+def find_ignored_contact_duplicate(
+    *,
+    phone: str = "",
+    email: str = "",
+    channel: str = "",
+    external_sender_id: str = "",
+    exclude_id: int | None = None,
+) -> dict | None:
+    tenant_id = _current_tenant_id()
+    phone_norm = normalize_phone_identifier(phone)
+    email_norm = normalize_email_identifier(email)
+    clean_channel = _sanitize_channel(channel)
+    external = (external_sender_id or "").strip()
+    clauses = []
+    params: list = [tenant_id]
+    if phone_norm:
+        clauses.append("phone_normalized = ?")
+        params.append(phone_norm)
+    if email_norm:
+        clauses.append("email_normalized = ?")
+        params.append(email_norm)
+    if clean_channel and external:
+        clauses.append("(channel = ? AND external_sender_id = ?)")
+        params.extend([clean_channel, external])
+    if not clauses:
+        return None
+    sql = (
+        "SELECT id, tenant_id, name, phone_original, phone_normalized, "
+        "email_original, email_normalized, channel, external_sender_id, "
+        "label, note, created_by, created_at, updated_at, deleted_at "
+        "FROM ignored_contacts WHERE tenant_id = ? AND deleted_at IS NULL "
+        f"AND ({' OR '.join(clauses)}) "
+    )
+    if exclude_id is not None:
+        sql += "AND id != ? "
+        params.append(int(exclude_id))
+    sql += "ORDER BY updated_at DESC LIMIT 1"
+    conn = _get_conn()
+    row = conn.execute(sql, params).fetchone()
+    conn.close()
+    return _ignored_contact_row_to_dict(row) if row else None
+
+
+def add_ignored_contact(
+    *,
+    name: str = "",
+    phone: str = "",
+    email: str = "",
+    channel: str = "",
+    external_sender_id: str = "",
+    label: str = "",
+    note: str = "",
+    created_by: str = "operator",
+) -> dict:
+    phone_norm = normalize_phone_identifier(phone)
+    email_norm = normalize_email_identifier(email)
+    clean_channel = _sanitize_channel(channel)
+    external = (external_sender_id or "").strip()
+    if not (phone_norm or email_norm or (clean_channel and external)):
+        raise ValueError("Provide a valid phone, email, or channel sender id.")
+    if find_ignored_contact_duplicate(
+        phone=phone,
+        email=email,
+        channel=clean_channel,
+        external_sender_id=external,
+    ):
+        raise ValueError("Contact is already on the Ignore List.")
+    now = datetime.now(timezone.utc).isoformat()
+    tenant_id = _current_tenant_id()
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO ignored_contacts "
+        "(tenant_id, name, phone_original, phone_normalized, email_original, "
+        "email_normalized, channel, external_sender_id, label, note, "
+        "created_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            tenant_id,
+            (name or "").strip()[:160],
+            (phone or "").strip()[:120],
+            phone_norm,
+            (email or "").strip()[:180],
+            email_norm,
+            clean_channel,
+            external[:220],
+            _sanitize_ignore_label(label),
+            (note or "").strip()[:1000],
+            (created_by or "operator").strip()[:80],
+            now,
+            now,
+        ),
+    )
+    contact_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, tenant_id, name, phone_original, phone_normalized, "
+        "email_original, email_normalized, channel, external_sender_id, "
+        "label, note, created_by, created_at, updated_at, deleted_at "
+        "FROM ignored_contacts WHERE id = ?",
+        (contact_id,),
+    ).fetchone()
+    conn.close()
+    return _ignored_contact_row_to_dict(row)
+
+
+def update_ignored_contact(contact_id: int, **updates) -> dict | None:
+    existing = next(
+        (c for c in list_ignored_contacts() if c["id"] == int(contact_id)),
+        None,
+    )
+    if not existing:
+        return None
+    merged = {
+        "name": updates.get("name", existing["name"]),
+        "phone": updates.get("phone", existing["phone_original"]),
+        "email": updates.get("email", existing["email_original"]),
+        "channel": updates.get("channel", existing["channel"]),
+        "external_sender_id": updates.get(
+            "external_sender_id", existing["external_sender_id"]),
+        "label": updates.get("label", existing["label"]),
+        "note": updates.get("note", existing["note"]),
+    }
+    phone_norm = normalize_phone_identifier(merged["phone"])
+    email_norm = normalize_email_identifier(merged["email"])
+    clean_channel = _sanitize_channel(merged["channel"])
+    external = (merged["external_sender_id"] or "").strip()
+    if not (phone_norm or email_norm or (clean_channel and external)):
+        raise ValueError("Provide a valid phone, email, or channel sender id.")
+    if find_ignored_contact_duplicate(
+        phone=merged["phone"],
+        email=merged["email"],
+        channel=clean_channel,
+        external_sender_id=external,
+        exclude_id=int(contact_id),
+    ):
+        raise ValueError("Contact is already on the Ignore List.")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE ignored_contacts SET name = ?, phone_original = ?, "
+        "phone_normalized = ?, email_original = ?, email_normalized = ?, "
+        "channel = ?, external_sender_id = ?, label = ?, note = ?, "
+        "updated_at = ? WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
+        (
+            (merged["name"] or "").strip()[:160],
+            (merged["phone"] or "").strip()[:120],
+            phone_norm,
+            (merged["email"] or "").strip()[:180],
+            email_norm,
+            clean_channel,
+            external[:220],
+            _sanitize_ignore_label(merged["label"]),
+            (merged["note"] or "").strip()[:1000],
+            now,
+            _current_tenant_id(),
+            int(contact_id),
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, tenant_id, name, phone_original, phone_normalized, "
+        "email_original, email_normalized, channel, external_sender_id, "
+        "label, note, created_by, created_at, updated_at, deleted_at "
+        "FROM ignored_contacts WHERE id = ?",
+        (int(contact_id),),
+    ).fetchone()
+    conn.close()
+    return _ignored_contact_row_to_dict(row) if row else None
+
+
+def delete_ignored_contact(contact_id: int) -> bool:
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE ignored_contacts SET deleted_at = ?, updated_at = ? "
+        "WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
+        (now, now, _current_tenant_id(), int(contact_id)),
+    )
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
+
+
+def match_ignored_contact(
+    *,
+    channel: str = "",
+    sender_id: str = "",
+    phone: str = "",
+    email: str = "",
+) -> dict | None:
+    tenant_id = _current_tenant_id()
+    clean_channel = _sanitize_channel(channel)
+    external = (sender_id or "").strip()
+    phone_norm = normalize_phone_identifier(phone or sender_id)
+    email_norm = normalize_email_identifier(email or sender_id)
+    clauses = []
+    params: list = [tenant_id]
+    if phone_norm:
+        clauses.append("phone_normalized = ?")
+        params.append(phone_norm)
+    if email_norm:
+        clauses.append("email_normalized = ?")
+        params.append(email_norm)
+    if clean_channel and external:
+        clauses.append("(channel = ? AND external_sender_id = ?)")
+        params.extend([clean_channel, external])
+    if not clauses:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, tenant_id, name, phone_original, phone_normalized, "
+        "email_original, email_normalized, channel, external_sender_id, "
+        "label, note, created_by, created_at, updated_at, deleted_at "
+        "FROM ignored_contacts WHERE tenant_id = ? AND deleted_at IS NULL "
+        f"AND ({' OR '.join(clauses)}) "
+        "ORDER BY updated_at DESC LIMIT 1",
+        params,
+    ).fetchone()
+    conn.close()
+    return _ignored_contact_row_to_dict(row) if row else None
+
+
+def record_ignored_contact_event(
+    *,
+    contact_id: int | None,
+    channel: str = "",
+    sender_identifier: str = "",
+    message_id: str = "",
+    reason: str = "Ignored inbound message because sender is on Excluded Contacts / Ignore List.",
+) -> None:
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO ignored_contact_events "
+        "(tenant_id, ignored_contact_id, channel, sender_identifier, "
+        "message_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            _current_tenant_id(),
+            contact_id,
+            _sanitize_channel(channel),
+            (sender_identifier or "").strip()[:220],
+            (message_id or "").strip()[:220],
+            reason,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_ignored_contact_events(limit: int = 100) -> list[dict]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, tenant_id, ignored_contact_id, channel, sender_identifier, "
+        "message_id, reason, created_at FROM ignored_contact_events "
+        "WHERE tenant_id = ? ORDER BY id DESC LIMIT ?",
+        (_current_tenant_id(), max(1, min(int(limit), 500))),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": int(r[0]),
+            "tenant_id": r[1] or "",
+            "ignored_contact_id": r[2],
+            "channel": r[3] or "",
+            "sender_identifier": r[4] or "",
+            "message_id": r[5] or "",
+            "reason": r[6] or "",
+            "created_at": r[7] or "",
         }
         for r in rows
     ]

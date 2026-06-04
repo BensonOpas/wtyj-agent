@@ -215,6 +215,22 @@ def handle_incoming_dm(message: dict) -> str:
     sender_name = message.get("sender_name", "")
     text = message["text"]
 
+    ignored = state_registry.match_ignored_contact(
+        channel=channel,
+        sender_id=conversation_id,
+    )
+    if ignored:
+        state_registry.record_ignored_contact_event(
+            contact_id=ignored.get("id"),
+            channel=channel,
+            sender_identifier=conversation_id,
+        )
+        bm_logger.log("ignored_contact_inbound_suppressed",
+                      channel=channel,
+                      sender=conversation_id[:50],
+                      reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+        return ""
+
     moderation = auto_block.evaluate_inbound(
         channel=channel,
         user_identifier=conversation_id,

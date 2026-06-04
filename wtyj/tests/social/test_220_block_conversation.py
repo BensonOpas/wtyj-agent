@@ -143,7 +143,8 @@ def test_zernio_webhook_drops_blocked_conversation():
         with patch.object(state_registry, "wa_store_message") as mock_wa, \
              patch.object(state_registry, "dm_store_message") as mock_dm, \
              patch.object(state_registry, "wa_has_been_processed", return_value=False), \
-             patch.object(state_registry, "wa_mark_as_processed"):
+             patch.object(state_registry, "wa_mark_as_processed"), \
+             patch.object(state_registry, "match_ignored_contact", return_value=None):
             # Mock the Zernio parser to return a blocked-conversation message
             with patch.object(webhook_server, "parse_zernio_webhook") as mock_parse:
                 mock_parse.return_value = {
@@ -163,6 +164,62 @@ def test_zernio_webhook_drops_blocked_conversation():
         # at the block check before any storage happened.
         assert mock_wa.call_count == 0
         assert mock_dm.call_count == 0
+    finally:
+        _wipe_220()
+
+
+def test_zernio_webhook_ignored_contact_stops_before_storage_and_agent():
+    from shared import state_registry
+    from agents.social import webhook_server
+    try:
+        _wipe_220()
+        ignored_conv = "220_zernio_ignored_conv"
+        ignored_sender = "59996881585"
+        ignored = {
+            "id": 72,
+            "name": "Owner",
+            "phone_original": "+599 9 688 1585",
+            "phone_normalized": ignored_sender,
+            "email_original": "",
+            "email_normalized": "",
+            "channel": "whatsapp",
+            "external_sender_id": "",
+            "label": "Owner",
+            "note": "",
+        }
+
+        with patch.object(state_registry, "wa_store_message") as mock_wa, \
+             patch.object(state_registry, "dm_store_message") as mock_dm, \
+             patch.object(state_registry, "wa_has_been_processed", return_value=False), \
+             patch.object(state_registry, "wa_mark_as_processed") as mock_processed, \
+             patch.object(state_registry, "match_ignored_contact", return_value=ignored) as mock_match, \
+             patch.object(state_registry, "record_ignored_contact_event") as mock_event, \
+             patch.object(webhook_server, "handle_incoming_whatsapp_message") as mock_agent, \
+             patch.object(webhook_server, "send_text_message") as mock_send, \
+             patch.object(webhook_server, "send_typing_indicator") as mock_typing, \
+             patch.object(webhook_server, "_buffer_message") as mock_buffer, \
+             patch.object(webhook_server, "parse_zernio_webhook") as mock_parse:
+            mock_parse.return_value = {
+                "message_id": "test_msg_220_ignored",
+                "conversation_id": ignored_conv,
+                "platform": "whatsapp",
+                "channel": "whatsapp",
+                "account_id": "test_account",
+                "sender_id": ignored_sender,
+                "sender_name": "Test Sender",
+                "text": "this should be fully ignored",
+            }
+            webhook_server._process_zernio_event({"raw": "payload"})
+
+        mock_processed.assert_called_once_with("test_msg_220_ignored")
+        assert mock_match.call_count >= 1
+        mock_event.assert_called_once()
+        assert mock_wa.call_count == 0
+        assert mock_dm.call_count == 0
+        assert mock_agent.call_count == 0
+        assert mock_send.call_count == 0
+        assert mock_typing.call_count == 0
+        assert mock_buffer.call_count == 0
     finally:
         _wipe_220()
 

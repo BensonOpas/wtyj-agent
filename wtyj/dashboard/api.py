@@ -4,6 +4,7 @@
 # Purpose: REST API endpoints for the operator dashboard.
 
 import io
+import csv
 import json
 import os
 import re
@@ -14,7 +15,7 @@ import requests as http_requests
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, StrictBool, field_validator
+from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
@@ -3637,6 +3638,166 @@ class ManualBlockRequest(BaseModel):
     blocked_by: str = "operator"
 
 
+class IgnoredContactRequest(BaseModel):
+    name: str = ""
+    phone: str = ""
+    email: str = ""
+    channel: str = ""
+    external_sender_id: str = ""
+    label: str = ""
+    note: str = ""
+
+
+class IgnoredContactsImportRequest(BaseModel):
+    contacts: list[IgnoredContactRequest] = Field(default_factory=list)
+
+
+def _ignored_contact_payload(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "phone": row["phone_original"],
+        "phoneNormalized": row["phone_normalized"],
+        "email": row["email_original"],
+        "emailNormalized": row["email_normalized"],
+        "channel": row["channel"],
+        "externalSenderId": row["external_sender_id"],
+        "label": row["label"],
+        "note": row["note"],
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _ignored_contact_candidate(req: IgnoredContactRequest) -> dict:
+    phone_norm = state_registry.normalize_phone_identifier(req.phone)
+    email_norm = state_registry.normalize_email_identifier(req.email)
+    return {
+        "name": (req.name or "").strip(),
+        "phone": (req.phone or "").strip(),
+        "phoneNormalized": phone_norm,
+        "email": (req.email or "").strip(),
+        "emailNormalized": email_norm,
+        "channel": (req.channel or "").strip().lower(),
+        "externalSenderId": (req.external_sender_id or "").strip(),
+        "label": (req.label or "").strip(),
+        "note": (req.note or "").strip(),
+        "valid": bool(
+            phone_norm
+            or email_norm
+            or ((req.channel or "").strip() and (req.external_sender_id or "").strip())
+        ),
+        "duplicate": False,
+        "alreadyIgnored": False,
+        "errors": [],
+    }
+
+
+def _parse_ignore_csv(raw: bytes) -> list[IgnoredContactRequest]:
+    text = raw.decode("utf-8-sig", errors="replace")
+    rows = csv.DictReader(io.StringIO(text))
+    out = []
+    for row in rows:
+        lowered = {str(k or "").strip().lower(): (v or "") for k, v in row.items()}
+        out.append(IgnoredContactRequest(
+            name=lowered.get("name", ""),
+            phone=lowered.get("phone", ""),
+            email=lowered.get("email", ""),
+            label=lowered.get("label", ""),
+            note=lowered.get("note", ""),
+            channel=lowered.get("channel", ""),
+            external_sender_id=lowered.get("external_sender_id", lowered.get("external sender id", "")),
+        ))
+    return out
+
+
+def _parse_ignore_vcf(raw: bytes) -> list[IgnoredContactRequest]:
+    text = raw.decode("utf-8", errors="replace")
+    cards = re.split(r"BEGIN:VCARD", text, flags=re.IGNORECASE)
+    out = []
+    for card in cards:
+        if "END:VCARD" not in card.upper():
+            continue
+        name = ""
+        phones: list[str] = []
+        emails: list[str] = []
+        for line in card.splitlines():
+            clean = line.strip()
+            if not clean or ":" not in clean:
+                continue
+            key, value = clean.split(":", 1)
+            key_upper = key.upper()
+            value = value.strip()
+            if key_upper.startswith("FN"):
+                name = value
+            elif key_upper.startswith("TEL"):
+                phones.append(value)
+            elif key_upper.startswith("EMAIL"):
+                emails.append(value)
+        max_len = max(len(phones), len(emails), 1)
+        for i in range(max_len):
+            out.append(IgnoredContactRequest(
+                name=name,
+                phone=phones[i] if i < len(phones) else "",
+                email=emails[i] if i < len(emails) else "",
+            ))
+    return out
+
+
+def _build_ignore_import_preview(items: list[IgnoredContactRequest]) -> dict:
+    seen: set[str] = set()
+    contacts = []
+    duplicates = 0
+    invalid = 0
+    already = 0
+    for idx, req in enumerate(items):
+        cand = _ignored_contact_candidate(req)
+        keys = [
+            f"p:{cand['phoneNormalized']}" if cand["phoneNormalized"] else "",
+            f"e:{cand['emailNormalized']}" if cand["emailNormalized"] else "",
+            (
+                f"x:{cand['channel']}:{cand['externalSenderId']}"
+                if cand["channel"] and cand["externalSenderId"] else ""
+            ),
+        ]
+        keys = [k for k in keys if k]
+        if not cand["valid"]:
+            cand["errors"].append("Add a valid phone, email, or sender id.")
+            invalid += 1
+        elif any(k in seen for k in keys):
+            cand["duplicate"] = True
+            cand["errors"].append("Duplicate inside this import file.")
+            duplicates += 1
+        elif state_registry.find_ignored_contact_duplicate(
+            phone=cand["phone"],
+            email=cand["email"],
+            channel=cand["channel"],
+            external_sender_id=cand["externalSenderId"],
+        ):
+            cand["alreadyIgnored"] = True
+            cand["errors"].append("Already on the Ignore List.")
+            already += 1
+        for k in keys:
+            seen.add(k)
+        cand["selected"] = cand["valid"] and not cand["duplicate"] and not cand["alreadyIgnored"]
+        cand["clientId"] = f"import-{idx}"
+        contacts.append(cand)
+    to_add = sum(1 for c in contacts if c["selected"])
+    return {
+        "summary": {
+            "total": len(contacts),
+            "valid": sum(1 for c in contacts if c["valid"]),
+            "duplicates": duplicates,
+            "invalid": invalid,
+            "alreadyIgnored": already,
+            "toAdd": to_add,
+            "skipped": len(contacts) - to_add,
+        },
+        "contacts": contacts,
+    }
+
+
 @router.post("/messages/conversations/{conversation_id:path}/block",
              dependencies=[Depends(_check_auth)])
 async def block_conversation(conversation_id: str,
@@ -3747,6 +3908,123 @@ async def list_blocked_senders():
     Exists purely so SR's Replit frontend can adopt Calvin's preferred
     /blocked-senders path without a backend rename."""
     return {"conversations": state_registry.list_blocked_conversations()}
+
+
+@router.get("/ignored-contacts", dependencies=[Depends(_check_auth)])
+async def list_ignored_contacts_endpoint():
+    return {
+        "contacts": [
+            _ignored_contact_payload(row)
+            for row in state_registry.list_ignored_contacts()
+        ]
+    }
+
+
+@router.post("/ignored-contacts", dependencies=[Depends(_check_auth)])
+async def add_ignored_contact_endpoint(req: IgnoredContactRequest):
+    try:
+        row = state_registry.add_ignored_contact(
+            name=req.name,
+            phone=req.phone,
+            email=req.email,
+            channel=req.channel,
+            external_sender_id=req.external_sender_id,
+            label=req.label,
+            note=req.note,
+            created_by="tenant",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    bm_logger.log("ignored_contact_added",
+                  contact_id=row["id"], channel=row["channel"],
+                  label=row["label"])
+    return {"ok": True, "contact": _ignored_contact_payload(row)}
+
+
+@router.put("/ignored-contacts/{contact_id}", dependencies=[Depends(_check_auth)])
+async def update_ignored_contact_endpoint(contact_id: int, req: IgnoredContactRequest):
+    try:
+        row = state_registry.update_ignored_contact(
+            contact_id,
+            name=req.name,
+            phone=req.phone,
+            email=req.email,
+            channel=req.channel,
+            external_sender_id=req.external_sender_id,
+            label=req.label,
+            note=req.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not row:
+        raise HTTPException(status_code=404, detail="Ignored contact not found")
+    bm_logger.log("ignored_contact_updated",
+                  contact_id=row["id"], channel=row["channel"],
+                  label=row["label"])
+    return {"ok": True, "contact": _ignored_contact_payload(row)}
+
+
+@router.delete("/ignored-contacts/{contact_id}", dependencies=[Depends(_check_auth)])
+async def delete_ignored_contact_endpoint(contact_id: int):
+    ok = state_registry.delete_ignored_contact(contact_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Ignored contact not found")
+    bm_logger.log("ignored_contact_deleted", contact_id=contact_id)
+    return {"ok": True, "id": contact_id}
+
+
+@router.post("/ignored-contacts/import/validate",
+             dependencies=[Depends(_check_auth)])
+async def validate_ignored_contacts_import(file: UploadFile = File(...)):
+    raw = await file.read()
+    filename = (file.filename or "").lower()
+    if filename.endswith(".csv"):
+        contacts = _parse_ignore_csv(raw)
+    elif filename.endswith(".vcf") or filename.endswith(".vcard"):
+        contacts = _parse_ignore_vcf(raw)
+    else:
+        raise HTTPException(status_code=400, detail="Upload a CSV or VCF file.")
+    return _build_ignore_import_preview(contacts)
+
+
+@router.post("/ignored-contacts/import", dependencies=[Depends(_check_auth)])
+async def import_ignored_contacts(req: IgnoredContactsImportRequest):
+    added = []
+    skipped = []
+    for item in req.contacts:
+        # Frontend submits only selected contacts after preview. Backend
+        # still validates every row again so imports cannot bypass rules.
+        cand = _ignored_contact_candidate(item)
+        if not cand["valid"] or state_registry.find_ignored_contact_duplicate(
+            phone=cand["phone"],
+            email=cand["email"],
+            channel=cand["channel"],
+            external_sender_id=cand["externalSenderId"],
+        ):
+            skipped.append(cand)
+            continue
+        try:
+            row = state_registry.add_ignored_contact(
+                name=cand["name"],
+                phone=cand["phone"],
+                email=cand["email"],
+                channel=cand["channel"],
+                external_sender_id=cand["externalSenderId"],
+                label=cand["label"],
+                note=cand["note"],
+                created_by="tenant-import",
+            )
+            added.append(_ignored_contact_payload(row))
+        except ValueError:
+            skipped.append(cand)
+    bm_logger.log("ignored_contacts_imported",
+                  added=len(added), skipped=len(skipped))
+    return {"ok": True, "added": added, "skipped": skipped}
+
+
+@router.get("/ignored-contacts/events", dependencies=[Depends(_check_auth)])
+async def list_ignored_contact_events(limit: int = Query(default=100, ge=1, le=500)):
+    return {"events": state_registry.list_ignored_contact_events(limit=limit)}
 
 
 # ── Manual Draft Creation ────────────────────────────────────────────────────

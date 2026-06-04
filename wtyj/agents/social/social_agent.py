@@ -177,6 +177,23 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
     _channel_label = {"whatsapp": "WhatsApp", "instagram_dm": "Instagram",
                       "facebook_dm": "Facebook", "twitter_dm": "X/Twitter"}.get(channel, channel)
 
+    ignored = state_registry.match_ignored_contact(
+        channel=channel,
+        sender_id=phone,
+        phone=phone,
+    )
+    if ignored:
+        state_registry.record_ignored_contact_event(
+            contact_id=ignored.get("id"),
+            channel=channel,
+            sender_identifier=phone,
+        )
+        bm_logger.log("ignored_contact_inbound_suppressed",
+                      channel=channel,
+                      sender=phone[:50],
+                      reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+        return ""
+
     _moderation = auto_block.evaluate_inbound(
         channel=channel,
         user_identifier=phone,

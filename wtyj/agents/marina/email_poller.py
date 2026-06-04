@@ -690,6 +690,25 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     continue
 
+                ignored = state_registry.match_ignored_contact(
+                    channel="email",
+                    sender_id=from_email,
+                    email=from_email,
+                )
+                if ignored:
+                    state_registry.record_ignored_contact_event(
+                        contact_id=ignored.get("id"),
+                        channel="email",
+                        sender_identifier=from_email,
+                        message_id=uid.decode() if isinstance(uid, bytes) else str(uid),
+                    )
+                    log(f"email_ignored_contact from={from_email[:50]}")
+                    th["last_activity"] = now
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    continue
+
                 # Provider/platform notifications are not customer messages.
                 # Keep them out of the operator inbox and do not spend an LLM
                 # call on them. Mark as seen so the poller does not loop.
