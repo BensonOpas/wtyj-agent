@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+import urllib.parse
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -134,6 +135,77 @@ def test_archive_email_thread_excludes_and_includes(monkeypatch, tmp_path):
     r = client.get("/dashboard/api/messages/conversations/archived",
                     headers=_auth(token))
     assert any(c["phone"] == conv_id for c in r.json())
+
+
+def test_archive_email_accepts_double_encoded_thread_key(monkeypatch, tmp_path):
+    """Email archive/unarchive tolerates a path id that arrives still
+    percent-encoded after one proxy/framework decode."""
+    from shared import state_registry
+    fake_state = {
+        "threads": {
+            "subj:encoded@x.com:test 249": {
+                "messages": [{"role": "customer", "ts": "2026-05-10T00:00:00+00:00",
+                              "body": "[QA] encoded"}],
+                "fields": {},
+                "flags": {},
+            }
+        }
+    }
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps(fake_state))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    token = _login()
+    conv_id = "email::subj:encoded@x.com:test 249"
+    double_encoded = urllib.parse.quote(urllib.parse.quote(conv_id, safe=""),
+                                        safe="")
+
+    r = client.post(
+        f"/dashboard/api/messages/conversations/{double_encoded}/archive",
+        headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["conversationId"] == conv_id
+    saved = json.loads(state_path.read_text())
+    assert saved["threads"]["subj:encoded@x.com:test 249"]["flags"]["deleted"] is True
+
+
+def test_facebookmail_system_notice_hidden_from_email_lists(monkeypatch, tmp_path):
+    """Provider notifications are not customer conversations. They should
+    not appear in active or archived dashboard lists for any tenant."""
+    from shared import state_registry
+    fake_state = {
+        "threads": {
+            "subj:notification@facebookmail.com:confirm your business email": {
+                "messages": [{"role": "customer", "ts": "2026-05-20T00:00:00+00:00",
+                              "body": "This looks like an automated notification from Facebook."}],
+                "fields": {},
+                "flags": {},
+            },
+            "subj:real@example.com:hello": {
+                "messages": [{"role": "customer", "ts": "2026-05-20T00:01:00+00:00",
+                              "body": "Hello"}],
+                "fields": {},
+                "flags": {},
+            },
+            "subj:notification@facebookmail.com:archived notice": {
+                "messages": [{"role": "customer", "ts": "2026-05-20T00:02:00+00:00",
+                              "body": "Facebook notice"}],
+                "fields": {},
+                "flags": {"deleted": True},
+            },
+        }
+    }
+    state_path = tmp_path / "email_thread_state.json"
+    state_path.write_text(json.dumps(fake_state))
+    monkeypatch.setattr(state_registry, "_get_email_state_path",
+                         lambda: str(state_path))
+
+    active = state_registry.email_list_conversations()
+    archived = state_registry.email_list_archived_conversations()
+    assert all("facebookmail.com" not in row["phone"] for row in active)
+    assert all("facebookmail.com" not in row["phone"] for row in archived)
+    assert any("real@example.com" in row["phone"] for row in active)
 
 
 def test_archive_email_404_when_thread_key_missing(monkeypatch, tmp_path):

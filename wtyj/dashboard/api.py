@@ -2356,17 +2356,18 @@ async def archive_conversation(conversation_id: str):
     id. Sets the existing 'archived' flag (flags.deleted for email,
     conversation_status.deleted=1 for WhatsApp). Idempotent - archiving
     an already-archived conversation succeeds without error."""
-    if conversation_id.startswith("email::"):
-        thread_key = conversation_id[len("email::"):]
+    normalized_id = urllib.parse.unquote(conversation_id or "")
+    if normalized_id.startswith("email::"):
+        thread_key = normalized_id[len("email::"):]
         ok = state_registry.email_set_archived(thread_key, True)
         if not ok:
             raise HTTPException(
                 status_code=404,
                 detail="email thread not found")
-        return {"ok": True, "conversationId": conversation_id,
+        return {"ok": True, "conversationId": normalized_id,
                 "channel": "email", "archived": True}
-    state_registry.wa_set_archived(conversation_id, True)
-    return {"ok": True, "conversationId": conversation_id,
+    state_registry.wa_set_archived(normalized_id, True)
+    return {"ok": True, "conversationId": normalized_id,
             "channel": "whatsapp", "archived": True}
 
 
@@ -2376,17 +2377,18 @@ async def unarchive_conversation(conversation_id: str):
     """Brief 249: per-conversation manual unarchive. Inverse of
     archive_conversation. Idempotent - unarchiving a not-archived
     conversation succeeds without error."""
-    if conversation_id.startswith("email::"):
-        thread_key = conversation_id[len("email::"):]
+    normalized_id = urllib.parse.unquote(conversation_id or "")
+    if normalized_id.startswith("email::"):
+        thread_key = normalized_id[len("email::"):]
         ok = state_registry.email_set_archived(thread_key, False)
         if not ok:
             raise HTTPException(
                 status_code=404,
                 detail="email thread not found")
-        return {"ok": True, "conversationId": conversation_id,
+        return {"ok": True, "conversationId": normalized_id,
                 "channel": "email", "archived": False}
-    state_registry.wa_set_archived(conversation_id, False)
-    return {"ok": True, "conversationId": conversation_id,
+    state_registry.wa_set_archived(normalized_id, False)
+    return {"ok": True, "conversationId": normalized_id,
             "channel": "whatsapp", "archived": False}
 
 

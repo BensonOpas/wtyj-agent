@@ -28,6 +28,27 @@ _alert_dispatcher = None
 _summary_dispatcher = None
 
 
+_SYSTEM_EMAIL_DOMAINS = {
+    "facebookmail.com",
+}
+
+
+def is_system_email_sender(email_addr: str) -> bool:
+    """Return True for provider/system notification senders.
+
+    These senders are not customers and should not become operator inbox
+    conversations or trigger Marina. Keep this deliberately narrow: domains
+    are added only when they are known platform notification domains.
+    """
+    if not email_addr:
+        return False
+    value = email_addr.strip().lower()
+    if "@" not in value:
+        return False
+    domain = value.rsplit("@", 1)[-1]
+    return domain in _SYSTEM_EMAIL_DOMAINS
+
+
 def set_summary_dispatcher(fn):
     """Brief 227: register the summary generator (typically dashboard.api's
     _generate_escalation_summary)."""
@@ -1200,6 +1221,8 @@ def email_list_conversations() -> list:
         # "subj:<email>:<normalized_subject>".
         _tk_parts = thread_key.split(":", 2)
         if len(_tk_parts) >= 2 and _tk_parts[0] == "subj":
+            if is_system_email_sender(_tk_parts[1]):
+                continue
             if get_blocked(_tk_parts[1]):
                 continue
         status = "escalated" if flags.get("fully_escalated") or flags.get("awaiting_relay") else "active"
@@ -1304,6 +1327,10 @@ def email_list_archived_conversations() -> list:
         # Inverse filter: only archived (deleted=true) rows.
         if not flags.get("deleted"):
             continue
+        _tk_parts = thread_key.split(":", 2)
+        if len(_tk_parts) >= 2 and _tk_parts[0] == "subj":
+            if is_system_email_sender(_tk_parts[1]):
+                continue
         last = messages[-1]
         last_ts = last.get("ts") or last.get("timestamp") or ""
         last_role = last.get("role", "")

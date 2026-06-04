@@ -690,6 +690,17 @@ def main():
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     continue
 
+                # Provider/platform notifications are not customer messages.
+                # Keep them out of the operator inbox and do not spend an LLM
+                # call on them. Mark as seen so the poller does not loop.
+                if state_registry.is_system_email_sender(from_email):
+                    log(f"email_system_sender_skipped from={from_email[:50]}")
+                    th["last_activity"] = now
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    continue
+
                 # Brief 232: archive auto-restore. If this thread was
                 # archived (flags.deleted=true via dashboard delete button,
                 # Brief 218), a fresh inbound message from the customer
