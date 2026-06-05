@@ -79,6 +79,29 @@ def normalize_phone_identifier(value: str | None) -> str:
     return re.sub(r"[^0-9]", "", raw)
 
 
+def _is_operator_whatsapp_destination(value: str | None) -> bool:
+    """Return True when a sender is the configured operator WhatsApp route.
+
+    The Ignore List is for customers/senders the tenant does not want Marina to
+    answer. It must never silence the operator alert destination: if the
+    operator's own contact is imported into the list, inbound operator messages
+    would otherwise be dropped before Marina can reply.
+    """
+    phone_norm = normalize_phone_identifier(value)
+    if not phone_norm:
+        return False
+    try:
+        settings = get_alert_settings(default_email_destination="")
+        destination = (
+            settings.get("channels", {})
+            .get("whatsapp", {})
+            .get("destination", "")
+        )
+    except Exception:
+        return False
+    return phone_norm == normalize_phone_identifier(destination)
+
+
 def normalize_email_identifier(value: str | None) -> str:
     if not value:
         return ""
@@ -2339,6 +2362,8 @@ def match_ignored_contact(
     external = (sender_id or "").strip()
     phone_norm = normalize_phone_identifier(phone or sender_id)
     email_norm = normalize_email_identifier(email or sender_id)
+    if clean_channel in ("whatsapp", "") and _is_operator_whatsapp_destination(phone or sender_id):
+        return None
     clauses = []
     params: list = [tenant_id]
     if phone_norm:

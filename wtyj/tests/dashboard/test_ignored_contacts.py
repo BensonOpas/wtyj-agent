@@ -28,6 +28,7 @@ def _wipe():
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM ignored_contact_events WHERE tenant_id = 'ignored-test'")
     conn.execute("DELETE FROM ignored_contacts WHERE tenant_id = 'ignored-test'")
+    conn.execute("DELETE FROM alert_settings")
     conn.commit()
     conn.close()
 
@@ -63,6 +64,46 @@ def test_state_registry_ignored_contact_match_and_remove():
 
         assert state_registry.delete_ignored_contact(row["id"]) is True
         assert state_registry.match_ignored_contact(phone="+599 9 688 1585") is None
+    finally:
+        _wipe()
+
+
+def test_operator_whatsapp_destination_cannot_be_ignored():
+    try:
+        _wipe()
+        state_registry.save_alert_settings(
+            {
+                "email": {"enabled": False, "destination": ""},
+                "whatsapp": {"enabled": True, "destination": "+351963618003"},
+                "telegram": {"enabled": False, "destination": ""},
+                "messenger": {"enabled": False, "destination": ""},
+            }
+        )
+        row = state_registry.add_ignored_contact(
+            name="Operator",
+            phone="+351963618003",
+            email="calvin@example.com",
+            label="Other",
+            created_by="tenant-import",
+        )
+        customer = state_registry.add_ignored_contact(
+            name="Customer",
+            phone="+599 9 688 1585",
+            label="Other",
+            created_by="tenant-import",
+        )
+
+        assert row["phone_normalized"] == "351963618003"
+        assert state_registry.match_ignored_contact(
+            channel="whatsapp",
+            sender_id="351963618003",
+            phone="351963618003",
+        ) is None
+        assert state_registry.match_ignored_contact(
+            channel="whatsapp",
+            sender_id="59996881585",
+            phone="+599 9 688 1585",
+        )["id"] == customer["id"]
     finally:
         _wipe()
 
