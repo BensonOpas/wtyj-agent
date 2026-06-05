@@ -1126,7 +1126,7 @@ def _build_contextual_fallback_reply(
     Principles:
     - Acknowledge the hiccup (not the customer's fault)
     - Use the customer's name when known
-    - Only ask for missing fields (service / date / guests)
+    - Avoid tenant-specific assumptions when the known context is incomplete
     - WhatsApp stays under 40 words; email can be slightly longer
     - If all fields present, acknowledge the full context and ask the customer
       to resend their last message (the one that triggered the fallback)
@@ -1156,34 +1156,27 @@ def _build_contextual_fallback_reply(
             known_parts.append(f"a booking for {date}")
     known_str = " and ".join(known_parts)
 
-    missing_parts = []
-    if not has_service:
-        missing_parts.append(f"which {svc_label} you're looking at")
-    if not has_date:
-        missing_parts.append("what date works")
-    if not has_guests:
-        missing_parts.append(f"how many {party_label}")
-    missing_str = " and ".join(missing_parts)
+    needs_context = not (has_service and has_date and has_guests)
 
     name_prefix = f"{name}, " if has_name else ""
 
     if channel == "whatsapp":
-        if not known_parts and not missing_parts:
+        if not known_parts and not needs_context:
             return f"Sorry{', ' + name if has_name else ''}, had a brief hiccup. Could you resend your last message?"
-        if not missing_parts:
+        if not needs_context:
             return f"Sorry {name_prefix}had a brief hiccup. I have {known_str} on file — could you resend your last message?"
         if not known_parts:
-            return f"Sorry {name_prefix}had a hiccup. Could you let me know {missing_str}?"
-        return f"Sorry {name_prefix}had a hiccup. I've got {known_str} — could you remind me {missing_str}?"
+            return f"Sorry {name_prefix}had a brief hiccup. Could you resend your last message or briefly tell me what you need help with?"
+        return f"Sorry {name_prefix}had a brief hiccup. I've got {known_str} — could you resend your last message or briefly tell me what you need help with?"
 
     signoff = f"\n\nWarm regards,\n{signature}"
-    if not known_parts and not missing_parts:
+    if not known_parts and not needs_context:
         return (
             f"Hi{' ' + name if has_name else ''},\n\n"
             f"Sorry, I had a brief hiccup on my end — could you resend your "
             f"last message and I'll get right back to you?{signoff}"
         )
-    if not missing_parts:
+    if not needs_context:
         return (
             f"Hi{' ' + name if has_name else ''},\n\n"
             f"Sorry, I had a brief hiccup on my end. I have {known_str} on "
@@ -1192,12 +1185,14 @@ def _build_contextual_fallback_reply(
         )
     if not known_parts:
         return (
-            f"Hi{' ' + name if has_name else ''}! Could you let me know "
-            f"{missing_str}? I'll get you sorted from there.{signoff}"
+            f"Hi{' ' + name if has_name else ''},\n\n"
+            f"Sorry, I had a brief hiccup on my end. Could you resend your "
+            f"last message or briefly tell me what you need help with?{signoff}"
         )
     return (
         f"Hi {name_prefix}sorry for the brief hiccup on my end. I have "
-        f"{known_str} — could you remind me {missing_str}?{signoff}"
+        f"{known_str} — could you resend your last message or briefly tell me "
+        f"what you need help with?{signoff}"
     )
 
 

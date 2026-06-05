@@ -17,15 +17,17 @@ def _call(thread_fields, channel="email"):
 
 
 def test_fallback_empty_fields_email_is_first_contact():
-    """Brief 176: empty thread_fields on email → classic first-contact reply."""
+    """Brief 176: empty thread_fields on email → neutral resend/help reply."""
     reply = _call({})
     # Should NOT acknowledge any "known" details
     assert "I have" not in reply
     assert "I've got" not in reply
-    # Should ask for the missing info
-    assert "trip" in reply.lower()
-    assert "date" in reply.lower()
-    assert "guests" in reply.lower()
+    # Should not assume any tenant shape such as tourism bookings.
+    lower = reply.lower()
+    assert "trip" not in lower
+    assert "date" not in lower
+    assert "guests" not in lower
+    assert "what you need help with" in lower
     # Has a signature
     assert "Marina" in reply
 
@@ -40,8 +42,8 @@ def test_fallback_partial_fields_email_acknowledges_known():
     assert "Alice" in reply
     assert "7" in reply
     assert "Klein Curaçao" in reply
-    # Still asks for the missing date
-    assert "date" in reply.lower()
+    # Still asks for context without assuming booking-specific fields.
+    assert "what you need help with" in reply.lower()
     # Does NOT re-ask for service or guests (they're already known)
     assert "which trip" not in reply.lower()
     assert "how many guests" not in reply.lower()
@@ -87,8 +89,13 @@ def test_fallback_whatsapp_is_terse():
 
 
 def test_fallback_whatsapp_empty_fields():
-    """Brief 176: WhatsApp fallback with empty fields — short, asks to resend OR asks missing."""
+    """Brief 176: WhatsApp fallback with empty fields — short and tenant-neutral."""
     reply = _call({}, channel="whatsapp")
     word_count = len(reply.split())
     assert word_count < 40
     assert "hiccup" in reply.lower() or "missed" in reply.lower() or "resend" in reply.lower()
+    lower = reply.lower()
+    assert "trip" not in lower
+    assert "date" not in lower
+    assert "guests" not in lower
+    assert "what you need help with" in lower
