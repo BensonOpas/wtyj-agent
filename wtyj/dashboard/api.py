@@ -1360,6 +1360,56 @@ class ResponseTimingUpdate(BaseModel):
     random_max_seconds: float = response_timing.DEFAULT_RANDOM_MAX_SECONDS
 
 
+WORKSPACE_BOOKINGS_LABEL_KEY = "workspace_bookings_label"
+WORKSPACE_BOOKINGS_LABEL_DEFAULT = "Appointments"
+WORKSPACE_BOOKINGS_LABEL_ALLOWED = {"Appointments", "Bookings", "Orders"}
+
+
+class WorkspaceLabelsUpdate(BaseModel):
+    bookings_label: str = WORKSPACE_BOOKINGS_LABEL_DEFAULT
+
+
+def _clean_workspace_bookings_label(value: str | None) -> str:
+    label = (value or "").strip()
+    if not label:
+        return WORKSPACE_BOOKINGS_LABEL_DEFAULT
+    if label in WORKSPACE_BOOKINGS_LABEL_ALLOWED:
+        return label
+    if len(label) > 24:
+        raise HTTPException(status_code=400, detail="Label must be 24 characters or fewer.")
+    if any(ch in label for ch in "\r\n\t<>"):
+        raise HTTPException(status_code=400, detail="Label contains unsupported characters.")
+    return label
+
+
+@router.get("/settings/workspace-labels", dependencies=[Depends(_check_auth)])
+async def get_workspace_labels():
+    label = state_registry.get_setting(
+        WORKSPACE_BOOKINGS_LABEL_KEY,
+        WORKSPACE_BOOKINGS_LABEL_DEFAULT,
+    )
+    try:
+        label = _clean_workspace_bookings_label(label)
+    except HTTPException:
+        label = WORKSPACE_BOOKINGS_LABEL_DEFAULT
+    return {
+        "bookingsLabel": label,
+        "defaultBookingsLabel": WORKSPACE_BOOKINGS_LABEL_DEFAULT,
+        "presets": sorted(WORKSPACE_BOOKINGS_LABEL_ALLOWED),
+    }
+
+
+@router.put("/settings/workspace-labels", dependencies=[Depends(_check_auth)])
+async def put_workspace_labels(req: WorkspaceLabelsUpdate):
+    label = _clean_workspace_bookings_label(req.bookings_label)
+    state_registry.set_setting(WORKSPACE_BOOKINGS_LABEL_KEY, label)
+    return {
+        "bookingsLabel": label,
+        "defaultBookingsLabel": WORKSPACE_BOOKINGS_LABEL_DEFAULT,
+        "presets": sorted(WORKSPACE_BOOKINGS_LABEL_ALLOWED),
+    }
+
+
 @router.get("/settings/agent-name", dependencies=[Depends(_check_auth)])
 async def get_agent_name_settings():
     from shared import icp_overrides as _icp
