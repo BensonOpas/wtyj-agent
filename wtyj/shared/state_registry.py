@@ -1984,9 +1984,9 @@ def get_conversation_status(conversation_id: str) -> str:
 
 def set_escalation_mode(escalation_id: int, mode: str) -> bool:
     """Brief 213: set the mode of a pending_notifications row. `mode` must
-    be 'soft' or 'hard' (caller validates). Returns True if a row was
+    be 'soft', 'hard', or 'order' (caller validates). Returns True if a row was
     updated, False if no row matched."""
-    if mode not in ("soft", "hard"):
+    if mode not in ("soft", "hard", "order"):
         return False
     conn = _get_conn()
     cur = conn.execute(

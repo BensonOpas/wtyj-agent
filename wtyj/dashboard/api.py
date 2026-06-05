@@ -2749,6 +2749,8 @@ def _mode_label(mode: str) -> str:
         return "Agent needs help"
     if mode == "hard":
         return "Hard escalation"
+    if mode == "order":
+        return "ORDER"
     return "(unset)"
 
 
@@ -3457,12 +3459,13 @@ async def list_escalations(mode: str = None, status: str = None):
     """List all escalation notifications.
     Brief 210 hotfix: SR's frontend mapper requires string ids.
     Brief 213: support ?mode=soft|hard|all (all = no filter).
+    Brief 252: support ?mode=order for confirmed product orders.
     Brief 249: support ?status=resolved|sent|pending|replied|all
     so the frontend can render a Resolved/History view."""
     rows = state_registry.get_all_escalations()
     for r in rows:
         r["id"] = str(r["id"])
-    if mode in ("soft", "hard"):
+    if mode in ("soft", "hard", "order"):
         rows = [r for r in rows if r.get("mode") == mode]
     if status and status != "all":
         rows = [r for r in rows if r.get("status") == status]
@@ -3605,7 +3608,7 @@ async def delete_escalation_endpoint(escalation_id: int):
 # conversation_status.ai_muted + human_takeover_at (per conversation).
 
 class EscalationModeRequest(BaseModel):
-    mode: str  # "soft" | "hard"
+    mode: str  # "soft" | "hard" | "order"
 
 
 def _refresh_and_stringify_escalation(escalation_id: int):
@@ -3621,8 +3624,8 @@ def _refresh_and_stringify_escalation(escalation_id: int):
 
 @router.post("/escalations/{escalation_id}/mode", dependencies=[Depends(_check_auth)])
 async def set_escalation_mode_endpoint(escalation_id: int, req: EscalationModeRequest):
-    if req.mode not in ("soft", "hard"):
-        raise HTTPException(status_code=400, detail=f"invalid mode: {req.mode!r} (must be 'soft' or 'hard')")
+    if req.mode not in ("soft", "hard", "order"):
+        raise HTTPException(status_code=400, detail=f"invalid mode: {req.mode!r} (must be 'soft', 'hard', or 'order')")
     ok = state_registry.set_escalation_mode(escalation_id, req.mode)
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")

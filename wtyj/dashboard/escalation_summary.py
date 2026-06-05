@@ -249,7 +249,7 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
         client = anthropic.Anthropic(api_key=api_key)
 
         history_text = _format_history(history)
-        mode_text = mode if mode in ("soft", "hard") else "(unset)"
+        mode_text = mode if mode in ("soft", "hard", "order") else "(unset)"
 
         system_prompt = _build_system_prompt()
 

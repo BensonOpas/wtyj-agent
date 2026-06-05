@@ -22,6 +22,7 @@ from agents.marina import sheets_writer
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
+_ORDER_INTENTS = {"order"}
 
 _BOOKING_FLAGS_TO_RESET = {
     "hold_created", "booking_confirmed", "booking_ref", "hold_id",
@@ -31,6 +32,8 @@ _BOOKING_FLAGS_TO_RESET = {
     "awaiting_booking_confirmation",
     "hold_service_key", "hold_date", "hold_slot_time",
     "awaiting_escalation_email", "needs_escalation_email",
+    "awaiting_order_confirmation", "order_confirmed",
+    "waiting_for_human_order_confirmation", "order_escalation_id",
 }
 
 _PERSISTENT_FIELDS = {"customer_name", "phone", "email"}
@@ -49,6 +52,21 @@ def _day_matches(day_name, days_available):
 
 def _build_action_context(flags):
     """Build action_context string for the Claude prompt based on flags."""
+    if flags.get("awaiting_order_confirmation"):
+        return (
+            "ACTION: An order summary was sent and the customer was asked "
+            "whether everything looks correct. The customer is replying now. "
+            "If they confirm with yes, perfect, looks good, let's do it, or "
+            "similar, set order_confirmed: true and "
+            "awaiting_order_confirmation: false. Reply with this exact message: "
+            "\"Perfect 💛 We've received your order.\n\n"
+            "We'll give you a call shortly to confirm the details and delivery.\n\n"
+            "Thank you for choosing Wibrandt.\" "
+            "If they change something, extract the changed fields, set "
+            "awaiting_order_confirmation: false, and continue the order flow. "
+            "If unclear, ask one short clarification question. Do NOT set "
+            "booking_confirmed and do NOT create a booking summary."
+        )
     if flags.get("awaiting_booking_confirmation"):
         return (
             "ACTION: A booking summary was sent and the customer was asked if they "
@@ -67,6 +85,182 @@ def _build_action_context(flags):
             "Do NOT generate a new booking summary."
         )
     return ""
+
+
+def _is_wibrandt_order_tenant():
+    """Keep product-order orchestration scoped to Wibrandt."""
+    raw = config_loader.get_raw() or {}
+    business = raw.get("business") or {}
+    slug = str(raw.get("tenant_slug") or raw.get("slug") or business.get("slug") or "").lower()
+    name = str(business.get("name") or "").lower()
+    return slug == "wibrandt" or name == "wibrandt"
+
+
+def _coerce_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _order_quantity(fields):
+    return _coerce_int(fields.get("quantity") or fields.get("guests"), 0)
+
+
+def _order_address(fields):
+    return (fields.get("delivery_address") or fields.get("address") or "").strip()
+
+
+def _order_lines(fields):
+    products = fields.get("products") or []
+    lines = []
+    if isinstance(products, list):
+        for item in products:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            qty = _coerce_int(item.get("quantity"), _order_quantity(fields) or 1)
+            unit_price = _coerce_float(item.get("unit_price"))
+            subtotal = _coerce_float(item.get("subtotal"))
+            if subtotal is None and unit_price is not None:
+                subtotal = unit_price * qty
+            lines.append({
+                "name": name,
+                "quantity": qty,
+                "unit_price": unit_price,
+                "subtotal": subtotal,
+            })
+    if not lines:
+        name = (fields.get("product_name") or fields.get("service_name") or "").strip()
+        if name:
+            qty = _order_quantity(fields) or 1
+            unit_price = _coerce_float(fields.get("unit_price"))
+            subtotal = _coerce_float(fields.get("subtotal"))
+            if subtotal is None and unit_price is not None:
+                subtotal = unit_price * qty
+            lines.append({
+                "name": name,
+                "quantity": qty,
+                "unit_price": unit_price,
+                "subtotal": subtotal,
+            })
+    return lines
+
+
+def _has_order_required_fields(fields):
+    return bool(_order_lines(fields) and _order_quantity(fields) and _order_address(fields))
+
+
+def _is_wibrandt_order_like(result, fields, flags):
+    if not _is_wibrandt_order_tenant():
+        return False
+    intents = set(result.get("intents") or [])
+    if intents & _ORDER_INTENTS:
+        return True
+    if flags.get("awaiting_order_confirmation") or flags.get("order_confirmed"):
+        return True
+    if any(fields.get(k) for k in ("products", "product_name", "quantity",
+                                   "delivery_address", "order_total")):
+        return True
+    return False
+
+
+def _money(value, currency):
+    amount = _coerce_float(value)
+    if amount is None:
+        return "(not calculated)"
+    if float(amount).is_integer():
+        display = str(int(amount))
+    else:
+        display = f"{amount:.2f}"
+    return f"{currency} {display}".strip()
+
+
+def _create_wibrandt_order_escalation(channel, phone, channel_label, fields,
+                                      flags, from_name, history, result):
+    cname = fields.get("customer_name") or from_name or "Unknown"
+    customer_phone = fields.get("phone") or phone
+    currency = fields.get("currency") or "ANG"
+    lines = _order_lines(fields)
+    total = _coerce_float(fields.get("order_total"))
+    if total is None:
+        line_totals = [line.get("subtotal") for line in lines if line.get("subtotal") is not None]
+        total = sum(line_totals) if line_totals else None
+    order_payload = {
+        "type": "ORDER",
+        "state": "WAITING_FOR_HUMAN_ORDER_CONFIRMATION",
+        "customer_name": cname,
+        "phone": customer_phone,
+        "products": lines,
+        "delivery_address": _order_address(fields),
+        "total": total,
+        "currency": currency,
+        "comments": fields.get("comments") or fields.get("special_requests") or "",
+        "channel": channel,
+        "customer_id": phone,
+    }
+    product_summary = ", ".join(
+        f"{line.get('quantity') or 1}x {line.get('name')}" for line in lines
+    ) or "order"
+    subject = f"[ORDER] {cname} ({channel_label}: {phone}) - {product_summary}"
+    chat_lines = []
+    for msg in (history or []):
+        role = str(msg.get("role", "?")).upper()
+        chat_lines.append(f"[{role} | {msg.get('created_at', '')}]")
+        chat_lines.append(msg.get("text", ""))
+        chat_lines.append("---")
+    body = (
+        "=== ORDER ===\n"
+        "Status: WAITING_FOR_HUMAN_ORDER_CONFIRMATION\n"
+        f"Customer: {cname}\n"
+        f"Phone: {customer_phone}\n"
+        f"Channel: {channel_label}\n"
+        f"Delivery address: {_order_address(fields) or '(not provided)'}\n"
+        f"Comments: {order_payload['comments'] or '(none)'}\n"
+        f"Total: {_money(total, currency)}\n\n"
+        "=== PRODUCTS ===\n"
+        + "\n".join(
+            f"- {line.get('quantity') or 1} x {line.get('name')} "
+            f"| unit: {_money(line.get('unit_price'), currency)} "
+            f"| subtotal: {_money(line.get('subtotal'), currency)}"
+            for line in lines
+        )
+        + "\n\n=== ORDER PAYLOAD ===\n"
+        + json.dumps(order_payload, indent=2, ensure_ascii=False)
+        + "\n\n=== CHAT LOG ===\n"
+        + ("\n".join(chat_lines) or "(no messages logged)")
+        + "\n\n=== HELGA INTERNAL NOTE ===\n"
+        + (result.get("internal_note") or "Customer confirmed the order summary.")
+    )
+    escalation_id = state_registry.create_pending_notification(
+        'escalation', channel, phone, cname, subject, body, mode="order")
+    flags["waiting_for_human_order_confirmation"] = True
+    flags["order_escalation_id"] = escalation_id
+    flags["fully_escalated"] = True
+    flags["awaiting_order_confirmation"] = False
+    flags["order_confirmed"] = False
+    state_registry.wa_store_message(
+        phone, "system", "ORDER escalation created; waiting for human order confirmation")
+    sheets_writer.log_escalation({
+        "email": phone,
+        "subject": channel_label,
+        "customer_name": cname,
+        "intent": "order",
+        "fields_collected": order_payload,
+        "internal_note": "Customer confirmed order summary; operator must call to confirm.",
+        "messages_json": json.dumps(history, ensure_ascii=False) if history else "[]",
+    })
+    bm_logger.log("wibrandt_order_escalated", phone=phone, escalation_id=escalation_id)
+    return escalation_id
 
 
 def _post_validate(fields, flags, result, service):
@@ -502,10 +696,35 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
 
     reply_text = reply
 
+    # Wibrandt product order flow: confirmed orders are not bookings and do
+    # not mean "customer needs reply". Once the customer confirms an order
+    # summary, create a dedicated ORDER escalation for the operator to call.
+    _skip_booking = False
+    _wibrandt_order_like = _is_wibrandt_order_like(result, fields, flags)
+    if _wibrandt_order_like:
+        if flags.get("order_confirmed") and not flags.get("order_escalation_id"):
+            reply_text = (
+                "Perfect 💛 We've received your order.\n\n"
+                "We'll give you a call shortly to confirm the details and delivery.\n\n"
+                "Thank you for choosing Wibrandt."
+            )
+            _create_wibrandt_order_escalation(
+                channel, phone, _channel_label, fields, flags, from_name, history, result)
+            _skip_booking = True
+        elif _has_order_required_fields(fields) and not flags.get("awaiting_order_confirmation"):
+            flags["awaiting_order_confirmation"] = True
+            flags.pop("booking_confirmed", None)
+            if "look correct" not in reply_text.lower() and "everything correct" not in reply_text.lower():
+                reply_text = reply_text.rstrip() + "\n\nDoes everything look correct?"
+            _skip_booking = True
+        elif result.get("intents") and any(i in _ORDER_INTENTS for i in result.get("intents", [])):
+            flags.pop("booking_confirmed", None)
+            _skip_booking = True
+
     # Step 6: Post-validation (booking intents only)
     _pv_service_key = fields.get("service_key", "")
     _pv_service = config_loader.get_service(_pv_service_key) if _pv_service_key else {}
-    _run_pv = any(i in _BOOKING_INTENTS for i in result.get("intents", []))
+    _run_pv = (not _skip_booking and any(i in _BOOKING_INTENTS for i in result.get("intents", [])))
     # Guard: if customer was responding to a booking summary and didn't change
     # any booking fields, skip post-validate to prevent decline loop
     if _run_pv and _was_awaiting and not flags.get("booking_confirmed"):
@@ -598,8 +817,6 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
                 )
                 bm_logger.log("whatsapp_slot_unavailable", phone=phone, service_key=_ck_svc,
                               spots=avail.get("spots_remaining", 0))
-
-    _skip_booking = False
 
     # Step 7.5: Semi-escalation → create relay (operator notified via email poller)
     if result.get("semi_escalation"):

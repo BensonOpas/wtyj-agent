@@ -78,7 +78,7 @@ MARINA_TOOL = {
                 "type": "array",
                 "items": {
                     "type": "string",
-                    "enum": ["booking", "inquiry", "cancellation", "reschedule",
+                    "enum": ["booking", "order", "inquiry", "cancellation", "reschedule",
                              "complaint", "social", "off_topic"],
                 },
                 "description": "One or more intent labels for this message.",
@@ -96,6 +96,25 @@ MARINA_TOOL = {
                     "email": {"type": "string"},
                     "special_requests": {"type": "string"},
                     "slot_time": {"type": "string", "description": "HH:MM format."},
+                    "products": {
+                        "type": "array",
+                        "description": "Product order lines, only for product-order tenants.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "quantity": {"type": "integer"},
+                                "unit_price": {"type": "number"},
+                                "subtotal": {"type": "number"},
+                            },
+                        },
+                    },
+                    "product_name": {"type": "string"},
+                    "quantity": {"type": "integer"},
+                    "delivery_address": {"type": "string"},
+                    "comments": {"type": "string"},
+                    "order_total": {"type": "number"},
+                    "currency": {"type": "string"},
                 },
             },
             "confidence": {
@@ -124,6 +143,8 @@ MARINA_TOOL = {
                 "properties": {
                     "booking_confirmed": {"type": "boolean"},
                     "awaiting_booking_confirmation": {"type": "boolean"},
+                    "awaiting_order_confirmation": {"type": "boolean"},
+                    "order_confirmed": {"type": "boolean"},
                     "needs_child_ages": {"type": "boolean"},
                     "needs_escalation_email": {"type": "boolean"},
                     "large_group": {"type": "boolean"},
@@ -591,6 +612,31 @@ def _build_knowledge_files_block() -> str:
     return "\n\n" + "\n".join(parts)
 
 
+def _is_wibrandt_order_tenant(business: dict) -> bool:
+    """Tenant-scoped product order behaviour for Wibrandt only."""
+    raw = config_loader.get_raw() or {}
+    slug = str(raw.get("tenant_slug") or raw.get("slug") or business.get("slug") or "").lower()
+    name = str(business.get("name") or "").lower()
+    return slug == "wibrandt" or name == "wibrandt"
+
+
+def _build_wibrandt_order_block(business: dict) -> str:
+    if not _is_wibrandt_order_tenant(business):
+        return ""
+    return """
+WIBRANDT PRODUCT ORDER FLOW:
+This tenant sells products. Product purchases are intent "order", not booking, appointment, support, or generic escalation.
+
+Phase 1: normal conversation. Answer product questions naturally. Do not escalate.
+Phase 2: when the customer wants to order, collect product, quantity, delivery address, customer name if natural, and comments if useful. Do not escalate while gathering data.
+Phase 3: once product, quantity, and delivery address are known, calculate an order summary using product/SOT prices when available. Include product, quantity, subtotal, total, delivery address, and comments if present. Ask: "Does everything look correct?"
+Phase 4: only after the customer confirms that order summary with yes, looks good, perfect, let's do it, or similar, set flags.order_confirmed=true and flags.awaiting_order_confirmation=false.
+
+Do not set requires_human for a normal order. Python will create the ORDER escalation after order_confirmed=true.
+Do not use booking_confirmed for Wibrandt product orders.
+"""
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -755,6 +801,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
     _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
+    _wibrandt_order_block = _build_wibrandt_order_block(business)
     agent_name = agent_identity.effective_agent_name(_icp_envelope)
     return f"""You are {agent_name}, the customer-facing AI Agent for {business.get('name', 'the business')}.
 Your customer-facing name is {agent_name}. Use this name only when natural. Do not overuse it, do not claim to be human, and do not imply any professional license or authority.
@@ -767,6 +814,8 @@ AGENT PERSONA:
 {writing_style_block}
 
 {_language_rule_block}
+
+{_wibrandt_order_block}
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find ({service_label} name,
@@ -960,6 +1009,10 @@ FIELD EXTRACTION RULES (apply when populating the `fields` argument of your mari
 - booking_confirmed (flag): true ONLY after the customer explicitly confirms a booking summary they were shown (e.g. "yes", "go ahead", "book it") — NEVER on the initial booking request, even if all details are provided.
 
 - awaiting_booking_confirmation (flag): set to false only when the customer wants to change something after a booking summary.
+
+- order_confirmed (flag): only for Wibrandt product orders. Set true only after the customer explicitly confirms an order summary they were shown.
+
+- awaiting_order_confirmation (flag): only for Wibrandt product orders. Set false when the customer confirms or changes the order after a summary.
 
 - needs_child_ages (flag): true when children are mentioned and the service has age-based pricing.
 
