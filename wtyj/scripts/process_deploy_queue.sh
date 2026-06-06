@@ -43,17 +43,29 @@ bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 # just restart). unboks is the SR-facing test sandbox; deploys with the
 # others so its container always runs the latest image.
 STATUS="success"
-for client in adamus consultadespertares unboks; do
+DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consultadespertares unboks}"
+HEALTH_PORTS=""
+for client in $DEPLOY_CLIENTS; do
+  if [ ! -d "/root/clients/$client" ]; then
+    echo "skip missing runtime client dir: /root/clients/$client"
+    continue
+  fi
   cd /root/clients/$client
   if ! (docker compose down && docker compose up -d); then
     STATUS="failed"
     break
   fi
+  case "$client" in
+    bluemarlin) HEALTH_PORTS="$HEALTH_PORTS 8001" ;;
+    adamus) HEALTH_PORTS="$HEALTH_PORTS 8002" ;;
+    consultadespertares) HEALTH_PORTS="$HEALTH_PORTS 8003" ;;
+    unboks) HEALTH_PORTS="$HEALTH_PORTS 8004" ;;
+  esac
 done
 
 # Health check with retry
 if [ "$STATUS" = "success" ]; then
-  for p in 8002 8003 8004; do
+  for p in $HEALTH_PORTS; do
     OK=0
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
       if curl -sf -m 3 http://localhost:$p/health | grep -q '"ok"'; then

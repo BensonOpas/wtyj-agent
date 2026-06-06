@@ -47,7 +47,7 @@ jobs:
             chmod +x wtyj/scripts/*.sh
             docker tag wtyj-agent:latest wtyj-agent:previous 2>/dev/null || \
               echo "No previous (first run)"
-            cd /root/clients/bluemarlin && docker compose build
+            docker build -t wtyj-agent:latest "$WTYJ_SOURCE_ROOT"
             docker tag wtyj-agent:latest wtyj-agent:$SHA
             docker tag wtyj-agent:latest wtyj-agent:staging
             cd /root/staging && docker compose down && docker compose up -d
@@ -56,15 +56,8 @@ jobs:
               [ "$attempt" = "12" ] && { echo "STAGING FAILED"; exit 1; }
               sleep 5
             done
-            cd /root/clients/bluemarlin && docker compose down && docker compose up -d
-            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-              curl -sf -m 3 http://localhost:8001/health | grep -q '"ok"' && break
-              [ "$attempt" = "12" ] && {
-                bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/rollback.sh" bluemarlin || true; exit 1; }
-              sleep 5
-            done
             if ! bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/e2e_canary_test.sh"; then
-              bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/rollback.sh" bluemarlin || true
+              bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/rollback.sh" staging || true
               exit 1
             fi
 

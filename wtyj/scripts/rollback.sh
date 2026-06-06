@@ -21,6 +21,10 @@ case "$TARGET" in
 esac
 
 for dir in $DIRS; do
+  if [ ! -d "$dir" ]; then
+    echo "skip missing runtime dir: $dir"
+    continue
+  fi
   cd "$dir"
   docker compose down && docker compose up -d
   echo "restarted: $dir"

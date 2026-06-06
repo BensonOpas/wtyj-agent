@@ -1,5 +1,5 @@
 #!/bin/bash
-# System-wide E2E test — runs on BlueMarlin after canary deploy
+# System-wide E2E test — runs against the staging canary by default
 # 10 checks from project_live_preparations.md. Exit 0 on success, 1 on failure.
 # Uses sentinel prefix "e2etest" so cleanup can LIKE-sweep all test data.
 #
@@ -15,8 +15,9 @@
 # valid as long as the container starts cleanly.
 set -e
 
-BASE="http://localhost:8001"
-PASSWORD=$(docker exec wtyj-bluemarlin printenv DASHBOARD_PASSWORD)
+BASE="${CANARY_BASE_URL:-http://localhost:9001}"
+CONTAINER="${CANARY_CONTAINER:-wtyj-staging}"
+PASSWORD=$(docker exec "$CONTAINER" printenv DASHBOARD_PASSWORD)
 RAND=$(head -c 6 /dev/urandom | xxd -p)
 SENTINEL_BRAIN="e2etest_brain_${RAND}"
 SENTINEL_WEBHOOK="e2etest${RAND}00000000000000"
@@ -56,7 +57,7 @@ echo "3/10 config OK"
 echo "4/10 brain SKIPPED (upstream Claude API; not gating deploy)"
 
 # 5. DB writable (insert -> read -> delete in container)
-docker exec wtyj-bluemarlin python3 -c "
+docker exec "$CONTAINER" python3 -c "
 import sqlite3
 c = sqlite3.connect('/app/data/state_registry.db')
 c.execute('CREATE TABLE IF NOT EXISTS _e2e_test (marker TEXT)')
@@ -93,5 +94,5 @@ echo "9/10 conversation_status SKIPPED (depends on 8/10)"
 echo "10/10 customer record SKIPPED (depends on 8/10)"
 
 echo ""
-echo "BlueMarlin canary E2E passed (checks 1-7); 8-10 deliberately skipped per Brief 238 (BlueMarlin deprecated)"
+echo "Staging canary E2E passed (checks 1-7); 8-10 deliberately skipped per Brief 238 (BlueMarlin deprecated)"
 exit 0
