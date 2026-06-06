@@ -1360,6 +1360,42 @@ class ResponseTimingUpdate(BaseModel):
     random_max_seconds: float = response_timing.DEFAULT_RANDOM_MAX_SECONDS
 
 
+class AgentPersonalitySettingsRequest(BaseModel):
+    tone: str = ""
+    formality: str = ""
+    empathy: str = ""
+    appointmentStyle: str = ""
+    instructions: str = ""
+    examples: list[str] = Field(default_factory=list)
+
+
+def _clean_agent_personality(raw: dict | AgentPersonalitySettingsRequest | None) -> dict:
+    data = raw.model_dump() if isinstance(raw, AgentPersonalitySettingsRequest) else dict(raw or {})
+
+    def clean_text(key: str, limit: int = 4000) -> str:
+        value = data.get(key, "")
+        if not isinstance(value, str):
+            return ""
+        return value.strip()[:limit]
+
+    examples_raw = data.get("examples", [])
+    examples = []
+    if isinstance(examples_raw, list):
+        for item in examples_raw:
+            if isinstance(item, str) and item.strip():
+                examples.append(item.strip()[:1000])
+            if len(examples) >= 6:
+                break
+    return {
+        "tone": clean_text("tone", 200),
+        "formality": clean_text("formality", 200),
+        "empathy": clean_text("empathy", 200),
+        "appointmentStyle": clean_text("appointmentStyle", 200),
+        "instructions": clean_text("instructions", 4000),
+        "examples": examples,
+    }
+
+
 WORKSPACE_BOOKINGS_LABEL_KEY = "workspace_bookings_label"
 WORKSPACE_BOOKINGS_LABEL_DEFAULT = "Appointments"
 WORKSPACE_BOOKINGS_LABEL_ALLOWED = {"Appointments", "Bookings", "Orders"}
@@ -1459,6 +1495,72 @@ async def put_response_timing_settings(req: ResponseTimingUpdate):
         raise HTTPException(status_code=500, detail="failed to update response timing")
     _icp.clear_cache()
     return response_timing.response_timing_config(_icp.fetch_overrides())
+
+
+@router.get("/settings/agent-personality", dependencies=[Depends(_check_auth)])
+async def get_agent_personality_settings():
+    return _clean_agent_personality(config_loader.get_agent_personality())
+
+
+@router.put("/settings/agent-personality", dependencies=[Depends(_check_auth)])
+async def put_agent_personality_settings(req: AgentPersonalitySettingsRequest):
+    settings = _clean_agent_personality(req)
+    ok = config_loader.update_agent_personality(settings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to update Agent Personality")
+    return {**settings, "bridgeSaved": False}
+
+
+@router.post("/settings/agent-personality/examples", dependencies=[Depends(_check_auth)])
+async def generate_agent_personality_examples(req: AgentPersonalitySettingsRequest):
+    settings = _clean_agent_personality(req)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Claude is not configured")
+
+    business = config_loader.get_business() or {}
+    company_name = business.get("name") or "the business"
+    agent_name = agent_identity.effective_agent_name()
+    prompt = f"""Create exactly three short customer reply examples for {agent_name}, the AI assistant for {company_name}.
+
+Use these tenant style settings:
+- Tone: {settings["tone"] or "not specified"}
+- Formality: {settings["formality"] or "not specified"}
+- Empathy: {settings["empathy"] or "not specified"}
+- Appointment style: {settings["appointmentStyle"] or "not specified"}
+- Extra instructions: {settings["instructions"] or "none"}
+
+Return only JSON in this shape:
+{{"examples":["example 1","example 2","example 3"]}}
+
+Do not mention Anthropic, Claude, OpenAI, or internal systems."""
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip() if response.content else ""
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
+        parsed = json.loads(raw)
+        examples = parsed.get("examples", [])
+        if not isinstance(examples, list):
+            examples = []
+        clean_examples = [
+            str(item).strip()[:1000] for item in examples
+            if isinstance(item, str) and item.strip()
+        ][:3]
+        return {"examples": clean_examples, "model": "claude-sonnet-4-6"}
+    except json.JSONDecodeError:
+        bm_logger.log("agent_personality_examples_parse_error")
+        raise HTTPException(status_code=500, detail="Could not parse generated examples")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        bm_logger.log("agent_personality_examples_error", error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail="Could not generate examples")
 
 
 @router.put("/settings/your-info", dependencies=[Depends(_check_auth)])

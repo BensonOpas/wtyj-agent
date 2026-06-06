@@ -333,6 +333,63 @@ def test_response_timing_settings_respects_admin_override(monkeypatch, tmp_path)
     assert json.loads(cfg_path.read_text())["response_timing"]["preset"] == "fast"
 
 
+def test_agent_personality_settings_round_trip(monkeypatch, tmp_path):
+    seed = {"business": {"name": "Co"}}
+    cfg_path = tmp_path / "client.json"
+    cfg_path.write_text(json.dumps(seed))
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(config_loader, "_cache", {})
+
+    token = _login()
+    r = client.get("/dashboard/api/settings/agent-personality", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "tone": "",
+        "formality": "",
+        "empathy": "",
+        "appointmentStyle": "",
+        "instructions": "",
+        "examples": [],
+    }
+
+    payload = {
+        "tone": "Warm",
+        "formality": "Professional",
+        "empathy": "High",
+        "appointmentStyle": "Gentle",
+        "instructions": "Ask one useful follow-up question.",
+        "examples": ["Hi, thanks for reaching out."],
+    }
+    r = client.put(
+        "/dashboard/api/settings/agent-personality",
+        json=payload,
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["bridgeSaved"] is False
+    assert r.json()["tone"] == "Warm"
+
+    on_disk = json.loads(cfg_path.read_text())
+    assert on_disk["agent_personality"]["instructions"] == \
+        "Ask one useful follow-up question."
+
+    r = client.get("/dashboard/api/settings/agent-personality", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["examples"] == ["Hi, thanks for reaching out."]
+
+
+def test_agent_personality_examples_requires_claude(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    token = _login()
+    r = client.post(
+        "/dashboard/api/settings/agent-personality/examples",
+        json={"tone": "Warm"},
+        headers=_auth(token),
+    )
+    assert r.status_code == 503
+    assert r.json()["detail"] == "Claude is not configured"
+
+
 # ── Test 4: info_update_create permanent + scheduled rows ─────────────────────
 def test_info_update_create_permanent_and_scheduled():
     try:

@@ -244,6 +244,51 @@ def update_response_timing(value: dict) -> bool:
     return True
 
 
+def get_agent_personality() -> dict:
+    """Return tenant Agent Personality settings from client.json.
+
+    The Nr2 dashboard stores this as a tenant-owned configuration block.
+    Missing or malformed values intentionally normalize to an empty object so
+    the Settings page can render for new tenants.
+    """
+    raw = _load()
+    value = raw.get("agent_personality")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def update_agent_personality(value: dict) -> bool:
+    """Persist tenant Agent Personality settings under top-level
+    agent_personality."""
+    global _cache
+    if not isinstance(value, dict):
+        return False
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = json.load(f)
+    except Exception:
+        return False
+    current["agent_personality"] = dict(value)
+    tmp_path = None
+    try:
+        dir_path = os.path.dirname(_CONFIG_PATH) or "."
+        with _tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False,
+            dir=dir_path, prefix=".client.", suffix=".tmp",
+        ) as tf:
+            json.dump(current, tf, indent=2, ensure_ascii=False)
+            tmp_path = tf.name
+        os.replace(tmp_path, _CONFIG_PATH)
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return False
+    _cache = {}
+    return True
+
+
 def your_info_whitelist() -> tuple:
     """Brief 216: expose the whitelist so the GET endpoint returns only
     the editable fields and the PUT endpoint validates inputs."""
