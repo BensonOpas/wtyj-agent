@@ -134,6 +134,8 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     # supplied, so the text part is the explicit fallback. Default
     # MIMEMultipart() subtype is 'mixed' which is wrong for this
     # purpose - clients may show both parts as separate attachments.
+    if not EMAIL_ADDR or "@" not in EMAIL_ADDR:
+        raise RuntimeError("SMTP sender email is not configured")
     if html_body is not None:
         msg = MIMEMultipart('alternative')
     else:
