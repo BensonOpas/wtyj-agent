@@ -71,6 +71,9 @@ def test_create_pending_notification_round_trip():
     assert match[0]["channel"] == "whatsapp"
     assert match[0]["status"] == "pending"
     assert match[0]["relay_token"] == "abc123def456"
+    escalations = state_registry.get_all_escalations()
+    escalation = [e for e in escalations if e["id"] == row_id]
+    assert escalation[0]["mode"] == "soft"
     _cleanup_notification(customer_id)
 
 

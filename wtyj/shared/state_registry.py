@@ -1946,6 +1946,8 @@ def create_pending_notification(notification_type: str, channel: str,
     ('soft'/'hard') sets pending_notifications.mode at insert time and
     drives the alert email's Mode line. None preserves existing value
     on UPDATE (COALESCE)."""
+    if mode is None and notification_type == "relay":
+        mode = "soft"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
 
