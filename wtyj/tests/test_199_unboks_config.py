@@ -36,12 +36,12 @@ def test_unboks_persona_has_pricing_guard():
         "brand_voice_rules must explicitly forbid quoting a specific price"
 
 
-def test_unboks_scheduling_directive_present():
-    """Brief 209: freeform_notes must contain the SCHEDULING/ACTIVATION
-    DIRECTIVE block so Marina-on-unboks handles activation calls warmly
-    instead of redirecting the customer to email."""
+def test_unboks_signup_flow_points_to_public_trial_page():
+    """The current Unboks tenant flow sends signup intent to the public
+    14-day trial signup instead of a manual activation-call escalation."""
     cfg = json.loads(UNBOKS_CONFIG.read_text())
     notes = cfg["agent_persona"]["freeform_notes"]
-    assert "SCHEDULING / ACTIVATION DIRECTIVE" in notes
-    assert "Do not send the customer to email if they are already messaging through an active channel" in notes
-    assert 'End the visible reply with "Marina" on its own final line' in notes
+    assert "Public signup / 14-day trial flow" in notes
+    assert "Click the free 14-day signup option and follow the steps there" in notes
+    assert "Do not add [ESCALATE] for normal signup or activation intent" in notes
+    assert "SCHEDULING / ACTIVATION DIRECTIVE" not in notes
