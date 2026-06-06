@@ -38,6 +38,17 @@ _BOOKING_FLAGS_TO_RESET = {
 
 _PERSISTENT_FIELDS = {"customer_name", "phone", "email"}
 
+_ORDER_DRAFT_FIELDS_TO_RESET = {
+    "products", "product_name", "quantity", "delivery_address", "address",
+    "order_total", "unit_price", "subtotal", "comments", "special_requests",
+}
+
+_ORDER_DRAFT_FLAGS_TO_RESET = {
+    "awaiting_order_confirmation", "order_confirmed",
+    "waiting_for_human_order_confirmation", "order_escalation_id",
+    "fully_escalated",
+}
+
 _MAX_REPLIES_PER_HOUR = 50
 _REPLY_WINDOW_SECONDS = 3600
 _STALE_CONVERSATION_SECONDS = 86400  # 24 hours — matches wa_get_history window
@@ -160,6 +171,16 @@ def _has_order_required_fields(fields):
     return bool(_order_lines(fields) and _order_quantity(fields) and _order_address(fields))
 
 
+def _reset_wibrandt_order_draft(fields, flags, escalation_id=None):
+    """Clear the active Wibrandt order draft after it has been snapshotted."""
+    for key in _ORDER_DRAFT_FIELDS_TO_RESET:
+        fields.pop(key, None)
+    for key in _ORDER_DRAFT_FLAGS_TO_RESET:
+        flags.pop(key, None)
+    if escalation_id is not None:
+        flags["last_order_escalation_id"] = escalation_id
+
+
 def _is_wibrandt_order_like(result, fields, flags):
     if not _is_wibrandt_order_tenant():
         return False
@@ -243,11 +264,7 @@ def _create_wibrandt_order_escalation(channel, phone, channel_label, fields,
     )
     escalation_id = state_registry.create_pending_notification(
         'escalation', channel, phone, cname, subject, body, mode="order")
-    flags["waiting_for_human_order_confirmation"] = True
-    flags["order_escalation_id"] = escalation_id
-    flags["fully_escalated"] = True
-    flags["awaiting_order_confirmation"] = False
-    flags["order_confirmed"] = False
+    _reset_wibrandt_order_draft(fields, flags, escalation_id)
     state_registry.wa_store_message(
         phone, "system", "ORDER escalation created; waiting for human order confirmation")
     sheets_writer.log_escalation({
@@ -468,6 +485,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         _cust_file = state_registry.customer_get_full(_cust_row["id"])
     except Exception as _e:
         bm_logger.log("customer_lookup_failed", phone=phone, error=str(_e))
+
+    if (
+        _is_wibrandt_order_tenant()
+        and flags.get("waiting_for_human_order_confirmation")
+        and flags.get("order_escalation_id")
+    ):
+        _released_order_id = flags.get("order_escalation_id")
+        _reset_wibrandt_order_draft(fields, flags, _released_order_id)
+        bm_logger.log(
+            "wibrandt_order_draft_released",
+            phone=phone,
+            escalation_id=_released_order_id,
+        )
 
     # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
     if flags.get("fully_escalated"):

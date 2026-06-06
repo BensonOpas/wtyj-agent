@@ -1960,7 +1960,11 @@ def create_pending_notification(notification_type: str, channel: str,
     # exists for this customer_id (escalation only), UPDATE it instead of
     # inserting a new one. Keeps the row id stable so any outstanding
     # alert thread / learning entry stays attached.
-    if notification_type == "escalation":
+    #
+    # Order escalations are intentionally not deduped: one customer can place
+    # multiple separate orders in the same conversation, and each confirmed
+    # order must appear as its own operator work item.
+    if notification_type == "escalation" and mode != "order":
         existing = conn.execute(
             "SELECT id FROM pending_notifications "
             "WHERE customer_id = ? AND notification_type = 'escalation' "

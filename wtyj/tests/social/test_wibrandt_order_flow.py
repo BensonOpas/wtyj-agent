@@ -148,9 +148,100 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
         assert "ANG 125" in escalation["body"]
 
         state = state_registry.wa_get_booking_state(phone)
-        assert state["flags"]["waiting_for_human_order_confirmation"] is True
-        assert state["flags"]["fully_escalated"] is True
-        assert state["flags"]["awaiting_order_confirmation"] is False
+        assert "waiting_for_human_order_confirmation" not in state["flags"]
+        assert "fully_escalated" not in state["flags"]
+        assert "order_escalation_id" not in state["flags"]
+        assert state["flags"]["last_order_escalation_id"] == escalation["id"]
+        assert "awaiting_order_confirmation" not in state["flags"]
         assert state_registry.get_active_escalation_mode(phone) == "order"
+    finally:
+        _cleanup(phone)
+
+
+@patch("agents.social.social_agent.sheets_writer")
+@patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_wibrandt_second_order_creates_separate_escalation(mock_process, _cfg, _sheets):
+    phone = "wibrandt_second_order"
+    _cleanup(phone)
+    try:
+        first_fields = {
+            "customer_name": "Calvin",
+            "products": [
+                {"name": "The Tosca Twist", "quantity": 2, "unit_price": 5, "subtotal": 10}
+            ],
+            "delivery_address": "Calle One",
+            "order_total": 10,
+            "currency": "XCG",
+        }
+        state_registry.wa_save_booking_state(
+            phone,
+            first_fields,
+            {"awaiting_order_confirmation": True},
+        )
+
+        second_fields = {
+            "customer_name": "Calvin",
+            "products": [
+                {"name": "White Chocolate Pecan Cookie", "quantity": 3, "unit_price": 6, "subtotal": 18}
+            ],
+            "delivery_address": "Calle Two",
+            "order_total": 18,
+            "currency": "XCG",
+        }
+        mock_process.side_effect = [
+            {
+                "intents": ["order"],
+                "fields": {},
+                "confidence": "high",
+                "reply": "Perfect 💛 We've received your order.",
+                "requires_human": False,
+                "flags": {
+                    "order_confirmed": True,
+                    "awaiting_order_confirmation": False,
+                },
+                "internal_note": "First order confirmed.",
+            },
+            {
+                "intents": ["order"],
+                "fields": second_fields,
+                "confidence": "high",
+                "reply": "Perfect 💛 We've received your order.",
+                "requires_human": False,
+                "flags": {
+                    "order_confirmed": True,
+                    "awaiting_order_confirmation": False,
+                },
+                "internal_note": "Second order confirmed.",
+            },
+        ]
+
+        handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Calvin",
+            "text": "Yes, first order is good",
+        })
+        handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Calvin",
+            "text": "Second order: 3 white chocolate cookies to Calle Two. Yes, confirmed.",
+        })
+
+        escalations = [
+            e for e in state_registry.get_all_escalations()
+            if e["customer_id"] == phone and e["mode"] == "order"
+        ]
+        assert len(escalations) == 2
+        bodies = "\n\n".join(e["body"] for e in escalations)
+        assert "Calle One" in bodies
+        assert "Calle Two" in bodies
+        assert "The Tosca Twist" in bodies
+        assert "White Chocolate Pecan Cookie" in bodies
+
+        state = state_registry.wa_get_booking_state(phone)
+        assert "waiting_for_human_order_confirmation" not in state["flags"]
+        assert "fully_escalated" not in state["flags"]
+        assert "order_escalation_id" not in state["flags"]
+        assert state["flags"]["last_order_escalation_id"] in {e["id"] for e in escalations}
     finally:
         _cleanup(phone)
