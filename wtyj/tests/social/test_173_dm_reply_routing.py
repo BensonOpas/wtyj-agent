@@ -86,3 +86,53 @@ def test_cache_populated_after_fanout_success(mock_get_account, mock_send):
     conv_id = "e" * 24
     whatsapp_client.send_whatsapp_message(conv_id, "first send")
     assert whatsapp_client._zernio_account_cache[conv_id] == "instagram_acc"
+
+
+@patch("shared.config_loader.get_raw")
+@patch("agents.social.zernio_dm_client.send_dm_reply")
+@patch("agents.social.social_publisher.get_account_id")
+def test_strict_allowlisted_account_is_tried_before_generic_active_account(
+        mock_get_account, mock_send, mock_get_raw):
+    """Issue #71: tenant allowlist is the authoritative outbound account source.
+
+    Wibrandt's live failure happened because the generic active WhatsApp account
+    differed from the strict allowlisted account for the conversation. The send
+    path must try the tenant allowlisted account first.
+    """
+    _clear_cache()
+    mock_get_raw.return_value = {
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["tenant_allowed_acc"],
+        }
+    }
+    mock_get_account.side_effect = lambda p: {"whatsapp": "generic_active_acc"}.get(p, "")
+    mock_send.side_effect = lambda conv, acc, text: acc == "tenant_allowed_acc"
+
+    ok = whatsapp_client.send_whatsapp_message("f" * 24, "human takeover reply")
+
+    assert ok is True
+    assert mock_send.call_args_list[0][0][1] == "tenant_allowed_acc"
+    assert whatsapp_client._zernio_account_cache["f" * 24] == "tenant_allowed_acc"
+
+
+@patch("shared.config_loader.get_raw")
+@patch("agents.social.zernio_dm_client.send_dm_reply")
+@patch("agents.social.social_publisher.get_account_id")
+def test_strict_allowlist_blocks_generic_active_account_after_allowed_fails(
+        mock_get_account, mock_send, mock_get_raw):
+    """Issue #71: do not bypass strict tenant isolation on fallback fan-out."""
+    _clear_cache()
+    mock_get_raw.return_value = {
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["tenant_allowed_acc"],
+        }
+    }
+    mock_get_account.side_effect = lambda p: {"whatsapp": "generic_active_acc"}.get(p, "")
+    mock_send.return_value = False
+
+    ok = whatsapp_client.send_whatsapp_message("1" * 24, "human takeover reply")
+
+    assert ok is False
+    assert [c[0][1] for c in mock_send.call_args_list] == ["tenant_allowed_acc"]

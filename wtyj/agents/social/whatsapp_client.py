@@ -108,6 +108,31 @@ def _is_zernio_conversation_id(s: str) -> bool:
 _zernio_account_cache: dict = {}
 
 
+def _candidate_zernio_account_ids(social_publisher) -> list[str]:
+    """Return outbound Zernio account candidates in safe priority order."""
+    candidates: list[str] = []
+
+    try:
+        from shared import config_loader
+        allowlist = (
+            (config_loader.get_raw().get("channel_account_allowlist") or {})
+            .get("zernio_accounts") or []
+        )
+    except Exception:
+        allowlist = []
+
+    for account_id in allowlist:
+        if account_id and account_id not in candidates:
+            candidates.append(account_id)
+
+    for platform in ("whatsapp", "facebook", "instagram", "twitter"):
+        account_id = social_publisher.get_account_id(platform)
+        if account_id and account_id not in candidates:
+            candidates.append(account_id)
+
+    return candidates
+
+
 def send_whatsapp_message(customer_id: str, text: str) -> bool:
     """Send a DM via Zernio Inbox API if customer_id is a Zernio conversation_id,
     otherwise fall back to the legacy Meta WhatsApp Cloud API. Returns True on success.
@@ -124,25 +149,30 @@ def send_whatsapp_message(customer_id: str, text: str) -> bool:
     # Deferred imports to avoid circular dependency with social_publisher
     from agents.social.zernio_dm_client import send_dm_reply
     from agents.social import social_publisher
+    from shared.tenant_guard import is_account_allowed
 
     # Fast path: cache hit
     cached = _zernio_account_cache.get(customer_id)
     if cached:
-        if send_dm_reply(customer_id, cached, text):
+        if not is_account_allowed(cached, direction="outbound"):
+            _zernio_account_cache.pop(customer_id, None)
+        elif send_dm_reply(customer_id, cached, text):
             return True
-        # Cache miss (account may have been reconnected with a new id) — fall through
-        _zernio_account_cache.pop(customer_id, None)
+        else:
+            # Cache miss (account may have been reconnected with a new id) — fall through
+            _zernio_account_cache.pop(customer_id, None)
 
-    # Cold path: try each social platform account in order. WhatsApp first because
-    # it's the most common path in production, then the other Meta channels, then X.
-    for platform in ("whatsapp", "facebook", "instagram", "twitter"):
-        account_id = social_publisher.get_account_id(platform)
-        if not account_id:
+    # Cold path: try tenant allowlisted accounts first. This is important for
+    # strict tenants where Late's generic active account lookup may return a
+    # different account than the one that received the inbound conversation.
+    for account_id in _candidate_zernio_account_ids(social_publisher):
+        if not is_account_allowed(account_id, direction="outbound"):
             continue
         if send_dm_reply(customer_id, account_id, text):
             _zernio_account_cache[customer_id] = account_id
             log("zernio_send_platform_resolved",
-                conversation_id=customer_id[:20], platform=platform)
+                conversation_id=customer_id[:20],
+                account_id=account_id[:20])
             return True
 
     log("zernio_send_all_platforms_failed", conversation_id=customer_id[:20])
