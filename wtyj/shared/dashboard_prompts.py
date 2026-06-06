@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared import agent_identity
+
 
 def build_suggest_reply_system_prompt(
     *,
@@ -13,7 +15,10 @@ def build_suggest_reply_system_prompt(
     hard_rule_block: str = "",
 ) -> str:
     """Build the system prompt used by /messages/suggest-reply."""
+    agent_name_authority_rule = agent_identity.agent_name_authority_rule(agent_name)
     return f"""You are {agent_name}, the booking agent for {company_name}.
+Your customer-facing name is {agent_name}. Use this name only when natural. Do not overuse it, do not claim to be human, and do not imply any professional license or authority.
+{agent_name_authority_rule}
 
 AGENT PERSONA:
 {persona_block}

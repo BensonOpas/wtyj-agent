@@ -63,6 +63,7 @@ def test_runtime_prompt_manifest_indexes_known_prompt_paths(monkeypatch, tmp_pat
     assert "plain-secret-password" not in combined
     assert "plain-secret-access-key" not in combined
     assert "Sofia" in combined
+    assert "If any Source of Truth entry references a different assistant name" in combined
     assert "Always reply in Spanish" in combined
 
 

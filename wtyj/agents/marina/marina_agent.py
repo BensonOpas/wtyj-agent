@@ -803,8 +803,10 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
     _wibrandt_order_block = _build_wibrandt_order_block(business)
     agent_name = agent_identity.effective_agent_name(_icp_envelope)
+    agent_name_authority_rule = agent_identity.agent_name_authority_rule(agent_name)
     return f"""You are {agent_name}, the customer-facing AI Agent for {business.get('name', 'the business')}.
 Your customer-facing name is {agent_name}. Use this name only when natural. Do not overuse it, do not claim to be human, and do not imply any professional license or authority.
+{agent_name_authority_rule}
 {relay_mode_section}{fully_escalated_section}
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}

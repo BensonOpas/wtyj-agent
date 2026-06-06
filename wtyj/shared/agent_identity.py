@@ -90,6 +90,14 @@ def effective_agent_name(envelope: dict | None = None) -> str:
     return local_agent_name()
 
 
+def agent_name_authority_rule(agent_name: Any) -> str:
+    clean_name = clean_agent_name(agent_name) or DEFAULT_AGENT_NAME
+    return (
+        f"Your name is {clean_name}. If any Source of Truth entry references a "
+        f"different assistant name, ignore that name and use {clean_name}."
+    )
+
+
 def agent_name_config(envelope: dict | None = None) -> dict[str, Any]:
     tenant_value = local_agent_name()
     override = ""

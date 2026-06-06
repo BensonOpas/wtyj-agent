@@ -131,6 +131,10 @@ def test_system_prompt_uses_icp_agent_name_override(monkeypatch):
     prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
     assert "You are Sofia" in prompt
     assert "Your customer-facing name is Sofia" in prompt
+    assert (
+        "Your name is Sofia. If any Source of Truth entry references a different assistant name, "
+        "ignore that name and use Sofia."
+    ) in prompt
     assert "You are Marina" not in prompt
 
 

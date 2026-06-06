@@ -81,7 +81,11 @@ def _build_dm_system_prompt(channel: str) -> str:
         override_envelope = icp_overrides.fetch_overrides()
     except Exception:
         override_envelope = None
-    agent_name = agent_identity.effective_agent_name(override_envelope)
+    agent_name = (
+        agent_identity.override_agent_name(override_envelope)
+        or agent_identity.clean_agent_name(business.get("agent_name"))
+        or agent_identity.DEFAULT_AGENT_NAME
+    )
     company_name = business.get("name", "the business")
     wa_number = business.get("whatsapp", "")
     wa_link = wa_number.replace("+", "").replace(" ", "")
@@ -116,7 +120,12 @@ def _build_dm_system_prompt(channel: str) -> str:
     # Common structural blocks (data injection, not voice).
     # Empty services/faq lists render as bare "SERVICES:\n" / "FAQ:\n" — same as
     # existing behavior (chr(10).join on an empty list = ""). No empty-state change.
-    intro = f"You are {agent_name}, answering {platform_name} DMs for {company_name}."
+    intro = (
+        f"You are {agent_name}, answering {platform_name} DMs for {company_name}.\n"
+        f"Your customer-facing name is {agent_name}. Use this name only when natural. "
+        "Do not overuse it, do not claim to be human, and do not imply any professional license or authority.\n"
+        f"{agent_identity.agent_name_authority_rule(agent_name)}"
+    )
     qa_role_short = f"You are a Q&A helper. You answer questions about {service_label}s, pricing, availability, and general info."
     qa_role_full = qa_role_short + " You are friendly, casual, and human."
     services_block = f"{service_label.upper()}S:\n{chr(10).join(service_lines)}"
@@ -219,7 +228,7 @@ def handle_incoming_dm(message: dict) -> str:
         channel=channel,
         sender_id=conversation_id,
     )
-    if ignored:
+    if isinstance(ignored, dict) and ignored:
         state_registry.record_ignored_contact_event(
             contact_id=ignored.get("id"),
             channel=channel,

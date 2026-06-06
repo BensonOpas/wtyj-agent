@@ -34,6 +34,10 @@ def test_booking_redirect_omitted_when_booking_flow_false(mock_config):
 
     # Master prompt content present
     assert "Master prompt for unboks." in prompt
+    assert (
+        "Your name is Calvin. If any Source of Truth entry references a different assistant name, "
+        "ignore that name and use Calvin."
+    ) in prompt
     # Booking redirect block ABSENT
     assert "BOOKING REDIRECT" not in prompt
     assert "wa.me/59912345" not in prompt
