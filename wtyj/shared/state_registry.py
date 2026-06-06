@@ -2870,11 +2870,15 @@ def resolve_conversation_from_escalation(escalation_id: int) -> None:
         return
     customer_id, esc_channel = row
 
-    # Set conversation status to resolved
+    # Set conversation status to resolved and release human takeover/mute.
+    # Resolved means the operator has completed the work item; leaving
+    # ai_muted=1 makes the agent appear down on later customer follow-ups.
     conn.execute(
-        "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
-        "VALUES (?, ?, 'resolved', ?) "
+        "INSERT INTO conversation_status "
+        "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
+        "VALUES (?, ?, 'resolved', ?, 0, NULL) "
         "ON CONFLICT(conversation_id) DO UPDATE SET status = 'resolved', "
+        "ai_muted = 0, human_takeover_at = NULL, "
         "updated_at = excluded.updated_at",
         (customer_id, esc_channel or "whatsapp",
          datetime.now(timezone.utc).isoformat())

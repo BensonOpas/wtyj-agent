@@ -127,6 +127,27 @@ def test_post_handback_clears_mute_and_sets_soft():
     _cleanup(esc_id, customer_id)
 
 
+# --- Test 4b: POST /resolve clears mute so agent can resume
+def test_post_resolve_clears_ai_mute_and_human_takeover():
+    from shared import state_registry
+    customer_id = "213_resolve_clears_mute_phone"
+    esc_id = _seed_escalation("whatsapp", customer_id, mode="hard")
+    state_registry.set_ai_muted(customer_id, True, "whatsapp")
+    assert state_registry.get_ai_muted(customer_id) is True
+
+    token = _login()
+    r = client.post(
+        f"/dashboard/api/escalations/{esc_id}/resolve",
+        json={"resolutionNote": "Handled by operator.", "saveAsLearning": False},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    assert state_registry.get_ai_muted(customer_id) is False
+    assert state_registry.get_conversation_status(customer_id) == "resolved"
+    assert state_registry.get_human_takeover_at(customer_id) is None
+    _cleanup(esc_id, customer_id)
+
+
 # --- Test 5: GET /escalations filters by mode
 def test_get_escalations_filters_by_mode():
     customer_a = "213_filter_phone_a"
