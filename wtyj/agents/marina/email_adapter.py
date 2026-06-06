@@ -16,7 +16,9 @@ import urllib.parse
 from email.header import decode_header as _decode_header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import make_msgid
+from email.utils import formataddr, make_msgid
+
+from shared import agent_identity
 
 
 # ========= CONSTANTS =========
@@ -68,6 +70,22 @@ def normalize_subject(subj: str) -> str:
             break
         s = ns
     return s
+
+
+def customer_facing_agent_name() -> str:
+    """Return the effective tenant assistant name for outbound email.
+
+    Nr3/Nr2 agent identity is the authority. The ICP bridge helper has its own
+    short cache, so this is safe to call during send without turning SMTP into a
+    config synchronization problem. If the bridge is unavailable, the helper
+    falls back to local client.json and finally the platform default.
+    """
+    try:
+        from shared import icp_overrides
+
+        return agent_identity.effective_agent_name(icp_overrides.fetch_overrides())
+    except Exception:
+        return agent_identity.local_agent_name()
 
 
 # ========= CONNECTION =========
@@ -140,7 +158,7 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
         msg = MIMEMultipart('alternative')
     else:
         msg = MIMEMultipart()
-    msg["From"] = "Marina <{}>".format(EMAIL_ADDR)
+    msg["From"] = formataddr((customer_facing_agent_name(), EMAIL_ADDR))
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg["Message-ID"] = make_msgid(domain=EMAIL_ADDR.split("@")[1])

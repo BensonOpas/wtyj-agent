@@ -40,6 +40,7 @@ from agents.marina.email_adapter import (  # noqa: F401
     log, _decode_subj, sha, normalize_subject,
     get_refresh_token, oauth_token, imap_connect, smtp_send,
     extract_text, strip_quotes, resolve_thread_key, _is_new_email,
+    customer_facing_agent_name,
     CLIENT_ID, TENANT_ID, EMAIL_ADDR, IMAP_HOST, IMAP_PORT,
     SMTP_HOST, SMTP_PORT, REFRESH_TOKEN_PATH, SESSION_ID,
     _MODULE_DIR, _CONFIG_DIR,
@@ -571,7 +572,7 @@ def main():
                         "1) Experience (Klein Curaçao / Sunset Cruise / West Coast Beach / Snorkeling / Jet Ski)\n"
                         "2) Date\n"
                         "3) Number of guests\n\n"
-                        "Warm regards,\nMarina\n"
+                        f"Warm regards,\n{customer_facing_agent_name()}\n"
                     )
                     smtp_send(from_email, "Re: " + subj, stop_msg,
                               in_reply_to=msg.get("Message-ID"), references=msg.get("References"))
