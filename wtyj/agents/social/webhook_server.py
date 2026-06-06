@@ -87,10 +87,50 @@ def _get_phone_lock(key: str) -> threading.Lock:
         return lock
 
 
+def _message_ids(messages: list[dict]) -> list[str]:
+    return [m.get("message_id", "") for m in messages or [] if m.get("message_id")]
+
+
+def _record_inbound(msg: dict, channel: str, conversation_id: str):
+    state_registry.inbound_processing_record(
+        msg.get("message_id", ""),
+        conversation_id=conversation_id or msg.get("from", ""),
+        channel=channel,
+        status="received",
+    )
+
+
+def _mark_delivery_failed(channel: str, conversation_id: str, customer_name: str,
+                          message_ids: list[str], error: str):
+    state_registry.inbound_processing_bulk_update(
+        message_ids, "send_failed", reason="provider_send_failed", error=error)
+    subject = f"[DELIVERY FAILED] {channel}: {conversation_id}"
+    body = (
+        "A reply was generated, but the provider send call failed.\n\n"
+        f"Channel: {channel}\n"
+        f"Conversation/customer: {conversation_id}\n"
+        "Action taken: The assistant reply was NOT stored as sent. "
+        "Operator must review and reply manually or reconnect the provider.\n"
+        f"Error: {error or 'provider returned false'}\n"
+        f"Inbound message ids: {', '.join(message_ids) or '(missing)'}"
+    )
+    try:
+        state_registry.create_pending_notification(
+            "escalation", channel, conversation_id,
+            customer_name or "Unknown", subject, body, mode="hard")
+    except Exception as exc:
+        log("delivery_failure_escalation_create_failed",
+            channel=channel, conversation_id=conversation_id[:20],
+            error=str(exc)[:200])
+
+
 def _maybe_run_cleanup():
     """Run stale data cleanup at most once per hour."""
     global _last_cleanup_ts
     now = time.time()
+    stale_failures = state_registry.inbound_processing_mark_stale_failures()
+    if stale_failures:
+        log("inbound_processing_stale_failures", count=stale_failures)
     if now - _last_cleanup_ts < 3600:
         return
     _last_cleanup_ts = now
@@ -139,9 +179,12 @@ def _process_whatsapp_event(payload: dict):
                         message_id=message_id)
                 continue
             state_registry.wa_mark_as_processed(message_id)
+            _record_inbound(msg, "whatsapp", msg.get("from", ""))
             log("whatsapp_message_normalized", **msg)
             # Only buffer text messages
             if msg.get("text") is None:
+                state_registry.inbound_processing_update(
+                    message_id, "ignored", reason="non_text_message")
                 log("whatsapp_non_text_skipped", source="meta_whatsapp",
                     message_type=msg.get("message_type"), message_id=message_id)
                 continue
@@ -162,6 +205,8 @@ def _process_whatsapp_event(payload: dict):
                     sender=(msg.get("from", "") or "")[:50],
                     message_id=message_id,
                     reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+                state_registry.inbound_processing_update(
+                    message_id, "ignored", reason="ignored_contact")
                 continue
             _buffer_message(msg)
     except Exception as e:
@@ -244,6 +289,9 @@ def _flush_buffer(phone):
     if not buf or not buf["messages"]:
         return
     messages = buf["messages"]
+    ids = _message_ids(messages)
+    state_registry.inbound_processing_bulk_update(
+        ids, "processing", reason="batch_flush_started")
     # Concatenate all text messages
     texts = [m["text"] for m in messages if m.get("text")]
     combined_text = "\n".join(texts)
@@ -288,11 +336,15 @@ def _flush_buffer(phone):
                         channel=_zernio_channel,
                         sender=(final_msg.get("from", "") or _zernio_conv)[:50],
                         reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "ignored", reason="ignored_contact")
                     return
                 # Brief 220: per-conversation runtime block. Drop BEFORE
                 # storage so the conversation doesn't appear in the inbox.
                 if state_registry.get_blocked(_zernio_conv):
                     log("whatsapp_zernio_blocked_conversation", conversation_id=_zernio_conv[:20])
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "ignored", reason="blocked_conversation")
                     return  # exits the with _phone_lock block
                 # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
                 if state_registry.get_ai_muted(_zernio_conv):
@@ -300,12 +352,12 @@ def _flush_buffer(phone):
                         conversation_id=_zernio_conv, channel=_zernio_channel,
                         role="user", text=combined_text, sender_name=_zernio_sender)
                     log("whatsapp_zernio_ai_muted", conversation_id=_zernio_conv[:20])
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
                 # Zernio WhatsApp — check booking_flow toggle
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
                 if _booking_flow_on:
-                    reply_text = handle_incoming_whatsapp_message(final_msg, channel=_zernio_channel)
-                    # Store user message after orchestrator (same ordering as DM path)
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
                         channel=_zernio_channel,
@@ -313,6 +365,9 @@ def _flush_buffer(phone):
                         text=combined_text,
                         sender_name=_zernio_sender,
                     )
+                    reply_text = handle_incoming_whatsapp_message(
+                        final_msg, channel=_zernio_channel,
+                        inbound_already_stored=True)
                 else:
                     # Q&A only — use DM agent
                     _dm_msg = {
@@ -334,30 +389,60 @@ def _flush_buffer(phone):
                     )
                     reply_text = handle_incoming_dm(_dm_msg)
                 if reply_text:
-                    send_reply(_zernio_channel, _zernio_conv, _zernio_acct, reply_text)
+                    ok = send_reply(_zernio_channel, _zernio_conv, _zernio_acct, reply_text)
+                    if not ok:
+                        log("zernio_reply_send_failed",
+                            channel=_zernio_channel,
+                            conversation_id=_zernio_conv[:20])
+                        _mark_delivery_failed(
+                            _zernio_channel, _zernio_conv, _zernio_sender,
+                            ids, "provider returned false")
+                        return
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
                         channel=_zernio_channel,
                         role="assistant",
                         text=reply_text,
                     )
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "replied", reason="provider_send_ok")
+                else:
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "ignored", reason="no_reply_returned")
             else:
                 # Brief 220: per-conversation runtime block (Meta-legacy WhatsApp path).
                 if state_registry.get_blocked(phone):
                     log("whatsapp_meta_blocked_conversation", phone=phone[:20])
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "ignored", reason="blocked_conversation")
                     return
                 # Brief 213: ai_muted check for Meta legacy WhatsApp.
                 if state_registry.get_ai_muted(phone):
                     state_registry.wa_store_message(phone, "user", combined_text)
                     log("whatsapp_meta_ai_muted", phone=phone[:20])
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
                 # Meta WhatsApp (legacy) — original path
-                reply_text = handle_incoming_whatsapp_message(final_msg)
                 state_registry.wa_store_message(phone, "user", combined_text)
+                reply_text = handle_incoming_whatsapp_message(
+                    final_msg, inbound_already_stored=True)
                 if reply_text:
-                    send_text_message(to=phone, text=reply_text)
+                    ok = send_text_message(to=phone, text=reply_text)
+                    if not ok:
+                        _mark_delivery_failed(
+                            "whatsapp", phone, final_msg.get("from_name", ""),
+                            ids, "provider returned false")
+                        return
                     state_registry.wa_store_message(phone, "assistant", reply_text)
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "replied", reason="provider_send_ok")
+                else:
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "ignored", reason="no_reply_returned")
         except Exception as e:
+            state_registry.inbound_processing_bulk_update(
+                ids, "processing_failed", reason="exception", error=str(e))
             log("webhook_process_error",
                 source="zernio_whatsapp" if final_msg.get("_zernio_conversation_id") else "meta_whatsapp",
                 error=str(e), phone=phone)
@@ -412,6 +497,7 @@ def _process_zernio_event(payload: dict):
             log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
             return
         state_registry.wa_mark_as_processed(message_id)
+        _record_inbound(msg, msg.get("channel", ""), msg.get("conversation_id", ""))
 
         ignored = state_registry.match_ignored_contact(
             channel=msg.get("channel", ""),
@@ -433,6 +519,8 @@ def _process_zernio_event(payload: dict):
                 sender=(msg.get("sender_id") or msg.get("conversation_id") or "")[:50],
                 message_id=message_id,
                 reason="Ignored inbound message because sender is on Excluded Contacts / Ignore List.")
+            state_registry.inbound_processing_update(
+                message_id, "ignored", reason="ignored_contact")
             return
 
         # Brief 208: per-tenant ignored_phones list. Drop messages from
@@ -445,6 +533,8 @@ def _process_zernio_event(payload: dict):
                     log("zernio_dm_ignored_phone",
                         sender=sender_digits,
                         message_id=message_id)
+                    state_registry.inbound_processing_update(
+                        message_id, "ignored", reason="ignored_phone")
                     return
 
         # Brief 220: per-conversation runtime block. Mirrors ignored_phones
@@ -455,6 +545,8 @@ def _process_zernio_event(payload: dict):
             log("zernio_dm_blocked_conversation",
                 conversation_id=msg.get("conversation_id", "")[:20],
                 message_id=message_id)
+            state_registry.inbound_processing_update(
+                message_id, "ignored", reason="blocked_conversation")
             return
 
         # Brief 238 — tenant isolation: refuse webhooks for accounts not
@@ -462,6 +554,9 @@ def _process_zernio_event(payload: dict):
         # permissive mode just logs and keeps going.
         from shared.tenant_guard import is_account_allowed
         if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
+            state_registry.inbound_processing_update(
+                message_id, "processing_failed",
+                reason="account_not_allowlisted")
             return
 
         # Brief 240: auto-resolve operator WhatsApp alert route. If this
@@ -495,6 +590,8 @@ def _process_zernio_event(payload: dict):
 
         text = msg.get("text", "")
         if not text:
+            state_registry.inbound_processing_update(
+                message_id, "ignored", reason="non_text_message")
             log("zernio_dm_non_text_skipped", message_id=message_id,
                 platform=msg.get("platform"))
             return
@@ -534,6 +631,8 @@ def _process_zernio_event(payload: dict):
                     role="user", text=text, sender_name=msg["sender_name"])
                 log("zernio_dm_ai_muted",
                     conversation_id=conversation_id[:20], channel=channel)
+                state_registry.inbound_processing_update(
+                    message_id, "escalated", reason="human_takeover_ai_muted")
                 return
 
             # Route based on booking_flow toggle
@@ -541,15 +640,11 @@ def _process_zernio_event(payload: dict):
 
             if _booking_flow_on:
                 # Full booking flow — route through orchestrator
-                # NOTE: store user message AFTER orchestrator call, not before.
-                # The orchestrator reads wa_get_history(conversation_id) internally.
-                # If we store before, Marina sees the message twice (once in history,
-                # once as the current inbound). This matches the WhatsApp _flush_buffer
-                # pattern which also stores after the call.
+                # Persist before model/order work so crashes remain visible.
+                # handle_incoming_whatsapp_message removes this exact inbound
+                # from prompt history when inbound_already_stored=True.
                 adapter_cls = ZERNIO_CHANNELS.get(channel, DEFAULT_ZERNIO_CHANNEL)
                 orchestrator_msg = adapter_cls.from_zernio(msg)
-                reply_text = handle_incoming_whatsapp_message(orchestrator_msg, channel=channel)
-                # Store user message after orchestrator (same as WhatsApp path)
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,
                     channel=channel,
@@ -557,6 +652,9 @@ def _process_zernio_event(payload: dict):
                     text=text,
                     sender_name=msg["sender_name"],
                 )
+                reply_text = handle_incoming_whatsapp_message(
+                    orchestrator_msg, channel=channel,
+                    inbound_already_stored=True)
             else:
                 # Q&A only — use DM agent
                 # DM agent reads dm_get_history which is separate, so store before is fine
@@ -571,7 +669,15 @@ def _process_zernio_event(payload: dict):
 
             if reply_text:
                 # Send reply via the sender registry (Brief 187 — dispatched by channel)
-                send_reply(channel, conversation_id, account_id, reply_text)
+                ok = send_reply(channel, conversation_id, account_id, reply_text)
+                if not ok:
+                    log("zernio_reply_send_failed",
+                        channel=channel,
+                        conversation_id=conversation_id[:20])
+                    _mark_delivery_failed(
+                        channel, conversation_id, msg.get("sender_name", ""),
+                        [message_id], "provider returned false")
+                    return
                 # Store assistant reply
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,
@@ -579,7 +685,19 @@ def _process_zernio_event(payload: dict):
                     role="assistant",
                     text=reply_text,
                 )
+                state_registry.inbound_processing_update(
+                    message_id, "replied", reason="provider_send_ok")
+            else:
+                state_registry.inbound_processing_update(
+                    message_id, "ignored", reason="no_reply_returned")
     except Exception as e:
+        try:
+            if "message_id" in locals():
+                state_registry.inbound_processing_update(
+                    message_id, "processing_failed",
+                    reason="exception", error=str(e))
+        except Exception:
+            pass
         log("webhook_process_error", source="zernio", error=str(e))
 
 

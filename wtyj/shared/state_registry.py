@@ -260,6 +260,22 @@ def _get_conn():
         ")"
     )
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS inbound_processing_events ("
+        "message_id TEXT PRIMARY KEY, "
+        "conversation_id TEXT NOT NULL DEFAULT '', "
+        "channel TEXT NOT NULL DEFAULT '', "
+        "status TEXT NOT NULL DEFAULT 'received', "
+        "reason TEXT NOT NULL DEFAULT '', "
+        "last_error TEXT NOT NULL DEFAULT '', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbound_processing_conversation "
+        "ON inbound_processing_events(conversation_id, updated_at)"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS whatsapp_threads ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "phone TEXT NOT NULL, "
@@ -1195,6 +1211,91 @@ def wa_mark_as_processed(message_id: str):
     )
     conn.commit()
     conn.close()
+
+
+def inbound_processing_record(message_id: str, conversation_id: str,
+                              channel: str, status: str = "received",
+                              reason: str = "", error: str = ""):
+    """Create/update the durable processing state for one inbound message."""
+    if not message_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO inbound_processing_events "
+        "(message_id, conversation_id, channel, status, reason, last_error, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(message_id) DO UPDATE SET "
+        "conversation_id = excluded.conversation_id, "
+        "channel = excluded.channel, "
+        "status = excluded.status, "
+        "reason = excluded.reason, "
+        "last_error = excluded.last_error, "
+        "updated_at = excluded.updated_at",
+        (message_id, conversation_id or "", channel or "", status,
+         (reason or "")[:500], (error or "")[:500], now, now)
+    )
+    conn.commit()
+    conn.close()
+
+
+def inbound_processing_update(message_id: str, status: str,
+                              reason: str = "", error: str = ""):
+    """Update a processing record; creates a minimal row if missing."""
+    if not message_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE inbound_processing_events "
+        "SET status = ?, reason = ?, last_error = ?, updated_at = ? "
+        "WHERE message_id = ?",
+        (status, (reason or "")[:500], (error or "")[:500], now, message_id)
+    )
+    if cur.rowcount == 0:
+        conn.execute(
+            "INSERT INTO inbound_processing_events "
+            "(message_id, status, reason, last_error, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, status, (reason or "")[:500], (error or "")[:500],
+             now, now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def inbound_processing_bulk_update(message_ids: list, status: str,
+                                   reason: str = "", error: str = ""):
+    """Update a batch of inbound processing records."""
+    seen = set()
+    for message_id in message_ids or []:
+        if message_id and message_id not in seen:
+            seen.add(message_id)
+            inbound_processing_update(message_id, status, reason=reason, error=error)
+
+
+def inbound_processing_mark_stale_failures(max_age_seconds: int = 300) -> int:
+    """Mark old non-terminal inbound records as visible failures.
+
+    This closes the crash window where a message was received/buffered but the
+    worker died before the timer or model/send path could finish.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE inbound_processing_events "
+        "SET status = 'processing_failed', "
+        "reason = 'stale_non_terminal_state', "
+        "last_error = 'Inbound processing did not reach a terminal state in time.', "
+        "updated_at = ? "
+        "WHERE status IN ('received', 'processing') AND updated_at < ?",
+        (now, cutoff)
+    )
+    conn.commit()
+    count = cur.rowcount
+    conn.close()
+    return count
 
 
 def wa_store_message(phone: str, role: str, text: str):

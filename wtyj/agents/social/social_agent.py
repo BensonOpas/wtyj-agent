@@ -357,7 +357,8 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
     return True
 
 
-def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -> str:
+def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
+                                     inbound_already_stored: bool = False) -> str:
     """
     Process a WhatsApp message: full booking orchestrator.
     Fetch state + history -> build action_context -> call marina_agent ->
@@ -427,6 +428,14 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp") -
 
     # Get conversation history (last 10 messages, 24h window)
     history = state_registry.wa_get_history(phone, limit=10)
+    if inbound_already_stored and history:
+        # The webhook layer may persist the inbound before model/order
+        # processing for reliability. Keep the current inbound out of the
+        # prompt history because it is already passed as the active body.
+        for idx in range(len(history) - 1, -1, -1):
+            if history[idx].get("role") == "user" and history[idx].get("text") == text:
+                history.pop(idx)
+                break
 
     # Build from identifier with name if available
     display_name = fields.get("customer_name") or from_name
