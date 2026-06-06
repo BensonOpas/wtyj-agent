@@ -41,7 +41,8 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
-            cd /root && git pull
+            export WTYJ_SOURCE_ROOT=/root/wtyj-agent-source
+            cd "$WTYJ_SOURCE_ROOT" && git pull
             SHA=$(git rev-parse --short HEAD)
             chmod +x wtyj/scripts/*.sh
             docker tag wtyj-agent:latest wtyj-agent:previous 2>/dev/null || \
@@ -59,11 +60,11 @@ jobs:
             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
               curl -sf -m 3 http://localhost:8001/health | grep -q '"ok"' && break
               [ "$attempt" = "12" ] && {
-                bash /root/wtyj/scripts/rollback.sh bluemarlin || true; exit 1; }
+                bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/rollback.sh" bluemarlin || true; exit 1; }
               sleep 5
             done
-            if ! bash /root/wtyj/scripts/e2e_canary_test.sh; then
-              bash /root/wtyj/scripts/rollback.sh bluemarlin || true
+            if ! bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/e2e_canary_test.sh"; then
+              bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/rollback.sh" bluemarlin || true
               exit 1
             fi
 
@@ -85,17 +86,18 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
+            export WTYJ_SOURCE_ROOT=/root/wtyj-agent-source
             export DEPLOY_QUEUE_PATH=/root/wtyj_deploy_queue.json
             export SKIP_OFF_HOURS_CHECK=1
-            cd /root
+            cd "$WTYJ_SOURCE_ROOT"
             FULL_SHA=$(git rev-parse HEAD)
             SHORT_SHA=$(git rev-parse --short HEAD)
             SUBJECT_B64=$(git log -1 --pretty=%s | base64 -w0)
-            chmod +x /root/wtyj/scripts/*.sh
+            chmod +x "$WTYJ_SOURCE_ROOT"/wtyj/scripts/*.sh
 
             # Enqueue current commit so it appears in queue → in_progress → history
-            python3 /root/wtyj/scripts/queue_enqueue.py \
+            python3 "$WTYJ_SOURCE_ROOT/wtyj/scripts/queue_enqueue.py" \
               --sha "$FULL_SHA" --short-sha "$SHORT_SHA" --subject-b64 "$SUBJECT_B64"
 
             # Process queue: claim + deploy + complete (writes history)
-            bash /root/wtyj/scripts/process_deploy_queue.sh
+            bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/process_deploy_queue.sh"

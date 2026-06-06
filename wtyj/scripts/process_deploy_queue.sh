@@ -5,13 +5,14 @@
 # decided off-hours is OK and may be at the boundary).
 set -e
 
+SOURCE_ROOT="${WTYJ_SOURCE_ROOT:-/root/wtyj-agent-source}"
 export DEPLOY_QUEUE_PATH="${DEPLOY_QUEUE_PATH:-/root/wtyj_deploy_queue.json}"
-cd /root
+cd "$SOURCE_ROOT"
 
 # Off-hours check (skip if CI already decided)
 if [ "${SKIP_OFF_HOURS_CHECK:-0}" != "1" ]; then
   COMMIT_MSG=$(git log -1 --pretty=%B)
-  if ! python3 /root/wtyj/scripts/off_hours_check.py --commit-message "$COMMIT_MSG"; then
+  if ! python3 "$SOURCE_ROOT/wtyj/scripts/off_hours_check.py" --commit-message "$COMMIT_MSG"; then
     echo "Currently business hours — skipping queue processing"
     exit 0
   fi
@@ -20,7 +21,7 @@ fi
 # Atomically claim a deploy task (returns JSON or empty)
 CLAIM=$(python3 -c "
 import sys, json
-sys.path.insert(0, '/root/wtyj')
+sys.path.insert(0, '$SOURCE_ROOT/wtyj')
 from shared import deploy_queue
 c = deploy_queue.claim_for_deploy()
 print(json.dumps(c) if c else '')
@@ -36,7 +37,7 @@ echo "Deploying claimed SHA: $SHA"
 START=$(date +%s)
 
 # Pre-deploy snapshot
-bash /root/wtyj/scripts/pre_deploy_snapshot.sh "$SHA"
+bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 
 # Deploy paying clients + internal sandbox (image already built by canary,
 # just restart). unboks is the SR-facing test sandbox; deploys with the
@@ -62,7 +63,7 @@ if [ "$STATUS" = "success" ]; then
     done
     if [ "$OK" = "0" ]; then
       STATUS="failed"
-      bash /root/wtyj/scripts/rollback.sh all || true
+      bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
       break
     fi
   done
@@ -73,7 +74,7 @@ DURATION=$(( $(date +%s) - START ))
 # Mark complete in queue (writes per-brief history)
 python3 -c "
 import sys
-sys.path.insert(0, '/root/wtyj')
+sys.path.insert(0, '$SOURCE_ROOT/wtyj')
 from shared import deploy_queue
 deploy_queue.complete_deploy('$STATUS', $DURATION)
 "

@@ -30,10 +30,11 @@ jobs:
           envs: FORCE
           command_timeout: 10m
           script: |
+            export WTYJ_SOURCE_ROOT=/root/wtyj-agent-source
             export DEPLOY_QUEUE_PATH=/root/wtyj_deploy_queue.json
             if [ "$FORCE" = "true" ]; then
               export SKIP_OFF_HOURS_CHECK=1
               echo "Emergency deploy — skipping off-hours check"
             fi
-            chmod +x /root/wtyj/scripts/*.sh
-            bash /root/wtyj/scripts/process_deploy_queue.sh
+            chmod +x "$WTYJ_SOURCE_ROOT"/wtyj/scripts/*.sh
+            bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/process_deploy_queue.sh"
