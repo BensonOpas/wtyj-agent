@@ -3159,6 +3159,115 @@ def _build_alert_body(customer_name: str, channel: str, mode: str,
     )
 
 
+def _extract_order_payload(body: str) -> dict:
+    """Extract the structured ORDER payload embedded in escalation body."""
+    if not body:
+        return {}
+    marker = "=== ORDER PAYLOAD ==="
+    idx = body.find(marker)
+    if idx < 0:
+        return {}
+    raw = body[idx + len(marker):].strip()
+    next_marker = re.search(r"\n\s*=== ", raw)
+    if next_marker:
+        raw = raw[:next_marker.start()].strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _order_lines(order: dict) -> list:
+    lines = []
+    products = order.get("products") or []
+    if not isinstance(products, list):
+        return lines
+    for item in products:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        qty = item.get("quantity")
+        unit = item.get("unit_price")
+        subtotal = item.get("subtotal")
+        parts = []
+        if qty not in (None, ""):
+            parts.append(f"{qty} x")
+        parts.append(name)
+        detail = " ".join(parts)
+        extras = []
+        if unit not in (None, ""):
+            extras.append(f"unit {unit}")
+        if subtotal not in (None, ""):
+            extras.append(f"subtotal {subtotal}")
+        if extras:
+            detail = f"{detail} ({', '.join(extras)})"
+        lines.append(detail)
+    return lines
+
+
+def _order_total(order: dict) -> str:
+    total = order.get("total")
+    currency = str(order.get("currency") or "").strip()
+    if total in (None, ""):
+        return "Price not captured"
+    return f"{currency + ' ' if currency else ''}{total}"
+
+
+def _build_order_alert_subject(customer_name: str, order: dict) -> str:
+    name = str(order.get("customer_name") or customer_name or "customer").strip()
+    return f"New order: {name} - {_order_total(order)}"
+
+
+def _build_order_alert_body(order: dict, customer_name: str, channel: str,
+                            client_name: str) -> str:
+    name = str(order.get("customer_name") or customer_name or "(unknown)").strip()
+    phone = str(order.get("phone") or order.get("customer_id") or "").strip()
+    address = str(order.get("delivery_address") or order.get("address") or "").strip()
+    comments = str(order.get("comments") or "").strip()
+    products = _order_lines(order)
+    products_text = "\n".join(f"- {line}" for line in products) or "- Order details not captured"
+    return (
+        f"New order in {client_name}\n\n"
+        f"Name: {name}\n"
+        f"Phone: {phone or 'Phone not captured'}\n"
+        f"Address: {address or 'Address not captured'}\n"
+        f"Channel: {_channel_label(channel)}\n\n"
+        f"Order:\n{products_text}\n\n"
+        f"Price: {_order_total(order)}\n"
+        f"Comments: {comments or '(none)'}\n\n"
+        f"Action: Confirm this order with the customer and prepare delivery."
+    )
+
+
+def _build_order_alert_body_whatsapp(order: dict, customer_name: str,
+                                     channel: str) -> str:
+    name = str(order.get("customer_name") or customer_name or "(unknown)").strip()
+    phone = str(order.get("phone") or order.get("customer_id") or "").strip()
+    address = str(order.get("delivery_address") or order.get("address") or "").strip()
+    products = _order_lines(order)
+    products_text = "; ".join(products[:4]) or "Order details not captured"
+    comments = str(order.get("comments") or "").strip()
+    parts = [
+        "New order",
+        "",
+        f"Name: {name}",
+        f"Phone: {phone or 'Phone not captured'}",
+        f"Address: {address or 'Address not captured'}",
+        f"Order: {products_text}",
+        f"Price: {_order_total(order)}",
+        f"Channel: {_channel_label(channel)}",
+    ]
+    if comments:
+        parts.append(f"Comments: {comments[:160]}")
+    parts.extend(["", "Action: Confirm with the customer."])
+    return "\n".join(parts)
+
+
 def _build_appointment_subject(customer_name: str,
                                 appointment_dict: dict) -> str:
     """Brief 241: 'Appointment confirmed: {name} - {time}'. Falls back to
@@ -3416,7 +3525,8 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                              channel: str, summary: str,
                              mode: str = None,
                              summary_dict: dict = None,
-                             is_update: bool = False) -> None:
+                             is_update: bool = False,
+                             body: str = "") -> None:
     """Brief 217 + 239: build the alert message, dispatch to enabled channels,
     record delivery status per attempt. Never raises. When summary_dict is
     supplied (Brief 239), builds a rich body with the structured summary;
@@ -3439,14 +3549,22 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         return
     channels_cfg = settings.get("channels", {})
 
-    email_subject = _build_alert_subject(customer_name, summary_dict, is_update)
-    alert_text = _build_alert_body(customer_name, channel, mode, summary_dict,
-                                    summary, client_name)
-    # Brief 256: WhatsApp gets a compact body (no quoted history, no
-    # signature, no disclaimer, ~539 char ceiling). Email keeps the rich
-    # body above via smtp_send below.
-    alert_text_whatsapp = _build_alert_body_whatsapp(customer_name, channel,
-                                                     summary_dict, summary)
+    order_payload = _extract_order_payload(body) if mode == "order" else {}
+    if order_payload:
+        email_subject = _build_order_alert_subject(customer_name, order_payload)
+        alert_text = _build_order_alert_body(order_payload, customer_name,
+                                             channel, client_name)
+        alert_text_whatsapp = _build_order_alert_body_whatsapp(
+            order_payload, customer_name, channel)
+    else:
+        email_subject = _build_alert_subject(customer_name, summary_dict, is_update)
+        alert_text = _build_alert_body(customer_name, channel, mode, summary_dict,
+                                        summary, client_name)
+        # Brief 256: WhatsApp gets a compact body (no quoted history, no
+        # signature, no disclaimer, ~539 char ceiling). Email keeps the rich
+        # body above via smtp_send below.
+        alert_text_whatsapp = _build_alert_body_whatsapp(customer_name, channel,
+                                                         summary_dict, summary)
 
     em = channels_cfg.get("email", {})
     if em.get("enabled"):

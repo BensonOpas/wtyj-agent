@@ -370,6 +370,50 @@ def test_alert_body_falls_back_to_vague_when_no_summary(monkeypatch):
     assert captured["subj"] == "New escalation: Calvin"
 
 
+def test_order_alert_body_uses_structured_order_payload(monkeypatch):
+    """ORDER escalations must alert operators with clean bakery order data."""
+    from dashboard import api as dapi
+    captured = {}
+
+    def fake_smtp(to, subj, body, **kw):
+        captured.update(to=to, subj=subj, body=body)
+
+    monkeypatch.setattr(dapi, "smtp_send", fake_smtp)
+    monkeypatch.setattr(dapi.state_registry, "get_alert_settings",
+                         lambda **k: {"channels": {"email": {"enabled": True,
+                                                              "destination": "ops@example.com"}}})
+    monkeypatch.setattr(dapi.state_registry, "record_alert_delivery",
+                         lambda *a, **k: None)
+    body = """=== ORDER PAYLOAD ===
+{
+  "type": "ORDER",
+  "customer_name": "Lisa",
+  "phone": "599999999",
+  "products": [
+    {"name": "White Chocolate Pecan Cookie", "quantity": 7, "unit_price": null, "subtotal": null}
+  ],
+  "delivery_address": "Purinchi",
+  "total": 42.0,
+  "currency": "XCG",
+  "comments": ""
+}
+
+=== CHAT LOG ===
+Lisa confirmed the order.
+"""
+    dapi._fire_escalation_alerts(
+        escalation_id=10, customer_name="Lisa", channel="whatsapp",
+        summary="[ORDER] Lisa - 7x White Chocolate Pecan Cookie",
+        mode="order", summary_dict=None, is_update=False, body=body)
+    assert captured["subj"] == "New order: Lisa - XCG 42.0"
+    assert "Name: Lisa" in captured["body"]
+    assert "Phone: 599999999" in captured["body"]
+    assert "Address: Purinchi" in captured["body"]
+    assert "- 7 x White Chocolate Pecan Cookie" in captured["body"]
+    assert "Price: XCG 42.0" in captured["body"]
+    assert "Action: Confirm this order with the customer" in captured["body"]
+
+
 def test_alert_subject_specific_for_scheduling_update(monkeypatch):
     """Brief 239: when intent=scheduling AND is_update AND proposedTimes
     non-empty, subject names the new time."""

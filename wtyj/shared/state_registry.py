@@ -2047,10 +2047,19 @@ def create_pending_notification(notification_type: str, channel: str,
             except Exception:
                 actual_mode = None
             try:
-                _alert_dispatcher(row_id, customer_name, channel, subject,
-                                  mode=actual_mode,
-                                  summary_dict=summary_dict,
-                                  is_update=is_update)
+                try:
+                    _alert_dispatcher(row_id, customer_name, channel, subject,
+                                      mode=actual_mode,
+                                      summary_dict=summary_dict,
+                                      body=body,
+                                      is_update=is_update)
+                except TypeError as exc:
+                    if "body" not in str(exc):
+                        raise
+                    _alert_dispatcher(row_id, customer_name, channel, subject,
+                                      mode=actual_mode,
+                                      summary_dict=summary_dict,
+                                      is_update=is_update)
             except Exception:
                 pass
 
