@@ -32,7 +32,7 @@ def test_marina_tool_schema_intents_enum():
     intents_prop = schema["input_schema"]["properties"]["intents"]
     assert intents_prop["type"] == "array"
     assert set(intents_prop["items"]["enum"]) == {
-        "booking", "inquiry", "cancellation", "reschedule",
+        "booking", "order", "inquiry", "cancellation", "reschedule",
         "complaint", "social", "off_topic",
     }
 

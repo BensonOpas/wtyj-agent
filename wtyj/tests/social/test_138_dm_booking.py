@@ -274,16 +274,20 @@ def test_dm_reply_sent_via_zernio(mock_orchestrator, mock_typing, mock_send):
         _cleanup(conv_id)
 
 
-# --- Test 7: User message stored AFTER orchestrator call (not before) ---
+# --- Test 7: User message stored BEFORE orchestrator call for reliability ---
 @patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_typing_indicator")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
-def test_dm_user_message_stored_after_orchestrator(mock_orchestrator, mock_typing, mock_send):
+def test_dm_user_message_stored_before_orchestrator(mock_orchestrator, mock_typing, mock_send):
     from agents.social.webhook_server import _process_zernio_event
     conv_id = "conv_138_ordering"
     _cleanup(conv_id)
 
-    # Track whether dm_store_message was called before the orchestrator
+    # Track whether dm_store_message was called before the orchestrator.
+    # Current reliability contract stores the inbound before model/order work
+    # so a crash still leaves the customer's message visible to operators.
+    # handle_incoming_whatsapp_message receives inbound_already_stored=True
+    # and removes that exact inbound from prompt history to avoid duplication.
     store_calls_at_orchestrator_time = []
 
     def _orchestrator_side_effect(msg, **kwargs):
@@ -304,13 +308,11 @@ def test_dm_user_message_stored_after_orchestrator(mock_orchestrator, mock_typin
         payload = _make_zernio_payload(conv_id, "Order test message")
         _process_zernio_event(payload)
 
-        # At the time the orchestrator was called, user message should NOT
-        # have been in the database yet
         assert len(store_calls_at_orchestrator_time) == 1
-        assert store_calls_at_orchestrator_time[0] == 0, \
-            "User message was stored BEFORE orchestrator call — Marina would see it twice"
+        assert store_calls_at_orchestrator_time[0] == 1, \
+            "User message must be stored BEFORE orchestrator call for inbound reliability"
 
-        # After the function completes, the message SHOULD be stored
+        # After the function completes, the message should still be stored once.
         history = state_registry.dm_get_history(conv_id, "instagram_dm", limit=50)
         user_msgs = [m for m in history if m["role"] == "user"
                      and "Order test message" in m.get("text", "")]

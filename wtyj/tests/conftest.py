@@ -29,14 +29,30 @@ def _bypass_tenant_guard_in_tests():
     to pop from config_loader._cache directly. The Brief 238 tests inject
     their own allowlist by patching shared.config_loader.get_raw, which
     overrides this strip at the function-call level (the patched function
-    returns their fake_cfg directly without going through _cache)."""
+    returns their fake_cfg directly without going through _cache).
+
+    Many older tests mutate config_loader._cache directly. Reset the path
+    and cache before/after every test so one test's temporary tenant config
+    cannot leak into unrelated BlueMarlin prompt/config assertions.
+    """
     from shared import config_loader
+    if os.path.exists(_BM_CLIENT_CONFIG):
+        config_loader._CONFIG_PATH = _BM_CLIENT_CONFIG
+        os.environ["CLIENT_CONFIG_PATH"] = _BM_CLIENT_CONFIG
+    config_loader._cache = {}
     config_loader._load()  # ensure cache populated
     if "channel_account_allowlist" in config_loader._cache:
-        saved = config_loader._cache.pop("channel_account_allowlist")
+        config_loader._cache.pop("channel_account_allowlist")
         try:
             yield
         finally:
-            config_loader._cache["channel_account_allowlist"] = saved
+            config_loader._CONFIG_PATH = _BM_CLIENT_CONFIG
+            os.environ["CLIENT_CONFIG_PATH"] = _BM_CLIENT_CONFIG
+            config_loader._cache = {}
     else:
-        yield
+        try:
+            yield
+        finally:
+            config_loader._CONFIG_PATH = _BM_CLIENT_CONFIG
+            os.environ["CLIENT_CONFIG_PATH"] = _BM_CLIENT_CONFIG
+            config_loader._cache = {}

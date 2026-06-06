@@ -26,6 +26,9 @@ def mock_deps():
         }
         mock_sr.wa_get_history.return_value = []
         mock_sr.customer_lookup.return_value = None
+        mock_sr.match_ignored_contact.return_value = None
+        mock_sr.customer_lookup_or_create.return_value = {"id": 1, "display_name": "Test"}
+        mock_sr.customer_get_full.return_value = {}
 
         yield {
             "marina": mock_marina,

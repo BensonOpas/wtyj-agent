@@ -31,6 +31,7 @@ def test_ignored_phone_dropped_at_webhook(
         "text": "yo",
     }
     mock_state.wa_has_been_processed.return_value = False
+    mock_state.match_ignored_contact.return_value = None
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
     _process_zernio_event({"event": "message.received", "data": {}})
@@ -59,6 +60,7 @@ def test_non_ignored_phone_proceeds(mock_typing, mock_parse, mock_config, mock_s
         "text": "hello",
     }
     mock_state.wa_has_been_processed.return_value = False
+    mock_state.match_ignored_contact.return_value = None
     # Brief 220: state_registry.get_blocked must return False so the new
     # block check (added after the ignored_phones check) doesn't drop
     # this otherwise-allowed message. Mock state defaults to MagicMock,

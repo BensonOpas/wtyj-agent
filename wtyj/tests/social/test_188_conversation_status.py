@@ -126,6 +126,7 @@ def test_after_resolve_normal_ai_path(mock_sr, mock_marina, mock_sheets, mock_co
     mock_sr.dm_get_history.return_value = []
     mock_sr.customer_lookup_or_create.return_value = {"id": 1, "display_name": "Test"}
     mock_sr.customer_get_full.return_value = {}
+    mock_sr.match_ignored_contact.return_value = None
 
     # Configure marina to return a simple inquiry response (no booking fields)
     mock_marina.process_message.return_value = {
