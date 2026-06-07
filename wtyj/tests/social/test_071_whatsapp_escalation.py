@@ -63,6 +63,56 @@ def test_fully_escalated_guard_returns_holding_reply(mock_process):
     _cleanup_phone(phone)
 
 
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_fully_escalated_guard_can_return_customer_media(mock_process, monkeypatch):
+    """Fully escalated Wibrandt threads still attach product images."""
+    phone = "TEST_071_ESC_MEDIA"
+    _cleanup_phone(phone)
+    state_registry.wa_save_booking_state(phone, {}, {"fully_escalated": True})
+    state_registry.wa_store_message(
+        phone, "user", "How does the Cinnamon Cardamom Twist look?"
+    )
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://api.unboks.org")
+    monkeypatch.setattr(
+        "agents.social.social_agent.config_loader.get_raw",
+        lambda: {"tenant_slug": "wibrandt", "business": {"name": "Wibrandt"}},
+    )
+    monkeypatch.setattr(
+        "agents.social.social_agent.state_registry.get_photos",
+        lambda limit=200: [
+            {
+                "id": 6,
+                "filename": "wibrandt-cinnamon-twist-ang5.jpg",
+                "original_filename": "cinnamon.jpg",
+                "tags": [
+                    "The Cinnamon Twist - 5 ANG - buttery and flaky.",
+                    "The Cinnamon Twist",
+                    "cinnamon",
+                    "cardamom",
+                ],
+                "service_key": "knowledge:info_update:wibrandt-cinnamon-twist",
+                "source": "knowledge_media",
+                "source_id": "wibrandt-cinnamon-twist",
+            },
+        ],
+    )
+    mock_process.return_value = _base_result(
+        reply=(
+            "The Cinnamon Cardamom Twist is soft and buttery.\n\n"
+            "You can also find more photos on our Instagram: "
+            "https://www.instagram.com/wibrandtbakehouse"
+        ),
+    )
+
+    msg = {"from": phone, "text": "Yes pls", "from_name": "Test"}
+    reply = handle_incoming_whatsapp_message(msg, include_media=True)
+
+    assert reply["media"]["id"] == "6"
+    assert "instagram.com" not in reply["text"]
+    assert "Cinnamon Cardamom Twist" in reply["text"]
+    _cleanup_phone(phone)
+
+
 # --- Test 2: Fully escalated guard filters relay flags ---
 
 @patch("agents.social.social_agent.marina_agent.process_message")

@@ -159,7 +159,8 @@ def _photo_text(photo: dict) -> str:
     return " ".join(str(p) for p in parts if p)
 
 
-def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict) -> dict | None:
+def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict,
+                           history: list[dict] | None = None) -> dict | None:
     """Return the best matching tenant media item for a sales/info reply.
 
     The media library is generic: bakeries upload products, real-estate
@@ -167,9 +168,15 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
     item. We score against image captions/tags and only attach one relevant
     image per reply so the agent helps sell without spamming the customer.
     """
+    history_text = " ".join(
+        str(msg.get("text") or "")
+        for msg in (history or [])[-6:]
+        if str(msg.get("role") or "") in {"user", "assistant"}
+    )
     query_text = " ".join([
         text or "",
         reply_text or "",
+        history_text,
         fields.get("product_name", ""),
         fields.get("service_name", ""),
         fields.get("property_name", ""),
@@ -236,6 +243,22 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
         "filename": str(photo.get("filename") or ""),
         "score": best[0],
     }
+
+
+def _strip_media_fallback_links(reply_text: str) -> str:
+    """Remove Instagram/Facebook fallback copy when an actual image is attached."""
+    paragraphs = re.split(r"\n\s*\n", str(reply_text or "").strip())
+    kept = []
+    for paragraph in paragraphs:
+        lower = paragraph.lower()
+        if "instagram.com" in lower or "facebook.com" in lower:
+            continue
+        if "more photos on our instagram" in lower:
+            continue
+        if "find more photos" in lower and "instagram" in lower:
+            continue
+        kept.append(paragraph.strip())
+    return "\n\n".join(p for p in kept if p).strip() or str(reply_text or "").strip()
 
 
 def _is_wibrandt_order_tenant():
@@ -735,6 +758,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 mode=_esc_mode)
             bm_logger.log("whatsapp_escalated_re_escalation", phone=phone)
 
+        selected_media = None
+        if include_media and channel == "whatsapp" and esc_reply:
+            selected_media = _select_customer_media(text, esc_reply, fields, flags, history)
+            if selected_media:
+                flags["last_media_id_sent"] = selected_media["id"]
+                esc_reply = _strip_media_fallback_links(esc_reply)
+                bm_logger.log(
+                    "customer_media_selected_escalated",
+                    phone=phone,
+                    media_id=selected_media["id"],
+                    filename=selected_media["filename"][:120],
+                    score=selected_media["score"],
+                )
+
         # Record reply timestamp + persist (early return bypasses end-of-function persistence)
         if esc_reply:
             _upsert_appointment_signal(esc_reply)
@@ -742,6 +779,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _reply_times.append(int(time.time()))
             flags["reply_times"] = _reply_times
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
+        if include_media:
+            return {
+                "text": esc_reply,
+                "media": selected_media,
+            }
         return esc_reply
 
     # Brief 188: conversation is being handled by AI → status "pending"
@@ -1391,9 +1433,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
 
     selected_media = None
     if include_media and channel == "whatsapp" and not result.get("requires_human"):
-        selected_media = _select_customer_media(text, reply_text, fields, flags)
+        selected_media = _select_customer_media(text, reply_text, fields, flags, history)
         if selected_media:
             flags["last_media_id_sent"] = selected_media["id"]
+            reply_text = _strip_media_fallback_links(reply_text)
             bm_logger.log(
                 "customer_media_selected",
                 phone=phone,
