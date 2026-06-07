@@ -133,7 +133,9 @@ def _candidate_zernio_account_ids(social_publisher) -> list[str]:
     return candidates
 
 
-def send_whatsapp_message(customer_id: str, text: str) -> bool:
+def send_whatsapp_message(customer_id: str, text: str,
+                          attachment_url: str = "",
+                          attachment_type: str = "image") -> bool:
     """Send a DM via Zernio Inbox API if customer_id is a Zernio conversation_id,
     otherwise fall back to the legacy Meta WhatsApp Cloud API. Returns True on success.
 
@@ -144,6 +146,11 @@ def send_whatsapp_message(customer_id: str, text: str) -> bool:
     the winning account so repeat sends bypass the fan-out on the fast path.
     """
     if not _is_zernio_conversation_id(customer_id):
+        if attachment_url:
+            log("whatsapp_attachment_legacy_meta_unsupported",
+                to=customer_id[:20],
+                attachment_type=attachment_type)
+            return False
         return send_text_message(to=customer_id, text=text)
 
     # Deferred imports to avoid circular dependency with social_publisher
@@ -156,7 +163,8 @@ def send_whatsapp_message(customer_id: str, text: str) -> bool:
     if cached:
         if not is_account_allowed(cached, direction="outbound"):
             _zernio_account_cache.pop(customer_id, None)
-        elif send_dm_reply(customer_id, cached, text):
+        elif _send_zernio_candidate(send_dm_reply, customer_id, cached, text,
+                                    attachment_url, attachment_type):
             return True
         else:
             # Cache miss (account may have been reconnected with a new id) — fall through
@@ -168,7 +176,8 @@ def send_whatsapp_message(customer_id: str, text: str) -> bool:
     for account_id in _candidate_zernio_account_ids(social_publisher):
         if not is_account_allowed(account_id, direction="outbound"):
             continue
-        if send_dm_reply(customer_id, account_id, text):
+        if _send_zernio_candidate(send_dm_reply, customer_id, account_id, text,
+                                  attachment_url, attachment_type):
             _zernio_account_cache[customer_id] = account_id
             log("zernio_send_platform_resolved",
                 conversation_id=customer_id[:20],
@@ -177,3 +186,13 @@ def send_whatsapp_message(customer_id: str, text: str) -> bool:
 
     log("zernio_send_all_platforms_failed", conversation_id=customer_id[:20])
     return False
+
+
+def _send_zernio_candidate(send_dm_reply, customer_id: str, account_id: str,
+                           text: str, attachment_url: str,
+                           attachment_type: str) -> bool:
+    if attachment_url:
+        return send_dm_reply(customer_id, account_id, text,
+                             attachment_url=attachment_url,
+                             attachment_type=attachment_type)
+    return send_dm_reply(customer_id, account_id, text)

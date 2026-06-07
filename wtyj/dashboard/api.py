@@ -1779,6 +1779,44 @@ _KNOWLEDGE_DIR = os.path.join(
 os.makedirs(_KNOWLEDGE_DIR, exist_ok=True)
 
 _KNOWLEDGE_MAX_BYTES = 25 * 1024 * 1024  # match SR's frontend cap
+_KNOWLEDGE_MEDIA_MAX_BYTES = 10 * 1024 * 1024
+_KNOWLEDGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _knowledge_media_service_key(source: str, knowledge_id: str) -> str:
+    safe_source = re.sub(r"[^a-zA-Z0-9_-]+", "_", (source or "info_update"))[:40]
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", (knowledge_id or ""))[:80]
+    return f"knowledge:{safe_source}:{safe_id}"
+
+
+def _public_media_url(filename: str) -> str:
+    slug = _current_tenant_slug()
+    if not slug:
+        return ""
+    base = os.environ.get("PUBLIC_API_BASE_URL", "https://api.unboks.org").rstrip("/")
+    return (
+        f"{base}/api/{urllib.parse.quote(slug)}/dashboard/api/public/media/"
+        f"{urllib.parse.quote(filename)}"
+    )
+
+
+def _knowledge_media_shape(photo: dict, source: str, knowledge_id: str) -> dict:
+    caption = ""
+    tags = photo.get("tags") if isinstance(photo, dict) else []
+    if isinstance(tags, list) and tags:
+        caption = str(tags[0])
+    return {
+        "id": str(photo["id"]),
+        "knowledgeSource": source or "info_update",
+        "knowledgeId": str(knowledge_id),
+        "filename": photo.get("filename", ""),
+        "originalFilename": photo.get("original_filename", ""),
+        "mimeType": "image/jpeg",
+        "sizeBytes": int(photo.get("file_size") or 0),
+        "caption": caption,
+        "url": _public_media_url(photo.get("filename", "")),
+        "uploadedAt": photo.get("uploaded_at", ""),
+    }
 
 
 @router.post("/knowledge/files", dependencies=[Depends(_check_auth)])
@@ -1836,6 +1874,104 @@ async def upload_knowledge_file(file: UploadFile = File(...)):
 async def list_knowledge_files():
     """Brief 230: return all knowledge files in SR's KnowledgeFile shape."""
     return state_registry.knowledge_files_list()
+
+
+@router.get("/knowledge/media", dependencies=[Depends(_check_auth)])
+async def list_knowledge_media(knowledge_id: str = Query(...),
+                               source: str = Query("info_update")):
+    """List tenant-scoped images attached to a knowledge/SOT item."""
+    key = _knowledge_media_service_key(source, knowledge_id)
+    photos = state_registry.get_photos(service_key=key, limit=100)
+    return {
+        "media": [
+            _knowledge_media_shape(photo, source, knowledge_id)
+            for photo in photos
+        ]
+    }
+
+
+@router.post("/knowledge/media", dependencies=[Depends(_check_auth)])
+async def upload_knowledge_media(
+        knowledge_id: str = Form(...),
+        source: str = Form("info_update"),
+        caption: str = Form(""),
+        file: UploadFile = File(...)):
+    """Upload an image for customer-facing product/property/menu photos."""
+    if not knowledge_id.strip():
+        raise HTTPException(status_code=400, detail="knowledge_id is required")
+    content_type = (file.content_type or "").lower()
+    if content_type not in _KNOWLEDGE_MEDIA_TYPES:
+        raise HTTPException(status_code=400, detail="Use a JPG, PNG, or WebP image.")
+    data = await file.read()
+    if len(data) > _KNOWLEDGE_MEDIA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image is over 10 MB.")
+    try:
+        Image.open(io.BytesIO(data)).verify()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    filename, width, height, file_size = _process_upload(data, 0)
+    parsed_caption = caption.strip()
+    key = _knowledge_media_service_key(source, knowledge_id)
+    photo_id = state_registry.save_photo(
+        filename=filename,
+        original_filename=file.filename or "image.jpg",
+        tags=[parsed_caption] if parsed_caption else [],
+        service_key=key,
+        source="knowledge_media",
+        source_id=str(knowledge_id),
+        width=width,
+        height=height,
+        file_size=file_size,
+    )
+    new_filename = f"photo_{photo_id}_{secrets.token_hex(4)}.jpg"
+    os.rename(
+        os.path.join(_PHOTOS_DIR, filename),
+        os.path.join(_PHOTOS_DIR, new_filename),
+    )
+    state_registry.update_photo_filename(photo_id, new_filename)
+    photo = state_registry.get_photo_by_id(photo_id)
+    bm_logger.log("knowledge_media_uploaded",
+                  photo_id=photo_id,
+                  knowledge_id=str(knowledge_id)[:80],
+                  size_bytes=file_size)
+    return _knowledge_media_shape(photo, source, knowledge_id)
+
+
+@router.delete("/knowledge/media/{media_id}", dependencies=[Depends(_check_auth)])
+async def delete_knowledge_media(media_id: str):
+    try:
+        photo_id = int(media_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    filename = state_registry.delete_photo(photo_id)
+    if not filename:
+        raise HTTPException(status_code=404, detail="Image not found")
+    try:
+        os.remove(os.path.join(_PHOTOS_DIR, filename))
+    except FileNotFoundError:
+        pass
+    return {"ok": True}
+
+
+@router.get("/public/media/{filename}")
+async def public_media(filename: str):
+    """Public media endpoint for provider fetches.
+
+    Zernio requires a publicly accessible attachment URL. We only serve files
+    that are registered in the tenant's photo_library and use basename checks
+    so arbitrary local paths cannot be fetched.
+    """
+    safe_name = os.path.basename(filename)
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="Media not found")
+    photo = state_registry.get_photo_by_filename(safe_name)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Media not found")
+    path = os.path.join(_PHOTOS_DIR, safe_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Media file missing")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 # === Brief 260: cloud knowledge connector status endpoint ===

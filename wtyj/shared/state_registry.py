@@ -4168,6 +4168,29 @@ def get_photo_by_id(photo_id: int) -> dict | None:
     }
 
 
+def get_photo_by_filename(filename: str) -> dict | None:
+    """Get a single photo by stored filename."""
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, filename, original_filename, tags_json, service_key, "
+        "source, source_id, width, height, file_size, used_count, uploaded_at "
+        "FROM photo_library WHERE filename = ?",
+        (filename,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0], "filename": row[1], "original_filename": row[2],
+        "tags": json.loads(row[3] or "[]"), "service_key": row[4],
+        "source": row[5], "source_id": row[6], "width": row[7],
+        "height": row[8], "file_size": row[9], "used_count": row[10],
+        "uploaded_at": row[11],
+    }
+
+
 def get_photo_by_source_id(source_id: str) -> dict | None:
     """Get a photo by external source ID (e.g. Google Drive file ID)."""
     if not source_id:

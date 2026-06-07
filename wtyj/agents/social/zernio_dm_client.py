@@ -5,6 +5,9 @@
 import hashlib
 import hmac
 import os
+import urllib.parse
+
+import requests as http_requests
 
 from late import Late
 from shared import bm_logger
@@ -96,8 +99,18 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
     }
 
 
-def send_dm_reply(conversation_id: str, account_id: str, text: str) -> bool:
+def send_dm_reply(conversation_id: str, account_id: str, text: str,
+                  attachment_url: str = "",
+                  attachment_type: str = "image") -> bool:
     """Send a DM reply via Zernio Inbox API. Returns True on success."""
+    if attachment_url:
+        return send_dm_reply_with_attachment(
+            conversation_id=conversation_id,
+            account_id=account_id,
+            text=text,
+            attachment_url=attachment_url,
+            attachment_type=attachment_type,
+        )
     client = _get_client()
     if not client:
         return False
@@ -112,6 +125,59 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str) -> bool:
     except Exception as e:
         bm_logger.log("zernio_dm_send_failed", conversation_id=conversation_id[:20],
                        error=str(e)[:200])
+        return False
+
+
+def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
+                                  attachment_url: str,
+                                  attachment_type: str = "image") -> bool:
+    """Send a Zernio inbox message with a public attachment URL.
+
+    The current Python SDK wrapper only exposes text parameters for
+    send_inbox_message, so attachment sends use Zernio's documented REST shape.
+    """
+    api_key = os.environ.get("LATE_API_KEY", "")
+    if not api_key:
+        bm_logger.log("zernio_dm_no_api_key")
+        return False
+    if attachment_type not in {"image", "video", "audio", "file"}:
+        bm_logger.log("zernio_dm_attachment_invalid_type",
+                      attachment_type=attachment_type)
+        return False
+    url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}/messages"
+    )
+    body = {
+        "accountId": account_id,
+        "message": text or "",
+        "attachmentUrl": attachment_url,
+        "attachmentType": attachment_type,
+    }
+    try:
+        resp = http_requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=15,
+        )
+        if 200 <= resp.status_code < 300:
+            bm_logger.log("zernio_dm_attachment_sent",
+                          conversation_id=conversation_id[:20],
+                          attachment_type=attachment_type)
+            return True
+        bm_logger.log("zernio_dm_attachment_send_failed",
+                      conversation_id=conversation_id[:20],
+                      status=resp.status_code,
+                      error=resp.text[:200])
+        return False
+    except Exception as e:
+        bm_logger.log("zernio_dm_attachment_send_failed",
+                      conversation_id=conversation_id[:20],
+                      error=str(e)[:200])
         return False
 
 

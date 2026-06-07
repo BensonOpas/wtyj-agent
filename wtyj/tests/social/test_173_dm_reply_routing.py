@@ -136,3 +136,37 @@ def test_strict_allowlist_blocks_generic_active_account_after_allowed_fails(
 
     assert ok is False
     assert [c[0][1] for c in mock_send.call_args_list] == ["tenant_allowed_acc"]
+
+
+@patch("shared.config_loader.get_raw")
+@patch("agents.social.zernio_dm_client.send_dm_reply")
+@patch("agents.social.social_publisher.get_account_id")
+def test_image_attachment_uses_allowlisted_zernio_account(
+        mock_get_account, mock_send, mock_get_raw):
+    _clear_cache()
+    mock_get_raw.return_value = {
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["tenant_allowed_acc"],
+        }
+    }
+    mock_get_account.return_value = "generic_active_acc"
+    mock_send.return_value = True
+
+    ok = whatsapp_client.send_whatsapp_message(
+        "2" * 24,
+        "Here is the product photo.",
+        attachment_url="https://api.unboks.org/api/wibrandt/dashboard/api/public/media/photo_1_abcd.jpg",
+        attachment_type="image",
+    )
+
+    assert ok is True
+    assert mock_send.call_args[0][:3] == (
+        "2" * 24,
+        "tenant_allowed_acc",
+        "Here is the product photo.",
+    )
+    assert mock_send.call_args.kwargs == {
+        "attachment_url": "https://api.unboks.org/api/wibrandt/dashboard/api/public/media/photo_1_abcd.jpg",
+        "attachment_type": "image",
+    }
