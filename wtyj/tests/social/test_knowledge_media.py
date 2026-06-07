@@ -37,6 +37,7 @@ def _png_bytes() -> bytes:
 
 
 def test_knowledge_media_upload_lists_and_serves_public_image_url(monkeypatch):
+    monkeypatch.setenv("TENANT_ID", "media-test")
     monkeypatch.setenv("TENANT_SLUG", "media-test")
     _reset_photos()
     token = _login()
