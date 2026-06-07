@@ -1342,6 +1342,300 @@ def wa_get_booking_state(phone: str) -> dict:
     }
 
 
+def _order_coerce_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _order_coerce_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _order_lines_from_fields(fields: dict) -> list:
+    products = fields.get("products") or []
+    lines = []
+    if isinstance(products, list):
+        for item in products:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            qty = _order_coerce_int(
+                item.get("quantity"),
+                _order_coerce_int(fields.get("quantity") or fields.get("guests"), 1),
+            )
+            unit_price = _order_coerce_float(item.get("unit_price"))
+            subtotal = _order_coerce_float(item.get("subtotal"))
+            if subtotal is None and unit_price is not None:
+                subtotal = unit_price * qty
+            lines.append({
+                "name": name,
+                "quantity": qty,
+                "unit_price": unit_price,
+                "subtotal": subtotal,
+            })
+    if not lines:
+        name = str(fields.get("product_name") or fields.get("service_name") or "").strip()
+        if name:
+            qty = _order_coerce_int(fields.get("quantity") or fields.get("guests"), 1)
+            unit_price = _order_coerce_float(fields.get("unit_price"))
+            subtotal = _order_coerce_float(fields.get("subtotal"))
+            if subtotal is None and unit_price is not None:
+                subtotal = unit_price * qty
+            lines.append({
+                "name": name,
+                "quantity": qty,
+                "unit_price": unit_price,
+                "subtotal": subtotal,
+            })
+    return lines
+
+
+def _order_total_from_fields(fields: dict, lines: list):
+    total = _order_coerce_float(fields.get("order_total") or fields.get("total"))
+    if total is not None:
+        return total
+    subtotals = [line.get("subtotal") for line in lines if line.get("subtotal") is not None]
+    return sum(subtotals) if subtotals else None
+
+
+def _order_address_from_fields(fields: dict) -> str:
+    return str(fields.get("delivery_address") or fields.get("address") or "").strip()
+
+
+def _order_payload_from_state(conversation_id: str, fields: dict,
+                              fallback_name: str = "",
+                              fallback_channel: str = "whatsapp") -> dict:
+    lines = _order_lines_from_fields(fields or {})
+    total = _order_total_from_fields(fields or {}, lines)
+    name = str(
+        (fields or {}).get("customer_name")
+        or (fields or {}).get("name")
+        or fallback_name
+        or ""
+    ).strip()
+    return {
+        "type": "ORDER",
+        "customer_name": name,
+        "phone": str((fields or {}).get("phone") or conversation_id or "").strip(),
+        "products": lines,
+        "delivery_address": _order_address_from_fields(fields or {}),
+        "total": total,
+        "currency": str((fields or {}).get("currency") or "XCG").strip(),
+        "comments": str(
+            (fields or {}).get("comments")
+            or (fields or {}).get("special_requests")
+            or ""
+        ).strip(),
+        "channel": fallback_channel or "whatsapp",
+        "customer_id": conversation_id,
+    }
+
+
+def _extract_order_payload_from_body(body: str) -> dict:
+    if not body:
+        return {}
+    marker = "=== ORDER PAYLOAD ==="
+    idx = body.find(marker)
+    if idx < 0:
+        return {}
+    raw = body[idx + len(marker):].strip()
+    next_marker = re.search(r"\n\s*=== ", raw)
+    if next_marker:
+        raw = raw[:next_marker.start()].strip()
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _active_order_escalation_for(conn, conversation_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT id, channel, customer_name, subject, body, status, created_at, mode "
+        "FROM pending_notifications "
+        "WHERE customer_id = ? AND notification_type = 'escalation' "
+        "AND mode = 'order' AND status != 'resolved' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (conversation_id,),
+    ).fetchone()
+    if not row:
+        return None
+    payload = _extract_order_payload_from_body(row[4] or "")
+    return {
+        "id": row[0],
+        "channel": row[1] or "whatsapp",
+        "customer_name": row[2] or "",
+        "subject": row[3] or "",
+        "body": row[4] or "",
+        "status": row[5] or "pending",
+        "created_at": row[6] or "",
+        "mode": row[7] or "order",
+        "order_payload": payload,
+    }
+
+
+def _order_state_from_fields_and_flags(conversation_id: str, fields: dict,
+                                       flags: dict, last_activity: str,
+                                       channel: str = "whatsapp",
+                                       fallback_name: str = "") -> dict | None:
+    fields = fields or {}
+    flags = flags or {}
+    lines = _order_lines_from_fields(fields)
+    order_like = bool(
+        lines
+        or fields.get("product_name")
+        or fields.get("quantity")
+        or fields.get("delivery_address")
+        or fields.get("order_total")
+        or flags.get("awaiting_order_confirmation")
+        or flags.get("order_confirmed")
+        or flags.get("waiting_for_human_order_confirmation")
+        or flags.get("order_escalation_id")
+    )
+    if not order_like:
+        return None
+    status = "collecting_details"
+    if flags.get("awaiting_order_confirmation"):
+        status = "awaiting_customer_confirmation"
+    if flags.get("waiting_for_human_order_confirmation") or flags.get("order_escalation_id"):
+        status = "awaiting_human_confirmation"
+    payload = _order_payload_from_state(conversation_id, fields, fallback_name, channel)
+    return {
+        "conversation_id": conversation_id,
+        "customer_name": payload.get("customer_name") or fallback_name or conversation_id,
+        "intent": "order",
+        "is_order": True,
+        "order_status": status,
+        "order_payload": payload,
+        "escalation_mode": "order" if status == "awaiting_human_confirmation" else None,
+        "escalation_id": flags.get("order_escalation_id"),
+        "human_action_required": status == "awaiting_human_confirmation",
+        "ai_muted": bool(flags.get("fully_escalated")),
+        "badge_type": "order",
+        "queue_type": "orders",
+        "next_operator_action": (
+            "Confirm this order with the customer."
+            if status == "awaiting_human_confirmation"
+            else "Waiting for the customer to confirm the order summary."
+            if status == "awaiting_customer_confirmation"
+            else "Collect order details."
+        ),
+        "channel": channel or "whatsapp",
+        "created_at": last_activity or datetime.now(timezone.utc).isoformat(),
+        "updated_at": last_activity or datetime.now(timezone.utc).isoformat(),
+        "source": "booking_state",
+    }
+
+
+def get_order_state_for_conversation(conversation_id: str) -> dict | None:
+    if not conversation_id:
+        return None
+    conn = _get_conn()
+    try:
+        escalation = _active_order_escalation_for(conn, conversation_id)
+        state_row = conn.execute(
+            "SELECT fields_json, flags_json, last_activity "
+            "FROM whatsapp_booking_state WHERE phone = ?",
+            (conversation_id,),
+        ).fetchone()
+        fields = json.loads(state_row[0] or "{}") if state_row else {}
+        flags = json.loads(state_row[1] or "{}") if state_row else {}
+        last_activity = state_row[2] if state_row else ""
+        sender_row = conn.execute(
+            "SELECT sender_name, channel FROM whatsapp_threads "
+            "WHERE phone = ? AND role = 'user' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        fallback_name = sender_row[0] if sender_row and sender_row[0] else ""
+        channel = sender_row[1] if sender_row and sender_row[1] else "whatsapp"
+    finally:
+        conn.close()
+    state = _order_state_from_fields_and_flags(
+        conversation_id, fields, flags, last_activity, channel, fallback_name)
+    if escalation:
+        payload = escalation.get("order_payload") or {}
+        if not payload or not payload.get("products"):
+            payload = (state or {}).get("order_payload") or payload
+        return {
+            "conversation_id": conversation_id,
+            "customer_name": payload.get("customer_name") or escalation.get("customer_name") or fallback_name or conversation_id,
+            "intent": "order",
+            "is_order": True,
+            "order_status": "awaiting_human_confirmation",
+            "order_payload": payload,
+            "escalation_mode": "order",
+            "escalation_id": escalation.get("id"),
+            "human_action_required": True,
+            "ai_muted": True,
+            "badge_type": "order",
+            "queue_type": "orders",
+            "next_operator_action": "Confirm this order with the customer.",
+            "channel": escalation.get("channel") or channel,
+            "created_at": escalation.get("created_at") or (state or {}).get("created_at"),
+            "updated_at": escalation.get("created_at") or (state or {}).get("updated_at"),
+            "source": "order_escalation",
+            "subject": escalation.get("subject") or "",
+        }
+    return state
+
+
+def list_order_queue() -> list:
+    """Return active order queue items from explicit order state.
+
+    This is intentionally separate from appointments. Orders can be
+    waiting on customer confirmation or waiting for human confirmation;
+    only the latter is also an escalation.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT w.phone, w.fields_json, w.flags_json, w.last_activity, "
+            "COALESCE(cs.deleted, 0), COALESCE(cs.blocked, 0), "
+            "(SELECT sender_name FROM whatsapp_threads t "
+            " WHERE t.phone = w.phone AND t.role = 'user' AND t.sender_name != '' "
+            " ORDER BY t.created_at DESC LIMIT 1) AS sender_name, "
+            "(SELECT channel FROM whatsapp_threads t "
+            " WHERE t.phone = w.phone ORDER BY t.created_at DESC LIMIT 1) AS channel "
+            "FROM whatsapp_booking_state w "
+            "LEFT JOIN conversation_status cs ON w.phone = cs.conversation_id "
+            "WHERE COALESCE(cs.deleted, 0) = 0 AND COALESCE(cs.blocked, 0) = 0"
+        ).fetchall()
+        conversation_ids = {r[0] for r in rows}
+        esc_rows = conn.execute(
+            "SELECT customer_id FROM pending_notifications pn "
+            "LEFT JOIN conversation_status cs ON pn.customer_id = cs.conversation_id "
+            "WHERE pn.notification_type = 'escalation' AND pn.mode = 'order' "
+            "AND pn.status != 'resolved' "
+            "AND COALESCE(cs.deleted, 0) = 0 AND COALESCE(cs.blocked, 0) = 0"
+        ).fetchall()
+        conversation_ids.update(r[0] for r in esc_rows if r[0])
+    finally:
+        conn.close()
+
+    items = []
+    for cid in conversation_ids:
+        state = get_order_state_for_conversation(cid)
+        if not state:
+            continue
+        if state.get("order_status") not in (
+            "awaiting_customer_confirmation",
+            "awaiting_human_confirmation",
+            "confirmed",
+        ):
+            continue
+        items.append(state)
+    items.sort(key=lambda r: r.get("updated_at") or r.get("created_at") or "", reverse=True)
+    return items
+
+
 def wa_save_booking_state(phone: str, fields: dict, flags: dict,
                           completed_bookings: list = None):
     """Save/update booking state for a phone number."""
@@ -1859,6 +2153,21 @@ def wa_list_conversations() -> list:
             "message_count": count_row[0] if count_row else 0,
             "channel": channel,
         })
+        order_state = get_order_state_for_conversation(phone)
+        if order_state:
+            conversations[-1].update({
+                "intent": order_state.get("intent"),
+                "is_order": True,
+                "order_status": order_state.get("order_status"),
+                "order_payload": order_state.get("order_payload"),
+                "escalation_mode": order_state.get("escalation_mode"),
+                "human_action_required": order_state.get("human_action_required"),
+                "ai_muted": order_state.get("ai_muted"),
+                "badge_type": order_state.get("badge_type"),
+                "queue_type": order_state.get("queue_type"),
+                "next_operator_action": order_state.get("next_operator_action"),
+                "order_escalation_id": order_state.get("escalation_id"),
+            })
     conn.close()
     return conversations
 

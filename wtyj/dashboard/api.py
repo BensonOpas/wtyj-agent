@@ -2788,6 +2788,18 @@ async def get_conversation(phone: str):
         "messages": messages,
         "booking_state": booking_state,
     }
+    order_state = state_registry.get_order_state_for_conversation(phone)
+    if order_state:
+        response.update({
+            "intent": order_state.get("intent"),
+            "isOrder": True,
+            "orderStatus": order_state.get("order_status"),
+            "orderPayload": order_state.get("order_payload"),
+            "humanActionRequired": order_state.get("human_action_required"),
+            "badgeType": order_state.get("badge_type"),
+            "queueType": order_state.get("queue_type"),
+            "nextOperatorAction": order_state.get("next_operator_action"),
+        })
     response.update(_conversation_status_fields(phone))
     return response
 
@@ -3889,6 +3901,19 @@ async def list_appointments_endpoint():
     Returns under both `items` and `appointments` keys for envelope flex."""
     items = state_registry.appointments_list()
     return {"items": items, "appointments": items}
+
+
+@router.get("/orders", dependencies=[Depends(_check_auth)])
+async def list_orders_endpoint():
+    """Return the canonical active order queue.
+
+    Orders are not appointments. This endpoint exposes the explicit
+    order-state contract used by Nr2 so awaiting-customer-confirmation
+    orders, awaiting-human-confirmation orders, and order escalations all
+    render from one backend truth.
+    """
+    items = state_registry.list_order_queue()
+    return {"items": items, "orders": items, "connected": True}
 
 
 class ConfirmAppointmentRequest(BaseModel):

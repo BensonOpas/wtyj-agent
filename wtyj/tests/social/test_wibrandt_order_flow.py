@@ -81,6 +81,22 @@ def test_wibrandt_order_summary_waits_for_customer_confirmation(mock_process, _c
             if e["customer_id"] == phone
         ]
         assert escalations == []
+
+        order_state = state_registry.get_order_state_for_conversation(phone)
+        assert order_state is not None
+        assert order_state["is_order"] is True
+        assert order_state["order_status"] == "awaiting_customer_confirmation"
+        assert order_state["badge_type"] == "order"
+        assert order_state["queue_type"] == "orders"
+        assert order_state["human_action_required"] is False
+
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert len(queue) == 1
+        assert queue[0]["order_status"] == "awaiting_customer_confirmation"
+        assert queue[0]["order_payload"]["delivery_address"] == "Kaya Test 10"
     finally:
         _cleanup(phone)
 
@@ -155,6 +171,20 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
         assert state["flags"]["last_order_escalation_id"] == escalation["id"]
         assert "awaiting_order_confirmation" not in state["flags"]
         assert state_registry.get_active_escalation_mode(phone) == "order"
+
+        order_state = state_registry.get_order_state_for_conversation(phone)
+        assert order_state is not None
+        assert order_state["order_status"] == "awaiting_human_confirmation"
+        assert order_state["escalation_mode"] == "order"
+        assert order_state["human_action_required"] is True
+        assert order_state["escalation_id"] == escalation["id"]
+
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert len(queue) == 1
+        assert queue[0]["order_status"] == "awaiting_human_confirmation"
     finally:
         _cleanup(phone)
 
