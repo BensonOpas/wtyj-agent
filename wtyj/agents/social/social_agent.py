@@ -9,6 +9,8 @@ import string
 import time
 import json
 import uuid
+import os
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from shared import appointment_detector
 from shared import state_registry
@@ -53,6 +55,23 @@ _MAX_REPLIES_PER_HOUR = 50
 _REPLY_WINDOW_SECONDS = 3600
 _STALE_CONVERSATION_SECONDS = 86400  # 24 hours — matches wa_get_history window
 
+_MEDIA_TRIGGER_WORDS = {
+    "photo", "photos", "picture", "pictures", "image", "images", "pic",
+    "show", "see", "look", "looks", "info", "information", "details",
+    "available", "sell", "menu", "cookie", "cookies", "cake", "cakes",
+    "pastry", "pastries", "twist", "bread", "product", "products",
+    "house", "home", "apartment", "villa", "property", "properties",
+    "room", "rooms", "view", "bedroom", "bedrooms",
+}
+
+_MEDIA_STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "what", "which", "have",
+    "has", "can", "you", "your", "our", "are", "about", "info", "please",
+    "hello", "hi", "hey", "price", "prices", "ang", "xcg", "eur", "usd",
+    "image", "images", "photo", "photos", "picture", "pictures", "show",
+    "details", "information", "product", "products", "available",
+}
+
 
 def _day_matches(day_name, days_available):
     """Check if day_name matches the service's days_available string."""
@@ -96,6 +115,127 @@ def _build_action_context(flags):
             "Do NOT generate a new booking summary."
         )
     return ""
+
+
+def _tenant_slug() -> str:
+    raw = config_loader.get_raw() or {}
+    business = raw.get("business") or {}
+    return str(raw.get("tenant_slug") or raw.get("slug") or business.get("slug") or "").strip().lower()
+
+
+def _public_media_url(filename: str) -> str:
+    slug = _tenant_slug()
+    safe_name = os.path.basename(str(filename or ""))
+    if not slug or not safe_name:
+        return ""
+    base = os.environ.get("PUBLIC_API_BASE_URL", "https://api.unboks.org").rstrip("/")
+    return (
+        f"{base}/api/{urllib.parse.quote(slug)}/dashboard/api/public/media/"
+        f"{urllib.parse.quote(safe_name)}"
+    )
+
+
+def _media_tokens(text: str) -> set[str]:
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", str(text or "").lower()):
+        if len(token) < 3 or token in _MEDIA_STOPWORDS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _photo_text(photo: dict) -> str:
+    tags = photo.get("tags") if isinstance(photo, dict) else []
+    if not isinstance(tags, list):
+        tags = []
+    parts = [
+        photo.get("filename", ""),
+        photo.get("original_filename", ""),
+        photo.get("service_key", ""),
+        photo.get("source", ""),
+        photo.get("source_id", ""),
+        " ".join(str(t) for t in tags),
+    ]
+    return " ".join(str(p) for p in parts if p)
+
+
+def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict) -> dict | None:
+    """Return the best matching tenant media item for a sales/info reply.
+
+    The media library is generic: bakeries upload products, real-estate
+    tenants upload properties, and other tenants can upload any customer-facing
+    item. We score against image captions/tags and only attach one relevant
+    image per reply so the agent helps sell without spamming the customer.
+    """
+    query_text = " ".join([
+        text or "",
+        reply_text or "",
+        fields.get("product_name", ""),
+        fields.get("service_name", ""),
+        fields.get("property_name", ""),
+    ])
+    lower_query = query_text.lower()
+    if not any(word in lower_query for word in _MEDIA_TRIGGER_WORDS):
+        return None
+
+    query_tokens = _media_tokens(query_text)
+    if not query_tokens:
+        return None
+
+    try:
+        photos = state_registry.get_photos(limit=200)
+    except Exception as exc:
+        bm_logger.log("customer_media_lookup_failed", error=str(exc)[:200])
+        return None
+
+    best: tuple[int, dict] | None = None
+    last_sent_id = str(flags.get("last_media_id_sent") or "")
+    explicit_media_request = any(
+        word in lower_query for word in ("photo", "photos", "picture", "pictures", "image", "images", "show", "see")
+    )
+
+    for photo in photos:
+        filename = str(photo.get("filename") or "")
+        if not filename:
+            continue
+        media_text = _photo_text(photo)
+        media_tokens = _media_tokens(media_text)
+        overlap = query_tokens & media_tokens
+        score = len(overlap)
+        source_id = str(photo.get("source_id") or "").replace("-", " ").lower()
+        service_key = str(photo.get("service_key") or "").replace("-", " ").lower()
+        if source_id and source_id in lower_query:
+            score += 8
+        if service_key and service_key in lower_query:
+            score += 5
+        tags = photo.get("tags") if isinstance(photo.get("tags"), list) else []
+        title = str(tags[0] if tags else "").lower()
+        title_tokens = _media_tokens(title)
+        title_overlap = query_tokens & title_tokens
+        score += len(title_overlap) * 2
+
+        if score < 2:
+            continue
+        if str(photo.get("id")) == last_sent_id and not explicit_media_request:
+            continue
+        if best is None or score > best[0]:
+            best = (score, photo)
+
+    if best is None:
+        return None
+    photo = dict(best[1])
+    url = _public_media_url(photo.get("filename", ""))
+    if not url:
+        return None
+    tags = photo.get("tags") if isinstance(photo.get("tags"), list) else []
+    caption = str(tags[0]) if tags else str(photo.get("original_filename") or photo.get("filename") or "Image")
+    return {
+        "id": str(photo.get("id")),
+        "url": url,
+        "caption": caption,
+        "filename": str(photo.get("filename") or ""),
+        "score": best[0],
+    }
 
 
 def _is_wibrandt_order_tenant():
@@ -392,7 +532,8 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
 
 
 def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
-                                     inbound_already_stored: bool = False) -> str:
+                                     inbound_already_stored: bool = False,
+                                     include_media: bool = False) -> str | dict:
     """
     Process a WhatsApp message: full booking orchestrator.
     Fetch state + history -> build action_context -> call marina_agent ->
@@ -1248,6 +1389,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # Step 9: Strip remaining placeholders (safety net)
     reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
 
+    selected_media = None
+    if include_media and channel == "whatsapp" and not result.get("requires_human"):
+        selected_media = _select_customer_media(text, reply_text, fields, flags)
+        if selected_media:
+            flags["last_media_id_sent"] = selected_media["id"]
+            bm_logger.log(
+                "customer_media_selected",
+                phone=phone,
+                media_id=selected_media["id"],
+                filename=selected_media["filename"][:120],
+                score=selected_media["score"],
+            )
+
     # Record reply timestamp for anti-loop tracking
     if reply_text:
         _reply_times = flags.get("reply_times", [])
@@ -1260,4 +1414,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     bm_logger.log("whatsapp_agent_reply", phone=phone,
                   intents=result.get("intents", []), reply_length=len(reply_text))
 
+    if include_media:
+        return {
+            "text": reply_text,
+            "media": selected_media,
+        }
     return reply_text

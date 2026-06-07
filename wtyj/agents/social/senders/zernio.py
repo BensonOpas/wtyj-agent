@@ -11,11 +11,18 @@ class ZernioSender(Sender):
     """Sends replies via Zernio's Inbox API (covers all Zernio-routed channels)."""
 
     @classmethod
-    def send(cls, conversation_id: str, account_id: str, text: str) -> bool:
+    def send(cls, conversation_id: str, account_id: str, text: str,
+             attachment_url: str = "", attachment_type: str = "image") -> bool:
         # Brief 238 — tenant isolation: refuse outbound sends to accounts
         # not allowlisted in this tenant's client.json. Strict mode blocks
         # the call entirely; permissive mode logs and proceeds.
         from shared.tenant_guard import is_account_allowed
         if not is_account_allowed(account_id, direction="outbound"):
             return False
-        return send_dm_reply(conversation_id, account_id, text)
+        return send_dm_reply(
+            conversation_id,
+            account_id,
+            text,
+            attachment_url=attachment_url,
+            attachment_type=attachment_type,
+        )

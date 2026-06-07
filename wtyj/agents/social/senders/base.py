@@ -13,7 +13,8 @@ class Sender(ABC):
 
     @classmethod
     @abstractmethod
-    def send(cls, conversation_id: str, account_id: str, text: str) -> bool:
+    def send(cls, conversation_id: str, account_id: str, text: str,
+             attachment_url: str = "", attachment_type: str = "image") -> bool:
         """Send a reply to the given conversation.
 
         Args:
@@ -24,6 +25,8 @@ class Sender(ABC):
                 for Zernio so it knows which account is sending; may be
                 ignored by senders that don't need it).
             text: the reply text to deliver.
+            attachment_url: optional public media URL to send with the reply.
+            attachment_type: provider attachment type, defaults to image.
 
         Returns:
             True on successful send, False otherwise. Errors are logged by

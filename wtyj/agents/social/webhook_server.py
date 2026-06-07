@@ -357,6 +357,7 @@ def _flush_buffer(phone):
                     return  # exits the with _phone_lock block; _flush_buffer returns
                 # Zernio WhatsApp — check booking_flow toggle
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+                reply_media = None
                 if _booking_flow_on:
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
@@ -365,9 +366,16 @@ def _flush_buffer(phone):
                         text=combined_text,
                         sender_name=_zernio_sender,
                     )
-                    reply_text = handle_incoming_whatsapp_message(
+                    reply_result = handle_incoming_whatsapp_message(
                         final_msg, channel=_zernio_channel,
-                        inbound_already_stored=True)
+                        inbound_already_stored=True,
+                        include_media=True)
+                    reply_media = None
+                    if isinstance(reply_result, dict):
+                        reply_text = str(reply_result.get("text") or "")
+                        reply_media = reply_result.get("media") if isinstance(reply_result.get("media"), dict) else None
+                    else:
+                        reply_text = reply_result
                 else:
                     # Q&A only — use DM agent
                     _dm_msg = {
@@ -389,11 +397,20 @@ def _flush_buffer(phone):
                     )
                     reply_text = handle_incoming_dm(_dm_msg)
                 if reply_text:
-                    ok = send_reply(_zernio_channel, _zernio_conv, _zernio_acct, reply_text)
+                    attachment_url = str((reply_media or {}).get("url") or "")
+                    ok = send_reply(
+                        _zernio_channel,
+                        _zernio_conv,
+                        _zernio_acct,
+                        reply_text,
+                        attachment_url=attachment_url,
+                        attachment_type="image" if attachment_url else "image",
+                    )
                     if not ok:
                         log("zernio_reply_send_failed",
                             channel=_zernio_channel,
-                            conversation_id=_zernio_conv[:20])
+                            conversation_id=_zernio_conv[:20],
+                            media_attached=bool(attachment_url))
                         _mark_delivery_failed(
                             _zernio_channel, _zernio_conv, _zernio_sender,
                             ids, "provider returned false")
@@ -404,6 +421,14 @@ def _flush_buffer(phone):
                         role="assistant",
                         text=reply_text,
                     )
+                    if attachment_url:
+                        state_registry.increment_photo_used_count(int(reply_media["id"]))
+                        state_registry.dm_store_message(
+                            conversation_id=_zernio_conv,
+                            channel=_zernio_channel,
+                            role="system",
+                            text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                        )
                     state_registry.inbound_processing_bulk_update(
                         ids, "replied", reason="provider_send_ok")
                 else:

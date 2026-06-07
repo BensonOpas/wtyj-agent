@@ -35,7 +35,33 @@ def _cleanup(conversation_id):
 def test_zernio_sender_delegates_to_send_dm_reply(mock_dm_reply):
     mock_dm_reply.return_value = True
     result = ZernioSender.send("conv_abc", "acct_456", "hello")
-    mock_dm_reply.assert_called_once_with("conv_abc", "acct_456", "hello")
+    mock_dm_reply.assert_called_once_with(
+        "conv_abc",
+        "acct_456",
+        "hello",
+        attachment_url="",
+        attachment_type="image",
+    )
+    assert result is True
+
+
+@patch("agents.social.senders.zernio.send_dm_reply")
+def test_zernio_sender_passes_media_attachment(mock_dm_reply):
+    mock_dm_reply.return_value = True
+    result = ZernioSender.send(
+        "conv_abc",
+        "acct_456",
+        "Here is the product.",
+        attachment_url="https://api.unboks.org/api/wibrandt/dashboard/api/public/media/cookie.jpg",
+        attachment_type="image",
+    )
+    mock_dm_reply.assert_called_once_with(
+        "conv_abc",
+        "acct_456",
+        "Here is the product.",
+        attachment_url="https://api.unboks.org/api/wibrandt/dashboard/api/public/media/cookie.jpg",
+        attachment_type="image",
+    )
     assert result is True
 
 
@@ -52,7 +78,13 @@ def test_sender_registry_mapping():
 def test_send_reply_dispatches_via_registry(mock_dm_reply):
     mock_dm_reply.return_value = True
     result = send_reply("instagram_dm", "conv_ig", "acct_ig", "hi there")
-    mock_dm_reply.assert_called_once_with("conv_ig", "acct_ig", "hi there")
+    mock_dm_reply.assert_called_once_with(
+        "conv_ig",
+        "acct_ig",
+        "hi there",
+        attachment_url="",
+        attachment_type="image",
+    )
     assert result is True
 
 
@@ -64,7 +96,13 @@ def test_unknown_channel_falls_back_to_default(mock_dm_reply):
     assert SENDERS.get("totally_new_channel_xyz", DEFAULT_SENDER) is ZernioSender
     # Actually invoke the fallback
     result = send_reply("totally_new_channel_xyz", "conv_x", "acct_x", "fallback test")
-    mock_dm_reply.assert_called_once_with("conv_x", "acct_x", "fallback test")
+    mock_dm_reply.assert_called_once_with(
+        "conv_x",
+        "acct_x",
+        "fallback test",
+        attachment_url="",
+        attachment_type="image",
+    )
     assert result is True
 
 
