@@ -677,9 +677,16 @@ def _process_zernio_event(payload: dict):
                     text=text,
                     sender_name=msg["sender_name"],
                 )
-                reply_text = handle_incoming_whatsapp_message(
+                reply_result = handle_incoming_whatsapp_message(
                     orchestrator_msg, channel=channel,
-                    inbound_already_stored=True)
+                    inbound_already_stored=True,
+                    include_media=True)
+                reply_media = None
+                if isinstance(reply_result, dict):
+                    reply_text = str(reply_result.get("text") or "")
+                    reply_media = reply_result.get("media") if isinstance(reply_result.get("media"), dict) else None
+                else:
+                    reply_text = reply_result
             else:
                 # Q&A only — use DM agent
                 # DM agent reads dm_get_history which is separate, so store before is fine
@@ -691,14 +698,24 @@ def _process_zernio_event(payload: dict):
                     sender_name=msg["sender_name"],
                 )
                 reply_text = handle_incoming_dm(msg)
+                reply_media = None
 
             if reply_text:
+                attachment_url = str((reply_media or {}).get("url") or "")
                 # Send reply via the sender registry (Brief 187 — dispatched by channel)
-                ok = send_reply(channel, conversation_id, account_id, reply_text)
+                ok = send_reply(
+                    channel,
+                    conversation_id,
+                    account_id,
+                    reply_text,
+                    attachment_url=attachment_url,
+                    attachment_type="image" if attachment_url else "image",
+                )
                 if not ok:
                     log("zernio_reply_send_failed",
                         channel=channel,
-                        conversation_id=conversation_id[:20])
+                        conversation_id=conversation_id[:20],
+                        media_attached=bool(attachment_url))
                     _mark_delivery_failed(
                         channel, conversation_id, msg.get("sender_name", ""),
                         [message_id], "provider returned false")
@@ -710,6 +727,14 @@ def _process_zernio_event(payload: dict):
                     role="assistant",
                     text=reply_text,
                 )
+                if attachment_url:
+                    state_registry.increment_photo_used_count(int(reply_media["id"]))
+                    state_registry.dm_store_message(
+                        conversation_id=conversation_id,
+                        channel=channel,
+                        role="system",
+                        text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                    )
                 state_registry.inbound_processing_update(
                     message_id, "replied", reason="provider_send_ok")
             else:
