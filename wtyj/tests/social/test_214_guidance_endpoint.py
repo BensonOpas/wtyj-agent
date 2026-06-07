@@ -130,6 +130,73 @@ def test_guidance_whatsapp_relay_succeeds(mock_marina, mock_wa_send):
     _cleanup(esc_id, customer_id)
 
 
+@patch("dashboard.api.marina_agent")
+def test_guidance_whatsapp_can_send_selected_media(mock_marina, monkeypatch):
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "214_wa_guidance_media_phone"
+    esc_id = _seed_escalation("whatsapp", customer_id, mode="soft")
+    filename = "photo_214_guidance_media.jpg"
+    media_path = os.path.join(dapi._PHOTOS_DIR, filename)
+    with open(media_path, "wb") as fh:
+        fh.write(b"\xff\xd8\xff\xd9")
+    photo_id = state_registry.save_photo(
+        filename=filename,
+        original_filename="cookie.jpg",
+        tags=["cookie"],
+        service_key="knowledge:products:cookie",
+        source="knowledge_media",
+        source_id="cookie",
+        file_size=4,
+    )
+
+    mock_marina.process_message.return_value = {
+        "reply": "Here is the cookie info and photo.",
+        "fields": {}, "flags": {}, "intents": [],
+        "confidence": "high", "requires_human": False,
+    }
+    sent = {}
+
+    def fake_send(phone, text, **kwargs):
+        sent.update(phone=phone, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(dapi, "send_whatsapp_message", fake_send)
+
+    token = _login()
+    r = client.post(
+        f"/dashboard/api/escalations/{esc_id}/guidance",
+        json={
+            "guidance": "Tell Lisa about the cookie and include the photo.",
+            "mediaId": str(photo_id),
+        },
+        headers=_auth(token),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mediaSent"] is True
+    assert sent["phone"] == customer_id
+    assert sent["text"] == "Here is the cookie info and photo."
+    assert sent["attachment_type"] == "image"
+    assert sent["attachment_url"].endswith(f"/dashboard/api/public/media/{filename}")
+
+    history = state_registry.wa_get_history(customer_id, limit=5)
+    assert any(
+        m["role"] == "assistant" and m["text"] == "Here is the cookie info and photo."
+        for m in history
+    )
+    assert any(m["role"] == "system" and "Image sent" in m["text"] for m in history)
+
+    state_registry.delete_photo(photo_id)
+    try:
+        os.remove(media_path)
+    except FileNotFoundError:
+        pass
+    _cleanup(esc_id, customer_id)
+
+
 # --- Test 2: Email soft-mode relay happy path
 @patch("dashboard.api.smtp_send")
 @patch("dashboard.api.state_registry.email_append_assistant_message",

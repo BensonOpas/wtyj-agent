@@ -4867,6 +4867,7 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
     customer_id = esc.get("customer_id", "")
 
     if channel == "whatsapp" and customer_id:
+        attachment_url = _resolve_media_attachment_url(req.selected_media_id)
         wa_state = state_registry.wa_get_booking_state(customer_id)
         wa_fields = wa_state.get("fields", {})
         wa_flags = wa_state.get("flags", {})
@@ -4889,14 +4890,29 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
         if not relay_reply:
             raise HTTPException(status_code=500, detail="Marina returned empty reply")
 
-        sent_ok = send_whatsapp_message(customer_id, relay_reply)
+        if attachment_url:
+            sent_ok = send_whatsapp_message(
+                customer_id,
+                relay_reply,
+                attachment_url=attachment_url,
+                attachment_type="image",
+            )
+        else:
+            sent_ok = send_whatsapp_message(customer_id, relay_reply)
         if not sent_ok:
             raise HTTPException(status_code=500,
-                detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
+                detail="Failed to send WhatsApp reply or image (Zernio account missing or send failed)")
 
         state_registry.wa_store_message(customer_id, "assistant", relay_reply)
+        if req.selected_media_id:
+            try:
+                state_registry.increment_photo_used_count(int(req.selected_media_id))
+            except (TypeError, ValueError):
+                pass
+            state_registry.wa_store_message(customer_id, "system", "Image sent")
         bm_logger.log("dashboard_guidance_sent_whatsapp",
-                      phone=customer_id, escalation_id=escalation_id)
+                      phone=customer_id, escalation_id=escalation_id,
+                      media_attached=bool(attachment_url))
 
         # Clear relay flags from persistent state (one guidance = one relay)
         wa_flags.pop("awaiting_relay", None)
@@ -4914,9 +4930,14 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
             answer=req.text, source="guidance_whatsapp",
             escalation_id=escalation_id)
 
-        return {"ok": True, "reply": relay_reply, "channel": "whatsapp"}
+        return {"ok": True, "reply": relay_reply, "channel": "whatsapp",
+                "mediaSent": bool(attachment_url)}
 
     elif channel == "email":
+        if req.selected_media_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Image guidance is only supported for WhatsApp right now")
         if not customer_id or "@" not in customer_id:
             raise HTTPException(status_code=400,
                 detail="Email escalation missing valid email address")
