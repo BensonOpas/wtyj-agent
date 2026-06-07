@@ -4667,7 +4667,9 @@ class EscalationReplyRequest(BaseModel):
 async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     """Reply to a semi escalation. Marina reformulates and sends to customer."""
     if not req.text and not req.selected_media_id:
-        raise HTTPException(status_code=400, detail="Reply text or image required")
+        raise HTTPException(
+            status_code=400,
+            detail="Reply text or image required (field: 'message', 'answer', or 'mediaId')")
 
     all_esc = state_registry.get_all_escalations()
     esc = next((e for e in all_esc if e["id"] == escalation_id), None)

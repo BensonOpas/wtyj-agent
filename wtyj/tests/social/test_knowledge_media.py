@@ -3,7 +3,6 @@ import io
 import os
 
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
-os.environ.setdefault("TENANT_SLUG", "media-test")
 os.environ.setdefault("PUBLIC_API_BASE_URL", "https://api.unboks.org")
 
 from fastapi.testclient import TestClient
@@ -37,7 +36,8 @@ def _png_bytes() -> bytes:
     return buf.getvalue()
 
 
-def test_knowledge_media_upload_lists_and_serves_public_image_url():
+def test_knowledge_media_upload_lists_and_serves_public_image_url(monkeypatch):
+    monkeypatch.setenv("TENANT_SLUG", "media-test")
     _reset_photos()
     token = _login()
 
