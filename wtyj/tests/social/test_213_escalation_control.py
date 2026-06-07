@@ -457,7 +457,112 @@ def test_hard_mode_whatsapp_reply_stores_role_operator_not_assistant(monkeypatch
     assert not any(m["role"] == "assistant" and m["text"] == operator_text
                    for m in history), (
         f"hard-mode operator text MUST NOT be stored as role='assistant'; "
-        f"history={history}")
+                   f"history={history}")
+
+
+def test_hard_mode_whatsapp_reply_can_send_selected_media(monkeypatch):
+    """Operator-selected tenant media is resolved to a public provider URL and
+    only stored after the provider send confirms success."""
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "246_hard_wa_media_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation",
+        channel="whatsapp",
+        customer_id=customer_id,
+        customer_name="Test Customer",
+        subject="Marina escalated",
+        body="needs help",
+        mode="hard",
+    )
+    filename = "photo_246_media_test.jpg"
+    media_path = os.path.join(dapi._PHOTOS_DIR, filename)
+    with open(media_path, "wb") as fh:
+        fh.write(b"\xff\xd8\xff\xd9")
+    photo_id = state_registry.save_photo(
+        filename=filename,
+        original_filename="menu.jpg",
+        tags=["Menu photo"],
+        service_key="knowledge:products:menu",
+        source="knowledge_media",
+        source_id="menu",
+        file_size=4,
+    )
+
+    sent = {}
+    def fake_send(phone, text, **kwargs):
+        sent.update(phone=phone, text=text, **kwargs)
+        return True
+    monkeypatch.setattr(dapi, "send_whatsapp_message", fake_send)
+
+    token = _login()
+    r = client.post(
+        f"/dashboard/api/escalations/{esc_id}/reply",
+        json={"message": "Here is the menu.", "mediaId": str(photo_id)},
+        headers=_auth(token),
+    )
+
+    assert r.status_code == 200, r.text
+    assert sent["phone"] == customer_id
+    assert sent["text"] == "Here is the menu."
+    assert sent["attachment_type"] == "image"
+    assert sent["attachment_url"].endswith(f"/dashboard/api/public/media/{filename}")
+
+    state_registry.delete_photo(photo_id)
+    try:
+        os.remove(media_path)
+    except FileNotFoundError:
+        pass
+    _cleanup(esc_id, customer_id)
+
+
+def test_hard_mode_whatsapp_media_send_failure_does_not_store_reply(monkeypatch):
+    from shared import state_registry
+    from dashboard import api as dapi
+
+    customer_id = "246_hard_wa_media_fail_phone"
+    esc_id = state_registry.create_pending_notification(
+        notification_type="escalation",
+        channel="whatsapp",
+        customer_id=customer_id,
+        customer_name="Test Customer",
+        subject="Marina escalated",
+        body="needs help",
+        mode="hard",
+    )
+    filename = "photo_246_media_fail.jpg"
+    media_path = os.path.join(dapi._PHOTOS_DIR, filename)
+    with open(media_path, "wb") as fh:
+        fh.write(b"\xff\xd8\xff\xd9")
+    photo_id = state_registry.save_photo(
+        filename=filename,
+        original_filename="menu.jpg",
+        tags=[],
+        service_key="knowledge:products:menu",
+        source="knowledge_media",
+        source_id="menu",
+        file_size=4,
+    )
+    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda *a, **k: False)
+
+    token = _login()
+    r = client.post(
+        f"/dashboard/api/escalations/{esc_id}/reply",
+        json={"message": "Here is the menu.", "mediaId": str(photo_id)},
+        headers=_auth(token),
+    )
+
+    assert r.status_code == 500
+    history = state_registry.wa_get_history(customer_id, limit=5)
+    assert not any(m["role"] == "operator" for m in history)
+
+    state_registry.delete_photo(photo_id)
+    try:
+        os.remove(media_path)
+    except FileNotFoundError:
+        pass
+    _cleanup(esc_id, customer_id)
 
 
 def test_soft_mode_whatsapp_reply_unchanged_still_routes_through_marina(monkeypatch):

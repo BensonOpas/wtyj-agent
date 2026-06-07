@@ -1833,6 +1833,35 @@ def _knowledge_media_shape(photo: dict, source: str, knowledge_id: str) -> dict:
     }
 
 
+def _knowledge_media_source_parts(photo: dict) -> tuple[str, str]:
+    service_key = str(photo.get("service_key") or "")
+    parts = service_key.split(":", 2)
+    if len(parts) == 3 and parts[0] == "knowledge":
+        return parts[1] or "info_update", parts[2] or str(photo.get("source_id") or "")
+    return str(photo.get("source") or "info_update"), str(photo.get("source_id") or "")
+
+
+def _resolve_media_attachment_url(media_id: str | None) -> str:
+    if not media_id:
+        return ""
+    try:
+        photo_id = int(str(media_id).strip())
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Image not found")
+    photo = state_registry.get_photo_by_id(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Image not found")
+    filename = os.path.basename(str(photo.get("filename") or ""))
+    if not filename or filename != photo.get("filename"):
+        raise HTTPException(status_code=404, detail="Image not found")
+    if not os.path.exists(os.path.join(_PHOTOS_DIR, filename)):
+        raise HTTPException(status_code=404, detail="Image file missing")
+    url = _public_media_url(filename)
+    if not url:
+        raise HTTPException(status_code=500, detail="Public media URL is not configured")
+    return url
+
+
 @router.post("/knowledge/files", dependencies=[Depends(_check_auth)])
 async def upload_knowledge_file(file: UploadFile = File(...)):
     """Brief 230: accept a file upload, store on disk, extract text
@@ -1902,6 +1931,17 @@ async def list_knowledge_media(knowledge_id: str = Query(...),
             for photo in photos
         ]
     }
+
+
+@router.get("/knowledge/media/library", dependencies=[Depends(_check_auth)])
+async def list_knowledge_media_library():
+    """List tenant-scoped customer-facing images available to send."""
+    photos = state_registry.get_photos(limit=200)
+    media = []
+    for photo in photos:
+        source, knowledge_id = _knowledge_media_source_parts(photo)
+        media.append(_knowledge_media_shape(photo, source, knowledge_id))
+    return {"media": media}
 
 
 @router.post("/knowledge/media", dependencies=[Depends(_check_auth)])
@@ -4612,16 +4652,22 @@ class EscalationReplyRequest(BaseModel):
     answer: str = ""
     message: str = ""
     guidance: str = ""
+    mediaId: str | None = None
+    media_id: str | None = None
 
     @property
     def text(self) -> str:
         return (self.guidance or self.message or self.answer or "").strip()
 
+    @property
+    def selected_media_id(self) -> str:
+        return str(self.mediaId or self.media_id or "").strip()
+
 @router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
 async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     """Reply to a semi escalation. Marina reformulates and sends to customer."""
-    if not req.text:
-        raise HTTPException(status_code=400, detail="Reply text required (field: 'message' or 'answer')")
+    if not req.text and not req.selected_media_id:
+        raise HTTPException(status_code=400, detail="Reply text or image required")
 
     all_esc = state_registry.get_all_escalations()
     esc = next((e for e in all_esc if e["id"] == escalation_id), None)
@@ -4637,27 +4683,43 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         # Mirrors the email branch at lines 2470-2511 (Brief 210).
         if esc.get("mode") == "hard":
             operator_reply = req.text
-            sent_ok = send_whatsapp_message(customer_id, operator_reply)
+            attachment_url = _resolve_media_attachment_url(req.selected_media_id)
+            if attachment_url:
+                sent_ok = send_whatsapp_message(
+                    customer_id,
+                    operator_reply,
+                    attachment_url=attachment_url,
+                    attachment_type="image",
+                )
+            else:
+                sent_ok = send_whatsapp_message(customer_id, operator_reply)
             if not sent_ok:
                 raise HTTPException(
                     status_code=500,
-                    detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
-            state_registry.wa_store_message(customer_id, "operator", operator_reply)
+                    detail="Failed to send WhatsApp reply or image (Zernio account missing or send failed)")
+            stored_text = operator_reply or "[Image sent]"
+            state_registry.wa_store_message(customer_id, "operator", stored_text)
             bm_logger.log("dashboard_hard_reply_sent",
                           phone=customer_id, escalation_id=escalation_id,
-                          mode="hard", channel="whatsapp")
+                          mode="hard", channel="whatsapp",
+                          media_attached=bool(attachment_url))
             state_registry.update_notification_status(escalation_id, "replied")
 
             # Brief 215 + Brief 266: toggle-aware learning create.
             _create_learning_from_operator_reply(
                 conversation_id=customer_id, channel="whatsapp",
-                answer=operator_reply, source="reply_whatsapp_hard",
+                answer=stored_text, source="reply_whatsapp_hard",
                 escalation_id=escalation_id)
 
-            return {"ok": True, "reply": operator_reply,
-                    "channel": "whatsapp", "role": "operator"}
+            return {"ok": True, "reply": stored_text,
+                    "channel": "whatsapp", "role": "operator",
+                    "mediaSent": bool(attachment_url)}
 
         # Soft / legacy / no-mode path: existing relay behavior unchanged
+        if req.selected_media_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Image replies require human takeover mode")
         wa_state = state_registry.wa_get_booking_state(customer_id)
         wa_fields = wa_state.get("fields", {})
         wa_flags = wa_state.get("flags", {})
@@ -4704,6 +4766,10 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         return {"ok": True, "reply": relay_reply}
 
     elif channel == "email":
+        if req.selected_media_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Image replies are only supported for WhatsApp right now")
         # Brief 210: hard-escalation email reply path. Operator's text is sent
         # verbatim (no Marina reformulation) — for hard escalations the operator
         # IS the author. Reformulation belongs to relay-mode (semi escalations).

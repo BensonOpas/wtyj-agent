@@ -68,6 +68,10 @@ def test_knowledge_media_upload_lists_and_serves_public_image_url():
     assert listed.status_code == 200
     assert listed.json()["media"][0]["id"] == media["id"]
 
+    library = client.get("/dashboard/api/knowledge/media/library", headers=_auth(token))
+    assert library.status_code == 200
+    assert any(item["id"] == media["id"] for item in library.json()["media"])
+
     public_path = media["url"].split("/dashboard/api", 1)[1]
     public = client.get(f"/dashboard/api{public_path}")
     assert public.status_code == 200
