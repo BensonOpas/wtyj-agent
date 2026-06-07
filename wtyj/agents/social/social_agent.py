@@ -60,6 +60,7 @@ _MEDIA_TRIGGER_WORDS = {
     "show", "see", "look", "looks", "info", "information", "details",
     "available", "sell", "menu", "cookie", "cookies", "cake", "cakes",
     "pastry", "pastries", "twist", "bread", "product", "products",
+    "cinnamon", "cinamon", "cardamom", "pecan", "banana", "tosca",
     "house", "home", "apartment", "villa", "property", "properties",
     "room", "rooms", "view", "bedroom", "bedrooms",
 }
@@ -138,6 +139,8 @@ def _public_media_url(filename: str) -> str:
 def _media_tokens(text: str) -> set[str]:
     tokens = set()
     for token in re.findall(r"[a-z0-9]+", str(text or "").lower()):
+        if token == "cinamon":
+            token = "cinnamon"
         if len(token) < 3 or token in _MEDIA_STOPWORDS:
             continue
         tokens.add(token)
@@ -173,19 +176,21 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
         for msg in (history or [])[-6:]
         if str(msg.get("role") or "") in {"user", "assistant"}
     )
-    query_text = " ".join([
+    current_text = " ".join([
         text or "",
         reply_text or "",
-        history_text,
         fields.get("product_name", ""),
         fields.get("service_name", ""),
         fields.get("property_name", ""),
     ])
+    query_text = " ".join([current_text, history_text])
     lower_query = query_text.lower()
     if not any(word in lower_query for word in _MEDIA_TRIGGER_WORDS):
         return None
 
-    query_tokens = _media_tokens(query_text)
+    current_tokens = _media_tokens(current_text)
+    history_tokens = _media_tokens(history_text)
+    query_tokens = current_tokens | history_tokens
     if not query_tokens:
         return None
 
@@ -197,8 +202,9 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
 
     best: tuple[int, dict] | None = None
     last_sent_id = str(flags.get("last_media_id_sent") or "")
+    lower_current = current_text.lower()
     explicit_media_request = any(
-        word in lower_query for word in ("photo", "photos", "picture", "pictures", "image", "images", "show", "see")
+        word in lower_current for word in ("photo", "photos", "picture", "pictures", "image", "images", "show", "see", "look")
     )
 
     for photo in photos:
@@ -207,19 +213,30 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
             continue
         media_text = _photo_text(photo)
         media_tokens = _media_tokens(media_text)
-        overlap = query_tokens & media_tokens
-        score = len(overlap)
+        current_overlap = current_tokens & media_tokens
+        history_overlap = history_tokens & media_tokens
+        score = len(current_overlap) * 5 + len(history_overlap)
         source_id = str(photo.get("source_id") or "").replace("-", " ").lower()
         service_key = str(photo.get("service_key") or "").replace("-", " ").lower()
-        if source_id and source_id in lower_query:
-            score += 8
-        if service_key and service_key in lower_query:
-            score += 5
+        if source_id and source_id in lower_current:
+            score += 15
+        elif source_id and source_id in lower_query:
+            score += 3
+        if service_key and service_key in lower_current:
+            score += 10
+        elif service_key and service_key in lower_query:
+            score += 2
         tags = photo.get("tags") if isinstance(photo.get("tags"), list) else []
         title = str(tags[0] if tags else "").lower()
         title_tokens = _media_tokens(title)
-        title_overlap = query_tokens & title_tokens
-        score += len(title_overlap) * 2
+        current_title_overlap = current_tokens & title_tokens
+        history_title_overlap = history_tokens & title_tokens
+        score += len(current_title_overlap) * 6 + len(history_title_overlap)
+
+        # If the current turn names a different product, old history should not
+        # keep attaching the previous product image.
+        if current_tokens and not (current_overlap or current_title_overlap):
+            score -= 4
 
         if score < 2:
             continue
