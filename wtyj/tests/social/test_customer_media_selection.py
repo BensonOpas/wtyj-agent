@@ -199,3 +199,63 @@ def test_customer_media_selection_current_product_beats_old_history(monkeypatch)
 
     assert selected is not None
     assert selected["id"] == "6"
+
+
+def test_customer_media_selection_skips_single_image_for_broad_menu_reply(monkeypatch):
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://api.unboks.org")
+    monkeypatch.setattr(
+        social_agent.config_loader,
+        "get_raw",
+        lambda: {"tenant_slug": "wibrandt", "business": {"name": "Wibrandt"}},
+    )
+    monkeypatch.setattr(
+        social_agent.state_registry,
+        "get_photos",
+        lambda limit=200: [
+            {
+                "id": 3,
+                "filename": "wibrandt-white-chocolate-pecan-cookie-ang6.jpg",
+                "original_filename": "cookie.jpg",
+                "tags": [
+                    "White Chocolate Pecan Cookie - 6 ANG - white chocolate chunks.",
+                    "White Chocolate Pecan Cookie",
+                    "cookie",
+                    "white chocolate",
+                    "pecan",
+                ],
+                "service_key": "knowledge:info_update:wibrandt-white-chocolate-pecan-cookie",
+                "source": "knowledge_media",
+                "source_id": "wibrandt-white-chocolate-pecan-cookie",
+            },
+            {
+                "id": 6,
+                "filename": "wibrandt-cinnamon-twist-ang5.jpg",
+                "original_filename": "cinnamon.jpg",
+                "tags": [
+                    "The Cinnamon Twist - 5 ANG - buttery and flaky.",
+                    "The Cinnamon Twist",
+                    "cinnamon",
+                    "cardamom",
+                ],
+                "service_key": "knowledge:info_update:wibrandt-cinnamon-twist",
+                "source": "knowledge_media",
+                "source_id": "wibrandt-cinnamon-twist",
+            },
+        ],
+    )
+
+    selected = social_agent._select_customer_media(
+        "What else do you have?",
+        (
+            "We've got the White Chocolate Pecan Cookie and the "
+            "Cinnamon Cardamom Twist. Anything catch your eye?"
+        ),
+        {},
+        {},
+        history=[
+            {"role": "user", "text": "Tell me about the White Chocolate Pecan Cookie"},
+            {"role": "assistant", "text": "The White Chocolate Pecan Cookie is a big cookie with white chocolate and pecans."},
+        ],
+    )
+
+    assert selected is None

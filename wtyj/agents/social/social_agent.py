@@ -162,6 +162,15 @@ def _photo_text(photo: dict) -> str:
     return " ".join(str(p) for p in parts if p)
 
 
+def _is_broad_media_query(text: str) -> bool:
+    lower = str(text or "").lower()
+    broad_phrases = (
+        "what else", "what do you have", "what have you got", "what you have",
+        "menu", "options", "products", "show me everything", "anything else",
+    )
+    return any(phrase in lower for phrase in broad_phrases)
+
+
 def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict,
                            history: list[dict] | None = None) -> dict | None:
     """Return the best matching tenant media item for a sales/info reply.
@@ -176,13 +185,14 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
         for msg in (history or [])[-6:]
         if str(msg.get("role") or "") in {"user", "assistant"}
     )
-    current_text = " ".join([
-        text or "",
+    customer_text = text or ""
+    product_context_text = " ".join([
         reply_text or "",
         fields.get("product_name", ""),
         fields.get("service_name", ""),
         fields.get("property_name", ""),
     ])
+    current_text = " ".join([customer_text, product_context_text])
     query_text = " ".join([current_text, history_text])
     lower_query = query_text.lower()
     if not any(word in lower_query for word in _MEDIA_TRIGGER_WORDS):
@@ -201,6 +211,7 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
         return None
 
     best: tuple[int, dict] | None = None
+    candidates: list[tuple[int, dict]] = []
     last_sent_id = str(flags.get("last_media_id_sent") or "")
     lower_current = current_text.lower()
     explicit_media_request = any(
@@ -242,11 +253,22 @@ def _select_customer_media(text: str, reply_text: str, fields: dict, flags: dict
             continue
         if str(photo.get("id")) == last_sent_id and not explicit_media_request:
             continue
+        candidates.append((score, photo))
         if best is None or score > best[0]:
             best = (score, photo)
 
     if best is None:
         return None
+    broad_customer_query = _is_broad_media_query(customer_text)
+    if broad_customer_query:
+        sorted_candidates = sorted(candidates, key=lambda item: item[0], reverse=True)
+        if len(sorted_candidates) >= 2 and sorted_candidates[1][0] >= 2:
+            bm_logger.log(
+                "customer_media_skipped_broad_multi_product",
+                top_score=sorted_candidates[0][0],
+                second_score=sorted_candidates[1][0],
+            )
+            return None
     photo = dict(best[1])
     url = _public_media_url(photo.get("filename", ""))
     if not url:
