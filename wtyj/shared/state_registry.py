@@ -1423,7 +1423,7 @@ def _order_payload_from_state(conversation_id: str, fields: dict,
     return {
         "type": "ORDER",
         "customer_name": name,
-        "phone": str((fields or {}).get("phone") or conversation_id or "").strip(),
+        "phone": str((fields or {}).get("phone") or "").strip(),
         "products": lines,
         "delivery_address": _order_address_from_fields(fields or {}),
         "total": total,

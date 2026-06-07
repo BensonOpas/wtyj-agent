@@ -3420,6 +3420,18 @@ def _order_total(order: dict) -> str:
     return f"{currency + ' ' if currency else ''}{total}"
 
 
+def _order_contact_phone(order: dict) -> str:
+    phone = str(order.get("phone") or order.get("customer_phone") or "").strip()
+    if not phone:
+        return ""
+    digit_count = len(re.sub(r"\D", "", phone))
+    if re.fullmatch(r"[a-fA-F0-9]{20,32}", phone) and digit_count < 10:
+        return ""
+    if digit_count < 7:
+        return ""
+    return phone
+
+
 def _build_order_alert_subject(customer_name: str, order: dict) -> str:
     name = str(order.get("customer_name") or customer_name or "customer").strip()
     return f"New order: {name} - {_order_total(order)}"
@@ -3428,7 +3440,7 @@ def _build_order_alert_subject(customer_name: str, order: dict) -> str:
 def _build_order_alert_body(order: dict, customer_name: str, channel: str,
                             client_name: str) -> str:
     name = str(order.get("customer_name") or customer_name or "(unknown)").strip()
-    phone = str(order.get("phone") or order.get("customer_id") or "").strip()
+    phone = _order_contact_phone(order)
     address = str(order.get("delivery_address") or order.get("address") or "").strip()
     comments = str(order.get("comments") or "").strip()
     products = _order_lines(order)
@@ -3449,7 +3461,7 @@ def _build_order_alert_body(order: dict, customer_name: str, channel: str,
 def _build_order_alert_body_whatsapp(order: dict, customer_name: str,
                                      channel: str) -> str:
     name = str(order.get("customer_name") or customer_name or "(unknown)").strip()
-    phone = str(order.get("phone") or order.get("customer_id") or "").strip()
+    phone = _order_contact_phone(order)
     address = str(order.get("delivery_address") or order.get("address") or "").strip()
     products = _order_lines(order)
     products_text = "; ".join(products[:4]) or "Order details not captured"
