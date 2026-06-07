@@ -40,6 +40,17 @@ def _sanitize(text: str) -> str:
     return "\n".join(redacted_lines)
 
 
+def _agent_display_text(text: str, agent_name: str) -> str:
+    """Return tenant-facing manifest text with legacy assistant names normalized."""
+    if not text:
+        return ""
+    clean_name = agent_name or agent_identity.DEFAULT_AGENT_NAME
+    display = re.sub(r"\b(Marina|Helga)\b", clean_name, str(text))
+    display = re.sub(r"\b(marina|helga)\b", clean_name.lower(), display)
+    display = display.replace("marina_response", "agent_response")
+    return display
+
+
 def _source(
     *,
     source_id: str,
@@ -51,6 +62,7 @@ def _source(
     priority: str,
     status: str = "indexed",
     partial_reason: str = "",
+    agent_name: str = "",
 ) -> dict[str, Any]:
     return {
         "id": source_id,
@@ -61,7 +73,7 @@ def _source(
         "priority": priority,
         "status": status,
         "partial_reason": partial_reason,
-        "text": _sanitize(text),
+        "text": _agent_display_text(_sanitize(text), agent_name) if agent_name else _sanitize(text),
     }
 
 
@@ -98,6 +110,7 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
         prompt_kind="system",
         priority="platform_safety",
         text=marina_agent._build_system_prompt({}, channel="whatsapp"),
+        agent_name=agent_name,
     ))
     sources.append(_source(
         source_id=f"runtime.{source_prefix}.email.system",
@@ -107,6 +120,7 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
         prompt_kind="system",
         priority="platform_safety",
         text=marina_agent._build_system_prompt({}, channel="email"),
+        agent_name=agent_name,
     ))
     sources.append(_source(
         source_id="runtime.fallback.whatsapp",
@@ -122,6 +136,7 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
             svc_label="service",
             party_label="guests",
         ),
+        agent_name=agent_name,
     ))
     sources.append(_source(
         source_id="runtime.fallback.email",
@@ -137,6 +152,7 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
             svc_label="service",
             party_label="guests",
         ),
+        agent_name=agent_name,
     ))
     sources.append(_source(
         source_id="runtime.dashboard.suggest_reply.system",

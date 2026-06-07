@@ -65,6 +65,9 @@ def test_runtime_prompt_manifest_indexes_known_prompt_paths(monkeypatch, tmp_pat
     assert "Sofia" in combined
     assert "Live Sofia WhatsApp system prompt" in combined
     assert "Live Marina WhatsApp system prompt" not in combined
+    assert "Helga" not in combined
+    assert "marina_response" not in combined
+    assert "agent_response" in combined
     assert "If any Source of Truth entry references a different assistant name" in combined
     assert "Always reply in Spanish" in combined
 
