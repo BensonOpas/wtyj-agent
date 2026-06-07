@@ -5012,7 +5012,17 @@ def get_approved_learnings_for_prompt(channel: str, limit: int = 20) -> list:
 
 # ── Brief 216: Your Info Updates (per-tenant temporary/permanent updates) ─────
 
-_INFO_UPDATE_TYPES = {"general", "offer", "holiday", "hours", "pricing", "other"}
+_INFO_UPDATE_TYPES = {
+    "general",
+    "offer",
+    "holiday",
+    "hours",
+    "pricing",
+    "policy",
+    "property",
+    "product",
+    "other",
+}
 
 
 def info_update_create(text: str, type_: str = "general",
@@ -5071,6 +5081,55 @@ def info_update_set_active(update_id: int, active: bool) -> bool:
     cur = conn.execute(
         "UPDATE info_updates SET active = ?, updated_at = ? WHERE id = ?",
         (1 if active else 0, now, update_id),
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def info_update_update(
+    update_id: int,
+    *,
+    text: str = None,
+    type_: str = None,
+    active: bool = None,
+    start_date: str = None,
+    end_date: str = None,
+) -> bool:
+    """Edit an info_update row while preserving its id and created_at."""
+    fields = []
+    params = []
+    if text is not None:
+        fields.append("text = ?")
+        params.append(text)
+    if type_ is not None:
+        fields.append("type = ?")
+        params.append(type_ if type_ in _INFO_UPDATE_TYPES else "other")
+    if active is not None:
+        fields.append("active = ?")
+        params.append(1 if active else 0)
+    if start_date is not None:
+        fields.append("start_date = ?")
+        params.append(start_date or None)
+    if end_date is not None:
+        fields.append("end_date = ?")
+        params.append(end_date or None)
+    if not fields:
+        conn = _get_conn()
+        exists = conn.execute(
+            "SELECT 1 FROM info_updates WHERE id = ?", (update_id,)
+        ).fetchone() is not None
+        conn.close()
+        return exists
+    now = datetime.now(timezone.utc).isoformat()
+    fields.append("updated_at = ?")
+    params.append(now)
+    params.append(update_id)
+    conn = _get_conn()
+    cur = conn.execute(
+        f"UPDATE info_updates SET {', '.join(fields)} WHERE id = ?",
+        tuple(params),
     )
     changed = cur.rowcount > 0
     conn.commit()

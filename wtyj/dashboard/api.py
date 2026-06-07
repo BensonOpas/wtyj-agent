@@ -1596,8 +1596,12 @@ class InfoUpdateCreate(BaseModel):
     endDate: str | None = None
 
 
-class InfoUpdateActiveUpdate(BaseModel):
-    active: StrictBool
+class InfoUpdateUpdate(BaseModel):
+    text: str | None = None
+    type: str | None = None
+    active: StrictBool | None = None
+    startDate: str | None = None
+    endDate: str | None = None
 
 
 @router.get("/settings/info-updates", dependencies=[Depends(_check_auth)])
@@ -1623,12 +1627,22 @@ async def create_info_update_endpoint(req: InfoUpdateCreate):
 @router.put("/settings/info-updates/{update_id}",
             dependencies=[Depends(_check_auth)])
 async def update_info_update_endpoint(update_id: int,
-                                      req: InfoUpdateActiveUpdate):
-    """Update the active flag for a saved knowledge update."""
-    ok = state_registry.info_update_set_active(update_id, req.active)
+                                      req: InfoUpdateUpdate):
+    """Update a saved knowledge update while preserving its row id."""
+    text = req.text.strip() if req.text is not None else None
+    if req.text is not None and not text:
+        raise HTTPException(status_code=400, detail="text required")
+    ok = state_registry.info_update_update(
+        update_id,
+        text=text,
+        type_=req.type,
+        active=req.active,
+        start_date=req.startDate,
+        end_date=req.endDate,
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="info_update not found")
-    return {"ok": True, "id": update_id, "active": req.active}
+    return {"ok": True, "id": update_id}
 
 
 @router.delete("/settings/info-updates/{update_id}",

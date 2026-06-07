@@ -469,6 +469,51 @@ def test_info_update_set_active_updates_row():
         _wipe_info_updates()
 
 
+def test_info_update_update_preserves_id_and_edits_fields():
+    try:
+        _wipe_info_updates()
+        row_id = state_registry.info_update_create(text="old text", type_="general")
+        before = next(r for r in state_registry.info_updates_list_all() if r["id"] == row_id)
+        assert state_registry.info_update_update(
+            row_id,
+            text="new text",
+            type_="product",
+            active=False,
+            start_date="2026-06-01",
+            end_date="2026-06-30",
+        ) is True
+        row = next(r for r in state_registry.info_updates_list_all() if r["id"] == row_id)
+        assert row["id"] == row_id
+        assert row["text"] == "new text"
+        assert row["type"] == "product"
+        assert row["active"] is False
+        assert row["startDate"] == "2026-06-01"
+        assert row["endDate"] == "2026-06-30"
+        assert row["createdAt"] == before["createdAt"]
+        assert row["updatedAt"] != before["updatedAt"]
+        assert state_registry.info_update_update(99999999, text="missing") is False
+    finally:
+        _wipe_info_updates()
+
+
+def test_info_update_endpoint_rejects_empty_edit_text():
+    try:
+        _wipe_info_updates()
+        row_id = state_registry.info_update_create(text="existing")
+        token = _login()
+        r = client.put(
+            f"/dashboard/api/settings/info-updates/{row_id}",
+            json={"text": "   "},
+            headers=_auth(token),
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"] == "text required"
+        row = next(r for r in state_registry.info_updates_list_all() if r["id"] == row_id)
+        assert row["text"] == "existing"
+    finally:
+        _wipe_info_updates()
+
+
 # ── Test 6: Marina prompt includes ACTIVE BUSINESS UPDATES when flag on ───────
 def test_marina_prompt_includes_info_updates_when_flag_on():
     from agents.marina import marina_agent
