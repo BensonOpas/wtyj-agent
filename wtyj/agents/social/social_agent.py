@@ -195,6 +195,23 @@ def _is_wibrandt_order_like(result, fields, flags):
     return False
 
 
+def _is_wibrandt_order_related_text(*parts) -> bool:
+    """Detect Wibrandt order/customer-order follow-up text, not appointments."""
+    if not _is_wibrandt_order_tenant():
+        return False
+    text = "\n".join(str(p or "") for p in parts).lower()
+    if not text.strip():
+        return False
+    order_terms = (
+        "order", "pedido", "bestelling", "delivery", "deliver",
+        "address", "total", "payment", "cash", "quantity", "qty",
+        "cookie", "cookies", "twist", "pecan", "banana carrot",
+        "cinnamon", "tosca", "cancel my order", "reduce her order",
+        "order summary",
+    )
+    return any(term in text for term in order_terms)
+
+
 def _money(value, currency):
     amount = _coerce_float(value)
     if amount is None:
@@ -462,6 +479,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                   from_name=from_name)
 
     def _upsert_appointment_signal(reply_text: str):
+        if _is_wibrandt_order_related_text(
+            text,
+            reply_text,
+            "\n".join(m.get("text", "") for m in (history or [])),
+        ):
+            bm_logger.log("wibrandt_order_skipped_appointment_signal", phone=phone)
+            return
         _cname = fields.get("customer_name") or from_name or ""
         appointment_detector.upsert_pending_from_exchange(
             conversation_id=phone,
@@ -550,15 +574,24 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _cname = fields.get("customer_name") or from_name or "Unknown"
             _ref = flags.get("booking_ref") or flags.get("returning_booking") or "NO-REF"
             _esc_note = esc_result.get("internal_note", "")
+            _esc_mode = (
+                "order" if _is_wibrandt_order_related_text(
+                    text,
+                    _esc_note,
+                    esc_result.get("reply", ""),
+                    "\n".join(m.get("text", "") for m in (history or [])),
+                ) else "hard"
+            )
+            _esc_prefix = "[ORDER]" if _esc_mode == "order" else "[ESCALATION]"
             state_registry.create_pending_notification(
                 'escalation', channel, phone, _cname,
-                f"[ESCALATION] {_ref} - {_cname} ({_channel_label}: {phone}) - {_esc_note[:200]}",
+                f"{_esc_prefix} {_ref} - {_cname} ({_channel_label}: {phone}) - {_esc_note[:200]}",
                 f"=== RE-ESCALATION (fully_escalated conversation) ===\n"
                 f"Customer: {_cname}\nNew issue: {_esc_note}\n\n"
                 f"=== CHAT LOG ===\n" + "\n".join(
                     f"[{m.get('role','?').upper()}] {m.get('text','')}" for m in (history or [])
                 ),
-                mode="hard")
+                mode=_esc_mode)
             bm_logger.log("whatsapp_escalated_re_escalation", phone=phone)
 
         # Record reply timestamp + persist (early return bypasses end-of-function persistence)

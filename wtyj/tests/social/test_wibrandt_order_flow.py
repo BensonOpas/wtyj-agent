@@ -34,6 +34,7 @@ def _cleanup(phone):
         conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (phone,))
         conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (phone,))
         conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (phone,))
+        conn.execute("DELETE FROM appointments WHERE conversation_id = ?", (phone,))
         conn.commit()
     finally:
         conn.close()
@@ -243,5 +244,97 @@ def test_wibrandt_second_order_creates_separate_escalation(mock_process, _cfg, _
         assert "fully_escalated" not in state["flags"]
         assert "order_escalation_id" not in state["flags"]
         assert state["flags"]["last_order_escalation_id"] in {e["id"] for e in escalations}
+    finally:
+        _cleanup(phone)
+
+
+@patch("agents.social.social_agent.sheets_writer")
+@patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_wibrandt_order_followup_does_not_create_appointment_signal(mock_process, _cfg, _sheets):
+    phone = "wibrandt_order_no_appointment"
+    _cleanup(phone)
+    try:
+        mock_process.return_value = {
+            "intents": ["order"],
+            "fields": {
+                "customer_name": "Lisa",
+                "product_name": "Cinnamon Cardamom Twist",
+                "quantity": 29,
+                "delivery_address": "Purinchi",
+                "order_total": 145,
+                "currency": "XCG",
+            },
+            "confidence": "high",
+            "reply": (
+                "Here is your order summary: Cinnamon Cardamom Twist x 29, "
+                "delivery to Purinchi, total XCG 145. Does everything look correct?"
+            ),
+            "requires_human": False,
+            "flags": {},
+            "internal_note": "",
+        }
+
+        handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Lisa",
+            "text": "I want Cinnamon Cardamom Twist x 29 delivered to Purinchi.",
+        })
+
+        appointments = [
+            a for a in state_registry.appointments_list()
+            if a["conversationId"] == phone
+        ]
+        assert appointments == []
+    finally:
+        _cleanup(phone)
+
+
+@patch("agents.social.social_agent.sheets_writer")
+@patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
+@patch("agents.social.social_agent.marina_agent.process_message")
+def test_wibrandt_fully_escalated_order_followup_creates_order_mode(mock_process, _cfg, _sheets):
+    phone = "wibrandt_order_followup_mode"
+    _cleanup(phone)
+    try:
+        state_registry.wa_store_message(
+            phone,
+            "assistant",
+            "Here is your order summary: 5 x Cinnamon Cardamom Twist, total XCG 25.",
+        )
+        state_registry.wa_save_booking_state(
+            phone,
+            {"customer_name": "Lisa"},
+            {"fully_escalated": True},
+        )
+        mock_process.return_value = {
+            "reply": "I am passing this to our team.",
+            "requires_human": True,
+            "semi_escalation": False,
+            "internal_note": (
+                "Customer wants to reduce her confirmed order of Cinnamon "
+                "Cardamom Twist from 29 to 20."
+            ),
+        }
+
+        handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Lisa",
+            "text": "I need to change my order to 20 cinnamon twists.",
+        })
+
+        escalations = [
+            e for e in state_registry.get_all_escalations()
+            if e["customer_id"] == phone
+        ]
+        assert len(escalations) == 1
+        assert escalations[0]["mode"] == "order"
+        assert escalations[0]["subject"].startswith("[ORDER]")
+
+        appointments = [
+            a for a in state_registry.appointments_list()
+            if a["conversationId"] == phone
+        ]
+        assert appointments == []
     finally:
         _cleanup(phone)
