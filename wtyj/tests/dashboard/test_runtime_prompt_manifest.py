@@ -51,8 +51,8 @@ def test_runtime_prompt_manifest_indexes_known_prompt_paths(monkeypatch, tmp_pat
     body = response.json()
     assert body["partial"] is False
     source_ids = {source["id"] for source in body["sources"]}
-    assert "runtime.marina.whatsapp.system" in source_ids
-    assert "runtime.marina.email.system" in source_ids
+    assert "runtime.sofia.whatsapp.system" in source_ids
+    assert "runtime.sofia.email.system" in source_ids
     assert "runtime.dashboard.suggest_reply.system" in source_ids
     assert "runtime.escalation_summary.system" in source_ids
     assert "runtime.dm_agent.instagram_dm.system" in source_ids
@@ -63,6 +63,8 @@ def test_runtime_prompt_manifest_indexes_known_prompt_paths(monkeypatch, tmp_pat
     assert "plain-secret-password" not in combined
     assert "plain-secret-access-key" not in combined
     assert "Sofia" in combined
+    assert "Live Sofia WhatsApp system prompt" in combined
+    assert "Live Marina WhatsApp system prompt" not in combined
     assert "If any Source of Truth entry references a different assistant name" in combined
     assert "Always reply in Spanish" in combined
 

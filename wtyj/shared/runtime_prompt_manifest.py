@@ -84,24 +84,25 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
     except Exception:
         override_envelope = None
     agent_name = agent_identity.effective_agent_name(override_envelope)
+    source_prefix = re.sub(r"[^a-z0-9]+", "_", agent_name.lower()).strip("_") or "agent"
     signature = config_loader.get_agent_signature()
     persona_block = marina_agent._build_agent_persona_block(override_envelope)
     hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
 
     sources: list[dict[str, Any]] = []
     sources.append(_source(
-        source_id="runtime.marina.whatsapp.system",
-        name="Live Marina WhatsApp system prompt",
-        location="wtyj/agents/marina/marina_agent.py::_build_system_prompt(channel='whatsapp')",
+        source_id=f"runtime.{source_prefix}.whatsapp.system",
+        name=f"Live {agent_name} WhatsApp system prompt",
+        location="wtyj/agents/customer_agent.py::_build_system_prompt(channel='whatsapp')",
         used_in=["whatsapp"],
         prompt_kind="system",
         priority="platform_safety",
         text=marina_agent._build_system_prompt({}, channel="whatsapp"),
     ))
     sources.append(_source(
-        source_id="runtime.marina.email.system",
-        name="Live Marina email system prompt",
-        location="wtyj/agents/marina/marina_agent.py::_build_system_prompt(channel='email')",
+        source_id=f"runtime.{source_prefix}.email.system",
+        name=f"Live {agent_name} email system prompt",
+        location="wtyj/agents/customer_agent.py::_build_system_prompt(channel='email')",
         used_in=["email"],
         prompt_kind="system",
         priority="platform_safety",
@@ -109,8 +110,8 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
     ))
     sources.append(_source(
         source_id="runtime.fallback.whatsapp",
-        name="Live Marina WhatsApp fallback reply",
-        location="wtyj/agents/marina/marina_agent.py::_build_contextual_fallback_reply(channel='whatsapp')",
+        name=f"Live {agent_name} WhatsApp fallback reply",
+        location="wtyj/agents/customer_agent.py::_build_contextual_fallback_reply(channel='whatsapp')",
         used_in=["whatsapp"],
         prompt_kind="fallback",
         priority="platform_safety",
@@ -124,8 +125,8 @@ def build_runtime_prompt_manifest() -> dict[str, Any]:
     ))
     sources.append(_source(
         source_id="runtime.fallback.email",
-        name="Live Marina email fallback reply",
-        location="wtyj/agents/marina/marina_agent.py::_build_contextual_fallback_reply(channel='email')",
+        name=f"Live {agent_name} email fallback reply",
+        location="wtyj/agents/customer_agent.py::_build_contextual_fallback_reply(channel='email')",
         used_in=["email"],
         prompt_kind="fallback",
         priority="platform_safety",
