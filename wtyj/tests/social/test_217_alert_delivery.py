@@ -414,6 +414,115 @@ Lisa confirmed the order.
     assert "Action: Confirm this order with the customer" in captured["body"]
 
 
+def test_order_whatsapp_alert_uses_order_alert_gate(monkeypatch):
+    """#76: ORDER alerts are controlled by the booking/order alert type, not
+    the generic escalation toggle. A tenant may disable normal escalation
+    alerts and still expect confirmed orders to alert WhatsApp."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    from agents.social import zernio_dm_client
+
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {
+                                 "escalations": False,
+                                 "appointments": True,
+                             },
+                             "channels": {
+                                 "email": {"enabled": False, "destination": ""},
+                                 "whatsapp": {
+                                     "enabled": True,
+                                     "destination": "+351963618055",
+                                     "zernioResolved": True,
+                                 },
+                             },
+                         })
+    monkeypatch.setattr(state_registry, "get_resolved_operator_whatsapp_route",
+                         lambda: {"conversation_id": "convORDEROPS",
+                                   "account_id": "acctORDEROPS",
+                                   "resolved_at": "2026-06-11T12:00:00+00:00"})
+    sent = {}
+
+    def fake_send(conv, acct, text):
+        sent.update(conv=conv, acct=acct, text=text)
+        return True
+
+    monkeypatch.setattr(zernio_dm_client, "send_dm_reply", fake_send)
+    deliveries = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: deliveries.append((a, k)))
+    body = """=== ORDER PAYLOAD ===
+{
+  "type": "ORDER",
+  "customer_name": "Lisa",
+  "phone": "+599999999",
+  "products": [
+    {"name": "White Chocolate Pecan Cookie", "quantity": 7, "unit_price": "XCG 6", "subtotal": "XCG 42"}
+  ],
+  "delivery_address": "Purinchi",
+  "total": 42,
+  "currency": "XCG",
+  "comments": "Call before delivery"
+}
+"""
+    dapi._fire_escalation_alerts(
+        escalation_id=76, customer_name="Lisa", channel="whatsapp",
+        summary="[ORDER] Lisa - 7x White Chocolate Pecan Cookie",
+        mode="order", summary_dict=None, is_update=False, body=body)
+
+    assert sent["conv"] == "convORDEROPS"
+    assert sent["acct"] == "acctORDEROPS"
+    assert "New order" in sent["text"]
+    assert "Name: Lisa" in sent["text"]
+    assert "Phone: +599999999" in sent["text"]
+    assert "Address: Purinchi" in sent["text"]
+    assert "White Chocolate Pecan Cookie" in sent["text"]
+    assert "Price: XCG 42" in sent["text"]
+    wa_rows = [row for row in deliveries if row[0][1] == "whatsapp"]
+    assert len(wa_rows) == 1
+    assert wa_rows[0][0][:4] == (76, "whatsapp", "+351963618055", "sent")
+    assert wa_rows[0][1]["alert_type"] == "order"
+
+
+def test_order_whatsapp_alert_disabled_when_booking_alerts_off(monkeypatch):
+    """#76: when the booking/order alert type is disabled, ORDER alerts do
+    not send even if normal escalation alerts are enabled."""
+    from dashboard import api as dapi
+    from shared import state_registry
+    from agents.social import zernio_dm_client
+
+    monkeypatch.setattr(state_registry, "get_alert_settings",
+                         lambda **k: {
+                             "alertTypes": {
+                                 "escalations": True,
+                                 "appointments": False,
+                             },
+                             "channels": {
+                                 "whatsapp": {
+                                     "enabled": True,
+                                     "destination": "+351963618055",
+                                     "zernioResolved": True,
+                                 },
+                             },
+                         })
+    monkeypatch.setattr(state_registry, "get_resolved_operator_whatsapp_route",
+                         lambda: {"conversation_id": "convORDEROPS",
+                                   "account_id": "acctORDEROPS",
+                                   "resolved_at": "2026-06-11T12:00:00+00:00"})
+    monkeypatch.setattr(zernio_dm_client, "send_dm_reply",
+                         lambda *a, **k: (_ for _ in ()).throw(
+                             AssertionError("ORDER alert should not send")))
+    deliveries = []
+    monkeypatch.setattr(state_registry, "record_alert_delivery",
+                         lambda *a, **k: deliveries.append((a, k)))
+    dapi._fire_escalation_alerts(
+        escalation_id=77, customer_name="Lisa", channel="whatsapp",
+        summary="[ORDER] Lisa", mode="order", summary_dict=None,
+        is_update=False, body='=== ORDER PAYLOAD ===\n{"customer_name":"Lisa"}')
+
+    assert deliveries == []
+
+
 def test_alert_subject_specific_for_scheduling_update(monkeypatch):
     """Brief 239: when intent=scheduling AND is_update AND proposedTimes
     non-empty, subject names the new time."""

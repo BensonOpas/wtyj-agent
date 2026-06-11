@@ -3754,12 +3754,17 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         default_email = ""
 
     settings = state_registry.get_alert_settings(default_email_destination=default_email)
-    # Brief 241: per-alert-type gate. When alertTypes.escalations is False
-    # (operator disabled escalation alerts in Settings), short-circuit the
-    # entire dispatcher - no rows written, no provider calls. Default True
-    # for backward compat.
+    # Brief 241 + #76: per-alert-type gate. ORDER rows are stored in the
+    # escalation table for workflow reasons, but tenants see them as the
+    # bookings/orders alert category in Settings. Do not let disabling
+    # generic escalation alerts suppress a confirmed order alert.
     alert_types = (settings or {}).get("alertTypes") or {}
-    if not alert_types.get("escalations", True):
+    alert_type = "order" if mode == "order" else "escalation"
+    if alert_type == "order":
+        alerts_enabled = alert_types.get("orders", alert_types.get("appointments", True))
+    else:
+        alerts_enabled = alert_types.get("escalations", True)
+    if not alerts_enabled:
         return
     channels_cfg = settings.get("channels", {})
 
@@ -3798,7 +3803,8 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         if not recipients:
             state_registry.record_alert_delivery(
                 escalation_id, "email", "", "skipped",
-                "no email destination configured")
+                "no email destination configured",
+                alert_type=alert_type)
         else:
             # Brief 243: build deep-link to this escalation ONCE outside
             # the per-recipient loop. Empty string when tenant config
@@ -3819,10 +3825,13 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
             for dest in recipients:
                 try:
                     smtp_send(dest, email_subject, alert_text, html_body=_html_body)
-                    state_registry.record_alert_delivery(escalation_id, "email", dest, "sent")
+                    state_registry.record_alert_delivery(
+                        escalation_id, "email", dest, "sent",
+                        alert_type=alert_type)
                 except Exception as exc:
                     state_registry.record_alert_delivery(
-                        escalation_id, "email", dest, "failed", str(exc)[:200])
+                        escalation_id, "email", dest, "failed", str(exc)[:200],
+                        alert_type=alert_type)
 
     wa = channels_cfg.get("whatsapp", {})
     if wa.get("enabled"):
@@ -3830,7 +3839,8 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
         if not dest:
             state_registry.record_alert_delivery(
                 escalation_id, "whatsapp", "", "skipped",
-                "no whatsapp destination configured")
+                "no whatsapp destination configured",
+                alert_type=alert_type)
         else:
             # Brief 240: operator WA alerts go via Zernio (same provider as
             # unboks customer chat, no Meta CSW issue). The route must be
@@ -3842,7 +3852,8 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
             if not route:
                 state_registry.record_alert_delivery(
                     escalation_id, "whatsapp", dest, "skipped",
-                    "zernio_operator_destination_not_resolved")
+                    "zernio_operator_destination_not_resolved",
+                    alert_type=alert_type)
             else:
                 from agents.social.zernio_dm_client import send_dm_reply
                 try:
@@ -3852,26 +3863,31 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
                         alert_text_whatsapp)  # Brief 256: compact body for WA
                     if ok:
                         state_registry.record_alert_delivery(
-                            escalation_id, "whatsapp", dest, "sent")
+                            escalation_id, "whatsapp", dest, "sent",
+                            alert_type=alert_type)
                     else:
                         state_registry.record_alert_delivery(
                             escalation_id, "whatsapp", dest, "failed",
-                            "zernio_send_dm_reply_returned_false")
+                            "zernio_send_dm_reply_returned_false",
+                            alert_type=alert_type)
                 except Exception as exc:
                     state_registry.record_alert_delivery(
                         escalation_id, "whatsapp", dest, "failed",
-                        f"zernio_send_dm_reply_exception: {str(exc)[:200]}")
+                        f"zernio_send_dm_reply_exception: {str(exc)[:200]}",
+                        alert_type=alert_type)
 
     if channels_cfg.get("telegram", {}).get("enabled"):
         state_registry.record_alert_delivery(
             escalation_id, "telegram",
             channels_cfg["telegram"].get("destination", ""),
-            "skipped", "telegram provider not configured")
+            "skipped", "telegram provider not configured",
+            alert_type=alert_type)
     if channels_cfg.get("messenger", {}).get("enabled"):
         state_registry.record_alert_delivery(
             escalation_id, "messenger",
             channels_cfg["messenger"].get("destination", ""),
-            "skipped", "messenger provider not configured")
+            "skipped", "messenger provider not configured",
+            alert_type=alert_type)
 
 
 # Brief 217: register the dispatcher with state_registry. Placed directly
