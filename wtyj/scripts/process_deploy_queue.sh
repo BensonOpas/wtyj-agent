@@ -43,7 +43,7 @@ bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 # just restart). unboks is the SR-facing test sandbox; deploys with the
 # others so its container always runs the latest image.
 STATUS="success"
-DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consultadespertares unboks}"
+DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consultadespertares unboks wibrandt}"
 HEALTH_PORTS=""
 for client in $DEPLOY_CLIENTS; do
   if [ ! -d "/root/clients/$client" ]; then
@@ -60,6 +60,7 @@ for client in $DEPLOY_CLIENTS; do
     adamus) HEALTH_PORTS="$HEALTH_PORTS 8002" ;;
     consultadespertares) HEALTH_PORTS="$HEALTH_PORTS 8003" ;;
     unboks) HEALTH_PORTS="$HEALTH_PORTS 8004" ;;
+    wibrandt) HEALTH_PORTS="$HEALTH_PORTS 8100" ;;
   esac
 done
 
