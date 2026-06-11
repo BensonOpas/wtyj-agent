@@ -587,6 +587,87 @@ def _build_info_updates_block() -> str:
     )
 
 
+def _product_title_from_update(text: str) -> tuple[str, str]:
+    """Return a product title + optional description from an info update."""
+    clean = (text or "").strip()
+    if not clean:
+        return "", ""
+    parts = [p.strip() for p in clean.splitlines() if p.strip()]
+    if not parts:
+        return "", ""
+    title = parts[0]
+    description = " ".join(parts[1:]).strip()
+    if description == title:
+        description = ""
+    return title, description
+
+
+def _product_catalog_key(title: str) -> str:
+    return (
+        (title or "")
+        .strip()
+        .lower()
+        .replace("cinamon", "cinnamon")
+        .replace("  ", " ")
+    )
+
+
+def _product_catalog_display_title(title: str) -> str:
+    return (title or "").strip().replace("Cinamon", "Cinnamon")
+
+
+def _build_live_product_catalog_block() -> str:
+    """Build a canonical product catalog from active Nr2 product records.
+
+    This prevents static SOT text from becoming the product source of truth.
+    Tenants can add/change products in Nr2, and the agent receives the current
+    product count and names directly from those active product records.
+    """
+    try:
+        from shared import state_registry
+        rows = state_registry.get_active_info_updates()
+    except Exception:
+        return ""
+
+    products: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    for row in rows or []:
+        if str(row.get("type") or "").strip().lower() != "product":
+            continue
+        title, description = _product_title_from_update(row.get("text") or "")
+        key = _product_catalog_key(title)
+        if not key:
+            continue
+        if key not in products:
+            order.append(key)
+        products[key] = {
+            "title": _product_catalog_display_title(title),
+            "description": description,
+        }
+
+    if not order:
+        return ""
+
+    lines = []
+    for idx, key in enumerate(order, 1):
+        product = products[key]
+        title = product["title"]
+        description = product["description"]
+        if description:
+            lines.append(f"{idx}. {title}: {description}")
+        else:
+            lines.append(f"{idx}. {title}")
+
+    return (
+        "\n\nLIVE PRODUCT CATALOG (central source from active Nr2 product records):\n"
+        f"Current active product count: {len(lines)}.\n"
+        "Use this live catalog for product availability, product names, and product counts. "
+        "It overrides static Source of Truth product lists/counts if they differ.\n"
+        "Do not say the tenant has fewer products than this catalog lists.\n\n"
+        + "\n".join(lines)
+    )
+
+
 def _build_knowledge_files_block() -> str:
     """Brief 230: unless features.knowledge_files_in_prompt is explicitly
     false, and at least one knowledge file has status='ready', inject
@@ -794,6 +875,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _customer_file_block = _build_customer_file_block(customer_file)
     _approved_answers_block = _build_approved_answers_block(channel)
     _info_updates_block = _build_info_updates_block()
+    _live_product_catalog_block = _build_live_product_catalog_block()
     _knowledge_files_block = _build_knowledge_files_block()
     # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
     # so both persona block and SOT block see the same snapshot.
@@ -1036,7 +1118,8 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 
 Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
 {_tenant_hard_rule_block}
-{_icp_final_override_block}"""
+{_icp_final_override_block}
+{_live_product_catalog_block}"""
 
 
 def _build_user_prompt(

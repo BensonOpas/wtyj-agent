@@ -1795,6 +1795,7 @@ os.makedirs(_KNOWLEDGE_DIR, exist_ok=True)
 _KNOWLEDGE_MAX_BYTES = 25 * 1024 * 1024  # match SR's frontend cap
 _KNOWLEDGE_MEDIA_MAX_BYTES = 10 * 1024 * 1024
 _KNOWLEDGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_KNOWLEDGE_MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _knowledge_media_service_key(source: str, knowledge_id: str) -> str:
@@ -1954,8 +1955,12 @@ async def upload_knowledge_media(
     if not knowledge_id.strip():
         raise HTTPException(status_code=400, detail="knowledge_id is required")
     content_type = (file.content_type or "").lower()
-    if content_type not in _KNOWLEDGE_MEDIA_TYPES:
-        raise HTTPException(status_code=400, detail="Use a JPG, PNG, or WebP image.")
+    original_ext = os.path.splitext(file.filename or "")[1].lower()
+    if (
+        content_type not in _KNOWLEDGE_MEDIA_TYPES
+        and original_ext not in _KNOWLEDGE_MEDIA_EXTENSIONS
+    ):
+        raise HTTPException(status_code=400, detail="Use a JPG, JPEG, PNG, or WebP image.")
     data = await file.read()
     if len(data) > _KNOWLEDGE_MEDIA_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Image is over 10 MB.")
