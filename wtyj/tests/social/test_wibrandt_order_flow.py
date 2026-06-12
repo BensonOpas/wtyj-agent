@@ -192,6 +192,70 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
 @patch("agents.social.social_agent.sheets_writer")
 @patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
 @patch("agents.social.social_agent.marina_agent.process_message")
+def test_wibrandt_returning_order_reopens_archived_conversation(mock_process, _cfg, _sheets):
+    phone = "wibrandt_archived_return_order"
+    _cleanup(phone)
+    try:
+        state_registry.wa_set_archived(phone, True)
+        fields = {
+            "customer_name": "Calvin",
+            "products": [
+                {"name": "Tosca Cookie", "quantity": 4, "unit_price": 6, "subtotal": 24},
+                {"name": "White Chocolate Pecan Cookie", "quantity": 2, "unit_price": 6, "subtotal": 12},
+                {"name": "Cinnamon Cardamom Twist", "quantity": 4, "unit_price": 5, "subtotal": 20},
+            ],
+            "delivery_address": "Purucnhi",
+            "comments": "Delivery requested around 19:00",
+            "order_total": 56,
+            "currency": "XCG",
+        }
+        state_registry.wa_save_booking_state(phone, fields, {"awaiting_order_confirmation": True})
+
+        mock_process.return_value = {
+            "intents": ["order"],
+            "fields": {},
+            "confidence": "high",
+            "reply": "Perfect 💛 We've received your order.",
+            "requires_human": False,
+            "flags": {
+                "order_confirmed": True,
+                "awaiting_order_confirmation": False,
+            },
+            "internal_note": "Customer confirmed second order.",
+        }
+
+        handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Calvin",
+            "text": "yes, looking good, can i have them around 19:00?",
+        })
+
+        conn = state_registry._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT deleted FROM conversation_status WHERE conversation_id = ?",
+                (phone,),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert row[0] == 0
+
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert len(queue) == 1
+        assert queue[0]["order_status"] == "awaiting_human_confirmation"
+        assert queue[0]["order_payload"]["delivery_address"] == "Purucnhi"
+        assert queue[0]["order_payload"]["products"][0]["name"] == "Tosca Cookie"
+    finally:
+        _cleanup(phone)
+
+
+@patch("agents.social.social_agent.sheets_writer")
+@patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
+@patch("agents.social.social_agent.marina_agent.process_message")
 def test_wibrandt_second_order_creates_separate_escalation(mock_process, _cfg, _sheets):
     phone = "wibrandt_second_order"
     _cleanup(phone)

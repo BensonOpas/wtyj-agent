@@ -2384,13 +2384,15 @@ def set_conversation_status(conversation_id: str, status: str,
     """Set or update the conversation status (pending/open/resolved).
     Uses UPSERT so the first call creates the row and subsequent calls update it."""
     conn = _get_conn()
+    should_unarchive = status in {"pending", "open", "active"}
     conn.execute(
         "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
         "VALUES (?, ?, ?, ?) "
         "ON CONFLICT(conversation_id) DO UPDATE SET status = excluded.status, "
-        "channel = excluded.channel, updated_at = excluded.updated_at",
+        "channel = excluded.channel, updated_at = excluded.updated_at, "
+        "deleted = CASE WHEN ? THEN 0 ELSE deleted END",
         (conversation_id, channel, status,
-         datetime.now(timezone.utc).isoformat())
+         datetime.now(timezone.utc).isoformat(), 1 if should_unarchive else 0)
     )
     conn.commit()
     conn.close()
