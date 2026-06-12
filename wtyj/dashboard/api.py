@@ -3949,6 +3949,20 @@ async def list_orders_endpoint():
     return {"items": items, "orders": items, "connected": True}
 
 
+@router.post("/orders/{escalation_id}/phone-confirmed",
+             dependencies=[Depends(_check_auth)])
+async def mark_order_phone_confirmed_endpoint(escalation_id: int):
+    ok = state_registry.mark_order_phone_confirmed(escalation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Active order not found")
+    bm_logger.log(
+        "order_phone_confirmed",
+        escalation_id=escalation_id,
+        actor="dashboard",
+    )
+    return {"ok": True, "status": "confirmed"}
+
+
 class ConfirmAppointmentRequest(BaseModel):
     """Brief 242: optional fields for the operator confirm action.
     confirmedBy and note are accepted for forward compat (frontend can

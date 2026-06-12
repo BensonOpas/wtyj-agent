@@ -185,6 +185,27 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
         ]
         assert len(queue) == 1
         assert queue[0]["order_status"] == "awaiting_human_confirmation"
+
+        assert state_registry.mark_order_phone_confirmed(escalation["id"]) is True
+        order_state = state_registry.get_order_state_for_conversation(phone)
+        assert order_state["order_status"] == "confirmed"
+        assert order_state["next_operator_action"] == (
+            "Prepare, deliver, and mark this order fulfilled."
+        )
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert len(queue) == 1
+        assert queue[0]["order_status"] == "confirmed"
+
+        assert state_registry.update_notification_status(escalation["id"], "resolved") is True
+        state_registry.resolve_conversation_from_escalation(escalation["id"])
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert queue == []
     finally:
         _cleanup(phone)
 

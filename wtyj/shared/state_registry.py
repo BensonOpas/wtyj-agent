@@ -1481,6 +1481,13 @@ def _active_order_escalation_for(conn, conversation_id: str) -> dict | None:
     }
 
 
+def _order_status_from_escalation_status(status: str | None) -> str:
+    s = (status or "").strip().lower()
+    if s == "confirmed":
+        return "confirmed"
+    return "awaiting_human_confirmation"
+
+
 def _order_state_from_fields_and_flags(conversation_id: str, fields: dict,
                                        flags: dict, last_activity: str,
                                        channel: str = "whatsapp",
@@ -1564,12 +1571,18 @@ def get_order_state_for_conversation(conversation_id: str) -> dict | None:
         payload = escalation.get("order_payload") or {}
         if not payload or not payload.get("products"):
             payload = (state or {}).get("order_payload") or payload
+        order_status = _order_status_from_escalation_status(escalation.get("status"))
+        next_operator_action = (
+            "Prepare, deliver, and mark this order fulfilled."
+            if order_status == "confirmed"
+            else "Call the customer to confirm order details and delivery."
+        )
         return {
             "conversation_id": conversation_id,
             "customer_name": payload.get("customer_name") or escalation.get("customer_name") or fallback_name or conversation_id,
             "intent": "order",
             "is_order": True,
-            "order_status": "awaiting_human_confirmation",
+            "order_status": order_status,
             "order_payload": payload,
             "escalation_mode": "order",
             "escalation_id": escalation.get("id"),
@@ -1577,7 +1590,7 @@ def get_order_state_for_conversation(conversation_id: str) -> dict | None:
             "ai_muted": True,
             "badge_type": "order",
             "queue_type": "orders",
-            "next_operator_action": "Confirm this order with the customer.",
+            "next_operator_action": next_operator_action,
             "channel": escalation.get("channel") or channel,
             "created_at": escalation.get("created_at") or (state or {}).get("created_at"),
             "updated_at": escalation.get("created_at") or (state or {}).get("updated_at"),
@@ -1634,6 +1647,26 @@ def list_order_queue() -> list:
         items.append(state)
     items.sort(key=lambda r: r.get("updated_at") or r.get("created_at") or "", reverse=True)
     return items
+
+
+def mark_order_phone_confirmed(escalation_id: int) -> bool:
+    """Mark an active order escalation as phone-confirmed.
+
+    Orders stay in the Orders queue after this transition. The final
+    fulfillment action still resolves the order and removes it from the
+    active queue.
+    """
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE pending_notifications SET status = 'confirmed' "
+        "WHERE id = ? AND notification_type = 'escalation' "
+        "AND mode = 'order' AND status != 'resolved'",
+        (escalation_id,),
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def wa_save_booking_state(phone: str, fields: dict, flags: dict,
