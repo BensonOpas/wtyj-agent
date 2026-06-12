@@ -1438,6 +1438,79 @@ def _order_payload_from_state(conversation_id: str, fields: dict,
     }
 
 
+def _order_merge_note(existing, update) -> str:
+    existing_text = str(existing or "").strip()
+    update_text = str(update or "").strip()
+    if not update_text:
+        return existing_text
+    if not existing_text:
+        return update_text
+    existing_l = existing_text.lower()
+    update_l = update_text.lower()
+    if update_l in existing_l:
+        return existing_text
+    if existing_l in update_l:
+        return update_text
+    return f"{existing_text}\n{update_text}"
+
+
+def _merge_order_payload_updates(payload: dict, state_payload: dict,
+                                 fields: dict) -> dict:
+    """Merge late customer-provided contact updates into an active order.
+
+    Confirmed order rows keep the original product snapshot, but customers can
+    still add a phone number, delivery note, or address after confirmation.
+    The Orders view should reflect those operator-critical updates without
+    replacing the confirmed products with a partial later state.
+    """
+    merged = dict(payload or {})
+    state_payload = state_payload or {}
+    fields = fields or {}
+
+    customer_name = (
+        fields.get("customer_name")
+        or fields.get("name")
+        or state_payload.get("customer_name")
+    )
+    if str(customer_name or "").strip():
+        merged["customer_name"] = str(customer_name).strip()
+
+    phone = fields.get("phone") or state_payload.get("phone")
+    if str(phone or "").strip():
+        merged["phone"] = str(phone).strip()
+
+    email = fields.get("email") or state_payload.get("email")
+    if str(email or "").strip():
+        merged["email"] = str(email).strip()
+
+    delivery_address = (
+        fields.get("delivery_address")
+        or fields.get("address")
+        or state_payload.get("delivery_address")
+    )
+    if str(delivery_address or "").strip():
+        merged["delivery_address"] = str(delivery_address).strip()
+
+    comments = (
+        fields.get("comments")
+        or fields.get("special_requests")
+        or state_payload.get("comments")
+    )
+    merged["comments"] = _order_merge_note(merged.get("comments"), comments)
+
+    if not merged.get("products") and state_payload.get("products"):
+        merged["products"] = state_payload.get("products")
+    if merged.get("total") is None and state_payload.get("total") is not None:
+        merged["total"] = state_payload.get("total")
+    if state_payload.get("currency"):
+        merged["currency"] = str(state_payload.get("currency")).strip()
+    if not merged.get("channel") and state_payload.get("channel"):
+        merged["channel"] = state_payload.get("channel")
+    if not merged.get("customer_id") and state_payload.get("customer_id"):
+        merged["customer_id"] = state_payload.get("customer_id")
+    return merged
+
+
 def _extract_order_payload_from_body(body: str) -> dict:
     if not body:
         return {}
@@ -1571,6 +1644,11 @@ def get_order_state_for_conversation(conversation_id: str) -> dict | None:
         payload = escalation.get("order_payload") or {}
         if not payload or not payload.get("products"):
             payload = (state or {}).get("order_payload") or payload
+        payload = _merge_order_payload_updates(
+            payload,
+            (state or {}).get("order_payload") or {},
+            fields,
+        )
         order_status = _order_status_from_escalation_status(escalation.get("status"))
         next_operator_action = (
             "Prepare, deliver, and mark this order fulfilled."

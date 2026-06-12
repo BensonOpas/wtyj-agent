@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -206,6 +207,82 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
             if item["conversation_id"] == phone
         ]
         assert queue == []
+    finally:
+        _cleanup(phone)
+
+
+def test_active_order_reflects_late_customer_phone_and_notes():
+    phone = "wibrandt_order_late_phone"
+    _cleanup(phone)
+    try:
+        initial_payload = {
+            "type": "ORDER",
+            "customer_name": "Calvin",
+            "phone": "62264366787268",
+            "products": [
+                {"name": "Tosca Cookie", "quantity": 4, "unit_price": None, "subtotal": None},
+                {"name": "White Chocolate Pecan Cookie", "quantity": 2, "unit_price": 6, "subtotal": 12},
+                {"name": "Cinnamon Cardamom Twist", "quantity": 4, "unit_price": 5, "subtotal": 20},
+            ],
+            "delivery_address": "Purucnhi",
+            "total": None,
+            "currency": "XCG",
+            "comments": "Delivery requested around 19:00",
+            "channel": "whatsapp",
+            "customer_id": phone,
+        }
+        body = (
+            "=== ORDER ===\n"
+            "Status: WAITING_FOR_HUMAN_ORDER_CONFIRMATION\n"
+            "Customer: Calvin\n"
+            "Phone: 62264366787268\n"
+            "Channel: WhatsApp\n"
+            "Delivery address: Purucnhi\n"
+            "Comments: Delivery requested around 19:00\n"
+            "Total: Price not captured\n\n"
+            "=== ORDER PAYLOAD ===\n"
+            + json.dumps(initial_payload, indent=2)
+        )
+        escalation_id = state_registry.create_pending_notification(
+            "escalation",
+            "whatsapp",
+            phone,
+            "Calvin",
+            "[ORDER] Calvin (WhatsApp) - 4x Tosca Cookie",
+            body,
+            mode="order",
+        )
+        state_registry.wa_store_message(phone, "user", "yes, looking good")
+        state_registry.wa_save_booking_state(
+            phone,
+            {
+                "customer_name": "Calvin",
+                "phone": "6881585",
+                "special_requests": (
+                    "Call a few minutes before arrival - they are in the back "
+                    "and cannot hear the doorbell"
+                ),
+            },
+            {"last_order_escalation_id": escalation_id},
+        )
+
+        order_state = state_registry.get_order_state_for_conversation(phone)
+        assert order_state is not None
+        payload = order_state["order_payload"]
+        assert payload["phone"] == "6881585"
+        assert payload["delivery_address"] == "Purucnhi"
+        assert payload["products"] == initial_payload["products"]
+        assert "Delivery requested around 19:00" in payload["comments"]
+        assert "Call a few minutes before arrival" in payload["comments"]
+
+        queue = [
+            item for item in state_registry.list_order_queue()
+            if item["conversation_id"] == phone
+        ]
+        assert len(queue) == 1
+        assert queue[0]["order_payload"]["phone"] == "6881585"
+        assert "cannot hear the doorbell" in queue[0]["order_payload"]["comments"]
+        assert queue[0]["order_payload"]["products"] == initial_payload["products"]
     finally:
         _cleanup(phone)
 
