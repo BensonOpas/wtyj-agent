@@ -3982,6 +3982,12 @@ async def list_escalations(mode: str = None, status: str = None):
         r["id"] = str(r["id"])
     if mode in ("soft", "hard", "order"):
         rows = [r for r in rows if r.get("mode") == mode]
+    elif mode in (None, "", "all"):
+        # Product orders have their own Nr2 Orders workspace. They are stored
+        # as order-mode escalation rows for audit/state, but they must not leak
+        # into the normal Escalations inbox or the operator sees the same work
+        # item twice.
+        rows = [r for r in rows if r.get("mode") != "order"]
     if status and status != "all":
         rows = [r for r in rows if r.get("status") == status]
     return rows

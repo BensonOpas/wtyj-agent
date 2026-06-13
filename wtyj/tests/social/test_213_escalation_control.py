@@ -50,6 +50,17 @@ def _cleanup(esc_id, customer_id):
     conn.close()
 
 
+def _cleanup_many(customer_ids):
+    from shared import state_registry
+    conn = state_registry._get_conn()
+    for customer_id in customer_ids:
+        conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (customer_id,))
+        conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (customer_id,))
+        conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (customer_id,))
+    conn.commit()
+    conn.close()
+
+
 # --- Test 1: POST /mode sets field + returns updated row
 def test_post_mode_sets_field_and_returns_updated_row():
     customer_id = "213_mode_phone"
@@ -65,6 +76,31 @@ def test_post_mode_sets_field_and_returns_updated_row():
     matched = next(e for e in rows if e["id"] == esc_id)
     assert matched["mode"] == "hard"
     _cleanup(esc_id, customer_id)
+
+
+def test_list_escalations_excludes_order_rows_by_default():
+    """Orders live in /orders, not in the generic Escalations inbox."""
+    from shared import state_registry
+
+    soft_customer = "213_default_soft"
+    order_customer = "213_default_order"
+    _cleanup_many([soft_customer, order_customer])
+    try:
+        soft_id = _seed_escalation("whatsapp", soft_customer, "soft")
+        order_id = _seed_escalation("whatsapp", order_customer, "order")
+        token = _login()
+
+        default_rows = client.get("/dashboard/api/escalations",
+                                  headers=_auth(token)).json()
+        assert any(row["id"] == str(soft_id) for row in default_rows)
+        assert all(row["id"] != str(order_id) for row in default_rows)
+        assert all(row.get("mode") != "order" for row in default_rows)
+
+        order_rows = client.get("/dashboard/api/escalations?mode=order",
+                                headers=_auth(token)).json()
+        assert any(row["id"] == str(order_id) for row in order_rows)
+    finally:
+        _cleanup_many([soft_customer, order_customer])
 
 
 # --- Test 2: POST /mode rejects invalid value
