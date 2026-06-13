@@ -73,6 +73,52 @@ _MEDIA_STOPWORDS = {
     "details", "information", "product", "products", "available",
 }
 
+_WIBRANDT_PRODUCT_CATALOG = (
+    {
+        "name": "The Tosca Twist",
+        "unit_price": 5,
+        "aliases": ("the tosca twist", "tosca twist"),
+    },
+    {
+        "name": "Cinnamon Cardamom Twist",
+        "unit_price": 5,
+        "aliases": (
+            "cinnamon cardamom twist",
+            "cinnamon cardamom twists",
+            "cinnamon twist",
+            "cinnamon twists",
+            "cinnamons",
+            "cinnamon",
+        ),
+    },
+    {
+        "name": "White Chocolate Pecan Cookie",
+        "unit_price": 6,
+        "aliases": (
+            "white chocolate pecan cookie",
+            "white chocolate pecan cookies",
+            "white chocolate cookie",
+            "white chocolate cookies",
+            "white chocolate",
+        ),
+    },
+    {
+        "name": "The Tosca Cookie",
+        "unit_price": 6,
+        "aliases": ("the tosca cookie", "tosca cookie", "tosca cookies"),
+    },
+    {
+        "name": "The Banana Carrot Pecan Crunch",
+        "unit_price": 7,
+        "aliases": (
+            "the banana carrot pecan crunch",
+            "banana carrot pecan crunch",
+            "banana pecan crunch",
+            "banana",
+        ),
+    },
+)
+
 
 def _day_matches(day_name, days_available):
     """Check if day_name matches the service's days_available string."""
@@ -323,6 +369,67 @@ def _coerce_float(value):
         return None
 
 
+def _normalize_product_name(value):
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())).strip()
+
+
+def _wibrandt_catalog_match(product_name):
+    normalized = _normalize_product_name(product_name)
+    if not normalized:
+        return None
+    for product in _WIBRANDT_PRODUCT_CATALOG:
+        for alias in product["aliases"]:
+            if _normalize_product_name(alias) in normalized:
+                return product
+    return None
+
+
+def _apply_wibrandt_catalog_pricing(fields):
+    """Fill deterministic Wibrandt product prices when Marina extracts names only."""
+    if not _is_wibrandt_order_tenant() or not isinstance(fields, dict):
+        return False
+
+    changed = False
+    products = fields.get("products") or []
+    if isinstance(products, list):
+        for item in products:
+            if not isinstance(item, dict):
+                continue
+            match = _wibrandt_catalog_match(item.get("name"))
+            if not match:
+                continue
+            qty = _coerce_int(item.get("quantity"), _order_quantity(fields) or 1) or 1
+            item["name"] = match["name"]
+            item["quantity"] = qty
+            item["unit_price"] = match["unit_price"]
+            item["subtotal"] = qty * match["unit_price"]
+            changed = True
+    elif products:
+        fields["products"] = []
+
+    if not fields.get("products"):
+        match = _wibrandt_catalog_match(fields.get("product_name") or fields.get("service_name"))
+        if match:
+            qty = _order_quantity(fields) or 1
+            fields["product_name"] = match["name"]
+            fields["quantity"] = qty
+            fields["unit_price"] = match["unit_price"]
+            fields["subtotal"] = qty * match["unit_price"]
+            changed = True
+
+    lines = _order_lines(fields)
+    priced_lines = [line for line in lines if line.get("subtotal") is not None]
+    if lines and len(priced_lines) == len(lines):
+        total = sum(line["subtotal"] for line in priced_lines)
+        fields["order_total"] = total
+        fields["currency"] = "XCG"
+        changed = True
+    elif changed:
+        fields["currency"] = "XCG"
+
+    return changed
+
+
 def _order_quantity(fields):
     return _coerce_int(fields.get("quantity") or fields.get("guests"), 0)
 
@@ -370,7 +477,12 @@ def _order_lines(fields):
 
 
 def _has_order_required_fields(fields):
-    return bool(_order_lines(fields) and _order_quantity(fields) and _order_address(fields))
+    lines = _order_lines(fields)
+    return bool(
+        lines
+        and _order_address(fields)
+        and all(_coerce_int(line.get("quantity"), 0) > 0 for line in lines)
+    )
 
 
 def _reset_wibrandt_order_draft(fields, flags, escalation_id=None):
@@ -423,6 +535,67 @@ def _money(value, currency):
     else:
         display = f"{amount:.2f}"
     return f"{currency} {display}".strip()
+
+
+def _wibrandt_order_has_complete_pricing(fields):
+    lines = _order_lines(fields)
+    return bool(lines) and all(line.get("subtotal") is not None for line in lines)
+
+
+def _wibrandt_order_total(fields):
+    total = _coerce_float(fields.get("order_total") or fields.get("total"))
+    if total is not None:
+        return total
+    subtotals = [line.get("subtotal") for line in _order_lines(fields) if line.get("subtotal") is not None]
+    return sum(subtotals) if subtotals else None
+
+
+def _looks_like_price_question(text):
+    normalized = str(text or "").lower()
+    return any(term in normalized for term in (
+        "price", "total", "pay", "payment", "how much", "cost",
+        "amount", "including delivery", "delivery fee",
+    ))
+
+
+def _reply_defers_known_price(reply_text):
+    normalized = str(reply_text or "").lower()
+    defers = ("checking", "team will confirm", "exact total", "exact pricing",
+              "get back to you", "pricing ready")
+    money_terms = ("price", "total", "payment", "pay", "cost")
+    return any(term in normalized for term in defers) and any(term in normalized for term in money_terms)
+
+
+def _build_wibrandt_order_summary_reply(fields):
+    currency = fields.get("currency") or "XCG"
+    lines = _order_lines(fields)
+    line_text = []
+    for line in lines:
+        qty = line.get("quantity") or 1
+        name = line.get("name") or "Item"
+        unit_price = _money(line.get("unit_price"), currency)
+        subtotal = _money(line.get("subtotal"), currency)
+        line_text.append(f"• {qty} x {name} — {unit_price} each — {subtotal}")
+
+    total = _money(_wibrandt_order_total(fields), currency)
+    parts = ["Here is your order summary:", "", *line_text, "", f"Product total: {total}"]
+    address = _order_address(fields)
+    phone = fields.get("phone")
+    comments = fields.get("comments") or fields.get("special_requests")
+    if address:
+        parts.extend(["", f"📍 {address}"])
+    if phone:
+        parts.append(f"☎️ {phone}")
+    if comments:
+        parts.append(f"💬 {comments}")
+    parts.extend([
+        "",
+        "Delivery fee is not configured yet, so this total is for the products only. "
+        "The team will confirm any delivery fee when they call.",
+        "",
+        "Does everything look correct?",
+    ])
+    return "\n".join(parts)
 
 
 def _create_wibrandt_order_escalation(channel, phone, channel_label, fields,
@@ -971,6 +1144,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if new_flags.get("awaiting_booking_confirmation"):
         new_flags.pop("awaiting_booking_confirmation")
     flags.update(new_flags)
+    _apply_wibrandt_catalog_pricing(fields)
 
     # Step 5: Change detection — cancel soft hold if customer changed booking details
     if (_was_awaiting and not flags.get("awaiting_booking_confirmation")
@@ -1008,8 +1182,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         elif _has_order_required_fields(fields) and not flags.get("awaiting_order_confirmation"):
             flags["awaiting_order_confirmation"] = True
             flags.pop("booking_confirmed", None)
-            if "look correct" not in reply_text.lower() and "everything correct" not in reply_text.lower():
+            if _wibrandt_order_has_complete_pricing(fields):
+                reply_text = _build_wibrandt_order_summary_reply(fields)
+            elif "look correct" not in reply_text.lower() and "everything correct" not in reply_text.lower():
                 reply_text = reply_text.rstrip() + "\n\nDoes everything look correct?"
+            _skip_booking = True
+        elif (
+            _has_order_required_fields(fields)
+            and flags.get("awaiting_order_confirmation")
+            and not flags.get("order_confirmed")
+            and _wibrandt_order_has_complete_pricing(fields)
+            and (_looks_like_price_question(text) or _reply_defers_known_price(reply_text))
+        ):
+            reply_text = _build_wibrandt_order_summary_reply(fields)
             _skip_booking = True
         elif result.get("intents") and any(i in _ORDER_INTENTS for i in result.get("intents", [])):
             flags.pop("booking_confirmed", None)

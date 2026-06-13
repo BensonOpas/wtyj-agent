@@ -105,6 +105,66 @@ def test_wibrandt_order_summary_waits_for_customer_confirmation(mock_process, _c
 @patch("agents.social.social_agent.sheets_writer")
 @patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
 @patch("agents.social.social_agent.marina_agent.process_message")
+def test_wibrandt_order_total_is_calculated_from_catalog_when_model_defers(mock_process, _cfg, _sheets):
+    phone = "wibrandt_order_catalog_total"
+    _cleanup(phone)
+    try:
+        fields = {
+            "customer_name": "Calvin",
+            "phone": "6881585",
+            "products": [
+                {"name": "Cinnamon Cardamom Twist", "quantity": 4},
+                {"name": "Tosca Cookie", "quantity": 3},
+                {"name": "Banana Pecan Crunch", "quantity": 1},
+            ],
+            "delivery_address": "Restaurant Purucni, Willemstad",
+            "comments": "Call before delivery",
+        }
+        flags = {"awaiting_order_confirmation": True}
+        state_registry.wa_save_booking_state(phone, fields, flags)
+
+        mock_process.return_value = {
+            "intents": ["order"],
+            "fields": {},
+            "confidence": "high",
+            "reply": "The team will confirm the exact total and handle payment when they call.",
+            "requires_human": False,
+            "flags": {},
+            "internal_note": "",
+        }
+
+        reply = handle_incoming_whatsapp_message({
+            "from": phone,
+            "from_name": "Calvin",
+            "text": "I need to know the total price including delivery please",
+        })
+
+        assert "Product total: XCG 45" in reply
+        assert "4 x Cinnamon Cardamom Twist — XCG 5 each — XCG 20" in reply
+        assert "3 x The Tosca Cookie — XCG 6 each — XCG 18" in reply
+        assert "1 x The Banana Carrot Pecan Crunch — XCG 7 each — XCG 7" in reply
+        assert "Delivery fee is not configured yet" in reply
+        assert "team will confirm the exact total" not in reply
+        assert "Does everything look correct?" in reply
+
+        state = state_registry.wa_get_booking_state(phone)
+        assert state["fields"]["currency"] == "XCG"
+        assert state["fields"]["order_total"] == 45
+        assert state["fields"]["products"][0]["unit_price"] == 5
+        assert state["fields"]["products"][1]["subtotal"] == 18
+        assert state["fields"]["products"][2]["name"] == "The Banana Carrot Pecan Crunch"
+        assert state["flags"]["awaiting_order_confirmation"] is True
+        assert [
+            e for e in state_registry.get_all_escalations()
+            if e["customer_id"] == phone
+        ] == []
+    finally:
+        _cleanup(phone)
+
+
+@patch("agents.social.social_agent.sheets_writer")
+@patch("agents.social.social_agent.config_loader.get_raw", return_value=_wibrandt_config())
+@patch("agents.social.social_agent.marina_agent.process_message")
 def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _sheets):
     phone = "wibrandt_order_confirmed"
     _cleanup(phone)
@@ -163,7 +223,7 @@ def test_wibrandt_confirmed_order_creates_order_escalation(mock_process, _cfg, _
         assert "WAITING_FOR_HUMAN_ORDER_CONFIRMATION" in escalation["body"]
         assert "Banana Carrot Pecan Crunch" in escalation["body"]
         assert "Kaya Test 10" in escalation["body"]
-        assert "ANG 125" in escalation["body"]
+        assert "XCG 35" in escalation["body"]
 
         state = state_registry.wa_get_booking_state(phone)
         assert "waiting_for_human_order_confirmation" not in state["flags"]
@@ -346,7 +406,7 @@ def test_wibrandt_returning_order_reopens_archived_conversation(mock_process, _c
         assert len(queue) == 1
         assert queue[0]["order_status"] == "awaiting_human_confirmation"
         assert queue[0]["order_payload"]["delivery_address"] == "Purucnhi"
-        assert queue[0]["order_payload"]["products"][0]["name"] == "Tosca Cookie"
+        assert queue[0]["order_payload"]["products"][0]["name"] == "The Tosca Cookie"
     finally:
         _cleanup(phone)
 
