@@ -3980,14 +3980,27 @@ async def list_escalations(mode: str = None, status: str = None):
     rows = state_registry.get_all_escalations()
     for r in rows:
         r["id"] = str(r["id"])
-    if mode in ("soft", "hard", "order"):
+    if mode == "order":
         rows = [r for r in rows if r.get("mode") == mode]
-    elif mode in (None, "", "all"):
+    else:
         # Product orders have their own Nr2 Orders workspace. They are stored
         # as order-mode escalation rows for audit/state, but they must not leak
         # into the normal Escalations inbox or the operator sees the same work
-        # item twice.
-        rows = [r for r in rows if r.get("mode") != "order"]
+        # item twice. Also suppress non-order escalation rows tied to the same
+        # active order conversation; those operational alerts belong in the
+        # order's phone-confirm/fulfillment workflow, not in generic tabs.
+        active_order_conversations = {
+            item.get("conversation_id")
+            for item in state_registry.list_order_queue()
+            if item.get("conversation_id")
+        }
+        rows = [
+            r for r in rows
+            if r.get("mode") != "order"
+            and r.get("customer_id") not in active_order_conversations
+        ]
+        if mode in ("soft", "hard"):
+            rows = [r for r in rows if r.get("mode") == mode]
     if status and status != "all":
         rows = [r for r in rows if r.get("status") == status]
     return rows

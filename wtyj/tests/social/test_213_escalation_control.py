@@ -5,6 +5,7 @@
 # webhook ingestion paths; Test 11 covers the email_poller helper.
 
 import sys, os
+from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
@@ -57,8 +58,38 @@ def _cleanup_many(customer_ids):
         conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (customer_id,))
         conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (customer_id,))
         conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (customer_id,))
+        conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (customer_id,))
     conn.commit()
     conn.close()
+
+
+def _insert_legacy_escalation(channel, customer_id, mode):
+    from shared import state_registry
+
+    conn = state_registry._get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO pending_notifications "
+            "(notification_type, relay_token, channel, customer_id, customer_name, "
+            "subject, body, status, created_at, mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "escalation",
+                None,
+                channel,
+                customer_id,
+                "Test",
+                "[ESCALATION] legacy",
+                "legacy body",
+                "pending",
+                datetime.now(timezone.utc).isoformat(),
+                mode,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
 
 
 # --- Test 1: POST /mode sets field + returns updated row
@@ -88,13 +119,31 @@ def test_list_escalations_excludes_order_rows_by_default():
     try:
         soft_id = _seed_escalation("whatsapp", soft_customer, "soft")
         order_id = _seed_escalation("whatsapp", order_customer, "order")
+        state_registry.wa_save_booking_state(
+            order_customer,
+            {
+                "customer_name": "Test",
+                "product_name": "Cinnamon Cardamom Twist",
+                "quantity": 1,
+                "delivery_address": "Test Address",
+                "order_total": 5,
+                "currency": "XCG",
+            },
+            {"awaiting_order_confirmation": True},
+        )
+        stale_hard_id = _insert_legacy_escalation("whatsapp", order_customer, "hard")
         token = _login()
 
         default_rows = client.get("/dashboard/api/escalations",
                                   headers=_auth(token)).json()
         assert any(row["id"] == str(soft_id) for row in default_rows)
         assert all(row["id"] != str(order_id) for row in default_rows)
+        assert all(row["id"] != str(stale_hard_id) for row in default_rows)
         assert all(row.get("mode") != "order" for row in default_rows)
+
+        hard_rows = client.get("/dashboard/api/escalations?mode=hard",
+                               headers=_auth(token)).json()
+        assert all(row["id"] != str(stale_hard_id) for row in hard_rows)
 
         order_rows = client.get("/dashboard/api/escalations?mode=order",
                                 headers=_auth(token)).json()
