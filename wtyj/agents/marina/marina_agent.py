@@ -658,12 +658,29 @@ def _build_live_product_catalog_block() -> str:
         else:
             lines.append(f"{idx}. {title}")
 
+    delivery_line = ""
+    try:
+        product_settings = config_loader.get_product_settings() or {}
+        delivery_amount = product_settings.get("delivery_cost_amount")
+        delivery_currency = str(product_settings.get("delivery_cost_currency") or "").strip().upper()
+        if delivery_amount not in ("", None):
+            delivery_value = float(delivery_amount)
+            if delivery_value >= 0:
+                display_amount = int(delivery_value) if delivery_value.is_integer() else round(delivery_value, 2)
+                delivery_line = (
+                    f"\nFixed delivery cost: {delivery_currency or 'XCG'} {display_amount}. "
+                    "Add this delivery cost to product totals when summarizing orders.\n"
+                )
+    except Exception:
+        delivery_line = ""
+
     return (
         "\n\nLIVE PRODUCT CATALOG (central source from active Nr2 product records):\n"
         f"Current active product count: {len(lines)}.\n"
         "Use this live catalog for product availability, product names, and product counts. "
         "It overrides static Source of Truth product lists/counts if they differ.\n"
         "Do not say the tenant has fewer products than this catalog lists.\n\n"
+        f"{delivery_line}"
         + "\n".join(lines)
     )
 

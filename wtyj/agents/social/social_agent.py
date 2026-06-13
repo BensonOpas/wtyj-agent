@@ -537,17 +537,46 @@ def _money(value, currency):
     return f"{currency} {display}".strip()
 
 
+def _product_settings():
+    try:
+        settings = config_loader.get_product_settings() or {}
+    except Exception:
+        return {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def _configured_delivery_cost():
+    settings = _product_settings()
+    amount = _coerce_float(settings.get("delivery_cost_amount"))
+    if amount is None:
+        return None
+    currency = str(settings.get("delivery_cost_currency") or "").strip().upper()
+    if not currency:
+        currency = "XCG" if _is_wibrandt_order_tenant() else ""
+    return {"amount": amount, "currency": currency or "XCG"}
+
+
 def _wibrandt_order_has_complete_pricing(fields):
     lines = _order_lines(fields)
     return bool(lines) and all(line.get("subtotal") is not None for line in lines)
 
 
-def _wibrandt_order_total(fields):
+def _wibrandt_order_product_total(fields):
     total = _coerce_float(fields.get("order_total") or fields.get("total"))
     if total is not None:
         return total
     subtotals = [line.get("subtotal") for line in _order_lines(fields) if line.get("subtotal") is not None]
     return sum(subtotals) if subtotals else None
+
+
+def _wibrandt_order_total(fields):
+    product_total = _wibrandt_order_product_total(fields)
+    if product_total is None:
+        return None
+    delivery = _configured_delivery_cost()
+    if delivery is None:
+        return product_total
+    return product_total + delivery["amount"]
 
 
 def _looks_like_price_question(text):
@@ -567,7 +596,12 @@ def _reply_defers_known_price(reply_text):
 
 
 def _build_wibrandt_order_summary_reply(fields):
-    currency = fields.get("currency") or "XCG"
+    delivery = _configured_delivery_cost()
+    currency = (
+        (delivery or {}).get("currency")
+        or fields.get("currency")
+        or "XCG"
+    )
     lines = _order_lines(fields)
     line_text = []
     for line in lines:
@@ -577,8 +611,18 @@ def _build_wibrandt_order_summary_reply(fields):
         subtotal = _money(line.get("subtotal"), currency)
         line_text.append(f"• {qty} x {name} — {unit_price} each — {subtotal}")
 
-    total = _money(_wibrandt_order_total(fields), currency)
-    parts = ["Here is your order summary:", "", *line_text, "", f"Product total: {total}"]
+    product_total = _wibrandt_order_product_total(fields)
+    final_total = _wibrandt_order_total(fields)
+    parts = [
+        "Here is your order summary:",
+        "",
+        *line_text,
+        "",
+        f"Product total: {_money(product_total, currency)}",
+    ]
+    if delivery is not None:
+        parts.append(f"Delivery cost: {_money(delivery['amount'], currency)}")
+        parts.append(f"Total: {_money(final_total, currency)}")
     address = _order_address(fields)
     phone = fields.get("phone")
     comments = fields.get("comments") or fields.get("special_requests")
@@ -588,13 +632,13 @@ def _build_wibrandt_order_summary_reply(fields):
         parts.append(f"☎️ {phone}")
     if comments:
         parts.append(f"💬 {comments}")
-    parts.extend([
-        "",
-        "Delivery fee is not configured yet, so this total is for the products only. "
-        "The team will confirm any delivery fee when they call.",
-        "",
-        "Does everything look correct?",
-    ])
+    if delivery is None:
+        parts.extend([
+            "",
+            "Delivery fee is not configured yet, so this total is for the products only. "
+            "The team will confirm any delivery fee when they call.",
+        ])
+    parts.extend(["", "Does everything look correct?"])
     return "\n".join(parts)
 
 
@@ -602,12 +646,11 @@ def _create_wibrandt_order_escalation(channel, phone, channel_label, fields,
                                       flags, from_name, history, result):
     cname = fields.get("customer_name") or from_name or "Unknown"
     customer_phone = fields.get("phone") or phone
-    currency = fields.get("currency") or "ANG"
+    delivery = _configured_delivery_cost()
+    currency = (delivery or {}).get("currency") or fields.get("currency") or "XCG"
     lines = _order_lines(fields)
-    total = _coerce_float(fields.get("order_total"))
-    if total is None:
-        line_totals = [line.get("subtotal") for line in lines if line.get("subtotal") is not None]
-        total = sum(line_totals) if line_totals else None
+    product_total = _wibrandt_order_product_total(fields)
+    total = _wibrandt_order_total(fields)
     order_payload = {
         "type": "ORDER",
         "state": "WAITING_FOR_HUMAN_ORDER_CONFIRMATION",
@@ -615,6 +658,8 @@ def _create_wibrandt_order_escalation(channel, phone, channel_label, fields,
         "phone": customer_phone,
         "products": lines,
         "delivery_address": _order_address(fields),
+        "product_total": product_total,
+        "delivery_cost": delivery["amount"] if delivery else None,
         "total": total,
         "currency": currency,
         "comments": fields.get("comments") or fields.get("special_requests") or "",

@@ -1360,6 +1360,11 @@ class ResponseTimingUpdate(BaseModel):
     random_max_seconds: float = response_timing.DEFAULT_RANDOM_MAX_SECONDS
 
 
+class ProductSettingsUpdate(BaseModel):
+    delivery_cost_amount: float | None = None
+    delivery_cost_currency: str = ""
+
+
 class AgentPersonalitySettingsRequest(BaseModel):
     tone: str = ""
     formality: str = ""
@@ -1418,6 +1423,47 @@ def _clean_workspace_bookings_label(value: str | None) -> str:
     return label
 
 
+def _default_product_currency() -> str:
+    settings = config_loader.get_product_settings() or {}
+    business = config_loader.get_business() or {}
+    raw = config_loader.get_raw() or {}
+    common = raw.get("common_sense_knowledge") if isinstance(raw.get("common_sense_knowledge"), dict) else {}
+    for value in (
+        settings.get("delivery_cost_currency"),
+        settings.get("currency"),
+        business.get("currency"),
+        common.get("currency"),
+        raw.get("currency"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()[:8]
+    return "XCG"
+
+
+def _clean_product_settings(raw: dict | ProductSettingsUpdate | None) -> dict:
+    data = raw.model_dump() if isinstance(raw, ProductSettingsUpdate) else dict(raw or {})
+    amount = data.get("delivery_cost_amount")
+    if amount in ("", None):
+        clean_amount = None
+    else:
+        try:
+            clean_amount = float(amount)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Delivery cost must be a number.")
+        if clean_amount < 0:
+            raise HTTPException(status_code=400, detail="Delivery cost cannot be negative.")
+        if clean_amount > 1000000:
+            raise HTTPException(status_code=400, detail="Delivery cost is too high.")
+        clean_amount = round(clean_amount, 2)
+    currency = str(data.get("delivery_cost_currency") or _default_product_currency()).strip().upper()
+    if not re.fullmatch(r"[A-Z]{2,8}", currency):
+        raise HTTPException(status_code=400, detail="Use a currency code such as XCG, ANG, EUR, or USD.")
+    return {
+        "delivery_cost_amount": clean_amount,
+        "delivery_cost_currency": currency,
+    }
+
+
 @router.get("/settings/workspace-labels", dependencies=[Depends(_check_auth)])
 async def get_workspace_labels():
     label = state_registry.get_setting(
@@ -1444,6 +1490,20 @@ async def put_workspace_labels(req: WorkspaceLabelsUpdate):
         "defaultBookingsLabel": WORKSPACE_BOOKINGS_LABEL_DEFAULT,
         "presets": sorted(WORKSPACE_BOOKINGS_LABEL_ALLOWED),
     }
+
+
+@router.get("/settings/product-settings", dependencies=[Depends(_check_auth)])
+async def get_product_settings_endpoint():
+    return _clean_product_settings(config_loader.get_product_settings())
+
+
+@router.put("/settings/product-settings", dependencies=[Depends(_check_auth)])
+async def put_product_settings_endpoint(req: ProductSettingsUpdate):
+    settings = _clean_product_settings(req)
+    ok = config_loader.update_product_settings(settings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to update product settings")
+    return settings
 
 
 @router.get("/settings/agent-name", dependencies=[Depends(_check_auth)])
