@@ -927,6 +927,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                   from_name=from_name)
 
     def _upsert_appointment_signal(reply_text: str):
+        workflow = config_loader.get_raw().get("workflow", {}) or {}
+        if workflow.get("type") == "callback_follow_up":
+            bm_logger.log(
+                "appointment_signal_skipped_for_callback_workflow",
+                phone=phone,
+            )
+            return
         if _is_wibrandt_order_related_text(
             text,
             reply_text,

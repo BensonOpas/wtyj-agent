@@ -2748,6 +2748,19 @@ async def list_conversations():
     Email conversation rows have phone prefixed with `email::` so the detail
     endpoint can route to the email helper."""
     wa_convos = state_registry.wa_list_conversations()
+    if _callback_followups_enabled():
+        # Callback tenants use the follow-up queue instead of the generic
+        # order/appointment classifier. Preserve the underlying historical
+        # rows for rollback/audit, but do not expose classification metadata.
+        classification_keys = {
+            "intent", "is_order", "order_status", "order_payload",
+            "badge_type", "queue_type", "next_operator_action",
+            "order_escalation_id",
+        }
+        for conversation in wa_convos:
+            for key in classification_keys:
+                conversation.pop(key, None)
+            conversation["appointment_signal"] = False
     # WhatsApp rows get a channel tag if missing (some rows come from dm_messages
     # via dm_store_message which already sets it; legacy rows default to 'whatsapp').
     for c in wa_convos:
