@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath
 from shared import state_registry
 from shared import bm_logger
 from shared import config_loader
+from shared import icp_overrides
 # Brief 235: register the Brief 227 escalation summary dispatcher in this
 # process. The side-effect import installs _generate_escalation_summary
 # as state_registry._summary_dispatcher so escalations created by the
@@ -737,6 +738,17 @@ def main():
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "body": body,
                 })
+
+                # Tenant-wide dashboard control. Keep the inbound message in
+                # the thread, but do not generate or send an AI response while
+                # the agent is paused.
+                if not icp_overrides.auto_reply_enabled():
+                    log(f"tenant_agent_paused from={from_email[:40]} subj={subj[:40]}")
+                    th["last_activity"] = now
+                    threads[thread_key] = th
+                    save_json(THREAD_STATE_PATH, state)
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    continue
 
                 # Brief 213: ai_muted gate. Inbound is now in th["messages"]
                 # so the operator sees the message; we skip Marina's reply

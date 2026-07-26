@@ -74,6 +74,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AgentControlRequest(BaseModel):
+    active: StrictBool
+
+
 class GenerateRequest(BaseModel):
     count: int = 3
 
@@ -979,6 +983,40 @@ async def get_client_profile():
             "name": name,
             "display_name": name,
         },
+    }
+
+
+@router.get("/agent/status", dependencies=[Depends(_check_auth)])
+async def get_agent_status():
+    """Return the real tenant-scoped AI auto-reply state from Nr 3."""
+    from shared import icp_overrides as _icp
+    envelope = _icp.fetch_overrides()
+    active = _icp.auto_reply_enabled(envelope)
+    toggle = (envelope.get("feature_toggles") or {}).get("ai_auto_reply") or {}
+    return {
+        "active": active,
+        "status": "active" if active else "paused",
+        "available": envelope.get("available") is True,
+        "source": toggle.get("source") or "backend_default",
+        "updatedAt": toggle.get("updated_at"),
+    }
+
+
+@router.put("/agent/status", dependencies=[Depends(_check_auth)])
+async def set_agent_status(req: AgentControlRequest):
+    """Start or pause AI replies without stopping message collection."""
+    from shared import icp_overrides as _icp
+    try:
+        envelope = _icp.set_auto_reply_enabled(req.active)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    toggle = (envelope.get("feature_toggles") or {}).get("ai_auto_reply") or {}
+    return {
+        "active": req.active,
+        "status": "active" if req.active else "paused",
+        "available": True,
+        "source": toggle.get("source") or "icp_override",
+        "updatedAt": toggle.get("updated_at"),
     }
 
 

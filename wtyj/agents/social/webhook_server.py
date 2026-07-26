@@ -355,6 +355,20 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
+                if not icp_overrides.auto_reply_enabled():
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv,
+                        channel=_zernio_channel,
+                        role="user",
+                        text=combined_text,
+                        sender_name=_zernio_sender,
+                    )
+                    log("tenant_agent_paused",
+                        conversation_id=_zernio_conv[:20],
+                        channel=_zernio_channel)
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "paused", reason="tenant_agent_paused")
+                    return
                 # Zernio WhatsApp — check booking_flow toggle
                 _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
                 reply_media = None
@@ -448,6 +462,12 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
+                if not icp_overrides.auto_reply_enabled():
+                    state_registry.wa_store_message(phone, "user", combined_text)
+                    log("tenant_agent_paused", phone=phone[:20], channel="whatsapp")
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "paused", reason="tenant_agent_paused")
+                    return
                 # Meta WhatsApp (legacy) — original path
                 state_registry.wa_store_message(phone, "user", combined_text)
                 reply_text = handle_incoming_whatsapp_message(
@@ -658,6 +678,20 @@ def _process_zernio_event(payload: dict):
                     conversation_id=conversation_id[:20], channel=channel)
                 state_registry.inbound_processing_update(
                     message_id, "escalated", reason="human_takeover_ai_muted")
+                return
+
+            if not icp_overrides.auto_reply_enabled():
+                state_registry.dm_store_message(
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    role="user",
+                    text=text,
+                    sender_name=msg["sender_name"],
+                )
+                log("tenant_agent_paused",
+                    conversation_id=conversation_id[:20], channel=channel)
+                state_registry.inbound_processing_update(
+                    message_id, "paused", reason="tenant_agent_paused")
                 return
 
             # Route based on booking_flow toggle
