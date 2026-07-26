@@ -1237,6 +1237,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # not mean "customer needs reply". Once the customer confirms an order
     # summary, create a dedicated ORDER escalation for the operator to call.
     _skip_booking = False
+    # A callback-follow-up tenant never enters the generic booking engine:
+    # its human team coordinates appointments after the callback instead.
+    _callback_workflow_on = (_workflow.get("type") == "callback_follow_up")
+    if _callback_workflow_on:
+        _skip_booking = True
     _wibrandt_order_like = _is_wibrandt_order_like(result, fields, flags)
     if _wibrandt_order_like:
         if flags.get("order_confirmed") and not flags.get("order_escalation_id"):
