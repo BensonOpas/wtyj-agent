@@ -1183,6 +1183,30 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         elif v == "" and k in fields:
             del fields[k]
 
+    # Callback-follow-up tenants persist one evolving, tenant-local request.
+    # The normal booking fields remain untouched so this capability is isolated
+    # from every existing tenant workflow.
+    _workflow = config_loader.get_raw().get("workflow", {}) or {}
+    if _workflow.get("type") == "callback_follow_up":
+        _followup_fields = {
+            "first_name": fields.get("first_name", ""),
+            "surnames": fields.get("surnames", ""),
+            "phone_raw": fields.get("phone") or phone,
+            "phone_normalized": fields.get("phone") or phone,
+            "callback_preference": fields.get("callback_preference", ""),
+            "visit_reason": fields.get("visit_reason", ""),
+        }
+        _followup = state_registry.upsert_follow_up_request(phone, channel, **_followup_fields)
+        _required = ("first_name", "surnames", "phone_raw", "callback_preference")
+        if (all(_followup.get(key) for key in _required)
+                and _followup.get("status") in ("collecting", "needs_human_answer")):
+            _followup = state_registry.update_follow_up_status(_followup["id"], "ready_to_call")
+        elif (result.get("requires_human")
+              and _followup.get("status") == "collecting"):
+            _followup = state_registry.update_follow_up_status(_followup["id"], "needs_human_answer")
+        bm_logger.log("callback_follow_up_updated", follow_up_id=_followup["id"],
+                      status=_followup["status"])
+
     # Step 4: Merge flags — Python manages awaiting_booking_confirmation (set only)
     new_flags = result.get("flags", {}) or {}
     _was_awaiting = flags.get("awaiting_booking_confirmation", False)
