@@ -73,6 +73,33 @@ _MEDIA_STOPWORDS = {
     "details", "information", "product", "products", "available",
 }
 
+
+def _valid_callback_phone(value: str) -> tuple[str, str]:
+    """Return the original and normalized phone only when it is callable.
+
+    Zernio conversation ids can be 24-character hexadecimal strings. They
+    must never satisfy the callback phone requirement.
+    """
+    raw = str(value or "").strip()
+    if not raw or not re.fullmatch(r"[+0-9().\s-]+", raw):
+        return "", ""
+    normalized = state_registry.normalize_phone_identifier(raw)
+    if not 9 <= len(normalized) <= 15:
+        return "", ""
+    return raw, normalized
+
+
+def _callback_name_fields(fields: dict) -> tuple[str, str]:
+    first_name = str(fields.get("first_name") or "").strip()
+    surnames = str(fields.get("surnames") or "").strip()
+    if first_name and surnames:
+        return first_name, surnames
+    full_name = str(fields.get("customer_name") or "").strip()
+    parts = full_name.split(maxsplit=1)
+    if len(parts) == 2:
+        return first_name or parts[0], surnames or parts[1]
+    return first_name, surnames
+
 _WIBRANDT_PRODUCT_CATALOG = (
     {
         "name": "The Tosca Twist",
@@ -1188,22 +1215,30 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # from every existing tenant workflow.
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     if _workflow.get("type") == "callback_follow_up":
+        _first_name, _surnames = _callback_name_fields(fields)
+        _phone_raw, _phone_normalized = _valid_callback_phone(
+            fields.get("phone") or phone)
         _followup_fields = {
-            "first_name": fields.get("first_name", ""),
-            "surnames": fields.get("surnames", ""),
-            "phone_raw": fields.get("phone") or phone,
-            "phone_normalized": fields.get("phone") or phone,
+            "first_name": _first_name,
+            "surnames": _surnames,
+            "phone_raw": _phone_raw,
+            "phone_normalized": _phone_normalized,
             "callback_preference": fields.get("callback_preference", ""),
-            "visit_reason": fields.get("visit_reason", ""),
+            "visit_reason": (
+                fields.get("visit_reason")
+                or fields.get("comments")
+                or fields.get("special_requests")
+                or ""
+            ),
         }
         _followup = state_registry.upsert_follow_up_request(phone, channel, **_followup_fields)
         _required = ("first_name", "surnames", "phone_raw", "callback_preference")
-        if (all(_followup.get(key) for key in _required)
-                and _followup.get("status") in ("collecting", "needs_human_answer")):
-            _followup = state_registry.update_follow_up_status(_followup["id"], "ready_to_call")
-        elif (result.get("requires_human")
-              and _followup.get("status") == "collecting"):
+        if (result.get("requires_human")
+                and _followup.get("status") == "collecting"):
             _followup = state_registry.update_follow_up_status(_followup["id"], "needs_human_answer")
+        elif (all(_followup.get(key) for key in _required)
+              and _followup.get("status") == "collecting"):
+            _followup = state_registry.update_follow_up_status(_followup["id"], "ready_to_call")
         bm_logger.log("callback_follow_up_updated", follow_up_id=_followup["id"],
                       status=_followup["status"])
 
