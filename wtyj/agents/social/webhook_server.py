@@ -50,6 +50,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def _use_whatsapp_orchestrator(channel: str) -> bool:
+    """Use the structured agent for bookings and callback-follow-up tenants."""
+    raw = config_loader.get_raw() or {}
+    if (raw.get("features") or {}).get("booking_flow", True):
+        return True
+    workflow = raw.get("workflow") or {}
+    return (
+        channel == "whatsapp"
+        and workflow.get("type") == "callback_follow_up"
+    )
+
 from dashboard.api import router as dashboard_router
 app.include_router(dashboard_router)
 
@@ -369,10 +381,11 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "paused", reason="tenant_agent_paused")
                     return
-                # Zernio WhatsApp — check booking_flow toggle
-                _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+                # Callback-follow-up tenants need the structured WhatsApp
+                # agent even though they intentionally disable booking_flow.
+                _orchestrator_on = _use_whatsapp_orchestrator(_zernio_channel)
                 reply_media = None
-                if _booking_flow_on:
+                if _orchestrator_on:
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
                         channel=_zernio_channel,
@@ -694,10 +707,11 @@ def _process_zernio_event(payload: dict):
                     message_id, "paused", reason="tenant_agent_paused")
                 return
 
-            # Route based on booking_flow toggle
-            _booking_flow_on = config_loader.get_raw().get("features", {}).get("booking_flow", True)
+            # Callback-follow-up tenants need the structured WhatsApp agent
+            # even though they intentionally disable booking_flow.
+            _orchestrator_on = _use_whatsapp_orchestrator(channel)
 
-            if _booking_flow_on:
+            if _orchestrator_on:
                 # Full booking flow — route through orchestrator
                 # Persist before model/order work so crashes remain visible.
                 # handle_incoming_whatsapp_message removes this exact inbound

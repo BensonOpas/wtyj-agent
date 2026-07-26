@@ -17,6 +17,7 @@ from shared import state_registry
 from shared import auto_block
 from shared import bm_logger
 from shared import config_loader
+from shared import tenant_hard_rules
 from agents.marina import marina_agent
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
@@ -1770,6 +1771,28 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
 
     # Step 9: Strip remaining placeholders (safety net)
     reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
+
+    # Consulta Despertares' first greeting and callback closing are mandatory
+    # output boundaries, not optional style guidance. Apply them after every
+    # model/booking rewrite so no later branch can remove or misplace them.
+    _reply_before_tenant_boundaries = reply_text
+    reply_text = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+        reply=reply_text,
+        inbound_text=text,
+        history=history,
+        fields=fields,
+        intents=result.get("intents", []),
+    )
+    if reply_text != _reply_before_tenant_boundaries:
+        bm_logger.log(
+            "consulta_despertares_mandatory_boundaries_applied",
+            phone=phone,
+            first_reply=not any(
+                str(message.get("role") or "").lower() == "assistant"
+                for message in (history or [])
+                if isinstance(message, dict)
+            ),
+        )
 
     selected_media = None
     if include_media and channel == "whatsapp" and not result.get("requires_human"):
