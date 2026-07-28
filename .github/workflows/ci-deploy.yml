@@ -21,10 +21,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \\
-            -f state=pending \\
-            -f context=deploy/backend-production \\
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \\
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state=pending \
+            -f context=deploy/backend-production \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description='Testing and deploying tenant services'
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -128,8 +128,8 @@ jobs:
             STATE=failure
             DESCRIPTION='Backend production deployment failed'
           fi
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \\
-            -f state="$STATE" \\
-            -f context=deploy/backend-production \\
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \\
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state="$STATE" \
+            -f context=deploy/backend-production \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description="$DESCRIPTION"
