@@ -78,7 +78,7 @@ def test_stable_whatsapp_reply_route_is_registered_for_post():
     matches = [
         route
         for route in api.router.routes
-        if getattr(route, "path", None) == "/messages/whatsapp/reply"
+        if getattr(route, "path", None) == "/dashboard/api/messages/whatsapp/reply"
     ]
 
     assert len(matches) == 1
