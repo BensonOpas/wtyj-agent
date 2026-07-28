@@ -121,3 +121,69 @@ def test_confirmed_reply_rejects_provider_failed_status(monkeypatch):
             "test",
             confirm_delivery=True,
         )
+
+def test_template_send_requires_meta_approval(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(
+        client.http_requests,
+        "get",
+        lambda *a, **k: FakeResponse(200, {
+            "templates": [{
+                "name": "consulta_despertares_seguimiento",
+                "language": "es",
+                "status": "PENDING",
+            }]
+        }),
+    )
+    posts = []
+    monkeypatch.setattr(
+        client.http_requests,
+        "post",
+        lambda *a, **k: posts.append((a, k)) or FakeResponse(201, {}),
+    )
+
+    with pytest.raises(client.ZernioReplyError, match="pendiente"):
+        client.send_dm_template(
+            "0123456789abcdef01234567",
+            "account-1",
+            "consulta_despertares_seguimiento",
+        )
+
+    assert posts == []
+
+
+def test_template_send_confirms_provider_delivery(monkeypatch):
+    gets = iter([
+        FakeResponse(200, {
+            "templates": [{
+                "name": "consulta_despertares_seguimiento",
+                "language": "es",
+                "status": "APPROVED",
+            }]
+        }),
+        FakeResponse(200, {
+            "messages": [{
+                "id": "template-message-1",
+                "direction": "outgoing",
+                "status": "delivered",
+            }]
+        }),
+    ])
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(client.http_requests, "get", lambda *a, **k: next(gets))
+    monkeypatch.setattr(
+        client.http_requests,
+        "post",
+        lambda *a, **k: FakeResponse(
+            201,
+            {"data": {"messageId": "template-message-1"}},
+        ),
+    )
+    monkeypatch.setattr(client.time, "sleep", lambda *_: None)
+
+    assert client.send_dm_template(
+        "0123456789abcdef01234567",
+        "account-1",
+        "consulta_despertares_seguimiento",
+    ) is True
+
