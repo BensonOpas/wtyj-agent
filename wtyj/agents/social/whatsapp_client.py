@@ -165,7 +165,10 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
     unresolved = {
         conversation_id for conversation_id in wanted
         if conversation_id not in resolved
-        and now - _zernio_contact_attempted_at.get(conversation_id, 0) >= 300
+        and (
+            conversation_id not in _zernio_contact_attempted_at
+            or now - _zernio_contact_attempted_at[conversation_id] >= 300
+        )
     }
     if not unresolved:
         return resolved
