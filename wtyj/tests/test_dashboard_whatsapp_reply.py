@@ -56,7 +56,7 @@ def test_whatsapp_conversation_reply_is_not_stored_when_zernio_fails(monkeypatch
         )
 
     assert exc_info.value.status_code == 502
-    assert "Zernio" in str(exc_info.value.detail)
+    assert "WhatsApp" in str(exc_info.value.detail)
     assert stored == []
 
 
