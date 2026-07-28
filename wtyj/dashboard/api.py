@@ -14,7 +14,7 @@ import urllib.parse
 import anthropic
 import requests as http_requests
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
