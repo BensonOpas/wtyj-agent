@@ -27,4 +27,5 @@ class WhatsAppZernioChannel(Channel):
             "_zernio_account_id": zernio_msg["account_id"],
             "_zernio_channel": zernio_msg["channel"],
             "_zernio_sender_name": sender_name,
+            "_zernio_sender_id": str(zernio_msg.get("sender_id") or "").strip(),
         }
