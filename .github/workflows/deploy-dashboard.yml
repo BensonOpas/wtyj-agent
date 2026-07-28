@@ -137,7 +137,7 @@ jobs:
             test -n "$REPLY_API_FILE"
             REPLY_API_ASSET="/assets/$(basename "$REPLY_API_FILE")"
             LIVE_REPLY_API=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$REPLY_API_ASSET?release=$DASHBOARD_SHA")
-            printf '%s' "$LIVE_REPLY_API" | grep -q '/whatsapp/reply'
+            printf '%s' "$LIVE_REPLY_API" | grep -q '/messages/whatsapp/reply'
 
             readlink -f "$CURRENT_LINK" | grep -q "$DASHBOARD_SHA"
             echo "Dashboard release $DASHBOARD_SHA is live and verified"
