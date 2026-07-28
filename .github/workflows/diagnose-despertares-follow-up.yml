@@ -14,7 +14,7 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Locate Consulta Despertares runtime
+      - name: Diagnose Consulta Despertares startup
         id: probe
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -24,32 +24,33 @@ jobs:
           command_timeout: 5m
           script: |
             set -eu
-            TARGET=$(docker ps --format '{{.Names}}' | grep -Ei 'consulta|despertares' | head -1)
-            test -n "$TARGET"
-            echo "Target container: $TARGET"
-            docker inspect --format 'configured_image={{.Config.Image}} image_id={{.Image}} created={{.Created}}' "$TARGET"
-            docker inspect --format 'compose_working_dir={{index .Config.Labels "com.docker.compose.project.working_dir"}} compose_config={{index .Config.Labels "com.docker.compose.project.config_files"}} compose_service={{index .Config.Labels "com.docker.compose.service"}}' "$TARGET"
-            echo "Latest application image:"
-            docker image inspect --format 'name={{index .RepoTags 0}} image_id={{.Id}} created={{.Created}}' wtyj-agent:latest
-            echo "Matching client runtime directories:"
-            find /root/clients -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep -Ei 'consulta|despertares' || true
-            echo "Follow-up endpoint response:"
-            docker exec -i "$TARGET" python3 - <<'PY'
+            TARGET=wtyj-consulta-despertares
+            echo "Container state:"
+            docker inspect --format 'status={{.State.Status}} running={{.State.Running}} restarting={{.State.Restarting}} exit_code={{.State.ExitCode}} error={{.State.Error}} image={{.Config.Image}} image_id={{.Image}}' "$TARGET"
+            echo "Published ports:"
+            docker port "$TARGET" || true
+            echo "Compose status:"
+            cd /root/clients/consulta-despertares
+            docker compose ps
+            echo "Host health response:"
+            curl -sS -m 5 -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8003/health || true
+            if [ "$(docker inspect --format '{{.State.Running}}' "$TARGET")" = "true" ]; then
+              echo "Container-local health response:"
+              docker exec "$TARGET" python3 - <<'PY'
             import urllib.error
             import urllib.request
-
-            with open('/app/data/session_token', 'r', encoding='utf-8') as handle:
-                token = handle.read().strip()
-            request = urllib.request.Request(
-                'http://127.0.0.1:8001/follow-ups',
-                headers={'Authorization': f'Bearer {token}'},
-            )
             try:
-                with urllib.request.urlopen(request, timeout=20) as response:
-                    print(f'HTTP {response.status}')
-            except urllib.error.HTTPError as exc:
-                print(f'HTTP {exc.code}: {exc.read().decode("utf-8", errors="replace")[:300]}')
+                with urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5) as response:
+                    print(f'HTTP {response.status}: {response.read().decode("utf-8", errors="replace")[:300]}')
+            except Exception as exc:
+                print(f'{type(exc).__name__}: {exc}')
             PY
+            fi
+            echo "Redacted startup errors:"
+            docker logs --since 10m "$TARGET" 2>&1 |
+              grep -Ei 'traceback|error|exception|failed|invalid|missing|required|refused' |
+              tail -n 120 |
+              sed -E 's/[0-9]{6,}/[redacted-number]/g' || true
 
       - name: Publish diagnostic result
         if: always()
@@ -59,13 +60,13 @@ jobs:
         run: |
           if [ "$RESULT" = "success" ]; then
             STATE=success
-            DESCRIPTION='Despertares runtime located'
+            DESCRIPTION='Despertares startup inspected'
           else
             STATE=failure
-            DESCRIPTION='Despertares runtime inspection failed'
+            DESCRIPTION='Despertares startup inspection failed'
           fi
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state="$STATE" \
-            -f context=diagnose/despertares-runtime \
+            -f context=diagnose/despertares-startup \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description="$DESCRIPTION"
