@@ -121,6 +121,7 @@ jobs:
             LIVE_FOLLOW_UPS=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$FOLLOW_UP_ASSET?release=$DASHBOARD_SHA")
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Copiado'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Abrir conversación'
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'phone_normalized'
 
             INBOX_FILE=$(grep -l 'Mensaje enviado por WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
             test -n "$INBOX_FILE"
