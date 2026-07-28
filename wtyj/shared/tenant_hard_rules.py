@@ -26,6 +26,35 @@ CONSULTA_DESPERTARES_OTHER_GREETING = (
 CONSULTA_DESPERTARES_CALLBACK_CLOSING = (
     "¿Cuándo te podemos llamar para confirmar la primera cita?"
 )
+CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE = """
+CONSULTA DESPERTARES RELATIONSHIP-FIRST INTAKE (HIGHEST PRIORITY):
+The goal is a natural, supportive conversation that eventually gives the human
+team enough information to call. It is NOT to collect fields as quickly as
+possible. These rules override generic booking pacing and checklist-like intake.
+
+- Listen and help first. Answer the customer's actual question before requesting
+  contact details. If they share emotional or sensitive context, acknowledge it
+  naturally and orient them without diagnosing.
+- Never ask for first name, surnames, phone, or callback preference in the first
+  substantive reply. First provide a useful answer or have a gentle contextual
+  exchange. If the customer explicitly supplies any field, extract it silently.
+- Treat a request for an appointment as the start of a conversation, not as a
+  trigger to immediately request identity and phone data.
+- Ask at most ONE question total per reply. "Full name (name and surnames)" is
+  one question. Never combine appointment availability and callback availability.
+- callback_preference means when the human team may CALL the customer. It is not
+  the day or time the customer wants the appointment.
+- If the customer corrects you, objects, or says the exchange is confusing,
+  address that first. Do not repeat or append another intake question.
+- The visit reason is optional. Invite it only when natural, never pressure for
+  detail, and never delay the callback because it is missing.
+- Do not ask which timezone applies. All times are understood as Spain local time.
+- Do not display a checklist, field recap, or "we have everything" summary unless
+  the customer explicitly asks for confirmation. A short natural acknowledgement
+  is enough.
+- Ask the approved callback closing only after first name, surnames, and phone are
+  known, callback preference is missing, and no other question is open in the reply.
+"""
 
 _CONSULTA_WEBSITE_LEAD_RE = re.compile(
     r"consulta\s+psicol[oó]gica\s+despertares.*"
@@ -34,16 +63,6 @@ _CONSULTA_WEBSITE_LEAD_RE = re.compile(
 )
 _CONSULTA_BOOKING_RE = re.compile(
     r"\b(?:cita|terapia|consulta|reservar|reserva|acudir|appointment|book|booking)\b",
-    re.IGNORECASE,
-)
-_CONSULTA_SPECIFIC_TIME_RE = re.compile(
-    r"(?:"
-    r"\b(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|"
-    r"ma[ñn]ana|pasado\s+ma[ñn]ana)\b|"
-    r"\b\d{1,2}\s*(?:/|-)\s*\d{1,2}(?:\s*(?:/|-)\s*\d{2,4})?\b|"
-    r"\b(?:[01]?\d|2[0-3])[:.h]\d{2}\b|"
-    r"\ba\s+las\s+(?:[01]?\d|2[0-3])\b"
-    r")",
     re.IGNORECASE,
 )
 _CONSULTA_CALLBACK_CLOSING_RE = re.compile(
@@ -75,6 +94,12 @@ def is_clinica_roberto() -> bool:
 
 def is_consulta_despertares() -> bool:
     return current_tenant_slug() == CONSULTA_DESPERTARES_SLUG
+
+
+def consulta_despertares_relationship_rule_block() -> str:
+    if not is_consulta_despertares():
+        return ""
+    return CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE
 
 
 def phone_privacy_rule_block() -> str:
@@ -177,17 +202,16 @@ def enforce_consulta_despertares_boundaries(
             str(intent or "").lower() for intent in intents
         )
     ) or bool(_CONSULTA_BOOKING_RE.search(user_text))
-    already_has_timing = bool(
-        fields.get("callback_preference")
-        or fields.get("date")
-        or fields.get("slot_time")
-        or _CONSULTA_SPECIFIC_TIME_RE.search(user_text)
+    already_has_callback_preference = bool(
+        str(fields.get("callback_preference") or "").strip()
     )
+    reply_already_asks_a_question = "?" in clean or "¿" in clean
 
     if (
         booking_intent
         and _consulta_has_name_and_phone(fields)
-        and not already_has_timing
+        and not already_has_callback_preference
+        and not reply_already_asks_a_question
     ):
         clean = clean.rstrip()
         clean = (

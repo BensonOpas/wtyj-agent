@@ -904,6 +904,9 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
     _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
+    _consulta_relationship_block = (
+        tenant_hard_rules.consulta_despertares_relationship_rule_block()
+    )
     _wibrandt_order_block = _build_wibrandt_order_block(business)
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     _callback_followup_block = ""
@@ -1155,7 +1158,8 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
 {_tenant_hard_rule_block}
 {_icp_final_override_block}
-{_live_product_catalog_block}"""
+{_live_product_catalog_block}
+{_consulta_relationship_block}"""
 
 
 def _build_user_prompt(
