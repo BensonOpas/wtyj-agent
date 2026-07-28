@@ -3098,6 +3098,28 @@ async def reply_to_whatsapp_conversation(
     }
 
 
+class DirectWhatsAppConversationReplyRequest(BaseModel):
+    conversation_id: str
+    message: str
+
+
+@router.post("/messages/whatsapp/reply",
+             dependencies=[Depends(_check_auth)])
+async def reply_to_whatsapp_conversation_direct(
+    req: DirectWhatsAppConversationReplyRequest,
+):
+    """Stable operator reply route.
+
+    Keep the conversation id in the JSON body so proxies and path converters
+    cannot reinterpret provider-owned identifiers. The legacy path route above
+    remains available for older dashboard bundles.
+    """
+    return await reply_to_whatsapp_conversation(
+        req.conversation_id,
+        WhatsAppConversationReplyRequest(message=req.message),
+    )
+
+
 # ── Email Forward + Delete (Brief 218) ──────────────────────────────────────
 # Two operator-facing email actions on a conversation. Forward re-sends the
 # latest customer message (text-only in v1; attachments aren't stored). Delete

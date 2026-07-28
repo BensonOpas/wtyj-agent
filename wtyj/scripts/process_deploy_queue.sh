@@ -122,6 +122,21 @@ if [ "$STATUS" = "success" ] && [ "$VERIFY_DESPERTARES" = "1" ]; then
     STATUS="failed"
     bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
   fi
+
+  # Probe the stable reply endpoint without credentials and with an invalid
+  # body. A matched route returns auth/validation (401/403/422); 404/405 proves
+  # the live container cannot accept the dashboard's POST request. No provider
+  # send can occur from this probe.
+  REPLY_CODE=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' -d '{}' \
+    http://localhost:8103/dashboard/api/messages/whatsapp/reply || true)
+  if [ "$REPLY_CODE" = "404" ] || [ "$REPLY_CODE" = "405" ] || [ "$REPLY_CODE" = "000" ]; then
+    echo "Consulta Despertares reply route verification failed: HTTP $REPLY_CODE"
+    STATUS="failed"
+    bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
+  else
+    echo "Consulta Despertares reply route matched POST: HTTP $REPLY_CODE"
+  fi
 fi
 
 DURATION=$(( $(date +%s) - START ))
