@@ -5,6 +5,8 @@
 
 import json
 import os
+import time
+import urllib.parse
 import urllib.request
 
 from shared.bm_logger import log
@@ -131,6 +133,105 @@ def _candidate_zernio_account_ids(social_publisher) -> list[str]:
             candidates.append(account_id)
 
     return candidates
+
+
+# Conversation identity cache used to backfill callback follow-ups created
+# before the Zernio webhook adapter preserved participantId.
+_zernio_contact_cache: dict[str, dict] = {}
+_zernio_contact_attempted_at: dict[str, float] = {}
+
+
+def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[str, dict]:
+    """Resolve conversation ids to Zernio participant phone/name metadata.
+
+    Results are tenant-isolated by the configured outbound account allowlist.
+    A short negative cache prevents the dashboard's 10-second poll from
+    repeatedly calling Zernio for conversations that cannot be resolved.
+    """
+    wanted = {
+        str(value or "").strip()
+        for value in conversation_ids or []
+        if _is_zernio_conversation_id(str(value or "").strip())
+    }
+    if not wanted:
+        return {}
+
+    now = time.monotonic()
+    resolved = {
+        conversation_id: _zernio_contact_cache[conversation_id]
+        for conversation_id in wanted
+        if conversation_id in _zernio_contact_cache
+    }
+    unresolved = {
+        conversation_id for conversation_id in wanted
+        if conversation_id not in resolved
+        and now - _zernio_contact_attempted_at.get(conversation_id, 0) >= 300
+    }
+    if not unresolved:
+        return resolved
+
+    api_key = os.environ.get("LATE_API_KEY", "")
+    if not api_key:
+        return resolved
+
+    from agents.social import social_publisher
+    from shared.tenant_guard import is_account_allowed
+
+    for account_id in _candidate_zernio_account_ids(social_publisher):
+        if not unresolved or not is_account_allowed(account_id, direction="outbound"):
+            continue
+        cursor = ""
+        for _page in range(5):
+            params = {"accountId": account_id, "limit": "100", "sortOrder": "desc"}
+            if cursor:
+                params["cursor"] = cursor
+            url = (
+                "https://zernio.com/api/v1/inbox/conversations?"
+                + urllib.parse.urlencode(params)
+            )
+            req = urllib.request.Request(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except Exception as exc:
+                log(
+                    "zernio_contact_resolution_failed",
+                    account_id=account_id[:20],
+                    error=str(exc)[:200],
+                )
+                break
+
+            rows = payload.get("data", []) if isinstance(payload, dict) else []
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                conversation_id = str(row.get("id") or "").strip()
+                if conversation_id not in unresolved:
+                    continue
+                row_account_id = str(row.get("accountId") or "").strip()
+                if row_account_id and row_account_id != account_id:
+                    continue
+                contact = {
+                    "phone": str(row.get("participantId") or "").strip(),
+                    "name": str(row.get("participantName") or "").strip(),
+                    "account_id": account_id,
+                }
+                _zernio_contact_cache[conversation_id] = contact
+                resolved[conversation_id] = contact
+                unresolved.discard(conversation_id)
+
+            pagination = payload.get("pagination", {}) if isinstance(payload, dict) else {}
+            cursor = str(pagination.get("nextCursor") or "").strip()
+            if not cursor or not pagination.get("hasMore") or not unresolved:
+                break
+
+    for conversation_id in unresolved:
+        _zernio_contact_attempted_at[conversation_id] = now
+    return resolved
 
 
 def send_whatsapp_message(customer_id: str, text: str,
