@@ -1,0 +1,245 @@
+name: Diagnose Calvin Adamus reset scope
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-calvin-adamus-reset.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Locate exact tenant records without exposing personal data
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /root/clients/consulta-despertares
+            CONTAINER_ID=$(docker compose ps -q | head -1)
+            test -n "$CONTAINER_ID"
+            docker exec -i "$CONTAINER_ID" python - <<'PY'
+            import hashlib
+            import json
+            import unicodedata
+
+            from shared import state_registry
+
+            TARGET = "calvin adamus"
+
+            def norm(value):
+                text = unicodedata.normalize("NFKD", str(value or ""))
+                text = "".join(ch for ch in text if not unicodedata.combining(ch))
+                return " ".join(text.casefold().split())
+
+            def fingerprint(value):
+                return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+
+            conn = state_registry._get_conn()
+            conn.row_factory = None
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            convs = set()
+            phones = set()
+            customer_ids = set()
+            source_message_ids = set()
+            sources = {}
+
+            def add_source(name):
+                sources[name] = sources.get(name, 0) + 1
+
+            if "follow_up_requests" in tables:
+                for row in conn.execute(
+                    "SELECT conversation_id, first_name, surnames, phone_raw, "
+                    "phone_normalized, source_message_id FROM follow_up_requests"
+                ).fetchall():
+                    if norm(f"{row[1]} {row[2]}") == TARGET:
+                        convs.add(row[0])
+                        phones.update(v for v in (row[3], row[4]) if v)
+                        if row[5]:
+                            source_message_ids.add(row[5])
+                        add_source("follow_up_requests")
+
+            if "customers" in tables:
+                for row in conn.execute(
+                    "SELECT id, display_name FROM customers"
+                ).fetchall():
+                    if norm(row[1]) == TARGET:
+                        customer_ids.add(row[0])
+                        add_source("customers")
+
+            if "whatsapp_threads" in tables:
+                for row in conn.execute(
+                    "SELECT DISTINCT phone, sender_name FROM whatsapp_threads"
+                ).fetchall():
+                    if norm(row[1]) == TARGET:
+                        convs.add(row[0])
+                        add_source("whatsapp_threads")
+
+            if "whatsapp_booking_state" in tables:
+                for row in conn.execute(
+                    "SELECT phone, fields_json FROM whatsapp_booking_state"
+                ).fetchall():
+                    try:
+                        fields = json.loads(row[1] or "{}")
+                    except Exception:
+                        fields = {}
+                    names = [
+                        fields.get("customer_name"),
+                        fields.get("name"),
+                        f"{fields.get('first_name', '')} {fields.get('surnames', '')}",
+                        f"{fields.get('first_name', '')} {fields.get('last_name', '')}",
+                    ]
+                    if any(norm(value) == TARGET for value in names):
+                        convs.add(row[0])
+                        add_source("whatsapp_booking_state")
+
+            if "pending_notifications" in tables:
+                for row in conn.execute(
+                    "SELECT customer_id, customer_name FROM pending_notifications"
+                ).fetchall():
+                    if norm(row[1]) == TARGET:
+                        convs.add(row[0])
+                        add_source("pending_notifications")
+
+            if "appointments" in tables:
+                for row in conn.execute(
+                    "SELECT conversation_id, customer_name FROM appointments"
+                ).fetchall():
+                    if norm(row[1]) == TARGET:
+                        convs.add(row[0])
+                        add_source("appointments")
+
+            if "ignored_contacts" in tables:
+                for row in conn.execute(
+                    "SELECT name, phone_original, phone_normalized, external_sender_id "
+                    "FROM ignored_contacts"
+                ).fetchall():
+                    if norm(row[0]) == TARGET:
+                        phones.update(v for v in (row[1], row[2]) if v)
+                        convs.update(v for v in (row[3],) if v)
+                        add_source("ignored_contacts")
+
+            for table in ("bookings", "service_bookings"):
+                if table not in tables:
+                    continue
+                columns = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if "customer_name" not in columns:
+                    continue
+                selected = ["customer_name"]
+                for col in ("customer_phone", "customer_id"):
+                    if col in columns:
+                        selected.append(col)
+                for row in conn.execute(
+                    f"SELECT {', '.join(selected)} FROM {table}"
+                ).fetchall():
+                    if norm(row[0]) == TARGET:
+                        values = dict(zip(selected, row))
+                        if values.get("customer_phone"):
+                            phones.add(values["customer_phone"])
+                        if isinstance(values.get("customer_id"), int):
+                            customer_ids.add(values["customer_id"])
+                        add_source(table)
+
+            if customer_ids and "customer_identifiers" in tables:
+                marks = ",".join("?" for _ in customer_ids)
+                for customer_id, kind, value in conn.execute(
+                    f"SELECT customer_id, type, value FROM customer_identifiers "
+                    f"WHERE customer_id IN ({marks})",
+                    list(customer_ids),
+                ).fetchall():
+                    if kind in ("phone", "wa_conversation_id", "conversation_id"):
+                        convs.add(value)
+                        phones.add(value)
+
+            candidate_values = {v for v in convs | phones if v}
+            if candidate_values and "customer_identifiers" in tables:
+                marks = ",".join("?" for _ in candidate_values)
+                linked = conn.execute(
+                    f"SELECT DISTINCT customer_id FROM customer_identifiers "
+                    f"WHERE value IN ({marks})",
+                    list(candidate_values),
+                ).fetchall()
+                customer_ids.update(row[0] for row in linked)
+
+            def count_where(table, column, values):
+                if table not in tables or not values:
+                    return 0
+                marks = ",".join("?" for _ in values)
+                return conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {column} IN ({marks})",
+                    list(values),
+                ).fetchone()[0]
+
+            candidate_values = {v for v in convs | phones if v}
+            counts = {
+                "customers": count_where("customers", "id", customer_ids),
+                "customer_identifiers": count_where(
+                    "customer_identifiers", "customer_id", customer_ids
+                ),
+                "customer_interactions": count_where(
+                    "customer_interactions", "customer_id", customer_ids
+                ),
+                "whatsapp_threads": count_where(
+                    "whatsapp_threads", "phone", candidate_values
+                ),
+                "whatsapp_booking_state": count_where(
+                    "whatsapp_booking_state", "phone", candidate_values
+                ),
+                "follow_up_requests": count_where(
+                    "follow_up_requests", "conversation_id", candidate_values
+                ),
+                "conversation_status": count_where(
+                    "conversation_status", "conversation_id", candidate_values
+                ),
+                "inbound_processing_events": count_where(
+                    "inbound_processing_events", "conversation_id", candidate_values
+                ),
+                "pending_notifications": count_where(
+                    "pending_notifications", "customer_id", candidate_values
+                ),
+                "appointments": count_where(
+                    "appointments", "conversation_id", candidate_values
+                ),
+                "escalation_learnings": count_where(
+                    "escalation_learnings", "conversation_id", candidate_values
+                ),
+            }
+            active_escalations = 0
+            if "pending_notifications" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                active_escalations = conn.execute(
+                    f"SELECT COUNT(*) FROM pending_notifications "
+                    f"WHERE customer_id IN ({marks}) "
+                    f"AND status IN ('pending', 'sent')",
+                    list(candidate_values),
+                ).fetchone()[0]
+
+            result = {
+                "target": "Calvin Adamus",
+                "candidateConversationCount": len(convs),
+                "candidatePhoneIdentifierCount": len(phones),
+                "candidateCustomerCount": len(customer_ids),
+                "candidateFingerprints": sorted(
+                    fingerprint(value) for value in candidate_values
+                ),
+                "matchSources": sources,
+                "recordCounts": counts,
+                "activeEscalationCount": active_escalations,
+                "safeToReset": bool(candidate_values or customer_ids),
+            }
+            print(json.dumps(result, sort_keys=True))
+            conn.close()
+            PY
