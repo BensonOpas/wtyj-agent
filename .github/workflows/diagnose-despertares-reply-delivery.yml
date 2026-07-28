@@ -1,0 +1,160 @@
+name: Diagnose Consulta Despertares reply delivery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-despertares-reply-delivery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect latest operator reply and Zernio timeline
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /root/clients/consulta-despertares
+            CONTAINER_ID=$(docker compose ps -q | head -1)
+            test -n "$CONTAINER_ID"
+            docker exec -i "$CONTAINER_ID" python - <<'PY'
+            import hashlib
+            import json
+            import os
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+            from datetime import datetime, timezone
+
+            from shared import config_loader
+
+            def digest(value):
+                return hashlib.sha256(str(value or "").encode()).hexdigest()[:12]
+
+            interesting = {
+                "dashboard_conversation_reply_sent",
+                "dashboard_conversation_reply_send_failed",
+                "zernio_dm_sent",
+                "zernio_dm_send_failed",
+                "zernio_send_platform_resolved",
+                "zernio_send_all_platforms_failed",
+            }
+            records = []
+            log_path = "/app/logs/agent.log"
+            if os.path.exists(log_path):
+                with open(log_path, encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            row = json.loads(line)
+                        except Exception:
+                            continue
+                        if row.get("event") in interesting:
+                            records.append(row)
+
+            print("RECENT_SEND_EVENTS")
+            for row in records[-20:]:
+                safe = {
+                    "ts": row.get("ts"),
+                    "event": row.get("event"),
+                    "conversation_hash": digest(row.get("conversation_id")),
+                    "account_hash": digest(row.get("account_id")),
+                    "status": row.get("status"),
+                    "error": str(row.get("error") or "")[:240],
+                }
+                print(json.dumps(safe, sort_keys=True))
+
+            completed = [
+                row for row in records
+                if row.get("event") == "dashboard_conversation_reply_sent"
+                and row.get("conversation_id")
+            ]
+            if not completed:
+                print("LATEST_REPLY none")
+                raise SystemExit(0)
+
+            latest = completed[-1]
+            conversation_id = str(latest["conversation_id"])
+            print("LATEST_REPLY", json.dumps({
+                "ts": latest.get("ts"),
+                "conversation_hash": digest(conversation_id),
+                "id_length": len(conversation_id),
+            }, sort_keys=True))
+
+            raw = config_loader.get_raw()
+            accounts = list(dict.fromkeys(
+                str(value)
+                for value in ((raw.get("channel_account_allowlist") or {}).get("zernio_accounts") or [])
+                if value
+            ))
+            api_key = os.environ.get("LATE_API_KEY", "")
+            print("ACCOUNT_CANDIDATES", len(accounts), "API_KEY_PRESENT", bool(api_key))
+
+            for account_id in accounts:
+                query = urllib.parse.urlencode({
+                    "accountId": account_id,
+                    "limit": 20,
+                    "sortOrder": "desc",
+                })
+                url = (
+                    "https://zernio.com/api/v1/inbox/conversations/"
+                    + urllib.parse.quote(conversation_id)
+                    + "/messages?"
+                    + query
+                )
+                request = urllib.request.Request(
+                    url,
+                    headers={"Authorization": "Bearer " + api_key},
+                    method="GET",
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=15) as response:
+                        status = response.status
+                        payload = json.loads(response.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc:
+                    print("PROVIDER", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": exc.code,
+                        "error": exc.read().decode("utf-8", "replace")[:300],
+                    }, sort_keys=True))
+                    continue
+                except Exception as exc:
+                    print("PROVIDER", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": 0,
+                        "error": str(exc)[:300],
+                    }, sort_keys=True))
+                    continue
+
+                messages = payload.get("messages") if isinstance(payload, dict) else []
+                if not isinstance(messages, list):
+                    messages = payload.get("data", []) if isinstance(payload, dict) else []
+                print("PROVIDER", json.dumps({
+                    "account_hash": digest(account_id),
+                    "http": status,
+                    "message_count": len(messages),
+                    "payload_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+                }, sort_keys=True))
+                for message in messages[:8]:
+                    if not isinstance(message, dict):
+                        continue
+                    body = message.get("message") or message.get("text") or ""
+                    safe = {
+                        "message_hash": digest(message.get("id")),
+                        "direction": message.get("direction"),
+                        "created_at": message.get("createdAt") or message.get("created_at"),
+                        "status": message.get("status") or message.get("deliveryStatus"),
+                        "error_code": message.get("errorCode"),
+                        "failure_reason": str(message.get("failureReason") or "")[:200],
+                        "body_length": len(str(body)),
+                        "body_hash": digest(body),
+                    }
+                    print("MESSAGE", json.dumps(safe, sort_keys=True))
+            PY
