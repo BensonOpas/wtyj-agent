@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+from fastapi import Response
+
 from agents.social.channels.whatsapp_zernio import WhatsAppZernioChannel
 from agents.social import whatsapp_client
 from dashboard import api
