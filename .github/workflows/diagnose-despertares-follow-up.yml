@@ -14,7 +14,7 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Diagnose Consulta Despertares startup
+      - name: Verify Copiado persistence in Consulta Despertares
         id: probe
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -25,32 +25,68 @@ jobs:
           script: |
             set -eu
             TARGET=wtyj-consulta-despertares
-            echo "Container state:"
-            docker inspect --format 'status={{.State.Status}} running={{.State.Running}} restarting={{.State.Restarting}} exit_code={{.State.ExitCode}} error={{.State.Error}} image={{.Config.Image}} image_id={{.Image}}' "$TARGET"
-            echo "Published ports:"
-            docker port "$TARGET" || true
-            echo "Compose status:"
-            cd /root/clients/consulta-despertares
-            docker compose ps
-            echo "Host health response:"
-            curl -sS -m 5 -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8003/health || true
-            if [ "$(docker inspect --format '{{.State.Running}}' "$TARGET")" = "true" ]; then
-              echo "Container-local health response:"
-              docker exec "$TARGET" python3 - <<'PY'
+            docker exec -i "$TARGET" python3 - <<'PY'
+            import json
             import urllib.error
             import urllib.request
+
+            with open('/app/data/session_token', 'r', encoding='utf-8') as handle:
+                token = handle.read().strip()
+
+            base = 'http://127.0.0.1:8001/dashboard/api'
+            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+            def request(path, method='GET', body=None):
+                data = json.dumps(body).encode('utf-8') if body is not None else None
+                req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+                try:
+                    with urllib.request.urlopen(req, timeout=20) as response:
+                        payload = json.loads(response.read().decode('utf-8'))
+                        return response.status, payload
+                except urllib.error.HTTPError as exc:
+                    raw = exc.read().decode('utf-8', errors='replace')
+                    print(f'HTTP {exc.code} for {method} {path}: {raw[:300]}')
+                    raise
+
+            list_status, envelope = request('/follow-ups')
+            items = envelope.get('items', [])
+            candidates = [row for row in items if row.get('status') != 'copied']
+            if not candidates:
+                raise SystemExit('No non-copied follow-up available for reversible probe')
+            item = next((row for row in candidates if row.get('status') != 'closed'), candidates[0])
+            follow_up_id = int(item['id'])
+            original_status = str(item.get('status') or 'collecting')
+            print(f'GET list: HTTP {list_status}; probe_id={follow_up_id}; original_status={original_status}')
+
+            changed = False
+            restored_status = None
             try:
-                with urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5) as response:
-                    print(f'HTTP {response.status}: {response.read().decode("utf-8", errors="replace")[:300]}')
-            except Exception as exc:
-                print(f'{type(exc).__name__}: {exc}')
+                copied_status, copied = request(
+                    f'/follow-ups/{follow_up_id}/status',
+                    method='POST',
+                    body={'status': 'copied'},
+                )
+                changed = True
+                print(f'POST copied: HTTP {copied_status}; status={copied.get("status")}')
+
+                get_status, persisted = request(f'/follow-ups/{follow_up_id}')
+                print(f'GET reload: HTTP {get_status}; persisted_status={persisted.get("status")}')
+                if copied.get('status') != 'copied' or persisted.get('status') != 'copied':
+                    raise SystemExit('Copied status did not persist after reload')
+            finally:
+                if changed:
+                    restore_http, restored = request(
+                        f'/follow-ups/{follow_up_id}/status',
+                        method='POST',
+                        body={'status': original_status},
+                    )
+                    restored_status = restored.get('status')
+                    print(f'POST restore: HTTP {restore_http}; status={restored_status}')
+
+            if restored_status != original_status:
+                raise SystemExit('Original status was not restored')
+            print('LIVE_COPIED_STATUS_PROBE_OK')
             PY
-            fi
-            echo "Redacted startup errors:"
-            docker logs --since 10m "$TARGET" 2>&1 |
-              grep -Ei 'traceback|error|exception|failed|invalid|missing|required|refused' |
-              tail -n 120 |
-              sed -E 's/[0-9]{6,}/[redacted-number]/g' || true
 
       - name: Publish diagnostic result
         if: always()
@@ -60,13 +96,13 @@ jobs:
         run: |
           if [ "$RESULT" = "success" ]; then
             STATE=success
-            DESCRIPTION='Despertares startup inspected'
+            DESCRIPTION='Copiado persists after reload'
           else
             STATE=failure
-            DESCRIPTION='Despertares startup inspection failed'
+            DESCRIPTION='Copiado production probe failed'
           fi
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state="$STATE" \
-            -f context=diagnose/despertares-startup \
+            -f context=diagnose/despertares-copied \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description="$DESCRIPTION"

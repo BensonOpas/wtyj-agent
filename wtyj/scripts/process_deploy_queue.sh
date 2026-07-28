@@ -116,7 +116,7 @@ fi
 # Consulta Despertares needs the follow-up API for the persistent "Copiado"
 # state. Authentication may return 401/403 here; 404 proves the route is absent.
 if [ "$STATUS" = "success" ] && [ "$VERIFY_DESPERTARES" = "1" ]; then
-  FOLLOW_UP_CODE=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost:8103/follow-ups || true)
+  FOLLOW_UP_CODE=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost:8103/dashboard/api/follow-ups || true)
   if [ "$FOLLOW_UP_CODE" = "404" ] || [ "$FOLLOW_UP_CODE" = "000" ]; then
     echo "Consulta Despertares follow-up route verification failed: HTTP $FOLLOW_UP_CODE"
     STATUS="failed"
