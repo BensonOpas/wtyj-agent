@@ -39,26 +39,57 @@ START=$(date +%s)
 # Pre-deploy snapshot
 bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 
-# Deploy paying clients + internal sandbox (image already built by canary,
-# just restart). unboks is the SR-facing test sandbox; deploys with the
-# others so its container always runs the latest image.
+# Deploy paying clients + internal sandbox (image already built by canary).
+# Runtime compose files may intentionally pin a tenant-specific tag. Refresh
+# those local wtyj-agent tags from latest before forcing container recreation.
 STATUS="success"
-DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consultadespertares unboks wibrandt}"
+DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consulta-despertares unboks wibrandt}"
 HEALTH_PORTS=""
+VERIFY_DESPERTARES=0
+LATEST_IMAGE_ID=$(docker image inspect --format '{{.Id}}' wtyj-agent:latest)
 for client in $DEPLOY_CLIENTS; do
   if [ ! -d "/root/clients/$client" ]; then
     echo "skip missing runtime client dir: /root/clients/$client"
     continue
   fi
   cd /root/clients/$client
-  if ! (docker compose down && docker compose up -d); then
+  if ! (
+    COMPOSE_IMAGES=$(docker compose config --images)
+    for image in $COMPOSE_IMAGES; do
+      case "$image" in
+        wtyj-agent|wtyj-agent:*)
+          docker tag wtyj-agent:latest "$image"
+          ;;
+      esac
+    done
+    docker compose down
+    docker compose up -d --force-recreate
+
+    # A green health endpoint is not sufficient if Compose recreated a stale
+    # pinned image. Assert every application container is on the latest image.
+    for container_id in $(docker compose ps -q); do
+      configured_image=$(docker inspect --format '{{.Config.Image}}' "$container_id")
+      case "$configured_image" in
+        wtyj-agent|wtyj-agent:*)
+          running_image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+          if [ "$running_image_id" != "$LATEST_IMAGE_ID" ]; then
+            echo "stale application image for $client: $configured_image"
+            exit 1
+          fi
+          ;;
+      esac
+    done
+  ); then
     STATUS="failed"
     break
   fi
   case "$client" in
     bluemarlin) HEALTH_PORTS="$HEALTH_PORTS 8001" ;;
     adamus) HEALTH_PORTS="$HEALTH_PORTS 8002" ;;
-    consultadespertares) HEALTH_PORTS="$HEALTH_PORTS 8003" ;;
+    consulta-despertares)
+      HEALTH_PORTS="$HEALTH_PORTS 8003"
+      VERIFY_DESPERTARES=1
+      ;;
     unboks) HEALTH_PORTS="$HEALTH_PORTS 8004" ;;
     wibrandt) HEALTH_PORTS="$HEALTH_PORTS 8100" ;;
   esac
@@ -80,6 +111,17 @@ if [ "$STATUS" = "success" ]; then
       break
     fi
   done
+fi
+
+# Consulta Despertares needs the follow-up API for the persistent "Copiado"
+# state. Authentication may return 401/403 here; 404 proves the route is absent.
+if [ "$STATUS" = "success" ] && [ "$VERIFY_DESPERTARES" = "1" ]; then
+  FOLLOW_UP_CODE=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost:8003/follow-ups || true)
+  if [ "$FOLLOW_UP_CODE" = "404" ] || [ "$FOLLOW_UP_CODE" = "000" ]; then
+    echo "Consulta Despertares follow-up route verification failed: HTTP $FOLLOW_UP_CODE"
+    STATUS="failed"
+    bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
+  fi
 fi
 
 DURATION=$(( $(date +%s) - START ))
