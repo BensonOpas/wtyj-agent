@@ -14,7 +14,7 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Consulta Despertares deployment image
+      - name: Locate Consulta Despertares runtime
         id: probe
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -28,11 +28,11 @@ jobs:
             test -n "$TARGET"
             echo "Target container: $TARGET"
             docker inspect --format 'configured_image={{.Config.Image}} image_id={{.Image}} created={{.Created}}' "$TARGET"
+            docker inspect --format 'compose_working_dir={{index .Config.Labels "com.docker.compose.project.working_dir"}} compose_config={{index .Config.Labels "com.docker.compose.project.config_files"}} compose_service={{index .Config.Labels "com.docker.compose.service"}}' "$TARGET"
             echo "Latest application image:"
             docker image inspect --format 'name={{index .RepoTags 0}} image_id={{.Id}} created={{.Created}}' wtyj-agent:latest
-            echo "Compose configured images:"
-            cd /root/clients/consultadespertares
-            docker compose config --images
+            echo "Matching client runtime directories:"
+            find /root/clients -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep -Ei 'consulta|despertares' || true
             echo "Follow-up endpoint response:"
             docker exec -i "$TARGET" python3 - <<'PY'
             import urllib.error
@@ -59,13 +59,13 @@ jobs:
         run: |
           if [ "$RESULT" = "success" ]; then
             STATE=success
-            DESCRIPTION='Despertares deployment image inspected'
+            DESCRIPTION='Despertares runtime located'
           else
             STATE=failure
-            DESCRIPTION='Despertares deployment inspection failed'
+            DESCRIPTION='Despertares runtime inspection failed'
           fi
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state="$STATE" \
-            -f context=diagnose/despertares-image \
+            -f context=diagnose/despertares-runtime \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description="$DESCRIPTION"
