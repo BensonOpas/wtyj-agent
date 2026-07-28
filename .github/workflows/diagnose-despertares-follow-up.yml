@@ -1,0 +1,81 @@
+name: Diagnose Despertares follow-up status
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-despertares-follow-up.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe copied status in Consulta Despertares container
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            TARGET=$(docker ps --format '{{.Names}}' | grep -Ei 'consulta|despertares' | head -1)
+            test -n "$TARGET"
+            echo "Target container: $TARGET"
+            docker exec -i "$TARGET" python3 - <<'PY'
+            import json
+            import urllib.error
+            import urllib.request
+
+            with open('/app/data/session_token', 'r', encoding='utf-8') as handle:
+                token = handle.read().strip()
+
+            base = 'http://127.0.0.1:8001'
+            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+            def request(path, method='GET', body=None):
+                data = json.dumps(body).encode('utf-8') if body is not None else None
+                req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+                try:
+                    with urllib.request.urlopen(req, timeout=20) as response:
+                        payload = json.loads(response.read().decode('utf-8'))
+                        return response.status, payload
+                except urllib.error.HTTPError as exc:
+                    raw = exc.read().decode('utf-8', errors='replace')
+                    print(f'HTTP {exc.code} for {method} {path}: {raw[:500]}')
+                    raise
+
+            status, envelope = request('/follow-ups')
+            items = envelope.get('items', [])
+            if not items:
+                raise SystemExit('No follow-ups available for probe')
+            item = next((row for row in items if row.get('status') != 'closed'), items[0])
+            follow_up_id = int(item['id'])
+            original_status = str(item.get('status') or 'collecting')
+            print(f'GET list: HTTP {status}; probe id={follow_up_id}; original_status={original_status}')
+
+            copied_status, copied = request(
+                f'/follow-ups/{follow_up_id}/status',
+                method='POST',
+                body={'status': 'copied'},
+            )
+            print(f'POST copied: HTTP {copied_status}; returned_status={copied.get("status")}')
+            _, persisted = request(f'/follow-ups/{follow_up_id}')
+            print(f'GET persisted: status={persisted.get("status")}')
+
+            restore_status, restored = request(
+                f'/follow-ups/{follow_up_id}/status',
+                method='POST',
+                body={'status': original_status},
+            )
+            print(f'POST restore: HTTP {restore_status}; returned_status={restored.get("status")}')
+
+            if copied.get('status') != 'copied' or persisted.get('status') != 'copied':
+                raise SystemExit('Copied status did not persist')
+            if restored.get('status') != original_status:
+                raise SystemExit('Original status was not restored')
+            print('LIVE_COPIED_STATUS_PROBE_OK')
+            PY
