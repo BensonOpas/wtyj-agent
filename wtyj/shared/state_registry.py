@@ -4459,7 +4459,7 @@ def get_follow_up_request(request_id: int) -> dict:
 
 def update_follow_up_status(request_id: int, status: str) -> dict:
     allowed = {"collecting", "ready_to_call", "needs_human_answer", "in_progress",
-               "appointment_coordinated", "no_answer", "closed"}
+               "copied", "appointment_coordinated", "no_answer", "closed"}
     if status not in allowed:
         raise ValueError("Invalid follow-up status")
     now = datetime.now(timezone.utc).isoformat()
