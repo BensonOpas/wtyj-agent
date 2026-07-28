@@ -7,10 +7,25 @@ on:
     branches: [main]
   workflow_dispatch:   # manual trigger from control panel "Deploy now" button
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - name: Mark backend production deployment pending
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \\
+            -f state=pending \\
+            -f context=deploy/backend-production \\
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \\
+            -f description='Testing and deploying tenant services'
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -94,3 +109,27 @@ jobs:
 
             # Process queue: claim + deploy + complete (writes history)
             bash "$WTYJ_SOURCE_ROOT/wtyj/scripts/process_deploy_queue.sh"
+
+
+  backend-deployment-status:
+    needs: [test, deploy-canary, deploy-production]
+    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish backend production result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_RESULT: ${{ needs.deploy-production.result }}
+        run: |
+          if [ "$PRODUCTION_RESULT" = "success" ]; then
+            STATE=success
+            DESCRIPTION='Backend tenant services deployed'
+          else
+            STATE=failure
+            DESCRIPTION='Backend production deployment failed'
+          fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \\
+            -f state="$STATE" \\
+            -f context=deploy/backend-production \\
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \\
+            -f description="$DESCRIPTION"
