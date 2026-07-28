@@ -295,6 +295,41 @@ def send_whatsapp_message(customer_id: str, text: str,
     return False
 
 
+def send_whatsapp_template_message(
+    customer_id: str,
+    template_name: str,
+    language: str = "es",
+) -> bool:
+    """Send an approved WhatsApp template through the tenant-owned account."""
+    if not _is_zernio_conversation_id(customer_id):
+        return False
+
+    from agents.social.zernio_dm_client import send_dm_template
+    from agents.social import social_publisher
+    from shared.tenant_guard import is_account_allowed
+
+    cached = _zernio_account_cache.get(customer_id)
+    candidates = []
+    if cached:
+        candidates.append(cached)
+    for account_id in _candidate_zernio_account_ids(social_publisher):
+        if account_id not in candidates:
+            candidates.append(account_id)
+
+    for account_id in candidates:
+        if not is_account_allowed(account_id, direction="outbound"):
+            continue
+        if send_dm_template(
+            customer_id,
+            account_id,
+            template_name,
+            language=language,
+        ):
+            _zernio_account_cache[customer_id] = account_id
+            return True
+    return False
+
+
 def _send_zernio_candidate(send_dm_reply, customer_id: str, account_id: str,
                            text: str, attachment_url: str,
                            attachment_type: str,
