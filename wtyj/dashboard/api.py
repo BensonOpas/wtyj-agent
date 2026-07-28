@@ -3030,6 +3030,73 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
     return {"ok": True, "channel": "email"}
 
 
+# ── WhatsApp Conversation Reply ──────────────────────────────────────────────
+# Direct operator reply for regular Inbox conversations. Zernio conversation
+# ids are routed by send_whatsapp_message through the configured tenant account.
+# The local timeline is updated only after the provider confirms the send.
+
+class WhatsAppConversationReplyRequest(BaseModel):
+    message: str
+
+
+@router.post("/messages/conversations/{conversation_id:path}/whatsapp/reply",
+             dependencies=[Depends(_check_auth)])
+async def reply_to_whatsapp_conversation(
+    conversation_id: str,
+    req: WhatsAppConversationReplyRequest,
+):
+    """Send an operator-authored WhatsApp reply verbatim through Zernio."""
+    customer_id = (conversation_id or "").replace("\r", "").replace("\n", "").strip()
+    message = (req.message or "").strip()
+
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="Conversation id is required")
+    if not message:
+        raise HTTPException(status_code=400, detail="`message` is required")
+    if len(message) > 4096:
+        raise HTTPException(status_code=400, detail="WhatsApp messages cannot exceed 4096 characters")
+
+    try:
+        sent_ok = send_whatsapp_message(customer_id, message)
+    except Exception as exc:
+        bm_logger.log(
+            "dashboard_conversation_reply_send_failed",
+            conversation_id=customer_id[:60],
+            channel="whatsapp",
+            error=str(exc)[:200],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Zernio did not confirm the WhatsApp message",
+        )
+
+    if not sent_ok:
+        bm_logger.log(
+            "dashboard_conversation_reply_send_failed",
+            conversation_id=customer_id[:60],
+            channel="whatsapp",
+            error="provider returned false",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Zernio did not confirm the WhatsApp message",
+        )
+
+    state_registry.wa_store_message(customer_id, "operator", message)
+    bm_logger.log(
+        "dashboard_conversation_reply_sent",
+        conversation_id=customer_id[:60],
+        channel="whatsapp",
+        role="operator",
+    )
+    return {
+        "ok": True,
+        "reply": message,
+        "channel": "whatsapp",
+        "role": "operator",
+    }
+
+
 # ── Email Forward + Delete (Brief 218) ──────────────────────────────────────
 # Two operator-facing email actions on a conversation. Forward re-sends the
 # latest customer message (text-only in v1; attachments aren't stored). Delete
