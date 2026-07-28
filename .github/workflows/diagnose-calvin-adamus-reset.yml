@@ -156,7 +156,8 @@ jobs:
                         f"PRAGMA table_info({table})"
                     ).fetchall()
                 }
-                selected = ["id"]
+                key_column = booking_key_columns[table]
+                selected = [key_column]
                 for col in (
                     "customer_name", "customer_phone", "customer_email", "customer_id"
                 ):
@@ -308,7 +309,9 @@ jobs:
             delete_ids("ignored_contacts", "id", ignored_ids)
 
             for table in ("bookings", "service_bookings"):
-                delete_ids(table, "id", booking_ids[table])
+                delete_ids(
+                    table, booking_key_columns[table], booking_ids[table]
+                )
 
             if "data_retention_audit_log" in tables and candidate_values:
                 marks = ",".join("?" for _ in candidate_values)
