@@ -98,6 +98,88 @@ jobs:
             print("ACCOUNT_CANDIDATES", len(accounts), "API_KEY_PRESENT", bool(api_key))
 
             for account_id in accounts:
+                templates_url = (
+                    "https://zernio.com/api/v1/whatsapp/templates?"
+                    + urllib.parse.urlencode({"accountId": account_id})
+                )
+                templates_request = urllib.request.Request(
+                    templates_url,
+                    headers={"Authorization": "Bearer " + api_key},
+                    method="GET",
+                )
+                try:
+                    with urllib.request.urlopen(templates_request, timeout=15) as response:
+                        template_payload = json.loads(response.read().decode("utf-8"))
+                    templates = template_payload.get("templates", [])
+                    approved = [
+                        {
+                            "name": item.get("name"),
+                            "language": item.get("language"),
+                            "category": item.get("category"),
+                            "component_types": [
+                                component.get("type")
+                                for component in (item.get("components") or [])
+                                if isinstance(component, dict)
+                            ],
+                        }
+                        for item in templates
+                        if isinstance(item, dict)
+                        and str(item.get("status") or "").upper() == "APPROVED"
+                    ]
+                    print("APPROVED_TEMPLATES", json.dumps({
+                        "account_hash": digest(account_id),
+                        "count": len(approved),
+                        "templates": approved,
+                    }, sort_keys=True))
+                except urllib.error.HTTPError as exc:
+                    print("APPROVED_TEMPLATES", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": exc.code,
+                        "error": exc.read().decode("utf-8", "replace")[:300],
+                    }, sort_keys=True))
+                except Exception as exc:
+                    print("APPROVED_TEMPLATES", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": 0,
+                        "error": str(exc)[:300],
+                    }, sort_keys=True))
+
+                detail_url = (
+                    "https://zernio.com/api/v1/inbox/conversations/"
+                    + urllib.parse.quote(conversation_id)
+                    + "?"
+                    + urllib.parse.urlencode({"accountId": account_id})
+                )
+                detail_request = urllib.request.Request(
+                    detail_url,
+                    headers={"Authorization": "Bearer " + api_key},
+                    method="GET",
+                )
+                try:
+                    with urllib.request.urlopen(detail_request, timeout=15) as response:
+                        detail_payload = json.loads(response.read().decode("utf-8"))
+                    detail = detail_payload.get("data", detail_payload)
+                    print("CONVERSATION", json.dumps({
+                        "account_hash": digest(account_id),
+                        "platform": detail.get("platform"),
+                        "status": detail.get("status"),
+                        "participant_hash": digest(detail.get("participantId")),
+                        "participant_present": bool(detail.get("participantId")),
+                        "last_message_at": detail.get("lastMessageAt"),
+                    }, sort_keys=True))
+                except urllib.error.HTTPError as exc:
+                    print("CONVERSATION", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": exc.code,
+                        "error": exc.read().decode("utf-8", "replace")[:300],
+                    }, sort_keys=True))
+                except Exception as exc:
+                    print("CONVERSATION", json.dumps({
+                        "account_hash": digest(account_id),
+                        "http": 0,
+                        "error": str(exc)[:300],
+                    }, sort_keys=True))
+
                 query = urllib.parse.urlencode({
                     "accountId": account_id,
                     "limit": 20,
