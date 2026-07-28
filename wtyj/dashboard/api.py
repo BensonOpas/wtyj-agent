@@ -14,7 +14,7 @@ import urllib.parse
 import anthropic
 import requests as http_requests
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
@@ -4216,8 +4216,11 @@ def _hydrate_follow_up_contact_identities(items: list[dict]) -> list[dict]:
 
 
 @router.get("/follow-ups", dependencies=[Depends(_check_auth)])
-async def list_follow_ups_endpoint(status: str = None):
+async def list_follow_ups_endpoint(response: Response, status: str = None):
     """One tenant-scoped work queue for callback coordination."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     _require_callback_followups()
     items = state_registry.list_follow_up_requests(status=status)
     items = await asyncio.to_thread(_hydrate_follow_up_contact_identities, items)
