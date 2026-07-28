@@ -1,0 +1,102 @@
+name: Deploy Unboks dashboard production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-dashboard.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: unboks-dashboard-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out dashboard source
+        uses: actions/checkout@v4
+        with:
+          repository: unboks-org/unboks-dashboard-api
+          ref: main
+          path: dashboard
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install, typecheck, and build
+        working-directory: dashboard
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --filter @workspace/unboks run typecheck
+          pnpm --filter @workspace/unboks run build
+          test -f artifacts/unboks/dist/public/index.html
+          test -n "$(find artifacts/unboks/dist/public/assets -type f -name '*.js' -print -quit)"
+
+      - name: Package immutable release
+        id: release
+        working-directory: dashboard
+        run: |
+          set -euo pipefail
+          DASHBOARD_SHA=$(git rev-parse HEAD)
+          echo "sha=$DASHBOARD_SHA" >> "$GITHUB_OUTPUT"
+          tar -C artifacts/unboks/dist/public -czf "$GITHUB_WORKSPACE/unboks-dashboard-$DASHBOARD_SHA.tgz" .
+
+      - name: Upload release to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: unboks-dashboard-${{ steps.release.outputs.sha }}.tgz
+          target: /tmp
+
+      - name: Activate release and verify live bundle
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            DASHBOARD_SHA='${{ steps.release.outputs.sha }}'
+            ARCHIVE="/tmp/unboks-dashboard-$DASHBOARD_SHA.tgz"
+            RELEASE_ROOT=/var/www/unboks-dashboard/releases
+            CURRENT_LINK=/var/www/unboks-dashboard/current
+            RELEASE_DIR="$RELEASE_ROOT/$DASHBOARD_SHA"
+
+            test -d "$RELEASE_ROOT"
+            if [ -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ]; then
+              echo "$CURRENT_LINK exists but is not a symlink; refusing unsafe replacement"
+              exit 1
+            fi
+
+            mkdir -p "$RELEASE_DIR"
+            tar -xzf "$ARCHIVE" -C "$RELEASE_DIR"
+            test -f "$RELEASE_DIR/index.html"
+            test -n "$(find "$RELEASE_DIR/assets" -type f -name '*.js' -print -quit)"
+
+            ln -sfn "$RELEASE_DIR" "$CURRENT_LINK.next"
+            mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
+            rm -f "$ARCHIVE"
+
+            LIVE_INDEX=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org/?release=$DASHBOARD_SHA")
+            ASSET_PATH=$(printf '%s' "$LIVE_INDEX" | grep -oE '/assets/index-[^" ]+\.js' | head -1)
+            test -n "$ASSET_PATH"
+            LIVE_BUNDLE=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$ASSET_PATH")
+            printf '%s' "$LIVE_BUNDLE" | grep -q 'Copiado'
+            printf '%s' "$LIVE_BUNDLE" | grep -q 'Abrir conversación'
+
+            readlink -f "$CURRENT_LINK" | grep -q "$DASHBOARD_SHA"
+            echo "Dashboard release $DASHBOARD_SHA is live and verified"
+
+            find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+              | sort -nr | tail -n +8 | cut -d' ' -f2- | xargs -r rm -rf
