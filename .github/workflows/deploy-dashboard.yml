@@ -125,11 +125,11 @@ jobs:
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnMount'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnWindowFocus'
 
-            INBOX_FILE=$(grep -l 'Mensaje enviado por WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
+            INBOX_FILE=$(grep -l 'Mensaje entregado a WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
             test -n "$INBOX_FILE"
             INBOX_ASSET="/assets/$(basename "$INBOX_FILE")"
             LIVE_INBOX=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$INBOX_ASSET?release=$DASHBOARD_SHA")
-            printf '%s' "$LIVE_INBOX" | grep -q 'Mensaje enviado por WhatsApp'
+            printf '%s' "$LIVE_INBOX" | grep -q 'Mensaje entregado a WhatsApp'
             printf '%s' "$LIVE_INBOX" | grep -q 'Escribe un mensaje'
             printf '%s' "$LIVE_INBOX" | grep -q 'Responder por WhatsApp'
             printf '%s' "$LIVE_INBOX" | grep -q 'Plantilla de seguimiento enviada'
