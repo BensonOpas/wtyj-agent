@@ -23,6 +23,7 @@ from shared import state_registry, config_loader, bm_logger, auto_block, agent_i
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
 from agents.social.whatsapp_client import send_whatsapp_message, resolve_zernio_conversation_contacts
+from agents.social.zernio_dm_client import ZernioReplyError, WhatsAppWindowClosedError
 from agents.marina import marina_agent
 from agents.marina.email_adapter import smtp_send
 from agents.social.content_agent import _build_seasonal_context
@@ -3058,7 +3059,27 @@ async def reply_to_whatsapp_conversation(
         raise HTTPException(status_code=400, detail="WhatsApp messages cannot exceed 4096 characters")
 
     try:
-        sent_ok = send_whatsapp_message(customer_id, message)
+        sent_ok = send_whatsapp_message(
+            customer_id,
+            message,
+            confirm_delivery=True,
+        )
+    except WhatsAppWindowClosedError as exc:
+        bm_logger.log(
+            "dashboard_conversation_reply_send_failed",
+            conversation_id=customer_id[:60],
+            channel="whatsapp",
+            error="whatsapp_window_closed",
+        )
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ZernioReplyError as exc:
+        bm_logger.log(
+            "dashboard_conversation_reply_send_failed",
+            conversation_id=customer_id[:60],
+            channel="whatsapp",
+            error=str(exc)[:200],
+        )
+        raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:
         bm_logger.log(
             "dashboard_conversation_reply_send_failed",
@@ -3068,7 +3089,7 @@ async def reply_to_whatsapp_conversation(
         )
         raise HTTPException(
             status_code=502,
-            detail="Zernio did not confirm the WhatsApp message",
+            detail="No se pudo confirmar el envío por WhatsApp.",
         )
 
     if not sent_ok:
