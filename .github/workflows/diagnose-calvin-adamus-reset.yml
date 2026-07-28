@@ -75,7 +75,8 @@ jobs:
             pending_ids = set()
             appointment_ids = set()
             ignored_ids = set()
-            booking_ids = {"bookings": set(), "service_bookings": set()}\n            booking_key_columns = {"bookings": "booking_ref", "service_bookings": "id"}
+            booking_ids = {"bookings": set(), "service_bookings": set()}
+            booking_key_columns = {"bookings": "booking_ref", "service_bookings": "id"}
 
             if "follow_up_requests" in tables:
                 for row in conn.execute(
