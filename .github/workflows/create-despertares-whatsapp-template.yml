@@ -1,0 +1,115 @@
+name: Create Consulta Despertares WhatsApp follow-up template
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/create-despertares-whatsapp-template.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  create-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit idempotent template to Meta through Zernio
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /root/clients/consulta-despertares
+            CONTAINER_ID=$(docker compose ps -q | head -1)
+            test -n "$CONTAINER_ID"
+            docker exec -i "$CONTAINER_ID" python - <<'PY'
+            import json
+            import os
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+
+            from shared import config_loader
+
+            template_name = "consulta_despertares_seguimiento"
+            template_text = (
+                "Hola. Te escribimos de Consulta Psicológica Despertares para "
+                "continuar con la solicitud que nos enviaste. Responde a este "
+                "mensaje cuando puedas y te ayudamos con la cita."
+            )
+            raw = config_loader.get_raw()
+            accounts = [
+                str(value)
+                for value in ((raw.get("channel_account_allowlist") or {}).get("zernio_accounts") or [])
+                if value
+            ]
+            if len(accounts) != 1:
+                raise SystemExit(f"Expected exactly one tenant WhatsApp account, found {len(accounts)}")
+            account_id = accounts[0]
+            api_key = os.environ["LATE_API_KEY"]
+            headers = {
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            }
+
+            list_url = (
+                "https://zernio.com/api/v1/whatsapp/templates?"
+                + urllib.parse.urlencode({"accountId": account_id})
+            )
+            list_request = urllib.request.Request(list_url, headers=headers, method="GET")
+            with urllib.request.urlopen(list_request, timeout=20) as response:
+                current = json.loads(response.read().decode("utf-8"))
+            existing = next(
+                (
+                    item for item in current.get("templates", [])
+                    if isinstance(item, dict) and item.get("name") == template_name
+                ),
+                None,
+            )
+            if existing:
+                print(json.dumps({
+                    "template": template_name,
+                    "status": existing.get("status"),
+                    "language": existing.get("language"),
+                    "created": False,
+                }, sort_keys=True))
+                raise SystemExit(0)
+
+            body = json.dumps({
+                "accountId": account_id,
+                "name": template_name,
+                "category": "UTILITY",
+                "language": "es",
+                "components": [{"type": "BODY", "text": template_text}],
+            }).encode("utf-8")
+            create_request = urllib.request.Request(
+                "https://zernio.com/api/v1/whatsapp/templates",
+                headers=headers,
+                data=body,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(create_request, timeout=30) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    status_code = response.status
+            except urllib.error.HTTPError as exc:
+                error_body = exc.read().decode("utf-8", "replace")
+                print(json.dumps({
+                    "template": template_name,
+                    "http": exc.code,
+                    "error": error_body[:500],
+                }, sort_keys=True))
+                raise
+
+            template = payload.get("template", payload.get("data", {}))
+            print(json.dumps({
+                "template": template_name,
+                "http": status_code,
+                "status": template.get("status") if isinstance(template, dict) else None,
+                "language": template.get("language") if isinstance(template, dict) else None,
+                "created": True,
+            }, sort_keys=True))
+            PY
