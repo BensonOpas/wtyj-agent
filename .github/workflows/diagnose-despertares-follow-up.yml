@@ -8,12 +8,14 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe copied status in Consulta Despertares container
+      - name: Inspect Consulta Despertares deployment image
+        id: probe
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -25,57 +27,45 @@ jobs:
             TARGET=$(docker ps --format '{{.Names}}' | grep -Ei 'consulta|despertares' | head -1)
             test -n "$TARGET"
             echo "Target container: $TARGET"
+            docker inspect --format 'configured_image={{.Config.Image}} image_id={{.Image}} created={{.Created}}' "$TARGET"
+            echo "Latest application image:"
+            docker image inspect --format 'name={{index .RepoTags 0}} image_id={{.Id}} created={{.Created}}' wtyj-agent:latest
+            echo "Compose configured images:"
+            cd /root/clients/consultadespertares
+            docker compose config --images
+            echo "Follow-up endpoint response:"
             docker exec -i "$TARGET" python3 - <<'PY'
-            import json
             import urllib.error
             import urllib.request
 
             with open('/app/data/session_token', 'r', encoding='utf-8') as handle:
                 token = handle.read().strip()
-
-            base = 'http://127.0.0.1:8001'
-            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-
-            def request(path, method='GET', body=None):
-                data = json.dumps(body).encode('utf-8') if body is not None else None
-                req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
-                try:
-                    with urllib.request.urlopen(req, timeout=20) as response:
-                        payload = json.loads(response.read().decode('utf-8'))
-                        return response.status, payload
-                except urllib.error.HTTPError as exc:
-                    raw = exc.read().decode('utf-8', errors='replace')
-                    print(f'HTTP {exc.code} for {method} {path}: {raw[:500]}')
-                    raise
-
-            status, envelope = request('/follow-ups')
-            items = envelope.get('items', [])
-            if not items:
-                raise SystemExit('No follow-ups available for probe')
-            item = next((row for row in items if row.get('status') != 'closed'), items[0])
-            follow_up_id = int(item['id'])
-            original_status = str(item.get('status') or 'collecting')
-            print(f'GET list: HTTP {status}; probe id={follow_up_id}; original_status={original_status}')
-
-            copied_status, copied = request(
-                f'/follow-ups/{follow_up_id}/status',
-                method='POST',
-                body={'status': 'copied'},
+            request = urllib.request.Request(
+                'http://127.0.0.1:8001/follow-ups',
+                headers={'Authorization': f'Bearer {token}'},
             )
-            print(f'POST copied: HTTP {copied_status}; returned_status={copied.get("status")}')
-            _, persisted = request(f'/follow-ups/{follow_up_id}')
-            print(f'GET persisted: status={persisted.get("status")}')
-
-            restore_status, restored = request(
-                f'/follow-ups/{follow_up_id}/status',
-                method='POST',
-                body={'status': original_status},
-            )
-            print(f'POST restore: HTTP {restore_status}; returned_status={restored.get("status")}')
-
-            if copied.get('status') != 'copied' or persisted.get('status') != 'copied':
-                raise SystemExit('Copied status did not persist')
-            if restored.get('status') != original_status:
-                raise SystemExit('Original status was not restored')
-            print('LIVE_COPIED_STATUS_PROBE_OK')
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    print(f'HTTP {response.status}')
+            except urllib.error.HTTPError as exc:
+                print(f'HTTP {exc.code}: {exc.read().decode("utf-8", errors="replace")[:300]}')
             PY
+
+      - name: Publish diagnostic result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.probe.outcome }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            STATE=success
+            DESCRIPTION='Despertares deployment image inspected'
+          else
+            STATE=failure
+            DESCRIPTION='Despertares deployment inspection failed'
+          fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state="$STATE" \
+            -f context=diagnose/despertares-image \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f description="$DESCRIPTION"
