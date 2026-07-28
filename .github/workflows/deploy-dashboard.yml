@@ -122,6 +122,20 @@ jobs:
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Copiado'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Abrir conversación'
 
+            INBOX_FILE=$(grep -l 'Mensaje enviado por WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
+            test -n "$INBOX_FILE"
+            INBOX_ASSET="/assets/$(basename "$INBOX_FILE")"
+            LIVE_INBOX=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$INBOX_ASSET?release=$DASHBOARD_SHA")
+            printf '%s' "$LIVE_INBOX" | grep -q 'Mensaje enviado por WhatsApp'
+            printf '%s' "$LIVE_INBOX" | grep -q 'Escribe un mensaje'
+            printf '%s' "$LIVE_INBOX" | grep -q 'Responder por WhatsApp'
+
+            REPLY_API_FILE=$(grep -l '/whatsapp/reply' "$RELEASE_DIR"/assets/*.js | head -1)
+            test -n "$REPLY_API_FILE"
+            REPLY_API_ASSET="/assets/$(basename "$REPLY_API_FILE")"
+            LIVE_REPLY_API=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$REPLY_API_ASSET?release=$DASHBOARD_SHA")
+            printf '%s' "$LIVE_REPLY_API" | grep -q '/whatsapp/reply'
+
             readlink -f "$CURRENT_LINK" | grep -q "$DASHBOARD_SHA"
             echo "Dashboard release $DASHBOARD_SHA is live and verified"
 
