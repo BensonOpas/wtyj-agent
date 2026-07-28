@@ -122,6 +122,8 @@ jobs:
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Copiado'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Abrir conversación'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'phone_normalized'
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnMount'
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnWindowFocus'
 
             INBOX_FILE=$(grep -l 'Mensaje enviado por WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
             test -n "$INBOX_FILE"
