@@ -27,6 +27,7 @@ jobs:
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state=pending \
             -f context=deploy/dashboard-production \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description='Building and publishing dashboard'
 
       - name: Check out dashboard source
@@ -123,6 +124,7 @@ jobs:
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state=success \
             -f context=deploy/dashboard-production \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description='Dashboard live bundle verified'
 
       - name: Mark production deployment failed
@@ -133,4 +135,5 @@ jobs:
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state=failure \
             -f context=deploy/dashboard-production \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -f description='Dashboard production deployment failed'
