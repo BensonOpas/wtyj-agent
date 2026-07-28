@@ -83,7 +83,7 @@ jobs:
                 "name": template_name,
                 "category": "UTILITY",
                 "language": "es",
-                "components": [{"type": "BODY", "text": template_text}],
+                "components": [{"type": "body", "text": template_text}],
             }).encode("utf-8")
             create_request = urllib.request.Request(
                 "https://zernio.com/api/v1/whatsapp/templates",
