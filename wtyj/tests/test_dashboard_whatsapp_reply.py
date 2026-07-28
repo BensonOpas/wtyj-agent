@@ -37,6 +37,8 @@ def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
         "reply": "Hola, Lucia",
         "channel": "whatsapp",
         "role": "operator",
+        "delivery_mode": "free_text",
+        "original_message_sent": True,
     }
 
 
@@ -54,7 +56,7 @@ def test_whatsapp_conversation_reply_is_not_stored_when_zernio_fails(monkeypatch
         )
 
     assert exc_info.value.status_code == 502
-    assert "Zernio" in str(exc_info.value.detail)
+    assert "WhatsApp" in str(exc_info.value.detail)
     assert stored == []
 
 
@@ -138,6 +140,15 @@ def test_whatsapp_window_closed_is_not_reported_as_sent(monkeypatch):
 
     monkeypatch.setattr(api, "send_whatsapp_message", raise_window_closed)
     monkeypatch.setattr(
+        api,
+        "send_whatsapp_template_message",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            api.ZernioReplyError(
+                "La plantilla de seguimiento está pendiente de aprobación de Meta."
+            )
+        ),
+    )
+    monkeypatch.setattr(
         api.state_registry,
         "wa_store_message",
         lambda *args: stored.append(args),
@@ -152,7 +163,7 @@ def test_whatsapp_window_closed_is_not_reported_as_sent(monkeypatch):
         )
 
     assert exc_info.value.status_code == 409
-    assert "24 horas" in str(exc_info.value.detail)
+    assert "pendiente" in str(exc_info.value.detail)
     assert stored == []
 
 
@@ -182,4 +193,42 @@ def test_provider_delivery_failure_is_not_stored(monkeypatch):
     assert exc_info.value.status_code == 502
     assert "fallido" in str(exc_info.value.detail)
     assert stored == []
+
+def test_closed_window_sends_template_and_stores_template_text(monkeypatch):
+    stored = []
+
+    def raise_window_closed(*_args, **_kwargs):
+        raise api.WhatsAppWindowClosedError("window closed")
+
+    monkeypatch.setattr(api, "send_whatsapp_message", raise_window_closed)
+    monkeypatch.setattr(
+        api,
+        "send_whatsapp_template_message",
+        lambda conversation_id, template_name, language="es": (
+            conversation_id == "0123456789abcdef01234567"
+            and template_name == "consulta_despertares_seguimiento"
+            and language == "es"
+        ),
+    )
+    monkeypatch.setattr(
+        api.state_registry,
+        "wa_store_message",
+        lambda *args: stored.append(args),
+    )
+
+    result = asyncio.run(
+        api.reply_to_whatsapp_conversation(
+            "0123456789abcdef01234567",
+            api.WhatsAppConversationReplyRequest(message="texto libre"),
+        )
+    )
+
+    assert result["delivery_mode"] == "template"
+    assert result["original_message_sent"] is False
+    assert result["reply"] == api._DESPERTARES_REENGAGEMENT_TEXT
+    assert stored == [(
+        "0123456789abcdef01234567",
+        "operator",
+        api._DESPERTARES_REENGAGEMENT_TEXT,
+    )]
 

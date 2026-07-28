@@ -132,6 +132,7 @@ jobs:
             printf '%s' "$LIVE_INBOX" | grep -q 'Mensaje enviado por WhatsApp'
             printf '%s' "$LIVE_INBOX" | grep -q 'Escribe un mensaje'
             printf '%s' "$LIVE_INBOX" | grep -q 'Responder por WhatsApp'
+            printf '%s' "$LIVE_INBOX" | grep -q 'Plantilla de seguimiento enviada'
 
             REPLY_API_FILE=$(grep -l '/whatsapp/reply' "$RELEASE_DIR"/assets/*.js | head -1)
             test -n "$REPLY_API_FILE"

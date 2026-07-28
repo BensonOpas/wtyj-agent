@@ -344,6 +344,142 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
                        error=str(e)[:200])
         return False
 
+def send_dm_template(
+    conversation_id: str,
+    account_id: str,
+    template_name: str,
+    language: str = "es",
+) -> bool:
+    """Send and confirm an approved WhatsApp template in an existing thread."""
+    api_key = os.environ.get("LATE_API_KEY", "")
+    if not api_key:
+        raise ZernioReplyError("No está configurada la conexión con WhatsApp.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    templates_response = http_requests.get(
+        "https://zernio.com/api/v1/whatsapp/templates",
+        headers=headers,
+        params={"accountId": account_id},
+        timeout=15,
+    )
+    templates_payload = _response_json(templates_response)
+    templates = templates_payload.get("templates", [])
+    selected = next(
+        (
+            item for item in templates
+            if isinstance(item, dict)
+            and item.get("name") == template_name
+            and str(item.get("language") or "") == language
+        ),
+        None,
+    )
+    template_status = str(selected.get("status") or "").upper() if selected else ""
+    if template_status != "APPROVED":
+        bm_logger.log(
+            "zernio_whatsapp_template_unavailable",
+            template_name=template_name,
+            status=template_status or "missing",
+        )
+        if template_status == "PENDING":
+            raise ZernioReplyError(
+                "La plantilla de seguimiento está pendiente de aprobación de Meta. "
+                "Todavía no se puede reabrir esta conversación."
+            )
+        raise ZernioReplyError(
+            "No hay una plantilla de WhatsApp aprobada para reabrir esta conversación."
+        )
+
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}/messages"
+    )
+    send_response = http_requests.post(
+        base_url,
+        headers=headers,
+        json={
+            "accountId": account_id,
+            "template": {
+                "elements": [{
+                    "name": template_name,
+                    "language": language,
+                }],
+            },
+        },
+        timeout=15,
+    )
+    payload = _response_json(send_response)
+    if not 200 <= send_response.status_code < 300:
+        provider_error = (
+            payload.get("message")
+            or payload.get("error")
+            or payload.get("detail")
+            or send_response.text[:200]
+        )
+        bm_logger.log(
+            "zernio_whatsapp_template_send_failed",
+            template_name=template_name,
+            status=send_response.status_code,
+            error=str(provider_error)[:200],
+        )
+        raise ZernioReplyError(
+            "WhatsApp rechazó la plantilla de seguimiento. No se ha enviado."
+        )
+
+    data = payload.get("data", payload)
+    message_id = ""
+    if isinstance(data, dict):
+        message_id = str(data.get("messageId") or data.get("id") or "")
+
+    for attempt in range(8):
+        if attempt:
+            time.sleep(0.5)
+        status_response = http_requests.get(
+            base_url,
+            headers=headers,
+            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+            timeout=15,
+        )
+        if not 200 <= status_response.status_code < 300:
+            continue
+        messages = _payload_messages(_response_json(status_response))
+        matched = next(
+            (
+                item for item in messages
+                if message_id
+                and str(item.get("id") or item.get("messageId") or "") == message_id
+            ),
+            None,
+        )
+        if not matched:
+            continue
+        status = str(
+            matched.get("status") or matched.get("deliveryStatus") or ""
+        ).lower()
+        if status in {"sent", "delivered", "read"}:
+            bm_logger.log(
+                "zernio_whatsapp_template_confirmed",
+                template_name=template_name,
+                status=status,
+            )
+            return True
+        if status in {"failed", "rejected", "undeliverable"}:
+            bm_logger.log(
+                "zernio_whatsapp_template_delivery_failed",
+                template_name=template_name,
+                status=status,
+            )
+            raise ZernioReplyError(
+                "WhatsApp marcó la plantilla como fallida. No se ha entregado."
+            )
+
+    raise ZernioReplyError(
+        "WhatsApp no confirmó el envío de la plantilla de seguimiento."
+    )
+
+
 def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
                                   attachment_url: str,
                                   attachment_type: str = "image") -> bool:
