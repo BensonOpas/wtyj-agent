@@ -1,4 +1,4 @@
-name: Diagnose Calvin Adamus reset scope
+name: Reset Calvin Adamus tenant records
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  reset:
     runs-on: ubuntu-latest
     steps:
-      - name: Locate exact tenant records without exposing personal data
+      - name: Back up, delete exact tenant records, and verify zero remain
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -26,8 +26,11 @@ jobs:
             CONTAINER_ID=$(docker compose ps -q | head -1)
             test -n "$CONTAINER_ID"
             docker exec -i "$CONTAINER_ID" python - <<'PY'
+            import datetime
             import hashlib
             import json
+            import os
+            import sqlite3
             import unicodedata
 
             from shared import state_registry
@@ -42,6 +45,20 @@ jobs:
             def fingerprint(value):
                 return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
 
+            db_path = state_registry.DB_PATH
+            backup_dir = os.path.join(os.path.dirname(db_path), "reset_backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = os.path.join(
+                backup_dir, f"calvin-adamus-reset-{stamp}.db"
+            )
+            source = sqlite3.connect(db_path)
+            backup = sqlite3.connect(backup_path)
+            source.backup(backup)
+            backup.close()
+            source.close()
+            os.chmod(backup_path, 0o600)
+
             conn = state_registry._get_conn()
             conn.row_factory = None
             tables = {
@@ -51,24 +68,26 @@ jobs:
             }
             convs = set()
             phones = set()
+            emails = set()
             customer_ids = set()
+            follow_up_ids = set()
             source_message_ids = set()
-            sources = {}
-
-            def add_source(name):
-                sources[name] = sources.get(name, 0) + 1
+            pending_ids = set()
+            appointment_ids = set()
+            ignored_ids = set()
+            booking_ids = {"bookings": set(), "service_bookings": set()}
 
             if "follow_up_requests" in tables:
                 for row in conn.execute(
-                    "SELECT conversation_id, first_name, surnames, phone_raw, "
+                    "SELECT id, conversation_id, first_name, surnames, phone_raw, "
                     "phone_normalized, source_message_id FROM follow_up_requests"
                 ).fetchall():
-                    if norm(f"{row[1]} {row[2]}") == TARGET:
-                        convs.add(row[0])
-                        phones.update(v for v in (row[3], row[4]) if v)
-                        if row[5]:
-                            source_message_ids.add(row[5])
-                        add_source("follow_up_requests")
+                    if norm(f"{row[2]} {row[3]}") == TARGET:
+                        follow_up_ids.add(row[0])
+                        convs.add(row[1])
+                        phones.update(v for v in (row[4], row[5]) if v)
+                        if row[6]:
+                            source_message_ids.add(row[6])
 
             if "customers" in tables:
                 for row in conn.execute(
@@ -76,7 +95,6 @@ jobs:
                 ).fetchall():
                     if norm(row[1]) == TARGET:
                         customer_ids.add(row[0])
-                        add_source("customers")
 
             if "whatsapp_threads" in tables:
                 for row in conn.execute(
@@ -84,7 +102,6 @@ jobs:
                 ).fetchall():
                     if norm(row[1]) == TARGET:
                         convs.add(row[0])
-                        add_source("whatsapp_threads")
 
             if "whatsapp_booking_state" in tables:
                 for row in conn.execute(
@@ -102,60 +119,65 @@ jobs:
                     ]
                     if any(norm(value) == TARGET for value in names):
                         convs.add(row[0])
-                        add_source("whatsapp_booking_state")
 
             if "pending_notifications" in tables:
                 for row in conn.execute(
-                    "SELECT customer_id, customer_name FROM pending_notifications"
+                    "SELECT id, customer_id, customer_name FROM pending_notifications"
                 ).fetchall():
-                    if norm(row[1]) == TARGET:
-                        convs.add(row[0])
-                        add_source("pending_notifications")
+                    if norm(row[2]) == TARGET:
+                        pending_ids.add(row[0])
+                        convs.add(row[1])
 
             if "appointments" in tables:
                 for row in conn.execute(
-                    "SELECT conversation_id, customer_name FROM appointments"
+                    "SELECT id, conversation_id, customer_name FROM appointments"
                 ).fetchall():
-                    if norm(row[1]) == TARGET:
-                        convs.add(row[0])
-                        add_source("appointments")
+                    if norm(row[2]) == TARGET:
+                        appointment_ids.add(row[0])
+                        convs.add(row[1])
 
             if "ignored_contacts" in tables:
                 for row in conn.execute(
-                    "SELECT name, phone_original, phone_normalized, external_sender_id "
+                    "SELECT id, name, phone_original, phone_normalized, "
+                    "email_original, email_normalized, external_sender_id "
                     "FROM ignored_contacts"
                 ).fetchall():
-                    if norm(row[0]) == TARGET:
-                        phones.update(v for v in (row[1], row[2]) if v)
-                        convs.update(v for v in (row[3],) if v)
-                        add_source("ignored_contacts")
+                    if norm(row[1]) == TARGET:
+                        ignored_ids.add(row[0])
+                        phones.update(v for v in (row[2], row[3]) if v)
+                        emails.update(v for v in (row[4], row[5]) if v)
+                        convs.update(v for v in (row[6],) if v)
 
             for table in ("bookings", "service_bookings"):
                 if table not in tables:
                     continue
                 columns = {
-                    row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                    row[1] for row in conn.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()
                 }
-                if "customer_name" not in columns:
-                    continue
-                selected = ["customer_name"]
-                for col in ("customer_phone", "customer_id"):
+                selected = ["id"]
+                for col in (
+                    "customer_name", "customer_phone", "customer_email", "customer_id"
+                ):
                     if col in columns:
                         selected.append(col)
                 for row in conn.execute(
                     f"SELECT {', '.join(selected)} FROM {table}"
                 ).fetchall():
-                    if norm(row[0]) == TARGET:
-                        values = dict(zip(selected, row))
+                    values = dict(zip(selected, row))
+                    if norm(values.get("customer_name")) == TARGET:
+                        booking_ids[table].add(values["id"])
                         if values.get("customer_phone"):
                             phones.add(values["customer_phone"])
+                        if values.get("customer_email"):
+                            emails.add(values["customer_email"])
                         if isinstance(values.get("customer_id"), int):
                             customer_ids.add(values["customer_id"])
-                        add_source(table)
 
             if customer_ids and "customer_identifiers" in tables:
                 marks = ",".join("?" for _ in customer_ids)
-                for customer_id, kind, value in conn.execute(
+                for _customer_id, kind, value in conn.execute(
                     f"SELECT customer_id, type, value FROM customer_identifiers "
                     f"WHERE customer_id IN ({marks})",
                     list(customer_ids),
@@ -163,8 +185,10 @@ jobs:
                     if kind in ("phone", "wa_conversation_id", "conversation_id"):
                         convs.add(value)
                         phones.add(value)
+                    elif kind == "email":
+                        emails.add(value)
 
-            candidate_values = {v for v in convs | phones if v}
+            candidate_values = {v for v in convs | phones | emails if v}
             if candidate_values and "customer_identifiers" in tables:
                 marks = ",".join("?" for _ in candidate_values)
                 linked = conn.execute(
@@ -173,6 +197,144 @@ jobs:
                     list(candidate_values),
                 ).fetchall()
                 customer_ids.update(row[0] for row in linked)
+
+            if len(customer_ids) != 1 or not (1 <= len(convs) <= 3):
+                raise SystemExit(
+                    "Safety check refused reset: expected one customer and 1-3 conversations"
+                )
+
+            candidate_values = {v for v in convs | phones | emails if v}
+            if "pending_notifications" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                for row in conn.execute(
+                    f"SELECT id FROM pending_notifications "
+                    f"WHERE customer_id IN ({marks})",
+                    list(candidate_values),
+                ).fetchall():
+                    pending_ids.add(row[0])
+            if "appointments" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                for row in conn.execute(
+                    f"SELECT id FROM appointments "
+                    f"WHERE conversation_id IN ({marks})",
+                    list(candidate_values),
+                ).fetchall():
+                    appointment_ids.add(row[0])
+            if "follow_up_requests" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                for row in conn.execute(
+                    f"SELECT id, source_message_id FROM follow_up_requests "
+                    f"WHERE conversation_id IN ({marks})",
+                    list(candidate_values),
+                ).fetchall():
+                    follow_up_ids.add(row[0])
+                    if row[1]:
+                        source_message_ids.add(row[1])
+            if "inbound_processing_events" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                for row in conn.execute(
+                    f"SELECT message_id FROM inbound_processing_events "
+                    f"WHERE conversation_id IN ({marks})",
+                    list(candidate_values),
+                ).fetchall():
+                    if row[0]:
+                        source_message_ids.add(row[0])
+
+            deleted = {}
+
+            def record(table, amount):
+                if amount:
+                    deleted[table] = deleted.get(table, 0) + amount
+
+            def delete_ids(table, column, values):
+                if table not in tables or not values:
+                    return
+                marks = ",".join("?" for _ in values)
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE {column} IN ({marks})",
+                    list(values),
+                )
+                record(table, cur.rowcount)
+
+            conn.execute("BEGIN IMMEDIATE")
+
+            if "alert_deliveries" in tables:
+                if pending_ids:
+                    marks = ",".join("?" for _ in pending_ids)
+                    cur = conn.execute(
+                        f"DELETE FROM alert_deliveries "
+                        f"WHERE escalation_id IN ({marks})",
+                        list(pending_ids),
+                    )
+                    record("alert_deliveries", cur.rowcount)
+                if appointment_ids:
+                    marks = ",".join("?" for _ in appointment_ids)
+                    cur = conn.execute(
+                        f"DELETE FROM alert_deliveries "
+                        f"WHERE appointment_id IN ({marks})",
+                        list(appointment_ids),
+                    )
+                    record("alert_deliveries", cur.rowcount)
+
+            if "ignored_contact_events" in tables:
+                conditions = []
+                params = []
+                if ignored_ids:
+                    marks = ",".join("?" for _ in ignored_ids)
+                    conditions.append(f"ignored_contact_id IN ({marks})")
+                    params.extend(ignored_ids)
+                if candidate_values:
+                    marks = ",".join("?" for _ in candidate_values)
+                    conditions.append(f"sender_identifier IN ({marks})")
+                    params.extend(candidate_values)
+                if conditions:
+                    cur = conn.execute(
+                        "DELETE FROM ignored_contact_events WHERE " + " OR ".join(conditions),
+                        params,
+                    )
+                    record("ignored_contact_events", cur.rowcount)
+
+            delete_ids("whatsapp_processed", "message_id", source_message_ids)
+            delete_ids(
+                "inbound_processing_events", "conversation_id", candidate_values
+            )
+            delete_ids("follow_up_requests", "id", follow_up_ids)
+            delete_ids("pending_notifications", "id", pending_ids)
+            delete_ids("appointments", "id", appointment_ids)
+            delete_ids("escalation_learnings", "conversation_id", candidate_values)
+            delete_ids("conversation_status", "conversation_id", candidate_values)
+            delete_ids("whatsapp_booking_state", "phone", candidate_values)
+            delete_ids("whatsapp_threads", "phone", candidate_values)
+            delete_ids("ignored_contacts", "id", ignored_ids)
+
+            for table in ("bookings", "service_bookings"):
+                delete_ids(table, "id", booking_ids[table])
+
+            if "data_retention_audit_log" in tables and candidate_values:
+                marks = ",".join("?" for _ in candidate_values)
+                cur = conn.execute(
+                    f"DELETE FROM data_retention_audit_log "
+                    f"WHERE identifier_value IN ({marks})",
+                    list(candidate_values),
+                )
+                record("data_retention_audit_log", cur.rowcount)
+
+            delete_ids("customer_interactions", "customer_id", customer_ids)
+            if "customer_merges" in tables and customer_ids:
+                marks = ",".join("?" for _ in customer_ids)
+                values = list(customer_ids)
+                cur = conn.execute(
+                    f"DELETE FROM customer_merges "
+                    f"WHERE surviving_id IN ({marks}) OR absorbed_id IN ({marks})",
+                    values + values,
+                )
+                record("customer_merges", cur.rowcount)
+            delete_ids("customer_identifiers", "customer_id", customer_ids)
+            delete_ids("customers", "id", customer_ids)
+
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
 
             def count_where(table, column, values):
                 if table not in tables or not values:
@@ -183,8 +345,7 @@ jobs:
                     list(values),
                 ).fetchone()[0]
 
-            candidate_values = {v for v in convs | phones if v}
-            counts = {
+            remaining = {
                 "customers": count_where("customers", "id", customer_ids),
                 "customer_identifiers": count_where(
                     "customer_identifiers", "customer_id", customer_ids
@@ -217,29 +378,21 @@ jobs:
                     "escalation_learnings", "conversation_id", candidate_values
                 ),
             }
-            active_escalations = 0
-            if "pending_notifications" in tables and candidate_values:
-                marks = ",".join("?" for _ in candidate_values)
-                active_escalations = conn.execute(
-                    f"SELECT COUNT(*) FROM pending_notifications "
-                    f"WHERE customer_id IN ({marks}) "
-                    f"AND status IN ('pending', 'sent')",
-                    list(candidate_values),
-                ).fetchone()[0]
+            remaining_total = sum(remaining.values())
+            if remaining_total:
+                raise SystemExit(
+                    f"Reset verification failed: {remaining_total} records remain"
+                )
 
-            result = {
+            print(json.dumps({
                 "target": "Calvin Adamus",
-                "candidateConversationCount": len(convs),
-                "candidatePhoneIdentifierCount": len(phones),
-                "candidateCustomerCount": len(customer_ids),
+                "backupCreated": True,
                 "candidateFingerprints": sorted(
                     fingerprint(value) for value in candidate_values
                 ),
-                "matchSources": sources,
-                "recordCounts": counts,
-                "activeEscalationCount": active_escalations,
-                "safeToReset": bool(candidate_values or customer_ids),
-            }
-            print(json.dumps(result, sort_keys=True))
+                "deletedCounts": deleted,
+                "remainingCounts": remaining,
+                "verifiedZero": True,
+            }, sort_keys=True))
             conn.close()
             PY
