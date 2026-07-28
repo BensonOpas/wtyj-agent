@@ -3,6 +3,7 @@
 # Last modified: Brief 102
 # Purpose: REST API endpoints for the operator dashboard.
 
+import asyncio
 import io
 import csv
 import json
@@ -21,7 +22,7 @@ from PIL import Image
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
-from agents.social.whatsapp_client import send_whatsapp_message
+from agents.social.whatsapp_client import send_whatsapp_message, resolve_zernio_conversation_contacts
 from agents.marina import marina_agent
 from agents.marina.email_adapter import smtp_send
 from agents.social.content_agent import _build_seasonal_context
@@ -4154,11 +4155,72 @@ async def list_appointments_endpoint():
 
 # ── Tenant capability: callback follow-ups ──────────────────────────────────
 
+def _hydrate_follow_up_contact_identities(items: list[dict]) -> list[dict]:
+    """Backfill Zernio participant phone/name for existing callback rows."""
+    candidates = [
+        item.get("conversation_id", "")
+        for item in items
+        if (
+            not item.get("phone_raw")
+            or not (item.get("first_name") or item.get("surnames"))
+        )
+    ]
+    contacts = resolve_zernio_conversation_contacts(candidates)
+    if not contacts:
+        return items
+
+    for item in items:
+        contact = contacts.get(item.get("conversation_id", ""))
+        if not contact:
+            continue
+        phone_raw = str(contact.get("phone") or "").strip()
+        if phone_raw.lower().startswith("whatsapp:"):
+            phone_raw = phone_raw.split(":", 1)[1].strip()
+        phone_normalized = state_registry.normalize_phone_identifier(phone_raw)
+        if not 9 <= len(phone_normalized) <= 15:
+            phone_raw = ""
+            phone_normalized = ""
+
+        first_name = str(item.get("first_name") or "").strip()
+        surnames = str(item.get("surnames") or "").strip()
+        participant_name = str(contact.get("name") or "").strip()
+        if not first_name and not surnames and participant_name:
+            name_parts = participant_name.split(maxsplit=1)
+            first_name = name_parts[0]
+            surnames = name_parts[1] if len(name_parts) > 1 else ""
+
+        update_fields = {}
+        if phone_raw and not item.get("phone_raw"):
+            update_fields["phone_raw"] = phone_raw
+            update_fields["phone_normalized"] = phone_normalized
+        if first_name and not item.get("first_name"):
+            update_fields["first_name"] = first_name
+        if surnames and not item.get("surnames"):
+            update_fields["surnames"] = surnames
+        if not update_fields:
+            continue
+
+        enriched = state_registry.upsert_follow_up_request(
+            item["conversation_id"],
+            item.get("channel") or "whatsapp",
+            **update_fields,
+        )
+        item.update(enriched)
+        bm_logger.log(
+            "follow_up_contact_identity_backfilled",
+            follow_up_id=item.get("id"),
+            has_phone=bool(item.get("phone_raw")),
+            has_name=bool(item.get("first_name") or item.get("surnames")),
+        )
+    return items
+
+
 @router.get("/follow-ups", dependencies=[Depends(_check_auth)])
 async def list_follow_ups_endpoint(status: str = None):
     """One tenant-scoped work queue for callback coordination."""
     _require_callback_followups()
     items = state_registry.list_follow_up_requests(status=status)
+    items = await asyncio.to_thread(_hydrate_follow_up_contact_identities, items)
     return {"items": items, "followUps": items}
 
 

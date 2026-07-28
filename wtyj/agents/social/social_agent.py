@@ -1224,8 +1224,14 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     if _workflow.get("type") == "callback_follow_up":
         _first_name, _surnames = _callback_name_fields(fields)
+        if not _first_name and not _surnames and from_name:
+            _profile_name_parts = str(from_name).strip().split(maxsplit=1)
+            _first_name = _profile_name_parts[0] if _profile_name_parts else ""
+            _surnames = _profile_name_parts[1] if len(_profile_name_parts) > 1 else ""
         _phone_raw, _phone_normalized = _valid_callback_phone(
-            fields.get("phone") or phone)
+            fields.get("phone")
+            or message.get("_zernio_sender_id")
+            or phone)
         _followup_fields = {
             "first_name": _first_name,
             "surnames": _surnames,
