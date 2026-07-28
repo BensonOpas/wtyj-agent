@@ -22,7 +22,7 @@ from PIL import Image
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import content_agent, social_publisher, graphics_engine
-from agents.social.whatsapp_client import send_whatsapp_message, resolve_zernio_conversation_contacts
+from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
 from agents.social.zernio_dm_client import ZernioReplyError, WhatsAppWindowClosedError
 from agents.marina import marina_agent
 from agents.marina.email_adapter import smtp_send
@@ -3037,6 +3037,15 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
 # ids are routed by send_whatsapp_message through the configured tenant account.
 # The local timeline is updated only after the provider confirms the send.
 
+_DESPERTARES_REENGAGEMENT_TEMPLATE = "consulta_despertares_seguimiento"
+_DESPERTARES_REENGAGEMENT_LANGUAGE = "es"
+_DESPERTARES_REENGAGEMENT_TEXT = (
+    "Hola. Te escribimos de Consulta Psicológica Despertares para continuar "
+    "con la solicitud que nos enviaste. Responde a este mensaje cuando puedas "
+    "y te ayudamos con la cita."
+)
+
+
 class WhatsAppConversationReplyRequest(BaseModel):
     message: str
 
@@ -3058,20 +3067,31 @@ async def reply_to_whatsapp_conversation(
     if len(message) > 4096:
         raise HTTPException(status_code=400, detail="WhatsApp messages cannot exceed 4096 characters")
 
+    delivery_mode = "free_text"
+    sent_message = message
     try:
         sent_ok = send_whatsapp_message(
             customer_id,
             message,
             confirm_delivery=True,
         )
-    except WhatsAppWindowClosedError as exc:
-        bm_logger.log(
-            "dashboard_conversation_reply_send_failed",
-            conversation_id=customer_id[:60],
-            channel="whatsapp",
-            error="whatsapp_window_closed",
-        )
-        raise HTTPException(status_code=409, detail=str(exc))
+    except WhatsAppWindowClosedError:
+        try:
+            sent_ok = send_whatsapp_template_message(
+                customer_id,
+                _DESPERTARES_REENGAGEMENT_TEMPLATE,
+                language=_DESPERTARES_REENGAGEMENT_LANGUAGE,
+            )
+        except ZernioReplyError as exc:
+            bm_logger.log(
+                "dashboard_conversation_reply_send_failed",
+                conversation_id=customer_id[:60],
+                channel="whatsapp",
+                error=str(exc)[:200],
+            )
+            raise HTTPException(status_code=409, detail=str(exc))
+        delivery_mode = "template"
+        sent_message = _DESPERTARES_REENGAGEMENT_TEXT
     except ZernioReplyError as exc:
         bm_logger.log(
             "dashboard_conversation_reply_send_failed",
@@ -3101,21 +3121,24 @@ async def reply_to_whatsapp_conversation(
         )
         raise HTTPException(
             status_code=502,
-            detail="Zernio did not confirm the WhatsApp message",
+            detail="WhatsApp no confirmó el envío.",
         )
 
-    state_registry.wa_store_message(customer_id, "operator", message)
+    state_registry.wa_store_message(customer_id, "operator", sent_message)
     bm_logger.log(
         "dashboard_conversation_reply_sent",
         conversation_id=customer_id[:60],
         channel="whatsapp",
         role="operator",
+        delivery_mode=delivery_mode,
     )
     return {
         "ok": True,
-        "reply": message,
+        "reply": sent_message,
         "channel": "whatsapp",
         "role": "operator",
+        "delivery_mode": delivery_mode,
+        "original_message_sent": delivery_mode == "free_text",
     }
 
 
