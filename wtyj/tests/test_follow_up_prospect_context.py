@@ -60,6 +60,9 @@ def test_follow_up_rows_include_complete_prospect_context(tmp_path, monkeypatch)
     assert selected["callback_preference"] == "por la tarde"
     assert selected["visit_reason"] == "Ansiedad"
 
+    copied = state_registry.update_follow_up_status(request_id, "copied")
+    assert copied["status"] == "copied"
+
 
 def test_follow_up_uses_historical_date_and_slot_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
