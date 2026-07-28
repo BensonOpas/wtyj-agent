@@ -239,7 +239,8 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
 
 def send_whatsapp_message(customer_id: str, text: str,
                           attachment_url: str = "",
-                          attachment_type: str = "image") -> bool:
+                          attachment_type: str = "image",
+                          confirm_delivery: bool = False) -> bool:
     """Send a DM via Zernio Inbox API if customer_id is a Zernio conversation_id,
     otherwise fall back to the legacy Meta WhatsApp Cloud API. Returns True on success.
 
@@ -268,7 +269,8 @@ def send_whatsapp_message(customer_id: str, text: str,
         if not is_account_allowed(cached, direction="outbound"):
             _zernio_account_cache.pop(customer_id, None)
         elif _send_zernio_candidate(send_dm_reply, customer_id, cached, text,
-                                    attachment_url, attachment_type):
+                                    attachment_url, attachment_type,
+                                    confirm_delivery):
             return True
         else:
             # Cache miss (account may have been reconnected with a new id) — fall through
@@ -281,7 +283,8 @@ def send_whatsapp_message(customer_id: str, text: str,
         if not is_account_allowed(account_id, direction="outbound"):
             continue
         if _send_zernio_candidate(send_dm_reply, customer_id, account_id, text,
-                                  attachment_url, attachment_type):
+                                  attachment_url, attachment_type,
+                                  confirm_delivery):
             _zernio_account_cache[customer_id] = account_id
             log("zernio_send_platform_resolved",
                 conversation_id=customer_id[:20],
@@ -294,9 +297,17 @@ def send_whatsapp_message(customer_id: str, text: str,
 
 def _send_zernio_candidate(send_dm_reply, customer_id: str, account_id: str,
                            text: str, attachment_url: str,
-                           attachment_type: str) -> bool:
+                           attachment_type: str,
+                           confirm_delivery: bool = False) -> bool:
     if attachment_url:
         return send_dm_reply(customer_id, account_id, text,
                              attachment_url=attachment_url,
                              attachment_type=attachment_type)
+    if confirm_delivery:
+        return send_dm_reply(
+            customer_id,
+            account_id,
+            text,
+            confirm_delivery=True,
+        )
     return send_dm_reply(customer_id, account_id, text)

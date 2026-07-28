@@ -11,8 +11,8 @@ from dashboard import api
 def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
     events = []
 
-    def fake_send(conversation_id, message):
-        events.append(("send", conversation_id, message))
+    def fake_send(conversation_id, message, confirm_delivery=False):
+        events.append(("send", conversation_id, message, confirm_delivery))
         return True
 
     def fake_store(conversation_id, role, message):
@@ -29,7 +29,7 @@ def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
     )
 
     assert events == [
-        ("send", "0123456789abcdef01234567", "Hola, Lucia"),
+        ("send", "0123456789abcdef01234567", "Hola, Lucia", True),
         ("store", "0123456789abcdef01234567", "operator", "Hola, Lucia"),
     ]
     assert result == {
@@ -91,8 +91,8 @@ def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
     monkeypatch.setattr(
         api,
         "send_whatsapp_message",
-        lambda conversation_id, message: events.append(
-            ("send", conversation_id, message)
+        lambda conversation_id, message, confirm_delivery=False: events.append(
+            ("send", conversation_id, message, confirm_delivery)
         ) or True,
     )
     monkeypatch.setattr(
@@ -114,7 +114,12 @@ def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
 
     assert result["ok"] is True
     assert events == [
-        ("send", "0123456789abcdef01234567", "Hola desde recepción"),
+        (
+            "send",
+            "0123456789abcdef01234567",
+            "Hola desde recepción",
+            True,
+        ),
         (
             "store",
             "0123456789abcdef01234567",
@@ -122,4 +127,59 @@ def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
             "Hola desde recepción",
         ),
     ]
+
+def test_whatsapp_window_closed_is_not_reported_as_sent(monkeypatch):
+    stored = []
+
+    def raise_window_closed(*_args, **_kwargs):
+        raise api.WhatsAppWindowClosedError(
+            "Han pasado más de 24 horas desde el último mensaje del contacto."
+        )
+
+    monkeypatch.setattr(api, "send_whatsapp_message", raise_window_closed)
+    monkeypatch.setattr(
+        api.state_registry,
+        "wa_store_message",
+        lambda *args: stored.append(args),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api.reply_to_whatsapp_conversation(
+                "0123456789abcdef01234567",
+                api.WhatsAppConversationReplyRequest(message="Hola"),
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "24 horas" in str(exc_info.value.detail)
+    assert stored == []
+
+
+def test_provider_delivery_failure_is_not_stored(monkeypatch):
+    stored = []
+
+    def raise_delivery_failed(*_args, **_kwargs):
+        raise api.ZernioReplyError(
+            "WhatsApp marcó el mensaje como fallido."
+        )
+
+    monkeypatch.setattr(api, "send_whatsapp_message", raise_delivery_failed)
+    monkeypatch.setattr(
+        api.state_registry,
+        "wa_store_message",
+        lambda *args: stored.append(args),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api.reply_to_whatsapp_conversation(
+                "0123456789abcdef01234567",
+                api.WhatsAppConversationReplyRequest(message="Hola"),
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "fallido" in str(exc_info.value.detail)
+    assert stored == []
 
