@@ -111,11 +111,16 @@ jobs:
             rm -f "$ARCHIVE"
 
             LIVE_INDEX=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org/?release=$DASHBOARD_SHA")
-            ASSET_PATH=$(printf '%s' "$LIVE_INDEX" | grep -oE '/assets/index-[^" ]+\.js' | head -1)
-            test -n "$ASSET_PATH"
-            LIVE_BUNDLE=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$ASSET_PATH")
-            printf '%s' "$LIVE_BUNDLE" | grep -q 'Copiado'
-            printf '%s' "$LIVE_BUNDLE" | grep -q 'Abrir conversación'
+            MAIN_ASSET=$(grep -oE '/assets/index-[^" ]+\.js' "$RELEASE_DIR/index.html" | head -1)
+            test -n "$MAIN_ASSET"
+            printf '%s' "$LIVE_INDEX" | grep -q "$MAIN_ASSET"
+
+            FOLLOW_UP_FILE=$(grep -l 'Copiado' "$RELEASE_DIR"/assets/FollowUps-*.js | head -1)
+            test -n "$FOLLOW_UP_FILE"
+            FOLLOW_UP_ASSET="/assets/$(basename "$FOLLOW_UP_FILE")"
+            LIVE_FOLLOW_UPS=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$FOLLOW_UP_ASSET?release=$DASHBOARD_SHA")
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Copiado'
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Abrir conversación'
 
             readlink -f "$CURRENT_LINK" | grep -q "$DASHBOARD_SHA"
             echo "Dashboard release $DASHBOARD_SHA is live and verified"
