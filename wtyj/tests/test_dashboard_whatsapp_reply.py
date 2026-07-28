@@ -73,3 +73,53 @@ def test_whatsapp_conversation_reply_rejects_invalid_messages(monkeypatch, messa
 
     assert exc_info.value.status_code == 400
     assert sent == []
+
+def test_stable_whatsapp_reply_route_is_registered_for_post():
+    matches = [
+        route
+        for route in api.router.routes
+        if getattr(route, "path", None) == "/messages/whatsapp/reply"
+    ]
+
+    assert len(matches) == 1
+    assert "POST" in matches[0].methods
+
+
+def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        api,
+        "send_whatsapp_message",
+        lambda conversation_id, message: events.append(
+            ("send", conversation_id, message)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        api.state_registry,
+        "wa_store_message",
+        lambda conversation_id, role, message: events.append(
+            ("store", conversation_id, role, message)
+        ),
+    )
+
+    result = asyncio.run(
+        api.reply_to_whatsapp_conversation_direct(
+            api.DirectWhatsAppConversationReplyRequest(
+                conversation_id="0123456789abcdef01234567",
+                message="Hola desde recepción",
+            )
+        )
+    )
+
+    assert result["ok"] is True
+    assert events == [
+        ("send", "0123456789abcdef01234567", "Hola desde recepción"),
+        (
+            "store",
+            "0123456789abcdef01234567",
+            "operator",
+            "Hola desde recepción",
+        ),
+    ]
+
