@@ -4375,12 +4375,31 @@ def upsert_follow_up_request(conversation_id: str, channel: str = "whatsapp",
     return _follow_up_row(row)
 
 
-def _follow_up_row(row) -> dict:
+def _follow_up_context(fields: dict = None) -> dict:
+    """Return extra prospect fields already captured in conversation state."""
+    fields = fields if isinstance(fields, dict) else {}
+    session_type = fields.get("session_type") or fields.get("service_name") or ""
+    appointment_preference = fields.get("appointment_preference") or ""
+    if not appointment_preference:
+        appointment_preference = " ".join(
+            str(fields.get(key) or "").strip() for key in ("date", "slot_time")
+        ).strip()
+    return {
+        "session_type": str(session_type).strip(),
+        "appointment_preference": str(appointment_preference).strip(),
+    }
+
+
+def _follow_up_row(row, thread_fields: dict = None) -> dict:
     keys = ("id", "conversation_id", "channel", "first_name", "surnames",
             "phone_raw", "phone_normalized", "callback_preference", "visit_reason",
             "status", "handoff_reason", "source_message_id", "created_at",
             "updated_at", "closed_at")
-    return dict(zip(keys, row)) if row else None
+    if not row:
+        return None
+    result = dict(zip(keys, row))
+    result.update(_follow_up_context(thread_fields))
+    return result
 
 
 def list_follow_up_requests(status: str = None, limit: int = 200) -> list:
@@ -4394,8 +4413,25 @@ def list_follow_up_requests(status: str = None, limit: int = 200) -> list:
         query += " WHERE status = ?"
         params.append(status)
     rows = conn.execute(query + " ORDER BY updated_at DESC LIMIT ?", [*params, limit]).fetchall()
+    fields_by_conversation = {}
+    conversation_ids = [row[1] for row in rows if row[1]]
+    if conversation_ids:
+        placeholders = ",".join("?" for _ in conversation_ids)
+        state_rows = conn.execute(
+            f"SELECT phone, fields_json FROM whatsapp_booking_state "
+            f"WHERE phone IN ({placeholders})",
+            conversation_ids,
+        ).fetchall()
+        for conversation_id, fields_json in state_rows:
+            try:
+                fields_by_conversation[conversation_id] = json.loads(fields_json or "{}")
+            except (TypeError, ValueError):
+                fields_by_conversation[conversation_id] = {}
     conn.close()
-    return [_follow_up_row(row) for row in rows]
+    return [
+        _follow_up_row(row, fields_by_conversation.get(row[1], {}))
+        for row in rows
+    ]
 
 
 def get_follow_up_request(request_id: int) -> dict:
@@ -4406,8 +4442,19 @@ def get_follow_up_request(request_id: int) -> dict:
         "handoff_reason, source_message_id, created_at, updated_at, closed_at "
         "FROM follow_up_requests WHERE id = ?", (request_id,)
     ).fetchone()
+    thread_fields = {}
+    if row and row[1]:
+        state_row = conn.execute(
+            "SELECT fields_json FROM whatsapp_booking_state WHERE phone = ?",
+            (row[1],),
+        ).fetchone()
+        if state_row:
+            try:
+                thread_fields = json.loads(state_row[0] or "{}")
+            except (TypeError, ValueError):
+                pass
     conn.close()
-    return _follow_up_row(row)
+    return _follow_up_row(row, thread_fields)
 
 
 def update_follow_up_status(request_id: int, status: str) -> dict:

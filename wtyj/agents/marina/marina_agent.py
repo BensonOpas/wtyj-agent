@@ -118,6 +118,7 @@ MARINA_TOOL = {
                     "first_name": {"type": "string"},
                     "surnames": {"type": "string"},
                     "callback_preference": {"type": "string"},
+                    "appointment_preference": {"type": "string"},
                     "visit_reason": {"type": "string"},
                 },
             },
