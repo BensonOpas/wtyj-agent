@@ -5,7 +5,9 @@
 import hashlib
 import hmac
 import os
+import time
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 
 import requests as http_requests
 
@@ -99,10 +101,211 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
     }
 
 
+class ZernioReplyError(RuntimeError):
+    """Provider rejected or did not confirm an operator reply."""
+
+
+class WhatsAppWindowClosedError(ZernioReplyError):
+    """WhatsApp free-text window is closed for this conversation."""
+
+
+def _response_json(response) -> dict:
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_messages(payload: dict) -> list[dict]:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        messages = payload.get("data", [])
+    return [item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else []
+
+
+def _parse_provider_time(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _confirmed_text_reply(
+    conversation_id: str,
+    account_id: str,
+    text: str,
+    api_key: str,
+) -> bool:
+    """Send free text only inside WhatsApp's active window and confirm status."""
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}"
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    detail_response = http_requests.get(
+        base_url,
+        headers=headers,
+        params={"accountId": account_id},
+        timeout=15,
+    )
+    if detail_response.status_code == 404:
+        return False
+    if not 200 <= detail_response.status_code < 300:
+        bm_logger.log(
+            "zernio_dm_confirmation_detail_failed",
+            conversation_id=conversation_id[:20],
+            status=detail_response.status_code,
+            error=detail_response.text[:200],
+        )
+        return False
+
+    detail_payload = _response_json(detail_response)
+    detail = detail_payload.get("data", detail_payload)
+    platform = str(detail.get("platform") or "").lower() if isinstance(detail, dict) else ""
+
+    messages_response = http_requests.get(
+        f"{base_url}/messages",
+        headers=headers,
+        params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
+        timeout=15,
+    )
+    if not 200 <= messages_response.status_code < 300:
+        bm_logger.log(
+            "zernio_dm_confirmation_history_failed",
+            conversation_id=conversation_id[:20],
+            status=messages_response.status_code,
+            error=messages_response.text[:200],
+        )
+        return False
+
+    existing_messages = _payload_messages(_response_json(messages_response))
+    if platform == "whatsapp":
+        latest_incoming = next(
+            (
+                _parse_provider_time(item.get("createdAt") or item.get("created_at"))
+                for item in existing_messages
+                if str(item.get("direction") or "").lower() == "incoming"
+            ),
+            None,
+        )
+        if latest_incoming is None or datetime.now(timezone.utc) - latest_incoming > timedelta(hours=24):
+            bm_logger.log(
+                "zernio_whatsapp_window_closed",
+                conversation_id=conversation_id[:20],
+                latest_incoming_at=latest_incoming.isoformat() if latest_incoming else "",
+            )
+            raise WhatsAppWindowClosedError(
+                "Han pasado más de 24 horas desde el último mensaje del contacto. "
+                "WhatsApp no permite enviar texto libre. El contacto debe escribir "
+                "primero o se debe usar una plantilla aprobada."
+            )
+
+    send_response = http_requests.post(
+        f"{base_url}/messages",
+        headers=headers,
+        json={"accountId": account_id, "message": text},
+        timeout=15,
+    )
+    send_payload = _response_json(send_response)
+    if not 200 <= send_response.status_code < 300:
+        detail_message = (
+            send_payload.get("message")
+            or send_payload.get("error")
+            or send_payload.get("detail")
+            or send_response.text[:200]
+        )
+        bm_logger.log(
+            "zernio_dm_send_failed",
+            conversation_id=conversation_id[:20],
+            status=send_response.status_code,
+            error=str(detail_message)[:200],
+        )
+        raise ZernioReplyError(
+            "WhatsApp rechazó el mensaje. Inténtalo de nuevo o usa una plantilla aprobada."
+        )
+
+    data = send_payload.get("data", send_payload)
+    message_id = ""
+    if isinstance(data, dict):
+        message_id = str(data.get("messageId") or data.get("id") or "")
+    terminal_success = {"sent", "delivered", "read"}
+    terminal_failure = {"failed", "rejected", "undeliverable"}
+
+    for attempt in range(8):
+        if attempt:
+            time.sleep(0.5)
+        status_response = http_requests.get(
+            f"{base_url}/messages",
+            headers=headers,
+            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+            timeout=15,
+        )
+        if not 200 <= status_response.status_code < 300:
+            continue
+        candidates = _payload_messages(_response_json(status_response))
+        matched = next(
+            (
+                item for item in candidates
+                if (
+                    message_id
+                    and str(item.get("id") or item.get("messageId") or "") == message_id
+                )
+                or (
+                    not message_id
+                    and str(item.get("direction") or "").lower() == "outgoing"
+                    and str(item.get("message") or item.get("text") or "") == text
+                )
+            ),
+            None,
+        )
+        if not matched:
+            continue
+        status = str(
+            matched.get("status") or matched.get("deliveryStatus") or ""
+        ).lower()
+        if status in terminal_success:
+            bm_logger.log(
+                "zernio_dm_delivery_confirmed",
+                conversation_id=conversation_id[:20],
+                status=status,
+            )
+            return True
+        if status in terminal_failure:
+            bm_logger.log(
+                "zernio_dm_delivery_failed",
+                conversation_id=conversation_id[:20],
+                status=status,
+                error_code=str(matched.get("errorCode") or "")[:80],
+                failure_reason=str(matched.get("failureReason") or "")[:200],
+            )
+            raise ZernioReplyError(
+                "WhatsApp marcó el mensaje como fallido. No se ha entregado al contacto."
+            )
+
+    bm_logger.log(
+        "zernio_dm_delivery_unconfirmed",
+        conversation_id=conversation_id[:20],
+        message_id=message_id[:20],
+    )
+    raise ZernioReplyError(
+        "Zernio aceptó el mensaje, pero WhatsApp no confirmó el envío. "
+        "No se mostrará como enviado."
+    )
+
+
 def send_dm_reply(conversation_id: str, account_id: str, text: str,
                   attachment_url: str = "",
-                  attachment_type: str = "image") -> bool:
-    """Send a DM reply via Zernio Inbox API. Returns True on success."""
+                  attachment_type: str = "image",
+                  confirm_delivery: bool = False) -> bool:
+    """Send a DM reply; optionally require provider delivery confirmation."""
     if attachment_url:
         return send_dm_reply_with_attachment(
             conversation_id=conversation_id,
@@ -111,6 +314,20 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
             attachment_url=attachment_url,
             attachment_type=attachment_type,
         )
+
+    api_key = os.environ.get("LATE_API_KEY", "")
+    if not api_key:
+        bm_logger.log("zernio_dm_no_api_key")
+        return False
+
+    if confirm_delivery:
+        return _confirmed_text_reply(
+            conversation_id=conversation_id,
+            account_id=account_id,
+            text=text,
+            api_key=api_key,
+        )
+
     client = _get_client()
     if not client:
         return False
@@ -126,7 +343,6 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
         bm_logger.log("zernio_dm_send_failed", conversation_id=conversation_id[:20],
                        error=str(e)[:200])
         return False
-
 
 def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
                                   attachment_url: str,
