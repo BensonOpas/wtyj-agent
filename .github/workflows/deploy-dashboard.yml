@@ -88,7 +88,14 @@ jobs:
             CURRENT_LINK=/var/www/unboks-dashboard/current
             RELEASE_DIR="$RELEASE_ROOT/$DASHBOARD_SHA"
 
-            test -d "$RELEASE_ROOT"
+            echo "Deploying dashboard $DASHBOARD_SHA as $(whoami)"
+            ls -ld /var/www /var/www/unboks-dashboard "$RELEASE_ROOT" "$CURRENT_LINK" "$ARCHIVE" 2>&1 || true
+            if [ ! -d "$RELEASE_ROOT" ]; then
+              echo "Expected release root is missing. Available nginx roots:"
+              grep -R -nE 'server_name[[:space:]]+dashboard\.unboks\.org|root[[:space:]]+/var/www' \
+                /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
+              exit 1
+            fi
             if [ -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ]; then
               echo "$CURRENT_LINK exists but is not a symlink; refusing unsafe replacement"
               exit 1
