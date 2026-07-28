@@ -1,4 +1,4 @@
-"""J3-N2-01: read-only client for Nr 3's ICP override bridge.
+"""J3-N2-01: tenant-scoped client for Nr 3's ICP override bridge.
 
 Calls Nr 3's GET /internal/tenants/{tenant_id}/overrides (J3-BE-17)
 and returns the effective_state envelope: {feature_toggles,
@@ -24,6 +24,10 @@ Failure modes (all return empty {} and log a warning, never raise):
 - 401 / 403 / 404 / 5xx
 - non-JSON response body
 - response shape unexpected
+
+The dashboard's explicit Start/Pause Agent action is the sole write path in
+this module. It can only update the `ai_auto_reply` boolean for the current
+tenant, using the same tenant-bound bridge token and identity header as reads.
 """
 import json
 import logging
@@ -46,6 +50,7 @@ ICP_OVERRIDES_TTL_SECONDS = int(os.environ.get("ICP_OVERRIDES_TTL_SECONDS", "60"
 # Outbound HTTP timeout. Short so a slow/dead Nr 3 doesn't stall Nr 2
 # request handling.
 _HTTP_TIMEOUT_SECONDS = 3.0
+_AUTO_REPLY_FEATURE_KEY = "ai_auto_reply"
 
 
 # Module-level cache: (tenant_id) -> (fetched_at_unix, envelope_dict)
@@ -109,6 +114,64 @@ def clear_cache() -> None:
     counters."""
     _cache.clear()
     _reset_observability()
+
+
+def auto_reply_enabled(envelope: Optional[dict] = None) -> bool:
+    """Return the tenant's effective AI auto-reply state.
+
+    Missing or unavailable override data preserves the historical running
+    behavior. An explicit boolean from Nr 3 always wins.
+    """
+    current = envelope if isinstance(envelope, dict) else fetch_overrides()
+    toggles = current.get("feature_toggles")
+    toggle = toggles.get(_AUTO_REPLY_FEATURE_KEY) if isinstance(toggles, dict) else None
+    value = toggle.get("value") if isinstance(toggle, dict) else None
+    return value if isinstance(value, bool) else True
+
+
+def set_auto_reply_enabled(enabled: bool) -> dict:
+    """Persist Start/Pause Agent state in Nr 3 and return a fresh envelope.
+
+    Unlike the read path, writes raise a generic RuntimeError on failure so
+    the dashboard never claims that the agent changed state when it did not.
+    """
+    tenant_id = _resolve_tenant_id()
+    base_url = os.environ.get("NR3_INTERNAL_OVERRIDES_URL", "").strip()
+    token = os.environ.get("NR3_INTERNAL_API_TOKEN", "").strip()
+    if not tenant_id or not base_url or not token:
+        raise RuntimeError("Agent control bridge is not configured")
+    url = (
+        base_url.rstrip("/")
+        + "/internal/tenants/"
+        + tenant_id
+        + "/feature-toggles/"
+        + _AUTO_REPLY_FEATURE_KEY
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-Identity": tenant_id,
+        "Accept": "application/json",
+    }
+    try:
+        response = requests.put(
+            url,
+            headers=headers,
+            json={"value": bool(enabled)},
+            timeout=_HTTP_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError("Agent control bridge is unreachable") from exc
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Agent control bridge returned HTTP {response.status_code}"
+        )
+    clear_cache()
+    envelope = fetch_overrides()
+    if not envelope.get("available"):
+        raise RuntimeError("Agent control state could not be verified")
+    if auto_reply_enabled(envelope) is not bool(enabled):
+        raise RuntimeError("Agent control state did not persist")
+    return envelope
 
 
 # J3-N2-04: in-process observability state. Module-level dict captured

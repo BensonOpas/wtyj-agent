@@ -153,6 +153,47 @@ def test_successful_200_returns_envelope(monkeypatch, configured):
     assert captured["timeout"] == 3.0
 
 
+def test_auto_reply_state_uses_explicit_bridge_value_and_defaults_running():
+    assert icp_overrides.auto_reply_enabled({
+        "feature_toggles": {"ai_auto_reply": {"value": False}},
+    }) is False
+    assert icp_overrides.auto_reply_enabled({
+        "feature_toggles": {"ai_auto_reply": {"value": True}},
+    }) is True
+    assert icp_overrides.auto_reply_enabled({
+        "available": False,
+        "feature_toggles": {},
+    }) is True
+
+
+def test_set_auto_reply_writes_current_tenant_and_verifies(monkeypatch, configured):
+    captured = {}
+
+    def fake_put(url, headers=None, json=None, timeout=None):
+        captured.update(
+            url=url,
+            headers=headers,
+            json=json,
+            timeout=timeout,
+        )
+        return _MockResponse(200, {"ok": True})
+
+    stopped = _bridge_envelope()
+    stopped["feature_toggles"]["ai_auto_reply"]["value"] = False
+    monkeypatch.setattr(requests, "put", fake_put)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _MockResponse(200, stopped))
+
+    envelope = icp_overrides.set_auto_reply_enabled(False)
+
+    assert envelope["feature_toggles"]["ai_auto_reply"]["value"] is False
+    assert captured["url"] == (
+        f"{URL}/internal/tenants/{TENANT}/feature-toggles/ai_auto_reply"
+    )
+    assert captured["headers"]["X-Tenant-Identity"] == TENANT
+    assert captured["json"] == {"value": False}
+    assert captured["timeout"] == 3.0
+
+
 def test_token_never_in_returned_envelope(monkeypatch, configured):
     monkeypatch.setattr(requests, "get",
                          lambda *a, **k: _MockResponse(200, _bridge_envelope()))

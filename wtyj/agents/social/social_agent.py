@@ -17,6 +17,7 @@ from shared import state_registry
 from shared import auto_block
 from shared import bm_logger
 from shared import config_loader
+from shared import tenant_hard_rules
 from agents.marina import marina_agent
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
@@ -72,6 +73,33 @@ _MEDIA_STOPWORDS = {
     "image", "images", "photo", "photos", "picture", "pictures", "show",
     "details", "information", "product", "products", "available",
 }
+
+
+def _valid_callback_phone(value: str) -> tuple[str, str]:
+    """Return the original and normalized phone only when it is callable.
+
+    Zernio conversation ids can be 24-character hexadecimal strings. They
+    must never satisfy the callback phone requirement.
+    """
+    raw = str(value or "").strip()
+    if not raw or not re.fullmatch(r"[+0-9().\s-]+", raw):
+        return "", ""
+    normalized = state_registry.normalize_phone_identifier(raw)
+    if not 9 <= len(normalized) <= 15:
+        return "", ""
+    return raw, normalized
+
+
+def _callback_name_fields(fields: dict) -> tuple[str, str]:
+    first_name = str(fields.get("first_name") or "").strip()
+    surnames = str(fields.get("surnames") or "").strip()
+    if first_name and surnames:
+        return first_name, surnames
+    full_name = str(fields.get("customer_name") or "").strip()
+    parts = full_name.split(maxsplit=1)
+    if len(parts) == 2:
+        return first_name or parts[0], surnames or parts[1]
+    return first_name, surnames
 
 _WIBRANDT_PRODUCT_CATALOG = (
     {
@@ -900,6 +928,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                   from_name=from_name)
 
     def _upsert_appointment_signal(reply_text: str):
+        workflow = config_loader.get_raw().get("workflow", {}) or {}
+        if workflow.get("type") == "callback_follow_up":
+            bm_logger.log(
+                "appointment_signal_skipped_for_callback_workflow",
+                phone=phone,
+            )
+            return
         if _is_wibrandt_order_related_text(
             text,
             reply_text,
@@ -1183,6 +1218,38 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         elif v == "" and k in fields:
             del fields[k]
 
+    # Callback-follow-up tenants persist one evolving, tenant-local request.
+    # The normal booking fields remain untouched so this capability is isolated
+    # from every existing tenant workflow.
+    _workflow = config_loader.get_raw().get("workflow", {}) or {}
+    if _workflow.get("type") == "callback_follow_up":
+        _first_name, _surnames = _callback_name_fields(fields)
+        _phone_raw, _phone_normalized = _valid_callback_phone(
+            fields.get("phone") or phone)
+        _followup_fields = {
+            "first_name": _first_name,
+            "surnames": _surnames,
+            "phone_raw": _phone_raw,
+            "phone_normalized": _phone_normalized,
+            "callback_preference": fields.get("callback_preference", ""),
+            "visit_reason": (
+                fields.get("visit_reason")
+                or fields.get("comments")
+                or fields.get("special_requests")
+                or ""
+            ),
+        }
+        _followup = state_registry.upsert_follow_up_request(phone, channel, **_followup_fields)
+        _required = ("first_name", "surnames", "phone_raw", "callback_preference")
+        if (result.get("requires_human")
+                and _followup.get("status") == "collecting"):
+            _followup = state_registry.update_follow_up_status(_followup["id"], "needs_human_answer")
+        elif (all(_followup.get(key) for key in _required)
+              and _followup.get("status") == "collecting"):
+            _followup = state_registry.update_follow_up_status(_followup["id"], "ready_to_call")
+        bm_logger.log("callback_follow_up_updated", follow_up_id=_followup["id"],
+                      status=_followup["status"])
+
     # Step 4: Merge flags — Python manages awaiting_booking_confirmation (set only)
     new_flags = result.get("flags", {}) or {}
     _was_awaiting = flags.get("awaiting_booking_confirmation", False)
@@ -1213,6 +1280,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # not mean "customer needs reply". Once the customer confirms an order
     # summary, create a dedicated ORDER escalation for the operator to call.
     _skip_booking = False
+    # A callback-follow-up tenant never enters the generic booking engine:
+    # its human team coordinates appointments after the callback instead.
+    _callback_workflow_on = (_workflow.get("type") == "callback_follow_up")
+    if _callback_workflow_on:
+        _skip_booking = True
     _wibrandt_order_like = _is_wibrandt_order_like(result, fields, flags)
     if _wibrandt_order_like:
         if flags.get("order_confirmed") and not flags.get("order_escalation_id"):
@@ -1699,6 +1771,28 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
 
     # Step 9: Strip remaining placeholders (safety net)
     reply_text = reply_text.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
+
+    # Consulta Despertares' first greeting and callback closing are mandatory
+    # output boundaries, not optional style guidance. Apply them after every
+    # model/booking rewrite so no later branch can remove or misplace them.
+    _reply_before_tenant_boundaries = reply_text
+    reply_text = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+        reply=reply_text,
+        inbound_text=text,
+        history=history,
+        fields=fields,
+        intents=result.get("intents", []),
+    )
+    if reply_text != _reply_before_tenant_boundaries:
+        bm_logger.log(
+            "consulta_despertares_mandatory_boundaries_applied",
+            phone=phone,
+            first_reply=not any(
+                str(message.get("role") or "").lower() == "assistant"
+                for message in (history or [])
+                if isinstance(message, dict)
+            ),
+        )
 
     selected_media = None
     if include_media and channel == "whatsapp" and not result.get("requires_human"):

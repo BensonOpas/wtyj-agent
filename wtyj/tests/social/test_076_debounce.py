@@ -84,6 +84,35 @@ def test_single_message_flush(mock_handle, mock_send):
     assert phone not in _message_buffers
 
 
+@patch("agents.social.webhook_server.send_text_message")
+@patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
+def test_paused_tenant_stores_inbound_without_replying(
+    mock_handle, mock_send, monkeypatch,
+):
+    phone = "TEST_076_PAUSED_001"
+    _cleanup_phone(phone)
+    monkeypatch.setattr(
+        "agents.social.webhook_server.icp_overrides.auto_reply_enabled",
+        lambda: False,
+    )
+    _buffer_message({
+        "from": phone,
+        "text": "I still need help",
+        "from_name": "Test",
+        "message_type": "text",
+    })
+    _message_buffers[phone]["timer"].cancel()
+
+    _flush_buffer(phone)
+
+    mock_handle.assert_not_called()
+    mock_send.assert_not_called()
+    history = state_registry.wa_get_full_history(phone)
+    assert history[-1]["role"] == "user"
+    assert history[-1]["text"] == "I still need help"
+    _cleanup_phone(phone)
+
+
 # --- Test 2: Rapid-fire messages batched into one ---
 
 @patch("agents.social.webhook_server.send_text_message")

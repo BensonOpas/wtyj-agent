@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from dashboard import api as api_mod
 from dashboard.api import router as dashboard_router
-from shared import config_loader
+from shared import config_loader, icp_overrides
 
 
 def _client() -> TestClient:
@@ -144,3 +144,64 @@ def test_client_profile_keeps_explicit_unboks_suspended_status(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["status"] == "suspended"
+
+
+def test_agent_status_reads_effective_auto_reply_state(monkeypatch):
+    monkeypatch.setattr(
+        icp_overrides,
+        "fetch_overrides",
+        lambda: {
+            "available": True,
+            "feature_toggles": {
+                "ai_auto_reply": {
+                    "value": False,
+                    "source": "icp_override",
+                    "updated_at": "2026-07-26T18:00:00Z",
+                },
+            },
+        },
+    )
+
+    response = _client().get("/dashboard/api/agent/status", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "active": False,
+        "status": "paused",
+        "available": True,
+        "source": "icp_override",
+        "updatedAt": "2026-07-26T18:00:00Z",
+    }
+
+
+def test_agent_status_update_requires_boolean_and_returns_verified_state(monkeypatch):
+    monkeypatch.setattr(
+        icp_overrides,
+        "set_auto_reply_enabled",
+        lambda active: {
+            "available": True,
+            "feature_toggles": {
+                "ai_auto_reply": {
+                    "value": active,
+                    "source": "icp_override",
+                    "updated_at": "2026-07-26T18:01:00Z",
+                },
+            },
+        },
+    )
+
+    invalid = _client().put(
+        "/dashboard/api/agent/status",
+        headers=_auth(),
+        json={"active": "false"},
+    )
+    assert invalid.status_code == 422
+
+    response = _client().put(
+        "/dashboard/api/agent/status",
+        headers=_auth(),
+        json={"active": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["active"] is False
+    assert response.json()["status"] == "paused"

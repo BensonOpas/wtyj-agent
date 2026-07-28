@@ -409,6 +409,32 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    # Callback follow-ups are intentionally stored in each tenant's own
+    # registry database.  A conversation may only have one active request;
+    # later messages enrich the same record instead of creating duplicates.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS follow_up_requests ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "conversation_id TEXT NOT NULL UNIQUE, "
+        "channel TEXT NOT NULL DEFAULT 'whatsapp', "
+        "first_name TEXT DEFAULT '', "
+        "surnames TEXT DEFAULT '', "
+        "phone_raw TEXT DEFAULT '', "
+        "phone_normalized TEXT DEFAULT '', "
+        "callback_preference TEXT DEFAULT '', "
+        "visit_reason TEXT DEFAULT '', "
+        "status TEXT NOT NULL DEFAULT 'collecting', "
+        "handoff_reason TEXT DEFAULT '', "
+        "source_message_id TEXT DEFAULT '', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "closed_at TEXT"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_follow_up_requests_status_updated "
+        "ON follow_up_requests(status, updated_at DESC)"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS ignored_contacts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -4300,6 +4326,106 @@ def get_knowledge_files_for_prompt(limit: int = 5) -> list:
         (limit,)).fetchall()
     conn.close()
     return [{"filename": r[0], "text": r[1]} for r in rows]
+
+
+_FOLLOW_UP_FIELDS = {
+    "first_name", "surnames", "phone_raw", "phone_normalized",
+    "callback_preference", "visit_reason", "handoff_reason",
+    "source_message_id",
+}
+
+
+def upsert_follow_up_request(conversation_id: str, channel: str = "whatsapp",
+                             **fields) -> dict:
+    """Create or enrich one callback follow-up for a conversation.
+
+    Empty values never erase data already collected. This makes repeated
+    inbound deliveries and partial extraction safe to retry.
+    """
+    clean = {key: str(value).strip() for key, value in fields.items()
+             if key in _FOLLOW_UP_FIELDS and value is not None and str(value).strip()}
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    existing = conn.execute(
+        "SELECT id FROM follow_up_requests WHERE conversation_id = ?",
+        (conversation_id,)).fetchone()
+    if existing is None:
+        columns = ["conversation_id", "channel", "created_at", "updated_at"] + list(clean)
+        values = [conversation_id, channel, now, now] + list(clean.values())
+        placeholders = ", ".join("?" for _ in columns)
+        conn.execute(
+            f"INSERT INTO follow_up_requests ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
+        )
+    elif clean:
+        assignments = ", ".join(f"{key} = ?" for key in clean)
+        conn.execute(
+            f"UPDATE follow_up_requests SET {assignments}, updated_at = ? "
+            "WHERE conversation_id = ?",
+            [*clean.values(), now, conversation_id],
+        )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, conversation_id, channel, first_name, surnames, phone_raw, "
+        "phone_normalized, callback_preference, visit_reason, status, "
+        "handoff_reason, source_message_id, created_at, updated_at, closed_at "
+        "FROM follow_up_requests WHERE conversation_id = ?", (conversation_id,)
+    ).fetchone()
+    conn.close()
+    return _follow_up_row(row)
+
+
+def _follow_up_row(row) -> dict:
+    keys = ("id", "conversation_id", "channel", "first_name", "surnames",
+            "phone_raw", "phone_normalized", "callback_preference", "visit_reason",
+            "status", "handoff_reason", "source_message_id", "created_at",
+            "updated_at", "closed_at")
+    return dict(zip(keys, row)) if row else None
+
+
+def list_follow_up_requests(status: str = None, limit: int = 200) -> list:
+    conn = _get_conn()
+    query = ("SELECT id, conversation_id, channel, first_name, surnames, phone_raw, "
+             "phone_normalized, callback_preference, visit_reason, status, "
+             "handoff_reason, source_message_id, created_at, updated_at, closed_at "
+             "FROM follow_up_requests")
+    params = []
+    if status:
+        query += " WHERE status = ?"
+        params.append(status)
+    rows = conn.execute(query + " ORDER BY updated_at DESC LIMIT ?", [*params, limit]).fetchall()
+    conn.close()
+    return [_follow_up_row(row) for row in rows]
+
+
+def get_follow_up_request(request_id: int) -> dict:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, conversation_id, channel, first_name, surnames, phone_raw, "
+        "phone_normalized, callback_preference, visit_reason, status, "
+        "handoff_reason, source_message_id, created_at, updated_at, closed_at "
+        "FROM follow_up_requests WHERE id = ?", (request_id,)
+    ).fetchone()
+    conn.close()
+    return _follow_up_row(row)
+
+
+def update_follow_up_status(request_id: int, status: str) -> dict:
+    allowed = {"collecting", "ready_to_call", "needs_human_answer", "in_progress",
+               "appointment_coordinated", "no_answer", "closed"}
+    if status not in allowed:
+        raise ValueError("Invalid follow-up status")
+    now = datetime.now(timezone.utc).isoformat()
+    closed_at = now if status == "closed" else None
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE follow_up_requests SET status = ?, updated_at = ?, "
+        "closed_at = CASE WHEN ? IS NOT NULL THEN ? ELSE closed_at END WHERE id = ?",
+        (status, now, closed_at, closed_at, request_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_follow_up_request(request_id)
 
 
 def get_pending_notifications(status: str = "pending") -> list:

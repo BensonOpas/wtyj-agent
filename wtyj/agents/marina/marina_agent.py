@@ -115,6 +115,10 @@ MARINA_TOOL = {
                     "comments": {"type": "string"},
                     "order_total": {"type": "number"},
                     "currency": {"type": "string"},
+                    "first_name": {"type": "string"},
+                    "surnames": {"type": "string"},
+                    "callback_preference": {"type": "string"},
+                    "visit_reason": {"type": "string"},
                 },
             },
             "confidence": {
@@ -900,7 +904,23 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _icp_sot_block = _build_icp_sot_block(_icp_envelope)
     _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
     _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
+    _consulta_relationship_block = (
+        tenant_hard_rules.consulta_despertares_relationship_rule_block()
+    )
     _wibrandt_order_block = _build_wibrandt_order_block(business)
+    _workflow = config_loader.get_raw().get("workflow", {}) or {}
+    _callback_followup_block = ""
+    if _workflow.get("type") == "callback_follow_up":
+        _callback_followup_block = """
+CALLBACK FOLLOW-UP WORKFLOW:
+Collect only the required details needed for a human team member to call back:
+first_name, surnames, phone, and callback_preference (Spain local time).
+Extract every field that the customer explicitly provides, including several in one message.
+Ask for only one missing required detail at a time. visit_reason is optional: never require it
+and never delay the callback because it is missing. If any detail is corrected, return the
+corrected value in fields. Do not diagnose, provide therapy, or claim an appointment is booked;
+say that the team will contact them to coordinate. Set requires_human for a direct human question.
+"""
     agent_name = agent_identity.effective_agent_name(_icp_envelope)
     agent_name_authority_rule = agent_identity.agent_name_authority_rule(agent_name)
     return f"""You are {agent_name}, the customer-facing AI Agent for {business.get('name', 'the business')}.
@@ -917,6 +937,8 @@ AGENT PERSONA:
 {_language_rule_block}
 
 {_wibrandt_order_block}
+
+{_callback_followup_block}
 
 BOOKING BEHAVIOUR:
 When the customer wants to book, extract all fields you can find ({service_label} name,
@@ -1136,7 +1158,8 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
 {_tenant_hard_rule_block}
 {_icp_final_override_block}
-{_live_product_catalog_block}"""
+{_live_product_catalog_block}
+{_consulta_relationship_block}"""
 
 
 def _build_user_prompt(

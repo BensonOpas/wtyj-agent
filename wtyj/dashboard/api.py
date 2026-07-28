@@ -74,6 +74,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AgentControlRequest(BaseModel):
+    active: StrictBool
+
+
 class GenerateRequest(BaseModel):
     count: int = 3
 
@@ -979,6 +983,40 @@ async def get_client_profile():
             "name": name,
             "display_name": name,
         },
+    }
+
+
+@router.get("/agent/status", dependencies=[Depends(_check_auth)])
+async def get_agent_status():
+    """Return the real tenant-scoped AI auto-reply state from Nr 3."""
+    from shared import icp_overrides as _icp
+    envelope = _icp.fetch_overrides()
+    active = _icp.auto_reply_enabled(envelope)
+    toggle = (envelope.get("feature_toggles") or {}).get("ai_auto_reply") or {}
+    return {
+        "active": active,
+        "status": "active" if active else "paused",
+        "available": envelope.get("available") is True,
+        "source": toggle.get("source") or "backend_default",
+        "updatedAt": toggle.get("updated_at"),
+    }
+
+
+@router.put("/agent/status", dependencies=[Depends(_check_auth)])
+async def set_agent_status(req: AgentControlRequest):
+    """Start or pause AI replies without stopping message collection."""
+    from shared import icp_overrides as _icp
+    try:
+        envelope = _icp.set_auto_reply_enabled(req.active)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    toggle = (envelope.get("feature_toggles") or {}).get("ai_auto_reply") or {}
+    return {
+        "active": req.active,
+        "status": "active" if req.active else "paused",
+        "available": True,
+        "source": toggle.get("source") or "icp_override",
+        "updatedAt": toggle.get("updated_at"),
     }
 
 
@@ -2403,6 +2441,25 @@ def _current_tenant_slug() -> str:
     return ""
 
 
+def _callback_followups_enabled() -> bool:
+    """Read the tenant capability from configuration in one place.
+
+    This deliberately does not key behaviour off a tenant name.  The tenant
+    configuration opts in with ``workflow.type = callback_follow_up``.
+    """
+    try:
+        raw = config_loader.get_raw()
+        workflow = raw.get("workflow", {}) if isinstance(raw, dict) else {}
+        return isinstance(workflow, dict) and workflow.get("type") == "callback_follow_up"
+    except Exception:
+        return False
+
+
+def _require_callback_followups() -> None:
+    if not _callback_followups_enabled():
+        raise HTTPException(status_code=404, detail="Follow-ups are not enabled for this tenant")
+
+
 def _looks_like_legacy_unboks_default_sot(blocks: list) -> bool:
     """Detect the old frontend seed so it cannot leak into new tenants."""
     if not isinstance(blocks, list) or len(blocks) != len(_LEGACY_UNBOKS_DEFAULT_SOT_IDS):
@@ -2729,6 +2786,19 @@ async def list_conversations():
     Email conversation rows have phone prefixed with `email::` so the detail
     endpoint can route to the email helper."""
     wa_convos = state_registry.wa_list_conversations()
+    if _callback_followups_enabled():
+        # Callback tenants use the follow-up queue instead of the generic
+        # order/appointment classifier. Preserve the underlying historical
+        # rows for rollback/audit, but do not expose classification metadata.
+        classification_keys = {
+            "intent", "is_order", "order_status", "order_payload",
+            "badge_type", "queue_type", "next_operator_action",
+            "order_escalation_id",
+        }
+        for conversation in wa_convos:
+            for key in classification_keys:
+                conversation.pop(key, None)
+            conversation["appointment_signal"] = False
     # WhatsApp rows get a channel tag if missing (some rows come from dm_messages
     # via dm_store_message which already sets it; legacy rows default to 'whatsapp').
     for c in wa_convos:
@@ -4013,6 +4083,44 @@ async def list_appointments_endpoint():
     Returns under both `items` and `appointments` keys for envelope flex."""
     items = state_registry.appointments_list()
     return {"items": items, "appointments": items}
+
+
+# ── Tenant capability: callback follow-ups ──────────────────────────────────
+
+@router.get("/follow-ups", dependencies=[Depends(_check_auth)])
+async def list_follow_ups_endpoint(status: str = None):
+    """One tenant-scoped work queue for callback coordination."""
+    _require_callback_followups()
+    items = state_registry.list_follow_up_requests(status=status)
+    return {"items": items, "followUps": items}
+
+
+@router.get("/follow-ups/{follow_up_id}", dependencies=[Depends(_check_auth)])
+async def get_follow_up_endpoint(follow_up_id: int):
+    _require_callback_followups()
+    item = state_registry.get_follow_up_request(follow_up_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+    return item
+
+
+class FollowUpStatusRequest(BaseModel):
+    status: str
+
+
+@router.post("/follow-ups/{follow_up_id}/status", dependencies=[Depends(_check_auth)])
+async def update_follow_up_status_endpoint(follow_up_id: int, req: FollowUpStatusRequest):
+    """Human-only status transition; the AI never coordinates an appointment."""
+    _require_callback_followups()
+    if not state_registry.get_follow_up_request(follow_up_id):
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+    try:
+        item = state_registry.update_follow_up_status(follow_up_id, req.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    bm_logger.log("follow_up_status_updated", follow_up_id=follow_up_id,
+                  status=req.status, actor="dashboard")
+    return item
 
 
 @router.get("/orders", dependencies=[Depends(_check_auth)])
