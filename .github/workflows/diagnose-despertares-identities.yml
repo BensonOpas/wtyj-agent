@@ -1,0 +1,144 @@
+name: Diagnose Despertares prospect identities
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-despertares-identities.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live identity sources
+        id: probe
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            docker exec -i wtyj-consulta-despertares python3 - <<'PY'
+            import hashlib
+            import json
+            import os
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+
+            from agents.social import social_publisher, whatsapp_client
+            from shared import state_registry
+            from shared.tenant_guard import is_account_allowed
+
+            items = state_registry.list_follow_up_requests(limit=200)
+            unknown = [
+                item for item in items
+                if not item.get('phone_raw') or not (item.get('first_name') or item.get('surnames'))
+            ]
+            print(
+                'FOLLOW_UP_COUNTS '
+                f'total={len(items)} '
+                f'no_phone={sum(not item.get("phone_raw") for item in items)} '
+                f'no_name={sum(not (item.get("first_name") or item.get("surnames")) for item in items)} '
+                f'identity_incomplete={len(unknown)}'
+            )
+
+            accounts = whatsapp_client._candidate_zernio_account_ids(social_publisher)
+            allowed_accounts = [
+                account_id for account_id in accounts
+                if is_account_allowed(account_id, direction='outbound')
+            ]
+            print(f'ACCOUNT_COUNTS candidates={len(accounts)} allowed={len(allowed_accounts)}')
+            for account_id in accounts:
+                digest = hashlib.sha256(account_id.encode()).hexdigest()[:10]
+                print(f'ACCOUNT hash={digest} allowed={account_id in allowed_accounts}')
+
+            current = whatsapp_client.resolve_zernio_conversation_contacts(
+                [item.get('conversation_id', '') for item in unknown]
+            )
+            print(f'CURRENT_RESOLVER resolved={len(current)} requested={len(unknown)}')
+            print(
+                'CURRENT_RESOLVED_FOLLOW_UP_IDS '
+                + ','.join(
+                    str(item['id']) for item in unknown
+                    if item.get('conversation_id') in current
+                )
+            )
+
+            api_key = os.environ.get('LATE_API_KEY', '')
+            if not api_key:
+                raise SystemExit('LATE_API_KEY is unavailable in tenant container')
+
+            for item in unknown:
+                conversation_id = str(item.get('conversation_id') or '')
+                conversation_hash = hashlib.sha256(conversation_id.encode()).hexdigest()[:10]
+                statuses = []
+                found = None
+                for account_id in allowed_accounts:
+                    account_hash = hashlib.sha256(account_id.encode()).hexdigest()[:10]
+                    url = (
+                        'https://zernio.com/api/v1/inbox/conversations/'
+                        + urllib.parse.quote(conversation_id)
+                        + '?'
+                        + urllib.parse.urlencode({'accountId': account_id})
+                    )
+                    req = urllib.request.Request(
+                        url,
+                        headers={'Authorization': f'Bearer {api_key}'},
+                        method='GET',
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            payload = json.loads(response.read().decode('utf-8'))
+                            statuses.append(f'{account_hash}:{response.status}')
+                    except urllib.error.HTTPError as exc:
+                        statuses.append(f'{account_hash}:{exc.code}')
+                        continue
+                    except Exception as exc:
+                        statuses.append(f'{account_hash}:{type(exc).__name__}')
+                        continue
+
+                    row = payload.get('data', {}) if isinstance(payload, dict) else {}
+                    if isinstance(row, list):
+                        row = row[0] if row else {}
+                    if isinstance(row, dict):
+                        found = row
+                        break
+
+                phone = str((found or {}).get('participantId') or '')
+                digits = ''.join(ch for ch in phone if ch.isdigit())
+                print(
+                    f'FOLLOW_UP id={item["id"]} conversation_hash={conversation_hash} '
+                    f'channel={item.get("channel")} direct_results={"|".join(statuses)} '
+                    f'found={bool(found)} platform={(found or {}).get("platform", "")} '
+                    f'participant_present={bool(phone)} participant_digits={len(digits)} '
+                    f'name_present={bool(str((found or {}).get("participantName") or "").strip())}'
+                )
+                if found:
+                    print('DIRECT_ROW_KEYS ' + ','.join(sorted(found.keys())))
+            PY
+
+      - name: Publish diagnostic result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.probe.outcome }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            STATE=success
+            DESCRIPTION='Despertares identity sources inspected'
+          else
+            STATE=failure
+            DESCRIPTION='Despertares identity inspection failed'
+          fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state="$STATE" \
+            -f context=diagnose/despertares-identities \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f description="$DESCRIPTION"
