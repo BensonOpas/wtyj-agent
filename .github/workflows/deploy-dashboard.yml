@@ -7,6 +7,10 @@ on:
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  statuses: write
+
 concurrency:
   group: unboks-dashboard-production
   cancel-in-progress: false
@@ -15,6 +19,16 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Mark production deployment pending
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state=pending \
+            -f context=deploy/dashboard-production \
+            -f description='Building and publishing dashboard'
+
       - name: Check out dashboard source
         uses: actions/checkout@v4
         with:
@@ -100,3 +114,23 @@ jobs:
 
             find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
               | sort -nr | tail -n +8 | cut -d' ' -f2- | xargs -r rm -rf
+
+      - name: Mark production deployment successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state=success \
+            -f context=deploy/dashboard-production \
+            -f description='Dashboard live bundle verified'
+
+      - name: Mark production deployment failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state=failure \
+            -f context=deploy/dashboard-production \
+            -f description='Dashboard production deployment failed'
