@@ -184,8 +184,12 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
         rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
 
     assert "Listen and help first" in rule
+    assert "ENTIRE conversation" in rule
+    assert "Never ask again" in rule
     assert "at most ONE question total per reply" in rule
-    assert "visit reason is optional" in rule
+    assert "Choosing a physical clinic" in rule
+    assert "visit reason is always optional" in rule
+    assert "still engaged" in rule
     assert "Do not ask which timezone applies" in rule
     assert "Do not display a checklist" in rule
 
@@ -194,6 +198,35 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
         return_value="another-tenant",
     ):
         assert tenant_hard_rules.consulta_despertares_relationship_rule_block() == ""
+
+
+def test_marina_schema_supports_a_complete_non_invasive_prospect_card():
+    fields = marina_agent.MARINA_TOOL["input_schema"]["properties"]["fields"]
+    properties = fields["properties"]
+
+    assert "session_type" in properties
+    assert "full history" in fields["description"]
+    assert "Never use the preferred appointment" in (
+        properties["callback_preference"]["description"]
+    )
+    assert "Never use callback availability" in (
+        properties["appointment_preference"]["description"]
+    )
+    assert "Choosing a physical clinic" in properties["session_type"]["description"]
+    assert "neutral paraphrase" in properties["visit_reason"]["description"]
+
+
+def test_despertares_rule_keeps_optional_enrichment_natural():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
+
+    assert "gently collect missing enrichment fields one at a time" in rule
+    assert "Never delay" in rule
+    assert "If the customer declines" in rule
+    assert "¿Preferirías que la primera sesión fuera presencial u online?" in rule
 
 
 def test_relationship_first_rule_is_the_final_tenant_prompt_block():
