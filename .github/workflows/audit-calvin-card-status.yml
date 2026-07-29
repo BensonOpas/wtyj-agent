@@ -1,4 +1,4 @@
-name: Reset Calvin in Despertares
+name: Finalize Calvin reset
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  reset:
+  finalize:
     runs-on: ubuntu-latest
     steps:
-      - name: Backup, delete exact Calvin records, and verify
+      - name: Quarantine historical Calvin backups and verify clean tenant
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -25,95 +25,73 @@ jobs:
             TENANT_DIR=/root/clients/consulta-despertares
             CONTAINER=wtyj-consulta-despertares
             STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-            BACKUP_NAME="calvin-adamus-pre-reset-$STAMP.db"
+            QUARANTINE_NAME=".calvin-quarantine-$STAMP"
             ARCHIVE_DIR="$TENANT_DIR/reset_archives"
             install -d -m 700 "$ARCHIVE_DIR"
 
-            docker exec -i -e BACKUP_NAME="$BACKUP_NAME" "$CONTAINER" python - <<'PY'
+            docker exec -i -e QUARANTINE_NAME="$QUARANTINE_NAME" "$CONTAINER" python - <<'PY'
             import json
             import os
+            import shutil
             import sqlite3
 
-            db_path = "/app/data/state_registry.db"
-            backup_path = "/app/data/" + os.environ["BACKUP_NAME"]
-            db = sqlite3.connect(db_path)
-            db.row_factory = sqlite3.Row
-            backup = sqlite3.connect(backup_path)
-            db.backup(backup)
-            backup.close()
-
-            customer_ids = (1, 43)
-            conversations = ("6a1481a1bc59f63d2ef733e3", "6a623edb10e2ccd35f2c66a9")
-            deleted = {}
-            statements = [
-                ("whatsapp_threads", "DELETE FROM whatsapp_threads WHERE phone IN (?, ?)", conversations),
-                ("whatsapp_booking_state", "DELETE FROM whatsapp_booking_state WHERE phone IN (?, ?)", conversations),
-                ("inbound_processing_events", "DELETE FROM inbound_processing_events WHERE conversation_id IN (?, ?)", conversations),
-                ("follow_up_requests", "DELETE FROM follow_up_requests WHERE id = 34 OR conversation_id IN (?, ?) OR phone_normalized = ?", (conversations[0], conversations[1], "537473246")),
-                ("conversation_status", "DELETE FROM conversation_status WHERE conversation_id IN (?, ?)", conversations),
-                ("appointments", "DELETE FROM appointments WHERE id = 1 OR conversation_id IN (?, ?) OR lower(trim(customer_name)) IN ('calvin', 'calvin adamus')", conversations),
-                ("pending_notifications", "DELETE FROM pending_notifications WHERE id = 11 OR customer_id IN (?, ?) OR lower(trim(customer_name)) IN ('calvin', 'calvin adamus')", conversations),
-                ("customer_interactions", "DELETE FROM customer_interactions WHERE customer_id IN (?, ?)", customer_ids),
-                ("customer_identifiers", "DELETE FROM customer_identifiers WHERE customer_id IN (?, ?) OR value IN (?, ?, ?)", (customer_ids[0], customer_ids[1], conversations[0], conversations[1], "537473246")),
-                ("customers", "DELETE FROM customers WHERE id IN (?, ?) OR lower(trim(display_name)) IN ('calvin', 'calvin adamus')", customer_ids),
-            ]
-            try:
-                db.execute("BEGIN IMMEDIATE")
-                for table, sql, params in statements:
-                    cur = db.execute(sql, params)
-                    deleted[table] = cur.rowcount
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-
+            data_dir = "/app/data"
+            quarantine = os.path.join(data_dir, os.environ["QUARANTINE_NAME"])
             needles = ("calvin", "adamus", "537473246", "6a1481a1bc59f63d2ef733e3", "6a623edb10e2ccd35f2c66a9")
-            residual = []
-            tables = [
-                row[0] for row in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                )
-            ]
-            for table in tables:
-                quoted = '"' + table.replace('"', '""') + '"'
-                columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
-                for row in db.execute(f"SELECT rowid AS __rowid__, * FROM {quoted}"):
-                    matched = [
-                        column for column in columns
-                        if row[column] is not None and any(n in str(row[column]).lower() for n in needles)
+            matched_files = []
+
+            def database_has_target(path):
+                try:
+                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    db.row_factory = sqlite3.Row
+                    tables = [
+                        row[0] for row in db.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                        )
                     ]
-                    if matched:
-                        residual.append({"table": table, "rowid": row["__rowid__"], "columns": matched})
-            print("CALVIN_DELETED=" + json.dumps(deleted, sort_keys=True))
-            print("CALVIN_LIVE_RESIDUAL=" + json.dumps(residual, sort_keys=True))
-            print("CALVIN_LIVE_RESIDUAL_COUNT=" + str(len(residual)))
-            assert not residual
-            db.close()
+                    for table in tables:
+                        quoted = '"' + table.replace('"', '""') + '"'
+                        columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
+                        for row in db.execute(f"SELECT * FROM {quoted}"):
+                            if any(
+                                row[column] is not None and any(n in str(row[column]).lower() for n in needles)
+                                for column in columns
+                            ):
+                                db.close()
+                                return True
+                    db.close()
+                except sqlite3.DatabaseError:
+                    return False
+                return False
+
+            candidates = []
+            for root, dirs, files in os.walk(data_dir):
+                dirs[:] = [d for d in dirs if not d.startswith(".calvin-quarantine-")]
+                for filename in files:
+                    if filename.endswith((".db", ".sqlite", ".sqlite3")):
+                        path = os.path.join(root, filename)
+                        if os.path.realpath(path) != os.path.realpath(os.path.join(data_dir, "state_registry.db")):
+                            candidates.append(path)
+
+            for path in sorted(candidates):
+                if database_has_target(path):
+                    os.makedirs(quarantine, mode=0o700, exist_ok=True)
+                    rel = os.path.relpath(path, data_dir)
+                    safe_name = rel.replace(os.sep, "__")
+                    destination = os.path.join(quarantine, safe_name)
+                    shutil.move(path, destination)
+                    matched_files.append(rel)
+
+            # The active state must remain clean.
+            assert not database_has_target(os.path.join(data_dir, "state_registry.db"))
+            print("CALVIN_QUARANTINED_FILES=" + json.dumps(matched_files, sort_keys=True))
+            print("CALVIN_QUARANTINED_COUNT=" + str(len(matched_files)))
             PY
 
-            test -f "$TENANT_DIR/data/$BACKUP_NAME"
-            mv -- "$TENANT_DIR/data/$BACKUP_NAME" "$ARCHIVE_DIR/$BACKUP_NAME"
-            chmod 600 "$ARCHIVE_DIR/$BACKUP_NAME"
-
-            if test -f "$TENANT_DIR/data/calvin-card-repair-6fb2701.db"; then
-              mv -- "$TENANT_DIR/data/calvin-card-repair-6fb2701.db" "$ARCHIVE_DIR/calvin-card-repair-6fb2701.db"
+            if test -d "$TENANT_DIR/data/$QUARANTINE_NAME"; then
+              mv -- "$TENANT_DIR/data/$QUARANTINE_NAME" "$ARCHIVE_DIR/$QUARANTINE_NAME"
+              chmod -R go-rwx "$ARCHIVE_DIR/$QUARANTINE_NAME"
             fi
-            if test -f "$TENANT_DIR/data/reset_backups/calvin-adamus-reset-20260728T224812Z.db"; then
-              mv -- "$TENANT_DIR/data/reset_backups/calvin-adamus-reset-20260728T224812Z.db" "$ARCHIVE_DIR/calvin-adamus-reset-20260728T224812Z.db"
-            fi
-
-            docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent
-            READY=0
-            for attempt in $(seq 1 30); do
-              RUNNING=$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)
-              HTTP_CODE=$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health || true)
-              if test "$RUNNING" = "true" && test "$HTTP_CODE" != "000"; then
-                READY=1
-                break
-              fi
-              sleep 2
-            done
-            test "$READY" = 1
 
             docker exec -i "$CONTAINER" python - <<'PY'
             import json
@@ -124,10 +102,10 @@ jobs:
             needles = ("calvin", "adamus", "537473246", "6a1481a1bc59f63d2ef733e3", "6a623edb10e2ccd35f2c66a9")
             matches = []
             for root, _, files in os.walk(data_dir):
-                for filename in sorted(files):
-                    path = os.path.join(root, filename)
+                for filename in files:
                     if not filename.endswith((".db", ".sqlite", ".sqlite3")):
                         continue
+                    path = os.path.join(root, filename)
                     try:
                         db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
                         db.row_factory = sqlite3.Row
@@ -154,10 +132,13 @@ jobs:
                         db.close()
                     except sqlite3.DatabaseError:
                         pass
-            print("CALVIN_POST_RESTART_MATCHES=" + json.dumps(matches, sort_keys=True))
-            print("CALVIN_POST_RESTART_COUNT=" + str(len(matches)))
+            print("CALVIN_ACTIVE_DATA_MATCHES=" + json.dumps(matches, sort_keys=True))
+            print("CALVIN_ACTIVE_DATA_COUNT=" + str(len(matches)))
             assert not matches
             PY
 
-            echo "CALVIN_RESET=complete"
-            echo "CALVIN_BACKUP=$ARCHIVE_DIR/$BACKUP_NAME"
+            RUNNING=$(docker inspect "$CONTAINER" --format '{{.State.Running}}')
+            HTTP_CODE=$(curl --max-time 3 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health)
+            test "$RUNNING" = "true"
+            test "$HTTP_CODE" != "000"
+            echo "CALVIN_RESET_FINAL=complete"
