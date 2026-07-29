@@ -108,11 +108,11 @@ jobs:
                 if selected:
                     schemas[table] = {"columns": columns, "foreign_keys": fks}
                     linked.append({"table": table, "rows": selected})
-            print("TARGET_CUSTOMER_IDS=" + json.dumps(sorted(target_customers)))
-            print("TARGET_CONVERSATION_IDS=" + json.dumps(sorted(target_conversations)))
-            print("TARGET_APPOINTMENT_IDS=" + json.dumps(sorted(target_appointments)))
-            print("TARGET_FOLLOWUP_IDS=" + json.dumps(sorted(target_followups)))
-            print("TARGET_NOTIFICATION_IDS=" + json.dumps(sorted(target_notifications)))
+            print("TARGET_CUSTOMER_IDS=" + json.dumps(sorted(target_customers, key=str)))
+            print("TARGET_CONVERSATION_IDS=" + json.dumps(sorted(target_conversations, key=str)))
+            print("TARGET_APPOINTMENT_IDS=" + json.dumps(sorted(target_appointments, key=str)))
+            print("TARGET_FOLLOWUP_IDS=" + json.dumps(sorted(target_followups, key=str)))
+            print("TARGET_NOTIFICATION_IDS=" + json.dumps(sorted(target_notifications, key=str)))
             print("CALVIN_SCHEMAS=" + json.dumps(schemas, ensure_ascii=False, sort_keys=True))
             print("CALVIN_LINKED=" + json.dumps(linked, ensure_ascii=False, sort_keys=True))
             print("CALVIN_LINKED_COUNT=" + str(sum(len(x["rows"]) for x in linked)))
