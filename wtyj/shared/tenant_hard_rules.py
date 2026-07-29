@@ -32,6 +32,14 @@ CONSULTA_DESPERTARES_CALLBACK_CLOSING = (
 CONSULTA_DESPERTARES_ENGLISH_CALLBACK_CLOSING = (
     "When can we call you to confirm the first appointment?"
 )
+CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION = (
+    "Would you like to tell me a little more about what's been going on for "
+    "you, so I can guide you toward the right support?"
+)
+CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION = (
+    "¿Te apetece contarme un poco más sobre lo que te está pasando, para "
+    "poder orientarte hacia el apoyo más adecuado?"
+)
 CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE = """
 CONSULTA DESPERTARES RELATIONSHIP-FIRST INTAKE (HIGHEST PRIORITY):
 The goal is a natural, supportive conversation that builds a useful prospect
@@ -76,6 +84,13 @@ These rules override generic booking pacing and checklist-like intake.
 - Do not fire intake questions back-to-back without engaging. Acknowledge or
   answer the current message naturally, then ask the single most useful missing
   question.
+- Never end a substantive clinic reply with a generic service-desk closing such
+  as "Is there anything else I can help you with?" or "How can I help you today?"
+  Those phrases close the conversation and do not help the prospect feel heard.
+- When the prospect has shared an emotional or mental-health concern and a
+  specific intake field would be premature, invite them to say a little more
+  about what has been going on so you can guide them toward the right support.
+  Keep this gentle and optional; do not ask for intimate details or diagnose.
 - The four callback fields are the minimum needed for contact, NOT a signal to
   stop the conversation or hand off immediately. Do not say that you are passing
   the details to the team while useful enrichment is still missing and the
@@ -94,7 +109,10 @@ These rules override generic booking pacing and checklist-like intake.
   not an unresolved human question. Set requires_human only when the latest
   message contains a separate question the agent genuinely cannot answer and the
   visible reply explicitly tells the customer that a human still needs to answer it.
-- Natural Spanish examples (adapt rather than repeat mechanically):
+- Natural engagement examples (adapt rather than repeat mechanically):
+  English: "Would you like to tell me a little more about what's been going on for you, so I can guide you toward the right support?"
+  Spanish: "¿Te apetece contarme un poco más sobre lo que te está pasando, para poder orientarte hacia el apoyo más adecuado?"
+- Natural Spanish intake examples:
   "¿Preferirías que la primera sesión fuera presencial u online?";
   "¿Qué días o franjas te suelen venir mejor para la sesión?";
   "Si te apetece contarlo, ¿qué te gustaría trabajar o qué te ha llevado a buscar ayuda ahora?"
@@ -119,6 +137,18 @@ _CONSULTA_BOOKING_RE = re.compile(
     r"\b(?:cita|terapia|consulta|reservar|reserva|acudir|appointment|book|booking)\b",
     re.IGNORECASE,
 )
+_CONSULTA_GENERIC_HELP_CLOSING_RE = re.compile(
+    r"(?:\s*\n*)?(?:"
+    r"is\s+there\s+(?:anything|something)(?:\s+else)?\s+"
+    r"(?:i|we)\s+can\s+help\s+you\s+with(?:\s+today)?"
+    r"|how\s+can\s+(?:i|we)\s+help\s+you(?:\s+today)?"
+    r"|¿?hay\s+algo\s+m[aá]s\s+en\s+lo\s+que\s+"
+    r"(?:pueda|podamos)\s+ayudarte"
+    r"|¿?en\s+qu[eé]\s+m[aá]s\s+(?:puedo|podemos)\s+ayudarte"
+    r")\s*\?\s*$",
+    re.IGNORECASE,
+)
+
 _CONSULTA_CALLBACK_CLOSING_RE = re.compile(
     r"(?:\s*\n*)?(?:"
     r"¿?\s*cu[aá]ndo\s+(?:te\s+podemos\s+llamar|podemos\s+llamarte)"
@@ -317,6 +347,18 @@ def enforce_consulta_despertares_boundaries(
     )
 
     clean = _strip_consulta_callback_closing(reply)
+
+    if not is_first_reply and _CONSULTA_GENERIC_HELP_CLOSING_RE.search(clean):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        prospect_question = (
+            CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+            if language == "English"
+            else CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+        )
+        clean = _CONSULTA_GENERIC_HELP_CLOSING_RE.sub(
+            f"\n\n{prospect_question}",
+            clean,
+        ).strip()
 
     if is_first_reply:
         language = consulta_despertares_reply_language(inbound_text, history)
