@@ -141,6 +141,17 @@ _CONSULTA_BOOKING_RE = re.compile(
     r"\b(?:cita|terapia|consulta|reservar|reserva|acudir|appointment|book|booking)\b",
     re.IGNORECASE,
 )
+_CONSULTA_SUPPORT_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"feel|feeling|felt|emotion|emotional|mood|anxiety|anxious|stress|stressed|"
+    r"depress(?:ed|ion)?|sad|invincible|indestructible|healthy|mental|"
+    r"psychologist|psychiatrist|support|help|"
+    r"siento|sentir|emoci[oó]n|estado\s+de\s+[aá]nimo|ansiedad|ansioso|"
+    r"estr[eé]s|depresi[oó]n|deprimido|triste|invencible|saludable|"
+    r"psic[oó]log[oa]|psiquiatra|apoyo|ayuda"
+    r")\b",
+    re.IGNORECASE,
+)
 _CONSULTA_GENERIC_HELP_CLOSING_RE = re.compile(
     r"(?:\s*\n*)?(?:"
     r"is\s+there\s+(?:anything|something)(?:\s+else)?\s+"
@@ -371,6 +382,20 @@ def enforce_consulta_despertares_boundaries(
             f"\n\n{prospect_question}",
             clean,
         ).strip()
+
+    if (
+        not is_first_reply
+        and _CONSULTA_SUPPORT_CONTEXT_RE.search(inbound_text or "")
+        and "?" not in clean
+        and "¿" not in clean
+    ):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        prospect_question = (
+            CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+            if language == "English"
+            else CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+        )
+        clean = f"{clean.rstrip()}\n\n{prospect_question}"
 
     if is_first_reply:
         language = consulta_despertares_reply_language(inbound_text, history)
