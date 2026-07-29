@@ -150,7 +150,7 @@ MARINA_TOOL = {
                     },
                     "visit_reason": {
                         "type": "string",
-                        "description": "A short, neutral paraphrase of why the customer is seeking help, using only what they volunteered. Never diagnose or add clinical conclusions.",
+                        "description": "A short, neutral paraphrase of why the customer is seeking psychological support, using only what they volunteered. Never diagnose or add clinical conclusions. Never put a location, clinic, callback time, appointment time, or session format in this field.",
                     },
                 },
             },
@@ -944,15 +944,40 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     _callback_followup_block = ""
     if _workflow.get("type") == "callback_follow_up":
-        _callback_followup_block = """
+        if tenant_hard_rules.is_consulta_despertares():
+            _callback_followup_block = """
+CONSULTA DESPERTARES CALLBACK AND PROSPECT-CARD WORKFLOW:
+Build the prospect card through a calm, natural clinic conversation. The minimum callback
+details are first_name, surnames, phone, and callback_preference (Spain local time), but
+collecting those four fields is NOT permission to stop or hand off immediately.
+Extract every useful field the customer has already volunteered anywhere in the complete
+conversation. Never ask for known information and never repeat a question.
+Ask at most one question per reply. Listen or answer first, then ask the most natural missing
+question. After callback_preference is known, continue with session_type, then
+appointment_preference, then invite visit_reason only if it was not already volunteered.
+The visit reason is optional and must be a neutral description of why psychological support
+is wanted. A location, clinic, callback time, appointment time, or session format is never a
+visit reason.
+Do not say that details are being passed to the team while the customer is comfortably engaged
+and session_type or appointment_preference is still missing. Complete a natural handoff after
+the enrichment opportunities were answered, declined, or the customer wants to stop.
+A request to speak with a psychologist, receive a callback, arrange an appointment, or ask when
+the team may call is normal callback intent. Do NOT set requires_human for those requests.
+Set requires_human only for a separate unresolved question that the agent genuinely cannot
+answer, and only when the visible reply clearly says a human still needs to answer it.
+Do not diagnose, provide therapy, or claim an appointment is booked.
+"""
+        else:
+            _callback_followup_block = """
 CALLBACK FOLLOW-UP WORKFLOW:
 Collect only the required details needed for a human team member to call back:
-first_name, surnames, phone, and callback_preference (Spain local time).
+first_name, surnames, phone, and callback_preference.
 Extract every field that the customer explicitly provides, including several in one message.
 Ask for only one missing required detail at a time. visit_reason is optional: never require it
 and never delay the callback because it is missing. If any detail is corrected, return the
 corrected value in fields. Do not diagnose, provide therapy, or claim an appointment is booked;
-say that the team will contact them to coordinate. Set requires_human for a direct human question.
+say that the team will contact them to coordinate. Set requires_human only for a separate
+question that the agent cannot answer and that still needs a human response.
 """
     agent_name = agent_identity.effective_agent_name(_icp_envelope)
     agent_name_authority_rule = agent_identity.agent_name_authority_rule(agent_name)
