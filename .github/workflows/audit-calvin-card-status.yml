@@ -1,4 +1,4 @@
-name: Finalize Calvin reset
+name: Audit Despertares language selection
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  finalize:
+  audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Quarantine historical Calvin backups and verify clean tenant
+      - name: Inspect live mixed-language conversation
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,123 +22,44 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            TENANT_DIR=/root/clients/consulta-despertares
             CONTAINER=wtyj-consulta-despertares
-            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-            QUARANTINE_NAME=".calvin-quarantine-$STAMP"
-            ARCHIVE_DIR="$TENANT_DIR/reset_archives"
-            install -d -m 700 "$ARCHIVE_DIR"
-
-            docker exec -i -e QUARANTINE_NAME="$QUARANTINE_NAME" "$CONTAINER" python - <<'PY'
-            import json
-            import os
-            import shutil
-            import sqlite3
-
-            data_dir = "/app/data"
-            quarantine = os.path.join(data_dir, os.environ["QUARANTINE_NAME"])
-            needles = ("calvin", "adamus", "537473246", "6a1481a1bc59f63d2ef733e3", "6a623edb10e2ccd35f2c66a9")
-            matched_files = []
-
-            def database_has_target(path):
-                try:
-                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                    db.row_factory = sqlite3.Row
-                    tables = [
-                        row[0] for row in db.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                        )
-                    ]
-                    for table in tables:
-                        quoted = '"' + table.replace('"', '""') + '"'
-                        columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
-                        for row in db.execute(f"SELECT * FROM {quoted}"):
-                            if any(
-                                row[column] is not None and any(n in str(row[column]).lower() for n in needles)
-                                for column in columns
-                            ):
-                                db.close()
-                                return True
-                    db.close()
-                except sqlite3.DatabaseError:
-                    return False
-                return False
-
-            candidates = []
-            for root, dirs, files in os.walk(data_dir):
-                dirs[:] = [d for d in dirs if not d.startswith(".calvin-quarantine-")]
-                for filename in files:
-                    if filename.endswith((".db", ".sqlite", ".sqlite3")):
-                        path = os.path.join(root, filename)
-                        if os.path.realpath(path) != os.path.realpath(os.path.join(data_dir, "state_registry.db")):
-                            candidates.append(path)
-
-            for path in sorted(candidates):
-                if database_has_target(path):
-                    os.makedirs(quarantine, mode=0o700, exist_ok=True)
-                    rel = os.path.relpath(path, data_dir)
-                    safe_name = rel.replace(os.sep, "__")
-                    destination = os.path.join(quarantine, safe_name)
-                    shutil.move(path, destination)
-                    matched_files.append(rel)
-
-            # The active state must remain clean.
-            assert not database_has_target(os.path.join(data_dir, "state_registry.db"))
-            print("CALVIN_QUARANTINED_FILES=" + json.dumps(matched_files, sort_keys=True))
-            print("CALVIN_QUARANTINED_COUNT=" + str(len(matched_files)))
-            PY
-
-            if test -d "$TENANT_DIR/data/$QUARANTINE_NAME"; then
-              mv -- "$TENANT_DIR/data/$QUARANTINE_NAME" "$ARCHIVE_DIR/$QUARANTINE_NAME"
-              chmod -R go-rwx "$ARCHIVE_DIR/$QUARANTINE_NAME"
-            fi
-
             docker exec -i "$CONTAINER" python - <<'PY'
             import json
-            import os
             import sqlite3
 
-            data_dir = "/app/data"
-            needles = ("calvin", "adamus", "537473246", "6a1481a1bc59f63d2ef733e3", "6a623edb10e2ccd35f2c66a9")
-            matches = []
-            for root, _, files in os.walk(data_dir):
-                for filename in files:
-                    if not filename.endswith((".db", ".sqlite", ".sqlite3")):
-                        continue
-                    path = os.path.join(root, filename)
-                    try:
-                        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                        db.row_factory = sqlite3.Row
-                        tables = [
-                            row[0] for row in db.execute(
-                                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                            )
-                        ]
-                        for table in tables:
-                            quoted = '"' + table.replace('"', '""') + '"'
-                            columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
-                            for row in db.execute(f"SELECT rowid AS __rowid__, * FROM {quoted}"):
-                                cols = [
-                                    column for column in columns
-                                    if row[column] is not None and any(n in str(row[column]).lower() for n in needles)
-                                ]
-                                if cols:
-                                    matches.append({
-                                        "db": os.path.relpath(path, data_dir),
-                                        "table": table,
-                                        "rowid": row["__rowid__"],
-                                        "columns": cols,
-                                    })
-                        db.close()
-                    except sqlite3.DatabaseError:
-                        pass
-            print("CALVIN_ACTIVE_DATA_MATCHES=" + json.dumps(matches, sort_keys=True))
-            print("CALVIN_ACTIVE_DATA_COUNT=" + str(len(matches)))
-            assert not matches
-            PY
+            config = json.load(open("/app/config/client.json", encoding="utf-8"))
+            business = config.get("business") or {}
+            print("LANG_CONFIG=" + json.dumps({
+                "languages": business.get("languages"),
+                "default_language": business.get("default_language"),
+                "agent_name": business.get("agent_name"),
+            }, ensure_ascii=False, sort_keys=True))
 
-            RUNNING=$(docker inspect "$CONTAINER" --format '{{.State.Running}}')
-            HTTP_CODE=$(curl --max-time 3 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health)
-            test "$RUNNING" = "true"
-            test "$HTTP_CODE" != "000"
-            echo "CALVIN_RESET_FINAL=complete"
+            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                """
+                SELECT id, phone, role, text, created_at, sender_name
+                FROM whatsapp_threads
+                WHERE lower(text) LIKE '%worldcup%'
+                   OR lower(text) LIKE '%indestructible%'
+                   OR lower(text) LIKE '%gorilla%'
+                   OR lower(text) LIKE '%why do you write in spanish%'
+                   OR lower(text) LIKE '%stick to english%'
+                ORDER BY id
+                """
+            ).fetchall()
+            print("LANG_THREAD=" + json.dumps([dict(row) for row in rows], ensure_ascii=False))
+            phones = sorted({row["phone"] for row in rows})
+            histories = {}
+            for phone in phones:
+                histories[phone] = [
+                    dict(row) for row in db.execute(
+                        "SELECT id, role, text, created_at, sender_name FROM whatsapp_threads WHERE phone = ? ORDER BY id",
+                        (phone,),
+                    ).fetchall()
+                ]
+            print("LANG_HISTORIES=" + json.dumps(histories, ensure_ascii=False, sort_keys=True))
+            print("LANG_PHONE_COUNT=" + str(len(phones)))
+            db.close()
+            PY
