@@ -142,3 +142,25 @@ def test_language_correction_guard_rewrites_mismatched_reply():
 
     assert tenant_hard_rules.detect_english_or_spanish(corrected) == "English"
     assert "post-victory high" in corrected
+
+
+def test_first_hi_does_not_duplicate_an_english_model_introduction():
+    model_reply = (
+        "I'm Alía, the virtual assistant for Consulta Psicológica Despertares. "
+        "How can I help you today?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=model_reply,
+            inbound_text="hi",
+            history=[],
+            fields={},
+            intents=[],
+        )
+
+    assert reply.startswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_GREETING
+    )
+    assert reply.lower().count("virtual assistant") == 1
+    assert "How can I help you today?" in reply
