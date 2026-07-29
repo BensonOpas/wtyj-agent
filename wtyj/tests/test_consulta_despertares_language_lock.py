@@ -277,3 +277,29 @@ def test_clinic_centered_offer_is_replaced_with_prospect_centered_question():
     assert reply.endswith(
         tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
     )
+
+
+def test_premature_setup_offer_is_replaced_with_listening_question():
+    history = [
+        {"role": "user", "text": "hi"},
+        {"role": "assistant", "text": "How can I help you today?"},
+    ]
+    draft = (
+        "If these intense shifts feel unusual for you, it may be worth "
+        "talking with a psychologist.\n\n"
+        "Would you like me to help you set that up?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="I have been feeling invincible lately.",
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert "set that up" not in reply
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+    )
