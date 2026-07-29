@@ -205,6 +205,25 @@ MARINA_TOOL = {
 }
 
 
+LANGUAGE_CORRECTION_TOOL = {
+    "name": "language_corrected_reply",
+    "description": (
+        "Rewrite the supplied customer-facing reply entirely in the requested "
+        "language while preserving its meaning, warmth, and number of questions."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reply": {
+                "type": "string",
+                "description": "The complete corrected customer-facing reply.",
+            },
+        },
+        "required": ["reply"],
+    },
+}
+
+
 # Keys to exclude from the client context (internal system config, not customer-facing)
 _INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature", "calendar_id"}
 # Top-level keys to skip (already injected elsewhere or handled separately)
@@ -1294,6 +1313,16 @@ def _build_user_prompt(
         else:
             history_section = "CONVERSATION HISTORY (recent messages):\n  (new conversation)\n\n"
 
+    language_lock = tenant_hard_rules.consulta_despertares_language_lock(
+        body,
+        messages or [],
+    )
+    language_lock_section = (
+        f"{language_lock}\n\n"
+        if language_lock
+        else ""
+    )
+
     # Build inbound message section
     visible_sender = tenant_hard_rules.prompt_sender_label(channel, from_email)
     if channel == "whatsapp":
@@ -1324,7 +1353,7 @@ THREAD CONTEXT (already collected this conversation):
   Fields: {json.dumps(thread_fields, ensure_ascii=False)}
   Flags: {json.dumps(thread_flags, ensure_ascii=False)}
 
-{history_section}{inbound_section}"""
+{history_section}{language_lock_section}{inbound_section}"""
 
 
 def _build_prompt(
@@ -1432,6 +1461,75 @@ def _build_contextual_fallback_reply(
     )
 
 
+def _correct_reply_language(
+    client,
+    reply: str,
+    target_language: str,
+    channel: str,
+    from_email: str,
+) -> str:
+    """Rare second-pass guard when the model ignores the language lock."""
+    fallback_by_language = {
+        "English": (
+            "I'm sorry, I want to make sure I reply in English. "
+            "Could you send that last message again?"
+        ),
+        "Spanish": (
+            "Perdona, quiero asegurarme de responderte en español. "
+            "¿Puedes enviarme de nuevo tu último mensaje?"
+        ),
+    }
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1536,
+            system=(
+                "You are a strict language-correction layer. Rewrite the supplied "
+                f"customer-facing message entirely in {target_language}. Preserve "
+                "all meaning, empathy, safety guidance, and the exact number of "
+                "questions. Do not add facts, promises, summaries, or questions."
+            ),
+            tools=[LANGUAGE_CORRECTION_TOOL],
+            tool_choice={"type": "tool", "name": "language_corrected_reply"},
+            messages=[{
+                "role": "user",
+                "content": json.dumps(
+                    {"target_language": target_language, "reply": reply},
+                    ensure_ascii=False,
+                ),
+            }],
+        )
+        tool_use_block = next(
+            (block for block in response.content if block.type == "tool_use"),
+            None,
+        )
+        corrected = (
+            str((tool_use_block.input or {}).get("reply") or "").strip()
+            if tool_use_block is not None
+            else ""
+        )
+        corrected_language = tenant_hard_rules.detect_english_or_spanish(corrected)
+        if corrected and (
+            not corrected_language or corrected_language == target_language
+        ):
+            bm_logger.log(
+                "consulta_despertares_language_corrected",
+                target_language=target_language,
+                channel=channel,
+                from_id=from_email[:50],
+            )
+            return corrected
+    except Exception as exc:
+        bm_logger.log(
+            "consulta_despertares_language_correction_error",
+            error=str(exc)[:200],
+            target_language=target_language,
+            channel=channel,
+            from_id=from_email[:50],
+        )
+    return fallback_by_language.get(target_language, reply)
+
+
 def process_message(
     from_email: str,
     subject: str,
@@ -1534,6 +1632,26 @@ def process_message(
         if result.get("reply_hold_failed"):
             result["reply_hold_failed"] = _strip_internal_tokens(
                 result["reply_hold_failed"]).replace("—", ",")
+
+        target_language = tenant_hard_rules.consulta_despertares_reply_language(
+            body,
+            messages or [],
+        )
+        actual_language = tenant_hard_rules.detect_english_or_spanish(
+            result["reply"]
+        )
+        if (
+            target_language
+            and actual_language
+            and target_language != actual_language
+        ):
+            result["reply"] = _correct_reply_language(
+                client=client,
+                reply=result["reply"],
+                target_language=target_language,
+                channel=channel,
+                from_email=from_email,
+            )
 
         return result
 

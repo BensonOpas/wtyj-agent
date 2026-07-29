@@ -23,8 +23,14 @@ CONSULTA_DESPERTARES_WEBSITE_GREETING = (
 CONSULTA_DESPERTARES_OTHER_GREETING = (
     "Hola, soy Alia, la asistente virtual de Consulta Despertares"
 )
+CONSULTA_DESPERTARES_ENGLISH_GREETING = (
+    "Hi, I'm Alia, the virtual assistant for Consulta Despertares."
+)
 CONSULTA_DESPERTARES_CALLBACK_CLOSING = (
     "¿Cuándo te podemos llamar para confirmar la primera cita?"
+)
+CONSULTA_DESPERTARES_ENGLISH_CALLBACK_CLOSING = (
+    "When can we call you to confirm the first appointment?"
 )
 CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE = """
 CONSULTA DESPERTARES RELATIONSHIP-FIRST INTAKE (HIGHEST PRIORITY):
@@ -114,9 +120,11 @@ _CONSULTA_BOOKING_RE = re.compile(
     re.IGNORECASE,
 )
 _CONSULTA_CALLBACK_CLOSING_RE = re.compile(
-    r"(?:\s*\n*)?"
+    r"(?:\s*\n*)?(?:"
     r"¿?\s*cu[aá]ndo\s+(?:te\s+podemos\s+llamar|podemos\s+llamarte)"
-    r"\s+para\s+confirmar\s+la\s+primera\s+cita\s*\?\s*",
+    r"\s+para\s+confirmar\s+la\s+primera\s+cita"
+    r"|when\s+can\s+we\s+call\s+you\s+to\s+confirm\s+the\s+first\s+appointment"
+    r")\s*\?\s*",
     re.IGNORECASE,
 )
 
@@ -142,6 +150,88 @@ def is_clinica_roberto() -> bool:
 
 def is_consulta_despertares() -> bool:
     return current_tenant_slug() == CONSULTA_DESPERTARES_SLUG
+
+
+_ENGLISH_LANGUAGE_MARKERS = {
+    "hi", "hello", "hey", "after", "winning", "feel", "that", "healthy",
+    "why", "write", "english", "please", "thanks", "thank", "want", "would",
+    "like", "need", "help", "appointment", "call", "today", "tomorrow",
+    "morning", "afternoon", "online", "person", "session", "fight",
+}
+_SPANISH_LANGUAGE_MARKERS = {
+    "hola", "buenas", "después", "ganar", "ganando", "siento", "saludable",
+    "por", "qué", "escribes", "español", "gracias", "quiero", "quisiera",
+    "necesito", "ayuda", "cita", "llamar", "hoy", "mañana", "tarde",
+    "presencial", "sesión", "luchar", "puedo", "podemos",
+}
+_LANGUAGE_TOKEN_RE = re.compile(r"[a-záéíóúüñ]+", re.IGNORECASE)
+
+
+def detect_english_or_spanish(text: str) -> str:
+    """Return English/Spanish only when the text provides usable evidence."""
+    tokens = [token.lower() for token in _LANGUAGE_TOKEN_RE.findall(text or "")]
+    if not tokens:
+        return ""
+
+    english_score = sum(token in _ENGLISH_LANGUAGE_MARKERS for token in tokens)
+    spanish_score = sum(token in _SPANISH_LANGUAGE_MARKERS for token in tokens)
+
+    normalized = " ".join(tokens)
+    if re.search(r"\b(?:i am|i'm|i feel|i want|i need|can you|could you|would you)\b", normalized):
+        english_score += 3
+    if re.search(r"\b(?:me siento|yo quiero|necesito|puedes|podrías|me gustaría)\b", normalized):
+        spanish_score += 3
+    if tokens[0] in {"hi", "hello", "hey"}:
+        english_score += 3
+    if tokens[0] in {"hola", "buenas"}:
+        spanish_score += 3
+
+    if english_score > spanish_score:
+        return "English"
+    if spanish_score > english_score:
+        return "Spanish"
+    return ""
+
+
+def consulta_despertares_reply_language(
+    inbound_text: str,
+    history: list | None = None,
+) -> str:
+    """Lock Despertares to the latest identifiable customer language."""
+    if not is_consulta_despertares():
+        return ""
+
+    detected = detect_english_or_spanish(inbound_text)
+    if detected:
+        return detected
+
+    for message in reversed(history or []):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").lower() != "user":
+            continue
+        detected = detect_english_or_spanish(str(message.get("text") or ""))
+        if detected:
+            return detected
+
+    # The clinic's normal operating language is Spanish when the message is
+    # genuinely language-neutral (numbers, punctuation, or emoji only).
+    return "Spanish"
+
+
+def consulta_despertares_language_lock(
+    inbound_text: str,
+    history: list | None = None,
+) -> str:
+    language = consulta_despertares_reply_language(inbound_text, history)
+    if not language:
+        return ""
+    return (
+        f"REPLY LANGUAGE LOCK (HIGHEST PRIORITY): {language}. "
+        f"Write the ENTIRE visible reply in {language}, including greeting, "
+        "acknowledgement, explanation, and every question. Ignore the language "
+        "of earlier assistant messages when it conflicts with this lock."
+    )
 
 
 def consulta_despertares_relationship_rule_block() -> str:
@@ -229,16 +319,25 @@ def enforce_consulta_despertares_boundaries(
     clean = _strip_consulta_callback_closing(reply)
 
     if is_first_reply:
-        # Website leads arrive through a known Spanish prefill, so preserve the
-        # tenant's exact approved Spanish greeting for that one deterministic
-        # entry point. Every other first reply is left in the model-selected
-        # customer language; prepending a Spanish greeting here caused bilingual
-        # duplicate introductions for English prospects.
+        language = consulta_despertares_reply_language(inbound_text, history)
         if _CONSULTA_WEBSITE_LEAD_RE.search(inbound_text or ""):
             greeting = CONSULTA_DESPERTARES_WEBSITE_GREETING
-            if not clean.startswith(greeting):
-                body = _strip_leading_spanish_greeting(clean)
-                clean = greeting if not body else f"{greeting}\n\n{body}"
+        elif language == "English":
+            greeting = CONSULTA_DESPERTARES_ENGLISH_GREETING
+        else:
+            greeting = CONSULTA_DESPERTARES_OTHER_GREETING + "."
+
+        if not clean.startswith(greeting):
+            body = _strip_leading_spanish_greeting(clean)
+            body = re.sub(
+                r"^\s*(?:hi|hello)\b"
+                r"(?:\s*,?\s*(?:i['’]?m|i\s+am)\b[^.!?\n]*[.!?]?|\s*[!.,:]?)\s*",
+                "",
+                body,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+            clean = greeting if not body else f"{greeting}\n\n{body}"
         return clean
 
     user_text = "\n".join(
@@ -265,9 +364,11 @@ def enforce_consulta_despertares_boundaries(
         and not reply_already_asks_a_question
     ):
         clean = clean.rstrip()
-        clean = (
-            CONSULTA_DESPERTARES_CALLBACK_CLOSING
-            if not clean
-            else f"{clean}\n\n{CONSULTA_DESPERTARES_CALLBACK_CLOSING}"
+        language = consulta_despertares_reply_language(inbound_text, history)
+        closing = (
+            CONSULTA_DESPERTARES_ENGLISH_CALLBACK_CLOSING
+            if language == "English"
+            else CONSULTA_DESPERTARES_CALLBACK_CLOSING
         )
+        clean = closing if not clean else f"{clean}\n\n{closing}"
     return clean
