@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Locate live agent code
+      - name: Inspect live agent code and tenant runtime
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,9 +22,14 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            echo "GIT_REPOSITORIES"
-            find /root /opt /srv /var/www -maxdepth 4 -type d -name .git -printf '%h\n' 2>/dev/null | head -n 100 || true
-            echo "SERVICE_NAMES"
-            systemctl list-units --type=service --all --no-legend | awk '{print $1}' | grep -Ei 'wtyj|unboks|agent|worker|api' | head -n 100 || true
-            echo "CONTAINER_NAMES"
-            command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}} {{.Image}}' | head -n 100 || true
+            APP_REPO=/root/wtyj-agent-source
+            test -d "$APP_REPO/.git"
+            echo "HEAD=$(git -C "$APP_REPO" rev-parse HEAD)"
+            echo "RELEVANT_FILES"
+            git -C "$APP_REPO" ls-files | grep -Ei '(prompt|agent|tenant|message|reply|language|greeting|config)' | head -n 300 || true
+            echo "GREETING_MATCHES"
+            git -C "$APP_REPO" grep -n -Ei 'greet|greeting|salud|language|idioma|introduc|presenta|assistant name|agent name|Alia|Alía|reply in|respond in' -- '*.py' '*.ts' '*.tsx' '*.js' '*.json' '*.md' | head -n 700 || true
+            echo "TENANT_CONTAINER_MOUNTS"
+            docker inspect wtyj-consulta-despertares --format '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}}{{println}}{{end}}'
+            echo "TENANT_CONTAINER_FILES"
+            docker exec wtyj-consulta-despertares sh -lc "pwd; find /app /data /config -maxdepth 3 -type f 2>/dev/null | grep -Ei '(prompt|tenant|config|json|yaml|sqlite|db)' | head -n 250 || true"
