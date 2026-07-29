@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Despertares deployment layout
+      - name: Inspect Despertares compose contract
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,12 +22,10 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            APP_REPO=/root/wtyj-agent-source
-            echo "DEPLOY_FILES"
-            git -C "$APP_REPO" ls-files | grep -Ei '(^|/)(dockerfile|docker-compose|compose|deploy|provision|release|rollback)' | head -n 300 || true
-            echo "CONTAINER_LABELS"
-            docker inspect wtyj-consulta-despertares --format '{{json .Config.Labels}}'
-            echo "CONTAINER_IMAGE"
-            docker inspect wtyj-consulta-despertares --format '{{.Config.Image}} {{.Image}}'
-            echo "COMPOSE_FILES"
-            find /root /opt /srv -maxdepth 4 -type f \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' -o -name 'compose*.yml' -o -name 'compose*.yaml' \) -print 2>/dev/null | head -n 100 || true
+            echo "DOCKERFILE"
+            sed -n '1,240p' /root/wtyj-agent-source/Dockerfile
+            echo "COMPOSE"
+            sed -n '1,240p' /root/clients/consulta-despertares/docker-compose.yml
+            echo "HEALTH"
+            docker inspect wtyj-consulta-despertares --format '{{json .Config.Healthcheck}}'
+            docker inspect wtyj-consulta-despertares --format '{{json .State.Health}}'
