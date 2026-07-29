@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect active Despertares greeting inputs
+      - name: Inspect Despertares deployment layout
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -23,9 +23,11 @@ jobs:
           script: |
             set -eu
             APP_REPO=/root/wtyj-agent-source
-            echo "ENFORCEMENT_CALLS"
-            git -C "$APP_REPO" grep -n 'enforce_consulta_despertares_boundaries' -- '*.py' || true
-            echo "LIVE_SAFE_CONFIG"
-            docker exec wtyj-consulta-despertares python -c 'import json; d=json.load(open("/app/config/client.json")); b=d.get("business",{}); p=d.get("agent_persona",{}); out={"business":{"slug":b.get("slug"),"name":b.get("name"),"agent_name":b.get("agent_name"),"languages":b.get("languages")},"agent_persona":{"tone":p.get("tone"),"language_register":p.get("language_register"),"greeting_style":p.get("greeting_style"),"brand_voice_rules":p.get("brand_voice_rules")},"workflow":d.get("workflow")}; print(json.dumps(out,ensure_ascii=False,indent=2))'
-            echo "LIVE_OVERRIDE_KEYS"
-            docker exec wtyj-consulta-despertares python -c 'import json; from shared import icp_overrides; o=icp_overrides.fetch_overrides() or {}; a=o.get("ai_agent_settings") or {}; print(json.dumps({"top_keys":sorted(o.keys()),"ai_agent_setting_keys":sorted(a.keys()),"agent_name":a.get("agent_name"),"tone":a.get("tone")},ensure_ascii=False,indent=2,default=str))'
+            echo "DEPLOY_FILES"
+            git -C "$APP_REPO" ls-files | grep -Ei '(^|/)(dockerfile|docker-compose|compose|deploy|provision|release|rollback)' | head -n 300 || true
+            echo "CONTAINER_LABELS"
+            docker inspect wtyj-consulta-despertares --format '{{json .Config.Labels}}'
+            echo "CONTAINER_IMAGE"
+            docker inspect wtyj-consulta-despertares --format '{{.Config.Image}} {{.Image}}'
+            echo "COMPOSE_FILES"
+            find /root /opt /srv -maxdepth 4 -type f \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' -o -name 'compose*.yml' -o -name 'compose*.yaml' \) -print 2>/dev/null | head -n 100 || true
