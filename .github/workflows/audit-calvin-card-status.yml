@@ -24,9 +24,9 @@ jobs:
             set -eu
             SOURCE_REPO=/root/wtyj-agent-source
             TENANT_DIR=/root/clients/consulta-despertares
-            DEPLOY_SHA=9aee5d7440d2bee225d53a70463de5e9d18b97c6
+            DEPLOY_SHA=817680ee6274f833228b480980406583300527e6
             SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
-            NEW_IMAGE="wtyj-agent:despertares-language-$SHORT_SHA"
+            NEW_IMAGE="wtyj-agent:despertares-engagement-$SHORT_SHA"
             BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
             BACKUP_FILE="$TENANT_DIR/docker-compose.yml.pre-language-$SHORT_SHA"
             WORKTREE_ADDED=0
@@ -68,6 +68,23 @@ jobs:
                 [{"role": "assistant", "text": "Hola, ¿cómo te puedo ayudar?"}],
             )
             assert "ENTIRE visible reply in English" in lock
+            guarded = rules.enforce_consulta_despertares_boundaries(
+                reply=(
+                    "That feeling can be worth exploring with a professional. "
+                    "Is there anything else I can help you with?"
+                ),
+                inbound_text=exact,
+                history=[
+                    {"role": "user", "text": "hi"},
+                    {"role": "assistant", "text": "How can I help you today?"},
+                ],
+                fields={},
+                intents=["inquiry"],
+            )
+            assert guarded.endswith(
+                rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+            )
+            assert "anything else I can help you with" not in guarded
             print("PREDEPLOY_LANGUAGE_STATIC=passed")
             PY
 
@@ -102,13 +119,22 @@ jobs:
                 channel="whatsapp",
                 messages=spanish_history,
             )
-            mixed_reply = str(mixed.get("reply") or "")
+            mixed_reply = rules.enforce_consulta_despertares_boundaries(
+                reply=str(mixed.get("reply") or ""),
+                inbound_text=exact,
+                history=spanish_history,
+                fields=mixed.get("fields") or {},
+                intents=mixed.get("intents") or [],
+            )
             print("MIXED_LANGUAGE_REPLY=" + mixed_reply.replace("\n", " "))
             print(
                 "MIXED_LANGUAGE_DETECTED="
                 + rules.detect_english_or_spanish(mixed_reply)
             )
             assert rules.detect_english_or_spanish(mixed_reply) == "English"
+            assert "anything else i can help you with" not in mixed_reply.lower()
+            assert "how can i help you today" not in mixed_reply.lower()
+            assert "?" in mixed_reply
 
             first = marina_agent.process_message(
                 from_email="despertares-first-hi-simulation",
@@ -170,6 +196,18 @@ jobs:
             assert "ENTIRE visible reply in English" in (
                 rules.consulta_despertares_language_lock(exact, [])
             )
+            guarded = rules.enforce_consulta_despertares_boundaries(
+                reply="Is there anything else I can help you with?",
+                inbound_text=exact,
+                history=[
+                    {"role": "user", "text": "hi"},
+                    {"role": "assistant", "text": "How can I help you today?"},
+                ],
+                fields={},
+                intents=["inquiry"],
+            )
+            assert guarded == rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+            print("LIVE_PROSPECT_QUESTION=passed")
             print("LIVE_LANGUAGE_LOCK=passed")
             PY
 
