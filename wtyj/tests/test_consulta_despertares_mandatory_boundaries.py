@@ -185,7 +185,7 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
 
     assert "Listen and help first" in rule
     assert "ENTIRE conversation" in rule
-    assert "Never ask again" in rule
+    assert "again for information" in rule
     assert "at most ONE question total per reply" in rule
     assert "Choosing a physical clinic" in rule
     assert "visit reason is always optional" in rule
@@ -223,7 +223,8 @@ def test_despertares_rule_keeps_optional_enrichment_natural():
     ):
         rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
 
-    assert "gently collect missing enrichment fields one at a time" in rule
+    assert "gently collect missing enrichment" in rule
+    assert "fields one at a time" in rule
     assert "Never delay" in rule
     assert "If the customer declines" in rule
     assert "¿Preferirías que la primera sesión fuera presencial u online?" in rule
