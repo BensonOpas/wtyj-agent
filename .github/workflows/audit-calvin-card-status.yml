@@ -24,7 +24,7 @@ jobs:
             set -eu
             SOURCE_REPO=/root/wtyj-agent-source
             TENANT_DIR=/root/clients/consulta-despertares
-            DEPLOY_SHA=72f2bfb8f17a907e8506f139cab19bf5557dfca8
+            DEPLOY_SHA=9aee5d7440d2bee225d53a70463de5e9d18b97c6
             SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
             NEW_IMAGE="wtyj-agent:despertares-language-$SHORT_SHA"
             BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
@@ -134,6 +134,7 @@ jobs:
             assert first_reply.startswith(
                 rules.CONSULTA_DESPERTARES_ENGLISH_GREETING
             )
+            assert first_reply.lower().count("virtual assistant") == 1
             assert rules.detect_english_or_spanish(first_reply) == "English"
             print("MODEL_LANGUAGE_SIMULATIONS=passed")
             PY
