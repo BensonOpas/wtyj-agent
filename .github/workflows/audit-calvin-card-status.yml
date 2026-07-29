@@ -1,4 +1,4 @@
-name: Audit Despertares language selection
+name: Deploy Despertares language lock
 
 on:
   pull_request:
@@ -10,56 +10,168 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect live mixed-language conversation
+      - name: Build, simulate, deploy, and verify
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 10m
+          command_timeout: 25m
           script: |
             set -eu
-            CONTAINER=wtyj-consulta-despertares
-            docker exec -i "$CONTAINER" python - <<'PY'
-            import json
-            import sqlite3
+            SOURCE_REPO=/root/wtyj-agent-source
+            TENANT_DIR=/root/clients/consulta-despertares
+            DEPLOY_SHA=72f2bfb8f17a907e8506f139cab19bf5557dfca8
+            SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
+            NEW_IMAGE="wtyj-agent:despertares-language-$SHORT_SHA"
+            BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
+            BACKUP_FILE="$TENANT_DIR/docker-compose.yml.pre-language-$SHORT_SHA"
+            WORKTREE_ADDED=0
+            SWITCHED=0
+            DEPLOY_OK=0
 
-            config = json.load(open("/app/config/client.json", encoding="utf-8"))
-            business = config.get("business") or {}
-            print("LANG_CONFIG=" + json.dumps({
-                "languages": business.get("languages"),
-                "default_language": business.get("default_language"),
-                "agent_name": business.get("agent_name"),
-            }, ensure_ascii=False, sort_keys=True))
+            cleanup() {
+              if test "$SWITCHED" = 1 && test "$DEPLOY_OK" != 1; then
+                cp "$BACKUP_FILE" "$TENANT_DIR/docker-compose.yml"
+                docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent || true
+              fi
+              if test "$WORKTREE_ADDED" = 1; then
+                git -C "$SOURCE_REPO" worktree remove --force "$BUILD_DIR" >/dev/null 2>&1 || true
+              else
+                rmdir "$BUILD_DIR" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cleanup EXIT
 
-            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
-            db.row_factory = sqlite3.Row
-            rows = db.execute(
-                """
-                SELECT id, phone, role, text, created_at, sender_name
-                FROM whatsapp_threads
-                WHERE lower(text) LIKE '%worldcup%'
-                   OR lower(text) LIKE '%indestructible%'
-                   OR lower(text) LIKE '%gorilla%'
-                   OR lower(text) LIKE '%why do you write in spanish%'
-                   OR lower(text) LIKE '%stick to english%'
-                ORDER BY id
-                """
-            ).fetchall()
-            print("LANG_THREAD=" + json.dumps([dict(row) for row in rows], ensure_ascii=False))
-            phones = sorted({row["phone"] for row in rows})
-            histories = {}
-            for phone in phones:
-                histories[phone] = [
-                    dict(row) for row in db.execute(
-                        "SELECT id, role, text, created_at, sender_name FROM whatsapp_threads WHERE phone = ? ORDER BY id",
-                        (phone,),
-                    ).fetchall()
-                ]
-            print("LANG_HISTORIES=" + json.dumps(histories, ensure_ascii=False, sort_keys=True))
-            print("LANG_PHONE_COUNT=" + str(len(phones)))
-            db.close()
+            git -C "$SOURCE_REPO" fetch origin main
+            git -C "$SOURCE_REPO" cat-file -e "$DEPLOY_SHA^{commit}"
+            git -C "$SOURCE_REPO" worktree add --detach "$BUILD_DIR" "$DEPLOY_SHA"
+            WORKTREE_ADDED=1
+            docker build -t "$NEW_IMAGE" "$BUILD_DIR"
+
+            docker run --rm --entrypoint python \
+              -v "$TENANT_DIR/config:/app/config:ro" \
+              "$NEW_IMAGE" - <<'PY'
+            from shared import tenant_hard_rules as rules
+
+            exact = (
+                "after winning the worldcup winning i feel that i am "
+                "industructable and wanna fight a gorrilla .. is sthat healthy"
+            )
+            assert rules.detect_english_or_spanish(exact) == "English"
+            assert rules.consulta_despertares_reply_language("hi", []) == "English"
+            lock = rules.consulta_despertares_language_lock(
+                exact,
+                [{"role": "assistant", "text": "Hola, ¿cómo te puedo ayudar?"}],
+            )
+            assert "ENTIRE visible reply in English" in lock
+            print("PREDEPLOY_LANGUAGE_STATIC=passed")
             PY
+
+            docker run --rm -i \
+              --env-file "$TENANT_DIR/config/platform.env" \
+              -v "$TENANT_DIR/config:/app/config:ro" \
+              -v "$TENANT_DIR/data:/app/data:ro" \
+              --entrypoint python "$NEW_IMAGE" - <<'PY'
+            from agents.marina import marina_agent
+            from shared import tenant_hard_rules as rules
+
+            exact = (
+                "after winning the worldcup winning i feel that i am "
+                "industructable and wanna fight a gorrilla .. is sthat healthy"
+            )
+            spanish_history = [
+                {"role": "user", "text": "hi"},
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Hola, soy Alia, la asistente virtual de Consulta "
+                        "Despertares. ¿Cómo te puedo ayudar?"
+                    ),
+                },
+            ]
+            mixed = marina_agent.process_message(
+                from_email="despertares-language-simulation",
+                subject="",
+                body=exact,
+                thread_fields={},
+                thread_flags={},
+                channel="whatsapp",
+                messages=spanish_history,
+            )
+            mixed_reply = str(mixed.get("reply") or "")
+            print("MIXED_LANGUAGE_REPLY=" + mixed_reply.replace("\n", " "))
+            print(
+                "MIXED_LANGUAGE_DETECTED="
+                + rules.detect_english_or_spanish(mixed_reply)
+            )
+            assert rules.detect_english_or_spanish(mixed_reply) == "English"
+
+            first = marina_agent.process_message(
+                from_email="despertares-first-hi-simulation",
+                subject="",
+                body="hi",
+                thread_fields={},
+                thread_flags={},
+                channel="whatsapp",
+                messages=[],
+            )
+            first_reply = rules.enforce_consulta_despertares_boundaries(
+                reply=str(first.get("reply") or ""),
+                inbound_text="hi",
+                history=[],
+                fields={},
+                intents=first.get("intents") or [],
+            )
+            print("FIRST_HI_REPLY=" + first_reply.replace("\n", " "))
+            print(
+                "FIRST_HI_DETECTED="
+                + rules.detect_english_or_spanish(first_reply)
+            )
+            assert first_reply.startswith(
+                rules.CONSULTA_DESPERTARES_ENGLISH_GREETING
+            )
+            assert rules.detect_english_or_spanish(first_reply) == "English"
+            print("MODEL_LANGUAGE_SIMULATIONS=passed")
+            PY
+
+            cp "$TENANT_DIR/docker-compose.yml" "$BACKUP_FILE"
+            sed -i "s|^    image: .*|    image: $NEW_IMAGE|" "$TENANT_DIR/docker-compose.yml"
+            docker compose -f "$TENANT_DIR/docker-compose.yml" config -q
+            SWITCHED=1
+            docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent
+
+            READY=0
+            for attempt in $(seq 1 30); do
+              RUNNING=$(docker inspect wtyj-consulta-despertares --format '{{.State.Running}}' 2>/dev/null || true)
+              HTTP_CODE=$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health || true)
+              if test "$RUNNING" = "true" && test "$HTTP_CODE" != "000"; then
+                READY=1
+                break
+              fi
+              sleep 2
+            done
+            test "$READY" = 1
+            test "$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')" = "$NEW_IMAGE"
+
+            docker exec wtyj-consulta-despertares python - <<'PY'
+            from shared import tenant_hard_rules as rules
+
+            exact = (
+                "after winning the worldcup winning i feel that i am "
+                "industructable and wanna fight a gorrilla .. is sthat healthy"
+            )
+            assert rules.detect_english_or_spanish(exact) == "English"
+            assert rules.consulta_despertares_reply_language("hi", []) == "English"
+            assert "ENTIRE visible reply in English" in (
+                rules.consulta_despertares_language_lock(exact, [])
+            )
+            print("LIVE_LANGUAGE_LOCK=passed")
+            PY
+
+            DEPLOY_OK=1
+            echo "DEPLOYED_IMAGE=$NEW_IMAGE"
+            echo "DEPLOYED_SHA=$DEPLOY_SHA"
