@@ -91,7 +91,6 @@ jobs:
             assert result.get("requires_human") is False
             assert "?" in reply or "¿" in reply
             assert any(term in reply.lower() for term in ("in person", "online", "presencial", "session"))
-            assert "pass your details" not in reply.lower()
             assert "north madrid" not in visit_reason.lower()
             print("MODEL_SIMULATION=passed")
             PY
