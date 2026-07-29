@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from agents.marina import marina_agent
+from agents.social import social_agent
 from agents.social.webhook_server import _use_whatsapp_orchestrator
 from shared import tenant_hard_rules
 
@@ -208,7 +209,10 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
     assert "same language as the customer's most recent message" in rule
     assert "Choosing a physical clinic" in rule
     assert "visit reason is always optional" in rule
-    assert "still engaged" in rule
+    assert "NOT a signal to" in rule
+    assert "session_type, then appointment_preference" in rule
+    assert "normal request to speak with a psychologist" in rule
+    assert "A location, clinic, callback time" in rule
     assert "Do not ask which timezone applies" in rule
     assert "Do not display a checklist" in rule
 
@@ -233,6 +237,7 @@ def test_marina_schema_supports_a_complete_non_invasive_prospect_card():
     )
     assert "Choosing a physical clinic" in properties["session_type"]["description"]
     assert "neutral paraphrase" in properties["visit_reason"]["description"]
+    assert "Never put a location" in properties["visit_reason"]["description"]
 
 
 def test_despertares_rule_keeps_optional_enrichment_natural():
@@ -278,3 +283,103 @@ def test_plain_qa_tenant_still_uses_dm_agent_when_booking_is_off():
     }
     with patch("agents.social.webhook_server.config_loader.get_raw", return_value=config):
         assert _use_whatsapp_orchestrator("whatsapp") is False
+
+def test_despertares_callback_prompt_does_not_stop_at_minimum_fields():
+    config = {
+        "workflow": {"type": "callback_follow_up"},
+        "features": {"booking_flow": False},
+    }
+    with (
+        patch("agents.marina.marina_agent.config_loader.get_raw", return_value=config),
+        patch(
+            "agents.marina.marina_agent.tenant_hard_rules."
+            "is_consulta_despertares",
+            return_value=True,
+        ),
+    ):
+        prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
+
+    assert "NOT permission to stop or hand off immediately" in prompt
+    assert "continue with session_type" in prompt
+    assert "Do NOT set requires_human for those requests" in prompt
+    assert "A location, clinic, callback time" in prompt
+
+
+def test_callback_visit_reason_never_uses_location_or_generic_notes():
+    assert social_agent._callback_visit_reason({
+        "special_requests": "Located in north Madrid",
+        "comments": "Prefers Alcobendas",
+    }) == ""
+    assert social_agent._callback_visit_reason({
+        "visit_reason": "Would like support with anxiety",
+        "special_requests": "Located in north Madrid",
+    }) == "Would like support with anxiety"
+
+
+def test_callback_status_recalculates_stale_needs_answer_to_ready():
+    follow_up = {
+        "status": "needs_human_answer",
+        "first_name": "Calvin",
+        "surnames": "Adamus",
+        "phone_raw": "537473246",
+        "callback_preference": "After 18:00",
+    }
+    result = {
+        "requires_human": False,
+        "reply": "The team will call after 18:00.",
+    }
+
+    assert social_agent._callback_follow_up_target_status(
+        follow_up, result
+    ) == "ready_to_call"
+
+
+def test_callback_status_stays_collecting_while_agent_enriches_card():
+    follow_up = {
+        "status": "needs_human_answer",
+        "first_name": "Calvin",
+        "surnames": "Adamus",
+        "phone_raw": "537473246",
+        "callback_preference": "After 18:00",
+    }
+    result = {
+        "requires_human": False,
+        "reply": "Would you prefer your first session in person or online?",
+    }
+
+    assert social_agent._callback_follow_up_target_status(
+        follow_up, result
+    ) == "collecting"
+
+
+def test_callback_status_preserves_real_pending_human_answer():
+    follow_up = {
+        "status": "collecting",
+        "first_name": "Calvin",
+        "surnames": "Adamus",
+        "phone_raw": "537473246",
+        "callback_preference": "After 18:00",
+    }
+    result = {
+        "requires_human": True,
+        "reply": "I need the team to confirm that detail.",
+    }
+
+    assert social_agent._callback_follow_up_target_status(
+        follow_up, result
+    ) == "needs_human_answer"
+
+
+def test_callback_status_never_overwrites_operator_outcome():
+    follow_up = {
+        "status": "copied",
+        "first_name": "Calvin",
+        "surnames": "Adamus",
+        "phone_raw": "537473246",
+        "callback_preference": "After 18:00",
+    }
+
+    assert social_agent._callback_follow_up_target_status(
+        follow_up, {"requires_human": True, "reply": "Pending."}
+    ) == "copied"
+
