@@ -303,3 +303,50 @@ def test_premature_setup_offer_is_replaced_with_listening_question():
     assert reply.endswith(
         tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
     )
+
+
+def test_support_reply_without_question_gets_listening_question():
+    history = [
+        {"role": "user", "text": "hi"},
+        {"role": "assistant", "text": "How can I help you today?"},
+    ]
+    draft = (
+        "If you'd like to talk through how you're feeling with one of our "
+        "psychologists, I'm happy to help you set that up."
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text=(
+                "After winning I feel indestructible and want to fight a "
+                "gorilla. Is that healthy"
+            ),
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+    )
+    assert reply.count("?") == 1
+
+
+def test_plain_non_support_acknowledgement_does_not_gain_clinic_question():
+    history = [
+        {"role": "user", "text": "What are your opening hours?"},
+        {"role": "assistant", "text": "We are checking that for you."},
+    ]
+    draft = "Thank you for your patience."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Thanks",
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert reply == draft
