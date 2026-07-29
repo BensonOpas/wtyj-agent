@@ -1,4 +1,4 @@
-name: Audit dashboard release path
+name: Deploy dashboard archive action
 
 on:
   pull_request:
@@ -10,30 +10,54 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect dashboard deployment layout
+      - name: Build and atomically deploy merged dashboard release
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 5m
+          command_timeout: 15m
           script: |
             set -eu
-            echo "CURRENT_RELEASE=$(readlink -f /var/www/unboks-dashboard/current 2>/dev/null || true)"
-            echo "RELEASE_ROOTS"
-            find /var/www/unboks-dashboard -maxdepth 2 -mindepth 1 -type d -printf '%p\n' 2>/dev/null | sort | tail -30
-            echo "CANDIDATE_REPOSITORIES"
-            find /root /opt /srv -maxdepth 4 -type d -name .git -printf '%h\n' 2>/dev/null | while read -r repo; do
-              case "$repo" in
-                *unboks*|*dashboard*)
-                  branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
-                  head=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || true)
-                  printf '%s branch=%s head=%s\n' "$repo" "$branch" "$head"
-                  ;;
-              esac
-            done
-            echo "NGINX_ROOTS"
-            grep -RhoE 'root[[:space:]]+/var/www/unboks-dashboard[^;]*' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | sort -u || true
+            SOURCE_REPO=/root/unboks-dashboard-api
+            DEPLOY_SHA=0e936089dc60b3562900c4bcd3f7cd1820845878
+            RELEASE_ROOT=/var/www/unboks-dashboard/releases
+            RELEASE_DIR="$RELEASE_ROOT/$DEPLOY_SHA"
+            DEPLOY_TMP=$(mktemp -d /tmp/unboks-dashboard-deploy.XXXXXX)
+            WORKTREE_ADDED=0
+
+            cleanup() {
+              if [ "$WORKTREE_ADDED" = 1 ]; then
+                git -C "$SOURCE_REPO" worktree remove --force "$DEPLOY_TMP" >/dev/null 2>&1 || true
+              else
+                rmdir "$DEPLOY_TMP" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cleanup EXIT
+
+            test -d "$SOURCE_REPO/.git"
+            git -C "$SOURCE_REPO" fetch origin main
+            git -C "$SOURCE_REPO" cat-file -e "$DEPLOY_SHA^{commit}"
+            git -C "$SOURCE_REPO" worktree add --detach "$DEPLOY_TMP" "$DEPLOY_SHA"
+            WORKTREE_ADDED=1
+
+            cd "$DEPLOY_TMP"
+            corepack pnpm install --frozen-lockfile
+            corepack pnpm --filter @workspace/unboks run typecheck
+            PORT=25767 BASE_PATH=/ corepack pnpm --filter @workspace/unboks run build
+
+            test -f artifacts/unboks/dist/public/index.html
+            grep -Rqs "Prospecto archivado" artifacts/unboks/dist/public/assets
+
+            install -d "$RELEASE_DIR"
+            cp -a artifacts/unboks/dist/public/. "$RELEASE_DIR/"
+            ln -sfn "$RELEASE_DIR" /var/www/unboks-dashboard/current.next
+            mv -Tf /var/www/unboks-dashboard/current.next /var/www/unboks-dashboard/current
+
+            nginx -t
+            test "$(readlink -f /var/www/unboks-dashboard/current)" = "$RELEASE_DIR"
+            curl -fsS https://dashboard.unboks.org/ >/dev/null
+            echo "DEPLOYED_RELEASE=$DEPLOY_SHA"
