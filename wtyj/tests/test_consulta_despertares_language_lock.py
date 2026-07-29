@@ -251,3 +251,29 @@ def test_relationship_prompt_forbids_generic_service_desk_closings():
     assert "generic service-desk closing" in rule
     assert "guide them toward the right support" in rule
     assert "do not ask for intimate details or diagnose" in rule
+
+
+def test_clinic_centered_offer_is_replaced_with_prospect_centered_question():
+    history = [
+        {"role": "user", "text": "hi"},
+        {"role": "assistant", "text": "How can I help you today?"},
+    ]
+    draft = (
+        "If you are noticing big shifts in how you feel, it can be worth "
+        "talking to someone.\n\n"
+        "Would you like to know more about how we can help?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="I have been feeling invincible lately.",
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert "how we can help" not in reply
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+    )
