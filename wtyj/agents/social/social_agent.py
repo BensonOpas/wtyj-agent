@@ -107,6 +107,11 @@ _CALLBACK_AUTOMATED_STATUSES = {
 }
 
 
+def _callback_visit_reason(fields: dict) -> str:
+    """Return only explicitly extracted clinical context for the card."""
+    return str(fields.get("visit_reason") or "").strip()
+
+
 def _callback_follow_up_target_status(
     follow_up: dict,
     result: dict,
@@ -1274,7 +1279,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             # Only the dedicated field may populate the clinical visit reason.
             # Generic comments/special_requests often contain location or
             # scheduling notes and must never be relabelled as clinical context.
-            "visit_reason": fields.get("visit_reason") or "",
+            "visit_reason": _callback_visit_reason(fields),
         }
         _followup = state_registry.upsert_follow_up_request(phone, channel, **_followup_fields)
         _target_status = _callback_follow_up_target_status(_followup, result)
