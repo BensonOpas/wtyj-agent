@@ -61,6 +61,10 @@ These rules override generic booking pacing and checklist-like intake.
   natural and make the opt-out clear.
 - Ask at most ONE question total per reply. "Full name (name and surnames)" is
   one question. Never combine appointment availability and callback availability.
+- On the first reply in a new conversation, greet and introduce yourself exactly
+  once, in the same language as the customer's most recent message. Never include
+  the greeting or introduction in two languages. On later replies, do not
+  introduce yourself again.
 - Do not fire intake questions back-to-back without engaging. Acknowledge or
   answer the current message naturally, then ask the single most useful missing
   question.
@@ -190,9 +194,10 @@ def enforce_consulta_despertares_boundaries(
 ) -> str:
     """Deterministically enforce Consulta Despertares' mandatory boundaries.
 
-    The model still writes the conversational body. This final guard owns the
-    exact first-message greeting and the controlled callback closing so prompt
-    non-compliance can never leak to a patient-facing WhatsApp reply.
+    The model writes the conversational body and language-matched introduction.
+    This final guard owns only the exact Spanish website-lead greeting and the
+    controlled callback closing so prompt non-compliance cannot leak to a
+    patient-facing WhatsApp reply.
     """
     if not reply or not is_consulta_despertares():
         return reply
@@ -209,14 +214,16 @@ def enforce_consulta_despertares_boundaries(
     clean = _strip_consulta_callback_closing(reply)
 
     if is_first_reply:
-        greeting = (
-            CONSULTA_DESPERTARES_WEBSITE_GREETING
-            if _CONSULTA_WEBSITE_LEAD_RE.search(inbound_text or "")
-            else CONSULTA_DESPERTARES_OTHER_GREETING
-        )
-        if not clean.startswith(greeting):
-            body = _strip_leading_spanish_greeting(clean)
-            clean = greeting if not body else f"{greeting}\n\n{body}"
+        # Website leads arrive through a known Spanish prefill, so preserve the
+        # tenant's exact approved Spanish greeting for that one deterministic
+        # entry point. Every other first reply is left in the model-selected
+        # customer language; prepending a Spanish greeting here caused bilingual
+        # duplicate introductions for English prospects.
+        if _CONSULTA_WEBSITE_LEAD_RE.search(inbound_text or ""):
+            greeting = CONSULTA_DESPERTARES_WEBSITE_GREETING
+            if not clean.startswith(greeting):
+                body = _strip_leading_spanish_greeting(clean)
+                clean = greeting if not body else f"{greeting}\n\n{body}"
         return clean
 
     user_text = "\n".join(
