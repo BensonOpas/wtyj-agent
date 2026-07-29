@@ -1,0 +1,62 @@
+name: Audit Calvin card status
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-calvin-card-status.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live Despertares state and status rules
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            APP_REPO=/root/wtyj-agent-source
+            echo "STATUS_CODE_MATCHES"
+            git -C "$APP_REPO" grep -n -Ei 'needs_human_answer|ready_to_call|handoff_reason|follow.?up|visit_reason|appointment_preference|session_type' -- '*.py' | head -n 1000 || true
+            echo "CALVIN_DATABASE_ROWS"
+            docker exec -i wtyj-consulta-despertares python - <<'PY'
+            import json
+            import sqlite3
+
+            db = sqlite3.connect("/app/data/state_registry.db")
+            db.row_factory = sqlite3.Row
+            tables = [
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
+            print("TABLES", json.dumps(tables))
+            for table in tables:
+                columns = [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]
+                if not columns:
+                    continue
+                where = " OR ".join(f'CAST("{column}" AS TEXT) LIKE ?' for column in columns)
+                params = ["%Calvin Adamus%"] * len(columns)
+                rows = list(db.execute(f'SELECT * FROM "{table}" WHERE {where} LIMIT 50', params))
+                if not rows:
+                    params = ["%537473246%"] * len(columns)
+                    rows = list(db.execute(f'SELECT * FROM "{table}" WHERE {where} LIMIT 50', params))
+                if rows:
+                    print("TABLE", table)
+                    print("COLUMNS", json.dumps(columns))
+                    for row in rows:
+                        safe = dict(row)
+                        for key in list(safe):
+                            if any(secret in key.lower() for secret in ("token", "secret", "password", "api_key")):
+                                safe[key] = "[REDACTED]"
+                        print(json.dumps(safe, ensure_ascii=False, default=str))
+            PY
+            echo "CALVIN_LOG_EVENTS"
+            docker exec wtyj-consulta-despertares sh -lc "grep -R -E 'Calvin Adamus|537473246' /app/logs 2>/dev/null | tail -n 300 || true"
