@@ -24,7 +24,7 @@ jobs:
             set -eu
             SOURCE_REPO=/root/wtyj-agent-source
             TENANT_DIR=/root/clients/consulta-despertares
-            DEPLOY_SHA=817680ee6274f833228b480980406583300527e6
+            DEPLOY_SHA=1a6717294aadf47abf84a200e6349430b157f673
             SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
             NEW_IMAGE="wtyj-agent:despertares-engagement-$SHORT_SHA"
             BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
@@ -134,7 +134,10 @@ jobs:
             assert rules.detect_english_or_spanish(mixed_reply) == "English"
             assert "anything else i can help you with" not in mixed_reply.lower()
             assert "how can i help you today" not in mixed_reply.lower()
-            assert "?" in mixed_reply
+            assert "how we can help" not in mixed_reply.lower()
+            assert mixed_reply.endswith(
+                rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+            )
 
             first = marina_agent.process_message(
                 from_email="despertares-first-hi-simulation",
@@ -181,10 +184,14 @@ jobs:
               fi
               sleep 2
             done
+            echo "DEPLOY_READY=$READY"
+            ACTUAL_IMAGE=$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}' 2>/dev/null || true)
+            echo "DEPLOY_ACTUAL_IMAGE=$ACTUAL_IMAGE"
+            echo "DEPLOY_EXPECTED_IMAGE=$NEW_IMAGE"
             test "$READY" = 1
-            test "$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')" = "$NEW_IMAGE"
+            test "$ACTUAL_IMAGE" = "$NEW_IMAGE"
 
-            docker exec wtyj-consulta-despertares python - <<'PY'
+            docker exec -i wtyj-consulta-despertares python - <<'PY'
             from shared import tenant_hard_rules as rules
 
             exact = (
