@@ -13,50 +13,147 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect live Despertares state and status rules
+      - name: Deploy and verify Despertares intake fix
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 10m
+          command_timeout: 25m
           script: |
             set -eu
-            APP_REPO=/root/wtyj-agent-source
-            echo "STATUS_CODE_MATCHES"
-            git -C "$APP_REPO" grep -n -Ei 'needs_human_answer|ready_to_call|handoff_reason|follow.?up|visit_reason|appointment_preference|session_type' -- '*.py' | head -n 1000 || true
-            echo "CALVIN_DATABASE_ROWS"
+            SOURCE_REPO=/root/wtyj-agent-source
+            TENANT_DIR=/root/clients/consulta-despertares
+            DEPLOY_SHA=6fb27012b130ab421744e8b733b4a98728380742
+            SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
+            NEW_IMAGE="wtyj-agent:consulta-intake-$SHORT_SHA"
+            BUILD_DIR=$(mktemp -d /tmp/despertares-intake-build.XXXXXX)
+            BACKUP_FILE="$TENANT_DIR/docker-compose.yml.pre-intake-$SHORT_SHA"
+            WORKTREE_ADDED=0
+            SWITCHED=0
+            DEPLOY_OK=0
+
+            cleanup() {
+              if [ "$SWITCHED" = 1 ] && [ "$DEPLOY_OK" != 1 ]; then
+                cp "$BACKUP_FILE" "$TENANT_DIR/docker-compose.yml"
+                docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent || true
+              fi
+              if [ "$WORKTREE_ADDED" = 1 ]; then
+                git -C "$SOURCE_REPO" worktree remove --force "$BUILD_DIR" >/dev/null 2>&1 || true
+              else
+                rmdir "$BUILD_DIR" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cleanup EXIT
+
+            git -C "$SOURCE_REPO" fetch origin main
+            git -C "$SOURCE_REPO" cat-file -e "$DEPLOY_SHA^{commit}"
+            git -C "$SOURCE_REPO" worktree add --detach "$BUILD_DIR" "$DEPLOY_SHA"
+            WORKTREE_ADDED=1
+            docker build -t "$NEW_IMAGE" "$BUILD_DIR"
+
+            docker run --rm --entrypoint python               -v "$TENANT_DIR/config:/app/config:ro"               "$NEW_IMAGE" -c 'from agents.marina import marina_agent; from agents.social import social_agent; from shared import tenant_hard_rules as t; prompt=marina_agent._build_system_prompt({},channel="whatsapp"); assert "NOT permission to stop or hand off immediately" in prompt; assert "continue with session_type" in prompt; assert social_agent._callback_visit_reason({"special_requests":"Located in north Madrid"}) == ""; follow={"status":"needs_human_answer","first_name":"Calvin","surnames":"Adamus","phone_raw":"537473246","callback_preference":"After 18:00"}; assert social_agent._callback_follow_up_target_status(follow,{"requires_human":False,"reply":"The team will call after 18:00."}) == "ready_to_call"; print("PREDEPLOY_STATIC_TEST=passed")'
+
+            docker run --rm -i               --env-file "$TENANT_DIR/config/platform.env"               -v "$TENANT_DIR/config:/app/config:ro"               -v "$TENANT_DIR/data:/app/data:ro"               --entrypoint python "$NEW_IMAGE" - <<'PY'
+            from agents.marina import marina_agent
+
+            history = [
+                {"role": "user", "text": "I feel like the ruler of the universe and want to fight giant green aliens. I would like to speak with someone."},
+                {"role": "assistant", "text": "A psychologist would be better placed to explore that with you. Would you like help getting connected?"},
+                {"role": "user", "text": "Yes, I am in north Madrid."},
+                {"role": "assistant", "text": "We have centres in Madrid. What is your full name?"},
+                {"role": "user", "text": "Calvin Adamus"},
+                {"role": "assistant", "text": "What is the best phone number to reach you on?"},
+                {"role": "user", "text": "537473246"},
+                {"role": "assistant", "text": "When would be a good time for the team to call?"},
+            ]
+            fields = {
+                "customer_name": "Calvin Adamus",
+                "first_name": "Calvin",
+                "surnames": "Adamus",
+                "phone": "537473246",
+                "callback_preference": "After 18:00",
+                "special_requests": "Located in north Madrid",
+            }
+            result = marina_agent.process_message(
+                from_email="despertares-deploy-simulation",
+                subject="",
+                body="After 18:00 is good. When do you call, today?",
+                thread_fields=fields,
+                thread_flags={},
+                channel="whatsapp",
+                messages=history,
+            )
+            reply = str(result.get("reply") or "")
+            visit_reason = str((result.get("fields") or {}).get("visit_reason") or "")
+            print("MODEL_SIMULATION_REPLY=" + reply.replace("\n", " "))
+            print("MODEL_SIMULATION_VISIT_REASON=" + visit_reason)
+            assert result.get("requires_human") is False
+            assert "?" in reply or "¿" in reply
+            assert any(term in reply.lower() for term in ("in person", "online", "presencial", "session"))
+            assert "pass your details" not in reply.lower()
+            assert "north madrid" not in visit_reason.lower()
+            print("MODEL_SIMULATION=passed")
+            PY
+
+            cp "$TENANT_DIR/docker-compose.yml" "$BACKUP_FILE"
+            sed -i "s|^    image: .*|    image: $NEW_IMAGE|" "$TENANT_DIR/docker-compose.yml"
+            docker compose -f "$TENANT_DIR/docker-compose.yml" config -q
+            SWITCHED=1
+            docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent
+
+            READY=0
+            for attempt in $(seq 1 30); do
+              RUNNING=$(docker inspect wtyj-consulta-despertares --format '{{.State.Running}}' 2>/dev/null || true)
+              HTTP_CODE=$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health || true)
+              if [ "$RUNNING" = "true" ] && [ "$HTTP_CODE" != "000" ]; then
+                READY=1
+                break
+              fi
+              sleep 2
+            done
+            test "$READY" = 1
+            test "$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')" = "$NEW_IMAGE"
+
+            docker exec wtyj-consulta-despertares python -c 'from agents.marina import marina_agent; from agents.social import social_agent; prompt=marina_agent._build_system_prompt({},channel="whatsapp"); assert "NOT permission to stop or hand off immediately" in prompt; assert social_agent._callback_visit_reason({"special_requests":"Located in north Madrid"}) == ""; print("LIVE_INTAKE_TEST=passed")'
+
+            DEPLOY_OK=1
+
+            cp "$TENANT_DIR/data/state_registry.db" "$TENANT_DIR/data/calvin-card-repair-$SHORT_SHA.db"
             docker exec -i wtyj-consulta-despertares python - <<'PY'
             import json
             import sqlite3
+            from datetime import datetime, timezone
 
             db = sqlite3.connect("/app/data/state_registry.db")
             db.row_factory = sqlite3.Row
-            tables = [
-                row[0] for row in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-                )
-            ]
-            print("TABLES", json.dumps(tables))
-            for table in tables:
-                columns = [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]
-                if not columns:
-                    continue
-                where = " OR ".join(f'CAST("{column}" AS TEXT) LIKE ?' for column in columns)
-                params = ["%Calvin Adamus%"] * len(columns)
-                rows = list(db.execute(f'SELECT * FROM "{table}" WHERE {where} LIMIT 50', params))
-                if not rows:
-                    params = ["%537473246%"] * len(columns)
-                    rows = list(db.execute(f'SELECT * FROM "{table}" WHERE {where} LIMIT 50', params))
-                if rows:
-                    print("TABLE", table)
-                    print("COLUMNS", json.dumps(columns))
-                    for row in rows:
-                        safe = dict(row)
-                        for key in list(safe):
-                            if any(secret in key.lower() for secret in ("token", "secret", "password", "api_key")):
-                                safe[key] = "[REDACTED]"
-                        print(json.dumps(safe, ensure_ascii=False, default=str))
+            conversation_id = "6a623edb10e2ccd35f2c66a9"
+            row = db.execute(
+                "SELECT * FROM follow_up_requests WHERE id = 34 AND conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row:
+                now = datetime.now(timezone.utc).isoformat()
+                if row["visit_reason"] == "Located in north Madrid":
+                    db.execute(
+                        "UPDATE follow_up_requests SET visit_reason = '', updated_at = ? WHERE id = 34 AND conversation_id = ?",
+                        (now, conversation_id),
+                    )
+                if row["status"] == "needs_human_answer":
+                    db.execute(
+                        "UPDATE follow_up_requests SET status = 'collecting', updated_at = ? WHERE id = 34 AND conversation_id = ?",
+                        (now, conversation_id),
+                    )
+                db.commit()
+            final = db.execute(
+                "SELECT id, first_name, surnames, phone_raw, callback_preference, visit_reason, status FROM follow_up_requests WHERE id = 34 AND conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            print("CALVIN_CARD_AFTER_REPAIR=" + json.dumps(dict(final) if final else None, ensure_ascii=False))
+            assert final is not None
+            assert final["visit_reason"] != "Located in north Madrid"
+            assert final["status"] != "needs_human_answer"
             PY
-            echo "CALVIN_LOG_EVENTS"
-            docker exec wtyj-consulta-despertares sh -lc "grep -R -E 'Calvin Adamus|537473246' /app/logs 2>/dev/null | tail -n 300 || true"
+
+            echo "DEPLOYED_IMAGE=$NEW_IMAGE"
+            echo "DEPLOYED_SHA=$DEPLOY_SHA"
