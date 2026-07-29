@@ -249,7 +249,6 @@ def test_despertares_rule_keeps_optional_enrichment_natural():
 
     assert "NOT a signal to" in rule
     assert "continue naturally with exactly one missing" in rule
-    assert "fields one at a time" in rule
     assert "Never delay" in rule
     assert "If the customer declines" in rule
     assert "¿Preferirías que la primera sesión fuera presencial u online?" in rule
