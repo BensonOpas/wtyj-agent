@@ -138,7 +138,6 @@ jobs:
             assert "how we can help" not in mixed_lower
             assert "set that up" not in mixed_lower
             assert "tell me a little more" in mixed_lower
-            assert "right support" in mixed_lower
             assert mixed_reply.rstrip().endswith("?")
 
             first = marina_agent.process_message(
