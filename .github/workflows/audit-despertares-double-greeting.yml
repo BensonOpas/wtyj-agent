@@ -13,19 +13,71 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Despertares compose contract
+      - name: Deploy and verify Despertares greeting fix
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 10m
+          command_timeout: 20m
           script: |
             set -eu
-            echo "DOCKERFILE"
-            sed -n '1,240p' /root/wtyj-agent-source/Dockerfile
-            echo "COMPOSE"
-            sed -n '1,240p' /root/clients/consulta-despertares/docker-compose.yml
-            echo "HEALTH"
-            docker inspect wtyj-consulta-despertares --format '{{json .Config.Healthcheck}}'
-            docker inspect wtyj-consulta-despertares --format '{{json .State.Health}}'
+            SOURCE_REPO=/root/wtyj-agent-source
+            TENANT_DIR=/root/clients/consulta-despertares
+            DEPLOY_SHA=de5cc90288b3cd0ec4b3bab44b1258f786e5d4af
+            SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
+            NEW_IMAGE="wtyj-agent:consulta-greeting-$SHORT_SHA"
+            BUILD_DIR=$(mktemp -d /tmp/despertares-greeting-build.XXXXXX)
+            BACKUP_FILE="$TENANT_DIR/docker-compose.yml.pre-greeting-$SHORT_SHA"
+            WORKTREE_ADDED=0
+            SWITCHED=0
+            DEPLOY_OK=0
+
+            cleanup() {
+              if [ "$SWITCHED" = 1 ] && [ "$DEPLOY_OK" != 1 ]; then
+                cp "$BACKUP_FILE" "$TENANT_DIR/docker-compose.yml"
+                docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent || true
+              fi
+              if [ "$WORKTREE_ADDED" = 1 ]; then
+                git -C "$SOURCE_REPO" worktree remove --force "$BUILD_DIR" >/dev/null 2>&1 || true
+              else
+                rmdir "$BUILD_DIR" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cleanup EXIT
+
+            test -d "$SOURCE_REPO/.git"
+            test -f "$TENANT_DIR/docker-compose.yml"
+            git -C "$SOURCE_REPO" fetch origin main
+            git -C "$SOURCE_REPO" cat-file -e "$DEPLOY_SHA^{commit}"
+            git -C "$SOURCE_REPO" worktree add --detach "$BUILD_DIR" "$DEPLOY_SHA"
+            WORKTREE_ADDED=1
+
+            docker build -t "$NEW_IMAGE" "$BUILD_DIR"
+
+            docker run --rm --entrypoint python               -v "$TENANT_DIR/config:/app/config:ro"               "$NEW_IMAGE" -c 'from shared import tenant_hard_rules as t; english="Hi, I am Alia, the virtual assistant for Consulta Despertares. How can I help?"; result=t.enforce_consulta_despertares_boundaries(english,"Hi, I would like some information.",[],{},[]); assert result == english; assert t.CONSULTA_DESPERTARES_OTHER_GREETING not in result; website="Hola *Consulta Psicológica Despertares*. Necesito más información sobre Consulta Psicológica Despertares"; approved=t.enforce_consulta_despertares_boundaries("¡Hola! Claro, te ayudo.",website,[],{},[]); assert approved.startswith(t.CONSULTA_DESPERTARES_WEBSITE_GREETING); print("PREDEPLOY_GREETING_TEST=passed")'
+
+            cp "$TENANT_DIR/docker-compose.yml" "$BACKUP_FILE"
+            sed -i "s|^    image: .*|    image: $NEW_IMAGE|" "$TENANT_DIR/docker-compose.yml"
+            docker compose -f "$TENANT_DIR/docker-compose.yml" config -q
+            SWITCHED=1
+            docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent
+
+            READY=0
+            for attempt in $(seq 1 30); do
+              RUNNING=$(docker inspect wtyj-consulta-despertares --format '{{.State.Running}}' 2>/dev/null || true)
+              HTTP_CODE=$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health || true)
+              if [ "$RUNNING" = "true" ] && [ "$HTTP_CODE" != "000" ]; then
+                READY=1
+                break
+              fi
+              sleep 2
+            done
+            test "$READY" = 1
+            test "$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')" = "$NEW_IMAGE"
+
+            docker exec wtyj-consulta-despertares python -c 'from shared import tenant_hard_rules as t; english="Hi, I am Alia, the virtual assistant for Consulta Despertares. How can I help?"; result=t.enforce_consulta_despertares_boundaries(english,"Hi, I would like some information.",[],{},[]); assert result == english; assert t.CONSULTA_DESPERTARES_OTHER_GREETING not in result; print("LIVE_GREETING_TEST=passed")'
+
+            DEPLOY_OK=1
+            echo "DEPLOYED_IMAGE=$NEW_IMAGE"
+            echo "DEPLOYED_SHA=$DEPLOY_SHA"
