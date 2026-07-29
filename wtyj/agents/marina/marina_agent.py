@@ -85,14 +85,27 @@ MARINA_TOOL = {
             },
             "fields": {
                 "type": "object",
-                "description": "Extracted booking fields. Only include fields with explicit evidence from the customer.",
+                "description": (
+                    "Facts extracted from the current message or any earlier customer "
+                    "message in the conversation. Re-read the full history on every turn, "
+                    "keep explicit facts already supplied, and never invent missing details."
+                ),
                 "properties": {
-                    "service_name": {"type": "string"},
+                    "service_name": {
+                        "type": "string",
+                        "description": "Therapy, service, or consultation type explicitly requested by the customer.",
+                    },
                     "service_key": {"type": "string", "description": "Exact key from the services list. See SERVICE ALIASES in the system prompt for the customer-wording mapping."},
                     "date": {"type": "string", "description": "YYYY-MM-DD format."},
                     "guests": {"type": "integer"},
-                    "customer_name": {"type": "string"},
-                    "phone": {"type": "string"},
+                    "customer_name": {
+                        "type": "string",
+                        "description": "The customer's complete name exactly as provided.",
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "A telephone number explicitly typed by the customer in the conversation.",
+                    },
                     "email": {"type": "string"},
                     "special_requests": {"type": "string"},
                     "slot_time": {"type": "string", "description": "HH:MM format."},
@@ -115,11 +128,30 @@ MARINA_TOOL = {
                     "comments": {"type": "string"},
                     "order_total": {"type": "number"},
                     "currency": {"type": "string"},
-                    "first_name": {"type": "string"},
-                    "surnames": {"type": "string"},
-                    "callback_preference": {"type": "string"},
-                    "appointment_preference": {"type": "string"},
-                    "visit_reason": {"type": "string"},
+                    "first_name": {
+                        "type": "string",
+                        "description": "Given name. When a full name is supplied, separate the first name from the remaining surnames.",
+                    },
+                    "surnames": {
+                        "type": "string",
+                        "description": "All surname words after the given name when a full name is supplied.",
+                    },
+                    "callback_preference": {
+                        "type": "string",
+                        "description": "When the human team may telephone the customer. Never use the preferred appointment day or time here.",
+                    },
+                    "appointment_preference": {
+                        "type": "string",
+                        "description": "Days or time ranges the customer prefers for the therapy session or appointment. Never use callback availability here.",
+                    },
+                    "session_type": {
+                        "type": "string",
+                        "description": "Session format explicitly established in context, normally Presencial or Online. Choosing a physical clinic after locations are offered is explicit evidence for Presencial.",
+                    },
+                    "visit_reason": {
+                        "type": "string",
+                        "description": "A short, neutral paraphrase of why the customer is seeking help, using only what they volunteered. Never diagnose or add clinical conclusions.",
+                    },
                 },
             },
             "confidence": {
