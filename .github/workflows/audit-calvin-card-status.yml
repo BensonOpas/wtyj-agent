@@ -132,12 +132,14 @@ jobs:
                 + rules.detect_english_or_spanish(mixed_reply)
             )
             assert rules.detect_english_or_spanish(mixed_reply) == "English"
-            assert "anything else i can help you with" not in mixed_reply.lower()
-            assert "how can i help you today" not in mixed_reply.lower()
-            assert "how we can help" not in mixed_reply.lower()
-            assert mixed_reply.endswith(
-                rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
-            )
+            mixed_lower = mixed_reply.lower()
+            assert "anything else i can help you with" not in mixed_lower
+            assert "how can i help you today" not in mixed_lower
+            assert "how we can help" not in mixed_lower
+            assert "set that up" not in mixed_lower
+            assert "tell me a little more" in mixed_lower
+            assert "right support" in mixed_lower
+            assert mixed_reply.rstrip().endswith("?")
 
             first = marina_agent.process_message(
                 from_email="despertares-first-hi-simulation",
