@@ -45,8 +45,7 @@ jobs:
             WORKTREE_ADDED=1
 
             cd "$DEPLOY_TMP"
-            export npm_config_user_agent="pnpm/$(pnpm --version)"
-            pnpm install --frozen-lockfile
+            pnpm install --frozen-lockfile --ignore-scripts
             pnpm --filter @workspace/unboks run typecheck
             PORT=25767 BASE_PATH=/ pnpm --filter @workspace/unboks run build
 
