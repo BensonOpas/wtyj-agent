@@ -1,0 +1,39 @@
+name: Audit dashboard release path
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-dashboard-release-path.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect dashboard deployment layout
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            echo "CURRENT_RELEASE=$(readlink -f /var/www/unboks-dashboard/current 2>/dev/null || true)"
+            echo "RELEASE_ROOTS"
+            find /var/www/unboks-dashboard -maxdepth 2 -mindepth 1 -type d -printf '%p\n' 2>/dev/null | sort | tail -30
+            echo "CANDIDATE_REPOSITORIES"
+            find /root /opt /srv -maxdepth 4 -type d -name .git -printf '%h\n' 2>/dev/null | while read -r repo; do
+              case "$repo" in
+                *unboks*|*dashboard*)
+                  branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
+                  head=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || true)
+                  printf '%s branch=%s head=%s\n' "$repo" "$branch" "$head"
+                  ;;
+              esac
+            done
+            echo "NGINX_ROOTS"
+            grep -RhoE 'root[[:space:]]+/var/www/unboks-dashboard[^;]*' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | sort -u || true
