@@ -24,7 +24,7 @@ jobs:
             set -eu
             SOURCE_REPO=/root/wtyj-agent-source
             TENANT_DIR=/root/clients/consulta-despertares
-            DEPLOY_SHA=c8973cfc3a723b04bd7cb10464b4674892cc972f
+            DEPLOY_SHA=84541f201ff2f31783c1bba2544d96c7b41c712e
             SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
             NEW_IMAGE="wtyj-agent:despertares-engagement-$SHORT_SHA"
             BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
