@@ -164,3 +164,90 @@ def test_first_hi_does_not_duplicate_an_english_model_introduction():
     )
     assert reply.lower().count("virtual assistant") == 1
     assert "How can I help you today?" in reply
+
+
+def test_later_english_generic_help_closing_becomes_prospect_centered():
+    history = [
+        {"role": "user", "text": "hi"},
+        {"role": "assistant", "text": "How can I help you today?"},
+    ]
+    draft = (
+        "Feeling invincible for a moment after a big win can happen. "
+        "If it continues or leads to risky decisions, it may be worth talking "
+        "with a professional.\n\n"
+        "Is there anything else I can help you with?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text=(
+                "After winning I feel indestructible and want to fight a "
+                "gorilla. Is that healthy?"
+            ),
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert "anything else I can help you with" not in reply
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+    )
+
+
+def test_later_spanish_generic_help_closing_becomes_prospect_centered():
+    history = [
+        {"role": "user", "text": "Hola"},
+        {"role": "assistant", "text": "¿Cómo te puedo ayudar?"},
+    ]
+    draft = (
+        "Si esa sensación se prolonga, puede ser útil hablarlo con un "
+        "profesional.\n\n"
+        "¿Hay algo más en lo que pueda ayudarte?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Me siento invencible desde hace varios días.",
+            history=history,
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert "Hay algo más" not in reply
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+    )
+
+
+def test_first_hi_may_still_use_a_simple_opening_question():
+    model_reply = (
+        "I'm Alía, the virtual assistant for Consulta Psicológica Despertares. "
+        "How can I help you today?"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=model_reply,
+            inbound_text="hi",
+            history=[],
+            fields={},
+            intents=[],
+        )
+
+    assert reply.endswith("How can I help you today?")
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+        not in reply
+    )
+
+
+def test_relationship_prompt_forbids_generic_service_desk_closings():
+    with _as_despertares():
+        rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
+
+    assert "generic service-desk closing" in rule
+    assert "guide them toward the right support" in rule
+    assert "do not ask for intimate details or diagnose" in rule
