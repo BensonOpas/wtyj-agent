@@ -1,0 +1,112 @@
+name: Audit Ceasar Despertares intake
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-ceasar-despertares-intake.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare Ceasar conversation with saved prospect fields
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /root/clients/consulta-despertares
+            CONTAINER_ID=$(docker compose ps -q | head -1)
+            test -n "$CONTAINER_ID"
+            docker exec -i "$CONTAINER_ID" python - <<'PY'
+            import json
+            import re
+            import unicodedata
+
+            from shared import state_registry
+
+            TARGETS = {"ceasar emperor roma", "caesar emperor roma"}
+
+            def norm(value):
+                text = unicodedata.normalize("NFKD", str(value or ""))
+                text = "".join(ch for ch in text if not unicodedata.combining(ch))
+                return " ".join(text.casefold().split())
+
+            def redact(value):
+                return re.sub(r"(?<!\d)\+?\d(?:[\s().-]*\d){7,}(?!\d)", "[phone]", str(value or ""))
+
+            conn = state_registry._get_conn()
+            rows = conn.execute(
+                "SELECT id, conversation_id, first_name, surnames, phone_raw, "
+                "callback_preference, visit_reason, status, updated_at "
+                "FROM follow_up_requests ORDER BY updated_at DESC"
+            ).fetchall()
+            matches = [
+                row for row in rows
+                if norm(f"{row[2]} {row[3]}") in TARGETS
+            ]
+            if len(matches) != 1:
+                raise SystemExit(f"Expected one exact Ceasar prospect, found {len(matches)}")
+
+            row = matches[0]
+            conversation_id = row[1]
+            state_row = conn.execute(
+                "SELECT fields_json, flags_json FROM whatsapp_booking_state "
+                "WHERE phone = ?",
+                (conversation_id,),
+            ).fetchone()
+            fields = json.loads(state_row[0] or "{}") if state_row else {}
+            flags = json.loads(state_row[1] or "{}") if state_row else {}
+
+            messages = conn.execute(
+                "SELECT role, text, created_at FROM whatsapp_threads "
+                "WHERE phone = ? ORDER BY created_at ASC",
+                (conversation_id,),
+            ).fetchall()
+
+            relevant_field_names = [
+                "first_name", "surnames", "customer_name", "phone",
+                "callback_preference", "appointment_preference",
+                "service_name", "session_type", "visit_reason",
+                "comments", "special_requests",
+            ]
+            result = {
+                "prospect": {
+                    "first_name": row[2],
+                    "surnames": row[3],
+                    "phone_present": bool(row[4]),
+                    "callback_preference": row[5],
+                    "visit_reason": row[6],
+                    "status": row[7],
+                    "updated_at": row[8],
+                },
+                "conversation_fields": {
+                    key: redact(fields.get(key))
+                    for key in relevant_field_names
+                    if fields.get(key) not in (None, "")
+                },
+                "conversation_flags": {
+                    key: value
+                    for key, value in flags.items()
+                    if key in ("fully_escalated", "awaiting_relay", "booking_confirmed")
+                },
+                "messages": [
+                    {
+                        "role": role,
+                        "text": redact(text),
+                        "created_at": created_at,
+                    }
+                    for role, text, created_at in messages
+                    if role in ("user", "assistant")
+                ],
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            conn.close()
+            PY
