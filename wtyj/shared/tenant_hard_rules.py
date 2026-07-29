@@ -330,8 +330,8 @@ def enforce_consulta_despertares_boundaries(
         if not clean.startswith(greeting):
             body = _strip_leading_spanish_greeting(clean)
             body = re.sub(
-                r"^\s*(?:hi|hello)\b"
-                r"(?:\s*,?\s*(?:i['’]?m|i\s+am)\b[^.!?\n]*[.!?]?|\s*[!.,:]?)\s*",
+                r"^\s*(?:(?:hi|hello)\b\s*[!.,:]?\s*)?"
+                r"(?:i['’]?m|i\s+am)\b[^.!?\n]*[.!?]?\s*",
                 "",
                 body,
                 count=1,
