@@ -212,7 +212,7 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
     assert "NOT a signal to" in rule
     assert "session_type, then appointment_preference" in rule
     assert "normal request to speak with a psychologist" in rule
-    assert "A location, clinic, callback time" in rule
+    assert "location, clinic, callback time" in rule
     assert "Do not ask which timezone applies" in rule
     assert "Do not display a checklist" in rule
 
@@ -247,7 +247,8 @@ def test_despertares_rule_keeps_optional_enrichment_natural():
     ):
         rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
 
-    assert "gently collect missing enrichment" in rule
+    assert "NOT a signal to" in rule
+    assert "continue naturally with exactly one missing" in rule
     assert "fields one at a time" in rule
     assert "Never delay" in rule
     assert "If the customer declines" in rule
