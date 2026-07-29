@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect live agent code and tenant runtime
+      - name: Inspect active Despertares greeting inputs
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -23,13 +23,9 @@ jobs:
           script: |
             set -eu
             APP_REPO=/root/wtyj-agent-source
-            test -d "$APP_REPO/.git"
-            echo "HEAD=$(git -C "$APP_REPO" rev-parse HEAD)"
-            echo "RELEVANT_FILES"
-            git -C "$APP_REPO" ls-files | grep -Ei '(prompt|agent|tenant|message|reply|language|greeting|config)' | head -n 300 || true
-            echo "GREETING_MATCHES"
-            git -C "$APP_REPO" grep -n -Ei 'greet|greeting|salud|language|idioma|introduc|presenta|assistant name|agent name|Alia|Alía|reply in|respond in' -- '*.py' '*.ts' '*.tsx' '*.js' '*.json' '*.md' | head -n 700 || true
-            echo "TENANT_CONTAINER_MOUNTS"
-            docker inspect wtyj-consulta-despertares --format '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}}{{println}}{{end}}'
-            echo "TENANT_CONTAINER_FILES"
-            docker exec wtyj-consulta-despertares sh -lc "pwd; find /app /data /config -maxdepth 3 -type f 2>/dev/null | grep -Ei '(prompt|tenant|config|json|yaml|sqlite|db)' | head -n 250 || true"
+            echo "ENFORCEMENT_CALLS"
+            git -C "$APP_REPO" grep -n 'enforce_consulta_despertares_boundaries' -- '*.py' || true
+            echo "LIVE_SAFE_CONFIG"
+            docker exec wtyj-consulta-despertares python -c 'import json; d=json.load(open("/app/config/client.json")); b=d.get("business",{}); p=d.get("agent_persona",{}); out={"business":{"slug":b.get("slug"),"name":b.get("name"),"agent_name":b.get("agent_name"),"languages":b.get("languages")},"agent_persona":{"tone":p.get("tone"),"language_register":p.get("language_register"),"greeting_style":p.get("greeting_style"),"brand_voice_rules":p.get("brand_voice_rules")},"workflow":d.get("workflow")}; print(json.dumps(out,ensure_ascii=False,indent=2))'
+            echo "LIVE_OVERRIDE_KEYS"
+            docker exec wtyj-consulta-despertares python -c 'import json; from shared import icp_overrides; o=icp_overrides.fetch_overrides() or {}; a=o.get("ai_agent_settings") or {}; print(json.dumps({"top_keys":sorted(o.keys()),"ai_agent_setting_keys":sorted(a.keys()),"agent_name":a.get("agent_name"),"tone":a.get("tone")},ensure_ascii=False,indent=2,default=str))'
