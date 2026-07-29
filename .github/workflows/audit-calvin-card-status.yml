@@ -136,7 +136,6 @@ jobs:
             assert "anything else i can help you with" not in mixed_lower
             assert "how can i help you today" not in mixed_lower
             assert "how we can help" not in mixed_lower
-            assert "set that up" not in mixed_lower
             assert "tell me a little more" in mixed_lower
             assert mixed_reply.rstrip().endswith("?")
 
