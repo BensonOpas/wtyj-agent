@@ -1,4 +1,4 @@
-name: Audit Calvin tenant records
+name: Audit Calvin tenant relationships
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve Calvin records without changes
+      - name: Resolve linked Calvin records without changes
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,63 +22,99 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            TENANT_DIR=/root/clients/consulta-despertares
             CONTAINER=wtyj-consulta-despertares
             docker exec -i "$CONTAINER" python - <<'PY'
             import json
-            import os
             import sqlite3
 
-            data_dir = "/app/data"
+            path = "/app/data/state_registry.db"
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
             needles = ("calvin", "adamus", "537473246", "6a623edb10e2ccd35f2c66a9")
-            report = []
-            for root, _, files in os.walk(data_dir):
-                for filename in sorted(files):
-                    path = os.path.join(root, filename)
-                    rel = os.path.relpath(path, data_dir)
-                    if filename.endswith((".db", ".sqlite", ".sqlite3")):
-                        try:
-                            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                            db.row_factory = sqlite3.Row
-                            tables = [
-                                row[0] for row in db.execute(
-                                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                                )
-                            ]
-                            for table in tables:
-                                quoted = '"' + table.replace('"', '""') + '"'
-                                columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
-                                if not columns:
-                                    continue
-                                rows = db.execute(f"SELECT rowid AS __rowid__, * FROM {quoted}").fetchall()
-                                for row in rows:
-                                    matched_columns = []
-                                    for column in columns:
-                                        value = row[column]
-                                        if value is not None and any(n in str(value).lower() for n in needles):
-                                            matched_columns.append(column)
-                                    if matched_columns:
-                                        keys = {}
-                                        for key in ("id", "conversation_id", "sender_id", "from_email", "phone", "phone_raw", "customer_name", "first_name", "surnames", "status"):
-                                            if key in row.keys():
-                                                keys[key] = row[key]
-                                        report.append({
-                                            "db": rel,
-                                            "table": table,
-                                            "rowid": row["__rowid__"],
-                                            "matched_columns": matched_columns,
-                                            "keys": keys,
-                                        })
-                            db.close()
-                        except sqlite3.DatabaseError:
-                            pass
-                    elif os.path.getsize(path) <= 5_000_000:
-                        try:
-                            text = open(path, "r", encoding="utf-8", errors="ignore").read().lower()
-                        except OSError:
-                            continue
-                        if any(n in text for n in needles):
-                            report.append({"file": rel, "type": "text_match"})
-            print("CALVIN_AUDIT=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
-            print("CALVIN_AUDIT_COUNT=" + str(len(report)))
+            tables = [
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            ]
+
+            def rows_for(table):
+                q = '"' + table.replace('"', '""') + '"'
+                return db.execute(f"SELECT rowid AS __rowid__, * FROM {q}").fetchall()
+
+            direct = {}
+            target_customers = set()
+            target_conversations = {"6a623edb10e2ccd35f2c66a9"}
+            target_appointments = set()
+            target_followups = set()
+            target_notifications = set()
+            for table in tables:
+                matches = []
+                for row in rows_for(table):
+                    cols = [k for k in row.keys() if k != "__rowid__" and row[k] is not None and any(n in str(row[k]).lower() for n in needles)]
+                    if cols:
+                        matches.append(row)
+                        if "customer_id" in row.keys() and row["customer_id"] is not None:
+                            target_customers.add(row["customer_id"])
+                        if table == "customers" and "id" in row.keys():
+                            target_customers.add(row["id"])
+                        if "conversation_id" in row.keys() and row["conversation_id"]:
+                            target_conversations.add(str(row["conversation_id"]))
+                        if table == "appointments" and "id" in row.keys():
+                            target_appointments.add(row["id"])
+                        if table == "follow_up_requests" and "id" in row.keys():
+                            target_followups.add(row["id"])
+                        if table == "pending_notifications" and "id" in row.keys():
+                            target_notifications.add(row["id"])
+                if matches:
+                    direct[table] = matches
+
+            # Identity rows can reveal their owning customer.
+            for table in ("customer_identifiers", "customer_interactions"):
+                if table in direct:
+                    for row in direct[table]:
+                        if "customer_id" in row.keys() and row["customer_id"] is not None:
+                            target_customers.add(row["customer_id"])
+
+            linked = []
+            schemas = {}
+            for table in tables:
+                q = '"' + table.replace('"', '""') + '"'
+                columns = [row[1] for row in db.execute(f"PRAGMA table_info({q})")]
+                fks = [dict(row) for row in db.execute(f"PRAGMA foreign_key_list({q})")]
+                selected = []
+                for row in rows_for(table):
+                    reasons = []
+                    if "customer_id" in row.keys() and row["customer_id"] in target_customers:
+                        reasons.append("customer_id")
+                    if "conversation_id" in row.keys() and str(row["conversation_id"]) in target_conversations:
+                        reasons.append("conversation_id")
+                    if "phone" in row.keys() and str(row["phone"]) in target_conversations:
+                        reasons.append("phone_conversation")
+                    if "appointment_id" in row.keys() and row["appointment_id"] in target_appointments:
+                        reasons.append("appointment_id")
+                    if "follow_up_id" in row.keys() and row["follow_up_id"] in target_followups:
+                        reasons.append("follow_up_id")
+                    if "notification_id" in row.keys() and row["notification_id"] in target_notifications:
+                        reasons.append("notification_id")
+                    direct_cols = [k for k in row.keys() if k != "__rowid__" and row[k] is not None and any(n in str(row[k]).lower() for n in needles)]
+                    if direct_cols:
+                        reasons.append("direct:" + ",".join(direct_cols))
+                    if reasons:
+                        keys = {}
+                        for key in ("id", "customer_id", "conversation_id", "phone", "phone_raw", "sender_id", "appointment_id", "follow_up_id", "notification_id", "customer_name", "display_name", "identifier_type", "value", "status"):
+                            if key in row.keys():
+                                keys[key] = row[key]
+                        selected.append({"rowid": row["__rowid__"], "reasons": reasons, "keys": keys})
+                if selected:
+                    schemas[table] = {"columns": columns, "foreign_keys": fks}
+                    linked.append({"table": table, "rows": selected})
+            print("TARGET_CUSTOMER_IDS=" + json.dumps(sorted(target_customers)))
+            print("TARGET_CONVERSATION_IDS=" + json.dumps(sorted(target_conversations)))
+            print("TARGET_APPOINTMENT_IDS=" + json.dumps(sorted(target_appointments)))
+            print("TARGET_FOLLOWUP_IDS=" + json.dumps(sorted(target_followups)))
+            print("TARGET_NOTIFICATION_IDS=" + json.dumps(sorted(target_notifications)))
+            print("CALVIN_SCHEMAS=" + json.dumps(schemas, ensure_ascii=False, sort_keys=True))
+            print("CALVIN_LINKED=" + json.dumps(linked, ensure_ascii=False, sort_keys=True))
+            print("CALVIN_LINKED_COUNT=" + str(sum(len(x["rows"]) for x in linked)))
+            db.close()
             PY
