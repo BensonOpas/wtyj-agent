@@ -45,9 +45,9 @@ jobs:
             WORKTREE_ADDED=1
 
             cd "$DEPLOY_TMP"
-            corepack pnpm install --frozen-lockfile
-            corepack pnpm --filter @workspace/unboks run typecheck
-            PORT=25767 BASE_PATH=/ corepack pnpm --filter @workspace/unboks run build
+            pnpm install --frozen-lockfile
+            pnpm --filter @workspace/unboks run typecheck
+            PORT=25767 BASE_PATH=/ pnpm --filter @workspace/unboks run build
 
             test -f artifacts/unboks/dist/public/index.html
             grep -Rqs "Prospecto archivado" artifacts/unboks/dist/public/assets
