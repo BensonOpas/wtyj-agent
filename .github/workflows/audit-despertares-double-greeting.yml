@@ -1,0 +1,35 @@
+name: Audit Despertares double greeting
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-despertares-double-greeting.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live agent code and tenant override
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            APP_REPO=/root/wtyj-agent
+            test -d "$APP_REPO/.git"
+            echo "HEAD=$(git -C "$APP_REPO" rev-parse HEAD)"
+            echo "RELEVANT_FILES"
+            git -C "$APP_REPO" ls-files | grep -Ei '(prompt|agent|tenant|message|reply|language|greeting|config)' | head -n 250 || true
+            echo "GREETING_MATCHES"
+            git -C "$APP_REPO" grep -n -Ei 'greet|greeting|salud|language|idioma|introduc|presenta|assistant name|agent name|Alia|Alía' -- '*.py' '*.ts' '*.tsx' '*.js' '*.json' '*.md' | head -n 500 || true
+            echo "RUNTIME_LAYOUT"
+            test -f "$APP_REPO/pyproject.toml" && echo "python-project=yes" || true
+            test -f "$APP_REPO/package.json" && echo "node-project=yes" || true
+            find "$APP_REPO" -maxdepth 3 -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) -printf '%p\n' | head -n 50 || true
