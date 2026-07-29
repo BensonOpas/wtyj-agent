@@ -1,4 +1,4 @@
-name: Backfill Ceasar Despertares prospect card
+name: Delete Calvin Ceasar Despertares test identity
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  backfill:
+  delete-test-identity:
     runs-on: ubuntu-latest
     steps:
-      - name: Backfill only details explicitly present in the Ceasar conversation
+      - name: Delete the exact linked Calvin/Ceasar test identity and verify absence
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -32,21 +32,20 @@ jobs:
             from shared import state_registry
 
             TARGETS = {"ceasar emperor roma", "caesar emperor roma"}
-            VISIT_REASON = (
-                "Comenta que, desde que ganaron el Mundial, se siente como el "
-                "emperador César y quiere luchar con elefantes en el Coliseo."
-            )
 
             def norm(value):
                 text = unicodedata.normalize("NFKD", str(value or ""))
                 text = "".join(ch for ch in text if not unicodedata.combining(ch))
                 return " ".join(text.casefold().split())
 
+            def qident(value):
+                return '"' + str(value).replace('"', '""') + '"'
+
             conn = state_registry._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT id, conversation_id, first_name, surnames "
-                    "FROM follow_up_requests ORDER BY updated_at DESC"
+                    "SELECT id, conversation_id, first_name, surnames, "
+                    "source_message_id FROM follow_up_requests ORDER BY updated_at DESC"
                 ).fetchall()
                 matches = [
                     row for row in rows
@@ -57,46 +56,138 @@ jobs:
                         f"Expected one exact Ceasar prospect, found {len(matches)}"
                     )
 
-                follow_up_id, conversation_id, _, _ = matches[0]
-                state_row = conn.execute(
-                    "SELECT fields_json FROM whatsapp_booking_state WHERE phone = ?",
-                    (conversation_id,),
-                ).fetchone()
-                if not state_row:
-                    raise SystemExit("Ceasar conversation state was not found")
+                _, conversation_id, _, _, source_message_id = matches[0]
+                customer_ids = [
+                    row[0] for row in conn.execute(
+                        "SELECT DISTINCT customer_id FROM customer_identifiers "
+                        "WHERE value = ?",
+                        (conversation_id,),
+                    ).fetchall()
+                ]
+                message_ids = {
+                    row[0] for row in conn.execute(
+                        "SELECT message_id FROM inbound_processing_events "
+                        "WHERE conversation_id = ?",
+                        (conversation_id,),
+                    ).fetchall()
+                    if row[0]
+                }
+                if source_message_id:
+                    message_ids.add(source_message_id)
 
-                fields = json.loads(state_row[0] or "{}")
-                fields["session_type"] = "Presencial"
-                fields["visit_reason"] = VISIT_REASON
+                table_rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+                table_names = [row[0] for row in table_rows]
+                deleted = {}
 
-                conn.execute(
-                    "UPDATE whatsapp_booking_state SET fields_json = ? WHERE phone = ?",
-                    (json.dumps(fields, ensure_ascii=False), conversation_id),
-                )
-                conn.execute(
-                    "UPDATE follow_up_requests SET visit_reason = ? WHERE id = ?",
-                    (VISIT_REASON, follow_up_id),
-                )
+                conn.execute("BEGIN")
+                # Delete every tenant-local row whose declared relationship points
+                # exactly to this conversation or its linked customer row.
+                for table in table_names:
+                    if table in {"customers", "customer_identifiers", "customer_merges"}:
+                        continue
+                    columns = {
+                        row[1] for row in conn.execute(
+                            f"PRAGMA table_info({qident(table)})"
+                        ).fetchall()
+                    }
+                    conditions = []
+                    params = []
+                    if "conversation_id" in columns:
+                        conditions.append(f"{qident('conversation_id')} = ?")
+                        params.append(conversation_id)
+                    if "phone" in columns:
+                        conditions.append(f"{qident('phone')} = ?")
+                        params.append(conversation_id)
+                    if "customer_id" in columns:
+                        customer_values = [conversation_id, *customer_ids]
+                        placeholders = ",".join("?" for _ in customer_values)
+                        conditions.append(
+                            f"{qident('customer_id')} IN ({placeholders})"
+                        )
+                        params.extend(customer_values)
+                    if not conditions:
+                        continue
+                    cur = conn.execute(
+                        f"DELETE FROM {qident(table)} WHERE " + " OR ".join(conditions),
+                        params,
+                    )
+                    if cur.rowcount:
+                        deleted[table] = cur.rowcount
+
+                if message_ids and "whatsapp_processed" in table_names:
+                    ids = sorted(message_ids)
+                    placeholders = ",".join("?" for _ in ids)
+                    cur = conn.execute(
+                        f"DELETE FROM whatsapp_processed WHERE message_id IN ({placeholders})",
+                        ids,
+                    )
+                    if cur.rowcount:
+                        deleted["whatsapp_processed"] = cur.rowcount
+
+                if customer_ids:
+                    placeholders = ",".join("?" for _ in customer_ids)
+                    if "customer_merges" in table_names:
+                        cur = conn.execute(
+                            f"DELETE FROM customer_merges WHERE surviving_id IN ({placeholders}) "
+                            f"OR absorbed_id IN ({placeholders})",
+                            [*customer_ids, *customer_ids],
+                        )
+                        if cur.rowcount:
+                            deleted["customer_merges"] = cur.rowcount
+                    cur = conn.execute(
+                        f"DELETE FROM customer_identifiers WHERE customer_id IN ({placeholders})",
+                        customer_ids,
+                    )
+                    if cur.rowcount:
+                        deleted["customer_identifiers"] = cur.rowcount
+                    cur = conn.execute(
+                        f"DELETE FROM customers WHERE id IN ({placeholders})",
+                        customer_ids,
+                    )
+                    if cur.rowcount:
+                        deleted["customers"] = cur.rowcount
+
                 conn.commit()
 
-                saved_state = conn.execute(
-                    "SELECT fields_json FROM whatsapp_booking_state WHERE phone = ?",
-                    (conversation_id,),
-                ).fetchone()
-                saved_follow_up = conn.execute(
-                    "SELECT visit_reason FROM follow_up_requests WHERE id = ?",
-                    (follow_up_id,),
-                ).fetchone()
-                saved_fields = json.loads(saved_state[0] or "{}")
-                assert saved_fields.get("session_type") == "Presencial"
-                assert saved_fields.get("visit_reason") == VISIT_REASON
-                assert saved_follow_up and saved_follow_up[0] == VISIT_REASON
+                remaining = {
+                    "follow_up_requests": conn.execute(
+                        "SELECT COUNT(*) FROM follow_up_requests "
+                        "WHERE conversation_id = ? OR "
+                        "lower(trim(first_name || ' ' || surnames)) IN (?, ?)",
+                        (conversation_id, *sorted(TARGETS)),
+                    ).fetchone()[0],
+                    "whatsapp_threads": conn.execute(
+                        "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ?",
+                        (conversation_id,),
+                    ).fetchone()[0],
+                    "whatsapp_booking_state": conn.execute(
+                        "SELECT COUNT(*) FROM whatsapp_booking_state WHERE phone = ?",
+                        (conversation_id,),
+                    ).fetchone()[0],
+                    "conversation_status": conn.execute(
+                        "SELECT COUNT(*) FROM conversation_status WHERE conversation_id = ?",
+                        (conversation_id,),
+                    ).fetchone()[0],
+                    "customer_identifiers": conn.execute(
+                        "SELECT COUNT(*) FROM customer_identifiers WHERE value = ?",
+                        (conversation_id,),
+                    ).fetchone()[0],
+                }
+                if any(remaining.values()):
+                    raise SystemExit(f"Deletion verification failed: {remaining}")
+
                 print(json.dumps({
-                    "matched_prospect": "Ceasar Emperor Roma",
-                    "session_type": saved_fields["session_type"],
-                    "visit_reason_saved": True,
-                    "appointment_preference_unchanged": True,
-                }, ensure_ascii=False, sort_keys=True))
+                    "matched_identity": "Calvin/Ceasar",
+                    "deleted_rows_by_table": deleted,
+                    "remaining_matches": remaining,
+                    "fresh_prospect_ready": True,
+                }, sort_keys=True))
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()
             PY
