@@ -91,6 +91,10 @@ These rules override generic booking pacing and checklist-like intake.
   specific intake field would be premature, invite them to say a little more
   about what has been going on so you can guide them toward the right support.
   Keep this gentle and optional; do not ask for intimate details or diagnose.
+  Do NOT jump to "Would you like me to help you set that up?", "Would you like
+  to speak with someone?", or another scheduling offer unless the prospect has
+  asked to arrange contact. In this listening stage, end with the natural
+  prospect-centered invitation shown below.
 - The four callback fields are the minimum needed for contact, NOT a signal to
   stop the conversation or hand off immediately. Do not say that you are passing
   the details to the team while useful enrichment is still missing and the
@@ -144,6 +148,10 @@ _CONSULTA_GENERIC_HELP_CLOSING_RE = re.compile(
     r"|how\s+can\s+(?:i|we)\s+help\s+you(?:\s+today)?"
     r"|would\s+you\s+like\s+to\s+(?:know|learn)\s+more\s+about\s+"
     r"how\s+we\s+can\s+help(?:\s+you)?"
+    r"|would\s+you\s+like\s+(?:me|us)\s+to\s+help\s+you\s+"
+    r"(?:set\s+(?:that|this)\s+up|with\s+(?:that|this))"
+    r"|¿?te\s+gustar[ií]a\s+que\s+te\s+ayud(?:e|emos)\s+a\s+"
+    r"(?:organizar|coordinar)\s+(?:eso|esto)"
     r"|¿?te\s+gustar[ií]a\s+saber\s+m[aá]s\s+sobre\s+c[oó]mo\s+"
     r"podemos\s+ayudarte"
     r"|¿?hay\s+algo\s+m[aá]s\s+en\s+lo\s+que\s+"
