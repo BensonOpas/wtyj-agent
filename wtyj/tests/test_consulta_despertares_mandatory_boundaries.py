@@ -41,15 +41,32 @@ def test_website_lead_always_starts_with_exact_mandatory_greeting():
     assert tenant_hard_rules.CONSULTA_DESPERTARES_CALLBACK_CLOSING not in enforced
 
 
-def test_other_first_message_uses_exact_alia_greeting():
+def test_other_first_message_preserves_single_language_introduction():
+    english_reply = (
+        "Hi, I'm Alia, the virtual assistant for Consulta Despertares. "
+        "How can I help?"
+    )
     enforced = _enforce(
-        "Hola, ¿en qué puedo ayudarte?",
+        english_reply,
+        "Hi, I would like some information.",
+    )
+
+    assert enforced == english_reply
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_OTHER_GREETING not in enforced
+
+
+def test_other_spanish_first_message_is_not_duplicated():
+    spanish_reply = (
+        "Hola, soy Alia, la asistente virtual de Consulta Despertares. "
+        "¿En qué puedo ayudarte?"
+    )
+    enforced = _enforce(
+        spanish_reply,
         "Buenas tardes, quería consultar precios.",
     )
 
-    assert enforced.startswith(
-        tenant_hard_rules.CONSULTA_DESPERTARES_OTHER_GREETING
-    )
+    assert enforced == spanish_reply
+    assert enforced.lower().count("hola") == 1
 
 
 def test_later_booking_reply_ends_with_exact_callback_question():
@@ -187,6 +204,8 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
     assert "ENTIRE conversation" in rule
     assert "again for information" in rule
     assert "at most ONE question total per reply" in rule
+    assert "introduce yourself exactly" in rule
+    assert "same language as the customer's most recent message" in rule
     assert "Choosing a physical clinic" in rule
     assert "visit reason is always optional" in rule
     assert "still engaged" in rule
