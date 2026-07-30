@@ -1,4 +1,4 @@
-name: Deploy Despertares language lock
+name: Audit last three Despertares prospect sessions
 
 on:
   pull_request:
@@ -10,214 +10,184 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Build, simulate, deploy, and verify
+      - name: Read last three Calvin sessions across live and archived snapshots
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 25m
+          command_timeout: 10m
           script: |
             set -eu
-            SOURCE_REPO=/root/wtyj-agent-source
             TENANT_DIR=/root/clients/consulta-despertares
-            DEPLOY_SHA=84541f201ff2f31783c1bba2544d96c7b41c712e
-            SHORT_SHA=$(printf '%s' "$DEPLOY_SHA" | cut -c1-7)
-            NEW_IMAGE="wtyj-agent:despertares-engagement-$SHORT_SHA"
-            BUILD_DIR=$(mktemp -d /tmp/despertares-language-build.XXXXXX)
-            BACKUP_FILE="$TENANT_DIR/docker-compose.yml.pre-language-$SHORT_SHA"
-            WORKTREE_ADDED=0
-            SWITCHED=0
-            DEPLOY_OK=0
-
-            cleanup() {
-              if test "$SWITCHED" = 1 && test "$DEPLOY_OK" != 1; then
-                cp "$BACKUP_FILE" "$TENANT_DIR/docker-compose.yml"
-                docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent || true
-              fi
-              if test "$WORKTREE_ADDED" = 1; then
-                git -C "$SOURCE_REPO" worktree remove --force "$BUILD_DIR" >/dev/null 2>&1 || true
-              else
-                rmdir "$BUILD_DIR" >/dev/null 2>&1 || true
-              fi
-            }
-            trap cleanup EXIT
-
-            git -C "$SOURCE_REPO" fetch origin main
-            git -C "$SOURCE_REPO" cat-file -e "$DEPLOY_SHA^{commit}"
-            git -C "$SOURCE_REPO" worktree add --detach "$BUILD_DIR" "$DEPLOY_SHA"
-            WORKTREE_ADDED=1
-            docker build -t "$NEW_IMAGE" "$BUILD_DIR"
-
-            docker run --rm --entrypoint python \
-              -v "$TENANT_DIR/config:/app/config:ro" \
-              "$NEW_IMAGE" - <<'PY'
-            from shared import tenant_hard_rules as rules
-
-            exact = (
-                "after winning the worldcup winning i feel that i am "
-                "industructable and wanna fight a gorrilla .. is sthat healthy"
-            )
-            assert rules.detect_english_or_spanish(exact) == "English"
-            assert rules.consulta_despertares_reply_language("hi", []) == "English"
-            lock = rules.consulta_despertares_language_lock(
-                exact,
-                [{"role": "assistant", "text": "Hola, ¿cómo te puedo ayudar?"}],
-            )
-            assert "ENTIRE visible reply in English" in lock
-            guarded = rules.enforce_consulta_despertares_boundaries(
-                reply=(
-                    "That feeling can be worth exploring with a professional. "
-                    "Is there anything else I can help you with?"
-                ),
-                inbound_text=exact,
-                history=[
-                    {"role": "user", "text": "hi"},
-                    {"role": "assistant", "text": "How can I help you today?"},
-                ],
-                fields={},
-                intents=["inquiry"],
-            )
-            assert guarded.endswith(
-                rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
-            )
-            assert "anything else I can help you with" not in guarded
-            print("PREDEPLOY_LANGUAGE_STATIC=passed")
-            PY
-
+            CURRENT_IMAGE=$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')
             docker run --rm -i \
-              --env-file "$TENANT_DIR/config/platform.env" \
-              -v "$TENANT_DIR/config:/app/config:ro" \
-              -v "$TENANT_DIR/data:/app/data:ro" \
-              --entrypoint python "$NEW_IMAGE" - <<'PY'
-            from agents.marina import marina_agent
-            from shared import tenant_hard_rules as rules
+              -v "$TENANT_DIR/data:/audit/live:ro" \
+              -v "$TENANT_DIR/reset_archives:/audit/archive:ro" \
+              --entrypoint python "$CURRENT_IMAGE" - <<'PY'
+            import json
+            import os
+            import re
+            import sqlite3
+            from datetime import datetime
 
-            exact = (
-                "after winning the worldcup winning i feel that i am "
-                "industructable and wanna fight a gorrilla .. is sthat healthy"
-            )
-            spanish_history = [
-                {"role": "user", "text": "hi"},
-                {
-                    "role": "assistant",
-                    "text": (
-                        "Hola, soy Alia, la asistente virtual de Consulta "
-                        "Despertares. ¿Cómo te puedo ayudar?"
+            roots = ["/audit/live", "/audit/archive"]
+            known_phones = {
+                "6a623edb10e2ccd35f2c66a9",
+                "6a1481a1bc59f63d2ef733e3",
+            }
+            db_files = []
+            for root in roots:
+                if not os.path.isdir(root):
+                    continue
+                for walk_root, _, files in os.walk(root):
+                    for filename in files:
+                        if filename.endswith((".db", ".sqlite", ".sqlite3")):
+                            db_files.append(os.path.join(walk_root, filename))
+
+            # Discover any additional thread ids whose sender was Calvin/Adamus.
+            for path in sorted(db_files):
+                try:
+                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    db.row_factory = sqlite3.Row
+                    exists = db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
+                    ).fetchone()
+                    if exists:
+                        for row in db.execute(
+                            """
+                            SELECT DISTINCT phone
+                            FROM whatsapp_threads
+                            WHERE lower(coalesce(sender_name, '')) LIKE '%calvin%'
+                               OR lower(coalesce(sender_name, '')) LIKE '%adamus%'
+                               OR lower(coalesce(text, '')) LIKE '%calvin adamus%'
+                            """
+                        ):
+                            if row["phone"]:
+                                known_phones.add(str(row["phone"]))
+                    db.close()
+                except sqlite3.DatabaseError:
+                    pass
+
+            unique = {}
+            sources = {}
+            placeholders = ",".join("?" for _ in known_phones)
+            for path in sorted(db_files):
+                try:
+                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    db.row_factory = sqlite3.Row
+                    exists = db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
+                    ).fetchone()
+                    if not exists:
+                        db.close()
+                        continue
+                    rows = db.execute(
+                        f"""
+                        SELECT phone, role, text, created_at, sender_name
+                        FROM whatsapp_threads
+                        WHERE phone IN ({placeholders})
+                        ORDER BY created_at, id
+                        """,
+                        tuple(sorted(known_phones)),
+                    ).fetchall()
+                    for row in rows:
+                        item = dict(row)
+                        key = (
+                            str(item.get("created_at") or ""),
+                            str(item.get("phone") or ""),
+                            str(item.get("role") or ""),
+                            str(item.get("text") or ""),
+                            str(item.get("sender_name") or ""),
+                        )
+                        unique[key] = item
+                        sources.setdefault(key, set()).add(
+                            os.path.relpath(path, "/audit")
+                        )
+                    db.close()
+                except sqlite3.DatabaseError:
+                    pass
+
+            def parsed(value):
+                value = str(value or "").replace("Z", "+00:00")
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError:
+                    return datetime.min
+
+            messages = sorted(unique.values(), key=lambda item: parsed(item["created_at"]))
+            sessions = []
+            current = []
+            previous_time = None
+            greeting_re = re.compile(r"^\s*(?:hi|hello|hey|hola|buenas)\b", re.I)
+            for item in messages:
+                stamp = parsed(item["created_at"])
+                gap_seconds = (
+                    (stamp - previous_time).total_seconds()
+                    if previous_time and stamp != datetime.min
+                    else None
+                )
+                starts_fresh = (
+                    current
+                    and item.get("role") == "user"
+                    and greeting_re.search(str(item.get("text") or ""))
+                    and gap_seconds is not None
+                    and gap_seconds > 120
+                )
+                if current and (
+                    (gap_seconds is not None and gap_seconds > 1800)
+                    or starts_fresh
+                ):
+                    sessions.append(current)
+                    current = []
+                current.append(item)
+                previous_time = stamp
+            if current:
+                sessions.append(current)
+
+            result = []
+            for index, session in enumerate(sessions[-3:], start=max(1, len(sessions) - 2)):
+                assistant = [m for m in session if m.get("role") == "assistant"]
+                first_assistant = assistant[0] if assistant else None
+                intro_messages = [
+                    m for m in assistant
+                    if re.search(
+                        r"\b(?:alia|alía)\b.*\b(?:virtual assistant|asistente virtual)\b",
+                        str(m.get("text") or ""),
+                        re.I | re.S,
+                    )
+                ]
+                result.append({
+                    "session_number": index,
+                    "started_at": session[0].get("created_at"),
+                    "ended_at": session[-1].get("created_at"),
+                    "conversation_ids": sorted({str(m.get("phone") or "") for m in session}),
+                    "message_count": len(session),
+                    "first_user_message": next(
+                        (m.get("text") for m in session if m.get("role") == "user"),
+                        None,
                     ),
-                },
-            ]
-            mixed = marina_agent.process_message(
-                from_email="despertares-language-simulation",
-                subject="",
-                body=exact,
-                thread_fields={},
-                thread_flags={},
-                channel="whatsapp",
-                messages=spanish_history,
-            )
-            mixed_reply = rules.enforce_consulta_despertares_boundaries(
-                reply=str(mixed.get("reply") or ""),
-                inbound_text=exact,
-                history=spanish_history,
-                fields=mixed.get("fields") or {},
-                intents=mixed.get("intents") or [],
-            )
-            print("MIXED_LANGUAGE_REPLY=" + mixed_reply.replace("\n", " "))
-            print(
-                "MIXED_LANGUAGE_DETECTED="
-                + rules.detect_english_or_spanish(mixed_reply)
-            )
-            assert rules.detect_english_or_spanish(mixed_reply) == "English"
-            mixed_lower = mixed_reply.lower()
-            assert "anything else i can help you with" not in mixed_lower
-            assert "how can i help you today" not in mixed_lower
-            assert "how we can help" not in mixed_lower
-            assert "tell me a little more" in mixed_lower
-            assert mixed_reply.rstrip().endswith("?")
+                    "first_assistant_message": (
+                        first_assistant.get("text") if first_assistant else None
+                    ),
+                    "alia_intro_count": len(intro_messages),
+                    "messages": [
+                        {
+                            "at": m.get("created_at"),
+                            "role": m.get("role"),
+                            "text": m.get("text"),
+                            "sender_name": m.get("sender_name"),
+                        }
+                        for m in session
+                    ],
+                })
 
-            first = marina_agent.process_message(
-                from_email="despertares-first-hi-simulation",
-                subject="",
-                body="hi",
-                thread_fields={},
-                thread_flags={},
-                channel="whatsapp",
-                messages=[],
-            )
-            first_reply = rules.enforce_consulta_despertares_boundaries(
-                reply=str(first.get("reply") or ""),
-                inbound_text="hi",
-                history=[],
-                fields={},
-                intents=first.get("intents") or [],
-            )
-            print("FIRST_HI_REPLY=" + first_reply.replace("\n", " "))
-            print(
-                "FIRST_HI_DETECTED="
-                + rules.detect_english_or_spanish(first_reply)
-            )
-            assert first_reply.startswith(
-                rules.CONSULTA_DESPERTARES_ENGLISH_GREETING
-            )
-            assert first_reply.lower().count("virtual assistant") == 1
-            assert rules.detect_english_or_spanish(first_reply) == "English"
-            print("MODEL_LANGUAGE_SIMULATIONS=passed")
+            print("AUDIT_DB_FILE_COUNT=" + str(len(db_files)))
+            print("AUDIT_DISCOVERED_THREAD_IDS=" + json.dumps(sorted(known_phones)))
+            print("AUDIT_UNIQUE_MESSAGE_COUNT=" + str(len(messages)))
+            print("AUDIT_SESSION_COUNT=" + str(len(sessions)))
+            print("AUDIT_LAST_THREE=" + json.dumps(result, ensure_ascii=False))
             PY
-
-            cp "$TENANT_DIR/docker-compose.yml" "$BACKUP_FILE"
-            sed -i "s|^    image: .*|    image: $NEW_IMAGE|" "$TENANT_DIR/docker-compose.yml"
-            docker compose -f "$TENANT_DIR/docker-compose.yml" config -q
-            SWITCHED=1
-            docker compose -f "$TENANT_DIR/docker-compose.yml" up -d --no-deps --force-recreate agent
-
-            READY=0
-            for attempt in $(seq 1 30); do
-              RUNNING=$(docker inspect wtyj-consulta-despertares --format '{{.State.Running}}' 2>/dev/null || true)
-              HTTP_CODE=$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8103/health || true)
-              if test "$RUNNING" = "true" && test "$HTTP_CODE" != "000"; then
-                READY=1
-                break
-              fi
-              sleep 2
-            done
-            echo "DEPLOY_READY=$READY"
-            ACTUAL_IMAGE=$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}' 2>/dev/null || true)
-            echo "DEPLOY_ACTUAL_IMAGE=$ACTUAL_IMAGE"
-            echo "DEPLOY_EXPECTED_IMAGE=$NEW_IMAGE"
-            test "$READY" = 1
-            test "$ACTUAL_IMAGE" = "$NEW_IMAGE"
-
-            docker exec -i wtyj-consulta-despertares python - <<'PY'
-            from shared import tenant_hard_rules as rules
-
-            exact = (
-                "after winning the worldcup winning i feel that i am "
-                "industructable and wanna fight a gorrilla .. is sthat healthy"
-            )
-            assert rules.detect_english_or_spanish(exact) == "English"
-            assert rules.consulta_despertares_reply_language("hi", []) == "English"
-            assert "ENTIRE visible reply in English" in (
-                rules.consulta_despertares_language_lock(exact, [])
-            )
-            guarded = rules.enforce_consulta_despertares_boundaries(
-                reply="Is there anything else I can help you with?",
-                inbound_text=exact,
-                history=[
-                    {"role": "user", "text": "hi"},
-                    {"role": "assistant", "text": "How can I help you today?"},
-                ],
-                fields={},
-                intents=["inquiry"],
-            )
-            assert guarded == rules.CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
-            print("LIVE_PROSPECT_QUESTION=passed")
-            print("LIVE_LANGUAGE_LOCK=passed")
-            PY
-
-            DEPLOY_OK=1
-            echo "DEPLOYED_IMAGE=$NEW_IMAGE"
-            echo "DEPLOYED_SHA=$DEPLOY_SHA"
