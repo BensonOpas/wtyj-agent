@@ -1,4 +1,4 @@
-name: Discover latest Despertares prospect thread
+name: Inspect Despertares active data mount
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Locate recent test thread without changing data
+      - name: Locate the running tenant database
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,71 +22,41 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            TENANT_DIR=/root/clients/consulta-despertares
-            CURRENT_IMAGE=$(docker inspect wtyj-consulta-despertares --format '{{.Config.Image}}')
-            docker run --rm -i \
-              -v "$TENANT_DIR/data:/audit/live:ro" \
-              -v "$TENANT_DIR/reset_archives:/audit/archive:ro" \
-              --entrypoint python "$CURRENT_IMAGE" - <<'PY'
+            CONTAINER=wtyj-consulta-despertares
+            docker inspect "$CONTAINER" --format 'ACTIVE_MOUNTS={{json .Mounts}}'
+            docker exec -i "$CONTAINER" python - <<'PY'
             import json
             import os
             import sqlite3
 
-            roots = ["/audit/live", "/audit/archive"]
-            stats = []
-            candidates = []
-            for root in roots:
+            found = []
+            for root in ("/app/data", "/data", "/app"):
                 if not os.path.isdir(root):
                     continue
-                for walk_root, _, files in os.walk(root):
-                    for filename in sorted(files):
+                for walk_root, dirs, files in os.walk(root):
+                    dirs[:] = [
+                        d for d in dirs
+                        if d not in {"__pycache__", ".git", "static", "templates"}
+                    ]
+                    for filename in files:
                         if not filename.endswith((".db", ".sqlite", ".sqlite3")):
                             continue
                         path = os.path.join(walk_root, filename)
-                        rel = os.path.relpath(path, "/audit")
+                        tables = []
                         try:
                             db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                            db.row_factory = sqlite3.Row
-                            exists = db.execute(
-                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
-                            ).fetchone()
-                            if not exists:
-                                db.close()
-                                continue
-                            count, maximum, latest = db.execute(
-                                "SELECT count(*), max(id), max(created_at) FROM whatsapp_threads"
-                            ).fetchone()
-                            stats.append({
-                                "db": rel,
-                                "message_count": count,
-                                "max_id": maximum,
-                                "latest": latest,
-                            })
-                            rows = db.execute(
-                                """
-                                SELECT id, phone, role, text, created_at, sender_name
-                                FROM whatsapp_threads
-                                WHERE lower(coalesce(text, '')) LIKE '%worldcup%'
-                                   OR lower(coalesce(text, '')) LIKE '%world cup%'
-                                   OR lower(coalesce(text, '')) LIKE '%gorilla%'
-                                   OR lower(coalesce(text, '')) LIKE '%gorrilla%'
-                                   OR lower(coalesce(text, '')) LIKE '%indestruct%'
-                                   OR lower(coalesce(text, '')) LIKE '%industruct%'
-                                   OR lower(coalesce(text, '')) LIKE '%write in spanish%'
-                                   OR lower(coalesce(text, '')) LIKE '%stick to english%'
-                                   OR lower(coalesce(sender_name, '')) LIKE '%calvin%'
-                                   OR lower(coalesce(sender_name, '')) LIKE '%adamus%'
-                                ORDER BY created_at, id
-                                """
-                            ).fetchall()
-                            for row in rows:
-                                item = dict(row)
-                                item["db"] = rel
-                                candidates.append(item)
+                            tables = [
+                                row[0] for row in db.execute(
+                                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                                )
+                            ]
                             db.close()
                         except sqlite3.DatabaseError:
                             pass
-            print("DISCOVERY_DB_STATS=" + json.dumps(stats, ensure_ascii=False))
-            print("DISCOVERY_CANDIDATES=" + json.dumps(candidates, ensure_ascii=False))
-            print("DISCOVERY_CANDIDATE_COUNT=" + str(len(candidates)))
+                        found.append({
+                            "path": path,
+                            "size": os.path.getsize(path),
+                            "tables": tables,
+                        })
+            print("ACTIVE_DATABASES=" + json.dumps(found, sort_keys=True))
             PY
