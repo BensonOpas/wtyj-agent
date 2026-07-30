@@ -1,4 +1,4 @@
-name: Audit last three Despertares prospect sessions
+name: Discover latest Despertares prospect thread
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Read last three Calvin sessions across live and archived snapshots
+      - name: Locate recent test thread without changing data
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -30,164 +30,63 @@ jobs:
               --entrypoint python "$CURRENT_IMAGE" - <<'PY'
             import json
             import os
-            import re
             import sqlite3
-            from datetime import datetime
 
             roots = ["/audit/live", "/audit/archive"]
-            known_phones = {
-                "6a623edb10e2ccd35f2c66a9",
-                "6a1481a1bc59f63d2ef733e3",
-            }
-            db_files = []
+            stats = []
+            candidates = []
             for root in roots:
                 if not os.path.isdir(root):
                     continue
                 for walk_root, _, files in os.walk(root):
-                    for filename in files:
-                        if filename.endswith((".db", ".sqlite", ".sqlite3")):
-                            db_files.append(os.path.join(walk_root, filename))
-
-            # Discover any additional thread ids whose sender was Calvin/Adamus.
-            for path in sorted(db_files):
-                try:
-                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                    db.row_factory = sqlite3.Row
-                    exists = db.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
-                    ).fetchone()
-                    if exists:
-                        for row in db.execute(
-                            """
-                            SELECT DISTINCT phone
-                            FROM whatsapp_threads
-                            WHERE lower(coalesce(sender_name, '')) LIKE '%calvin%'
-                               OR lower(coalesce(sender_name, '')) LIKE '%adamus%'
-                               OR lower(coalesce(text, '')) LIKE '%calvin adamus%'
-                            """
-                        ):
-                            if row["phone"]:
-                                known_phones.add(str(row["phone"]))
-                    db.close()
-                except sqlite3.DatabaseError:
-                    pass
-
-            unique = {}
-            sources = {}
-            placeholders = ",".join("?" for _ in known_phones)
-            for path in sorted(db_files):
-                try:
-                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                    db.row_factory = sqlite3.Row
-                    exists = db.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
-                    ).fetchone()
-                    if not exists:
-                        db.close()
-                        continue
-                    rows = db.execute(
-                        f"""
-                        SELECT phone, role, text, created_at, sender_name
-                        FROM whatsapp_threads
-                        WHERE phone IN ({placeholders})
-                        ORDER BY created_at, id
-                        """,
-                        tuple(sorted(known_phones)),
-                    ).fetchall()
-                    for row in rows:
-                        item = dict(row)
-                        key = (
-                            str(item.get("created_at") or ""),
-                            str(item.get("phone") or ""),
-                            str(item.get("role") or ""),
-                            str(item.get("text") or ""),
-                            str(item.get("sender_name") or ""),
-                        )
-                        unique[key] = item
-                        sources.setdefault(key, set()).add(
-                            os.path.relpath(path, "/audit")
-                        )
-                    db.close()
-                except sqlite3.DatabaseError:
-                    pass
-
-            def parsed(value):
-                value = str(value or "").replace("Z", "+00:00")
-                try:
-                    return datetime.fromisoformat(value)
-                except ValueError:
-                    return datetime.min
-
-            messages = sorted(unique.values(), key=lambda item: parsed(item["created_at"]))
-            sessions = []
-            current = []
-            previous_time = None
-            greeting_re = re.compile(r"^\s*(?:hi|hello|hey|hola|buenas)\b", re.I)
-            for item in messages:
-                stamp = parsed(item["created_at"])
-                gap_seconds = (
-                    (stamp - previous_time).total_seconds()
-                    if previous_time and stamp != datetime.min
-                    else None
-                )
-                starts_fresh = (
-                    current
-                    and item.get("role") == "user"
-                    and greeting_re.search(str(item.get("text") or ""))
-                    and gap_seconds is not None
-                    and gap_seconds > 120
-                )
-                if current and (
-                    (gap_seconds is not None and gap_seconds > 1800)
-                    or starts_fresh
-                ):
-                    sessions.append(current)
-                    current = []
-                current.append(item)
-                previous_time = stamp
-            if current:
-                sessions.append(current)
-
-            result = []
-            for index, session in enumerate(sessions[-3:], start=max(1, len(sessions) - 2)):
-                assistant = [m for m in session if m.get("role") == "assistant"]
-                first_assistant = assistant[0] if assistant else None
-                intro_messages = [
-                    m for m in assistant
-                    if re.search(
-                        r"\b(?:alia|alía)\b.*\b(?:virtual assistant|asistente virtual)\b",
-                        str(m.get("text") or ""),
-                        re.I | re.S,
-                    )
-                ]
-                result.append({
-                    "session_number": index,
-                    "started_at": session[0].get("created_at"),
-                    "ended_at": session[-1].get("created_at"),
-                    "conversation_ids": sorted({str(m.get("phone") or "") for m in session}),
-                    "message_count": len(session),
-                    "first_user_message": next(
-                        (m.get("text") for m in session if m.get("role") == "user"),
-                        None,
-                    ),
-                    "first_assistant_message": (
-                        first_assistant.get("text") if first_assistant else None
-                    ),
-                    "alia_intro_count": len(intro_messages),
-                    "messages": [
-                        {
-                            "at": m.get("created_at"),
-                            "role": m.get("role"),
-                            "text": m.get("text"),
-                            "sender_name": m.get("sender_name"),
-                        }
-                        for m in session
-                    ],
-                })
-
-            print("AUDIT_DB_FILE_COUNT=" + str(len(db_files)))
-            print("AUDIT_DISCOVERED_THREAD_IDS=" + json.dumps(sorted(known_phones)))
-            print("AUDIT_UNIQUE_MESSAGE_COUNT=" + str(len(messages)))
-            print("AUDIT_SESSION_COUNT=" + str(len(sessions)))
-            print("AUDIT_LAST_THREE=" + json.dumps(result, ensure_ascii=False))
+                    for filename in sorted(files):
+                        if not filename.endswith((".db", ".sqlite", ".sqlite3")):
+                            continue
+                        path = os.path.join(walk_root, filename)
+                        rel = os.path.relpath(path, "/audit")
+                        try:
+                            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                            db.row_factory = sqlite3.Row
+                            exists = db.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='whatsapp_threads'"
+                            ).fetchone()
+                            if not exists:
+                                db.close()
+                                continue
+                            count, maximum, latest = db.execute(
+                                "SELECT count(*), max(id), max(created_at) FROM whatsapp_threads"
+                            ).fetchone()
+                            stats.append({
+                                "db": rel,
+                                "message_count": count,
+                                "max_id": maximum,
+                                "latest": latest,
+                            })
+                            rows = db.execute(
+                                """
+                                SELECT id, phone, role, text, created_at, sender_name
+                                FROM whatsapp_threads
+                                WHERE lower(coalesce(text, '')) LIKE '%worldcup%'
+                                   OR lower(coalesce(text, '')) LIKE '%world cup%'
+                                   OR lower(coalesce(text, '')) LIKE '%gorilla%'
+                                   OR lower(coalesce(text, '')) LIKE '%gorrilla%'
+                                   OR lower(coalesce(text, '')) LIKE '%indestruct%'
+                                   OR lower(coalesce(text, '')) LIKE '%industruct%'
+                                   OR lower(coalesce(text, '')) LIKE '%write in spanish%'
+                                   OR lower(coalesce(text, '')) LIKE '%stick to english%'
+                                   OR lower(coalesce(sender_name, '')) LIKE '%calvin%'
+                                   OR lower(coalesce(sender_name, '')) LIKE '%adamus%'
+                                ORDER BY created_at, id
+                                """
+                            ).fetchall()
+                            for row in rows:
+                                item = dict(row)
+                                item["db"] = rel
+                                candidates.append(item)
+                            db.close()
+                        except sqlite3.DatabaseError:
+                            pass
+            print("DISCOVERY_DB_STATS=" + json.dumps(stats, ensure_ascii=False))
+            print("DISCOVERY_CANDIDATES=" + json.dumps(candidates, ensure_ascii=False))
+            print("DISCOVERY_CANDIDATE_COUNT=" + str(len(candidates)))
             PY
