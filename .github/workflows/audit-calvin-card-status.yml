@@ -13,7 +13,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Read and segment recent Calvin messages
+      - name: Read the three most recent prospect conversations
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -27,115 +27,11 @@ jobs:
             import json
             import re
             import sqlite3
-            from datetime import datetime
 
             db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
             db.row_factory = sqlite3.Row
 
-            target_phones = {
-                str(row["phone"])
-                for row in db.execute(
-                    """
-                    SELECT DISTINCT phone
-                    FROM whatsapp_threads
-                    WHERE lower(coalesce(sender_name, '')) LIKE '%calvin%'
-                       OR lower(coalesce(sender_name, '')) LIKE '%adamus%'
-                       OR lower(coalesce(text, '')) LIKE '%worldcup%'
-                       OR lower(coalesce(text, '')) LIKE '%world cup%'
-                       OR lower(coalesce(text, '')) LIKE '%gorilla%'
-                       OR lower(coalesce(text, '')) LIKE '%gorrilla%'
-                       OR lower(coalesce(text, '')) LIKE '%write in spanish%'
-                       OR lower(coalesce(text, '')) LIKE '%stick to english%'
-                    """
-                ).fetchall()
-                if row["phone"]
-            }
-            rows = []
-            if target_phones:
-                placeholders = ",".join("?" for _ in target_phones)
-                rows = [
-                    dict(row) for row in db.execute(
-                        f"""
-                        SELECT id, phone, role, text, created_at, sender_name
-                        FROM whatsapp_threads
-                        WHERE phone IN ({placeholders})
-                        ORDER BY created_at, id
-                        """,
-                        tuple(sorted(target_phones)),
-                    ).fetchall()
-                ]
-
-            def parsed(value):
-                value = str(value or "").replace("Z", "+00:00")
-                try:
-                    return datetime.fromisoformat(value)
-                except ValueError:
-                    return datetime.min
-
-            sessions = []
-            current = []
-            previous_time = None
-            greeting_re = re.compile(r"^\s*(?:hi|hello|hey|hola|buenas)\b", re.I)
-            for item in rows:
-                stamp = parsed(item["created_at"])
-                gap = (
-                    (stamp - previous_time).total_seconds()
-                    if previous_time and stamp != datetime.min
-                    else None
-                )
-                starts_fresh = (
-                    current
-                    and item.get("role") == "user"
-                    and greeting_re.search(str(item.get("text") or ""))
-                    and gap is not None
-                    and gap > 120
-                )
-                if current and ((gap is not None and gap > 1800) or starts_fresh):
-                    sessions.append(current)
-                    current = []
-                current.append(item)
-                previous_time = stamp
-            if current:
-                sessions.append(current)
-
-            report = []
-            for position, session in enumerate(sessions[-3:], start=1):
-                assistants = [m for m in session if m.get("role") == "assistant"]
-                intro_messages = [
-                    m for m in assistants
-                    if re.search(
-                        r"\b(?:alia|alía)\b.*\b(?:virtual assistant|asistente virtual)\b",
-                        str(m.get("text") or ""),
-                        re.I | re.S,
-                    )
-                ]
-                report.append({
-                    "position_in_last_three": position,
-                    "started_at": session[0]["created_at"],
-                    "ended_at": session[-1]["created_at"],
-                    "conversation_ids": sorted({m["phone"] for m in session}),
-                    "message_count": len(session),
-                    "alia_intro_count": len(intro_messages),
-                    "first_user_message": next(
-                        (m["text"] for m in session if m["role"] == "user"),
-                        None,
-                    ),
-                    "first_assistant_message": next(
-                        (m["text"] for m in session if m["role"] == "assistant"),
-                        None,
-                    ),
-                    "messages": [
-                        {
-                            "at": m["created_at"],
-                            "role": m["role"],
-                            "text": m["text"],
-                            "sender_name": m["sender_name"],
-                        }
-                        for m in session
-                    ],
-                })
-
-            recent_overview = [
+            recent = [
                 dict(row) for row in db.execute(
                     """
                     SELECT phone, min(created_at) AS first_at, max(created_at) AS last_at,
@@ -144,14 +40,57 @@ jobs:
                     FROM whatsapp_threads
                     GROUP BY phone
                     ORDER BY last_at DESC
-                    LIMIT 10
+                    LIMIT 3
                     """
                 ).fetchall()
             ]
-            print("LIVE_TARGET_PHONES=" + json.dumps(sorted(target_phones)))
-            print("LIVE_TARGET_MESSAGE_COUNT=" + str(len(rows)))
-            print("LIVE_TARGET_SESSION_COUNT=" + str(len(sessions)))
-            print("LIVE_LAST_THREE=" + json.dumps(report, ensure_ascii=False))
-            print("LIVE_RECENT_THREAD_OVERVIEW=" + json.dumps(recent_overview, ensure_ascii=False))
+
+            report = []
+            for item in recent:
+                messages = [
+                    dict(row) for row in db.execute(
+                        """
+                        SELECT id, phone, role, text, created_at, sender_name
+                        FROM whatsapp_threads
+                        WHERE phone = ?
+                        ORDER BY created_at, id
+                        """,
+                        (item["phone"],),
+                    ).fetchall()
+                ]
+                assistants = [m for m in messages if m.get("role") == "assistant"]
+                intros = [
+                    m for m in assistants
+                    if re.search(
+                        r"\b(?:alia|alía)\b.*\b(?:virtual assistant|asistente virtual)\b",
+                        str(m.get("text") or ""),
+                        re.I | re.S,
+                    )
+                ]
+                report.append({
+                    **item,
+                    "alia_intro_count": len(intros),
+                    "alia_intro_positions": [
+                        index + 1 for index, message in enumerate(messages)
+                        if message in intros
+                    ],
+                    "first_user_message": next(
+                        (m["text"] for m in messages if m["role"] == "user"), None
+                    ),
+                    "first_assistant_message": next(
+                        (m["text"] for m in messages if m["role"] == "assistant"), None
+                    ),
+                    "messages": [
+                        {
+                            "at": m["created_at"],
+                            "role": m["role"],
+                            "text": m["text"],
+                            "sender_name": m["sender_name"],
+                        }
+                        for m in messages
+                    ],
+                })
+
+            print("LIVE_RECENT_THREE=" + json.dumps(report, ensure_ascii=False))
             db.close()
             PY
