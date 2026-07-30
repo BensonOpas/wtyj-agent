@@ -350,3 +350,31 @@ def test_plain_non_support_acknowledgement_does_not_gain_clinic_question():
         )
 
     assert reply == draft
+
+
+def test_first_website_lead_reply_introduces_alia_exactly_once():
+    model_reply = (
+        "Hola, soy la asistente virtual de Consulta Despertares. "
+        "La terapia individual para adultos está disponible."
+    )
+    inbound = (
+        "Hola *Consulta Psicológica Despertares*. "
+        "Necesito más información sobre Adultos "
+        "https://www.consultadespertares.es/servicios/psicologo-adultos/"
+    )
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=model_reply,
+            inbound_text=inbound,
+            history=[],
+            fields={},
+            intents=["inquiry"],
+        )
+
+    assert reply.startswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_WEBSITE_GREETING
+    )
+    assert reply.count("Alia") == 1
+    assert "Hola, soy la asistente virtual" not in reply
+    assert "La terapia individual para adultos está disponible." in reply
