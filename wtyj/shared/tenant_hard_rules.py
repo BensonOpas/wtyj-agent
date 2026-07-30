@@ -18,7 +18,7 @@ English required wording when appropriate: "For privacy reasons, I can't automat
 Only after the customer explicitly types the phone number in the chat may you treat it as customer-provided contact information."""
 
 CONSULTA_DESPERTARES_WEBSITE_GREETING = (
-    "Hola, soy la asistente virtual de Consulta Despertares."
+    "Hola, soy Alia, la asistente virtual de Consulta Despertares."
 )
 CONSULTA_DESPERTARES_OTHER_GREETING = (
     "Hola, soy Alia, la asistente virtual de Consulta Despertares"
