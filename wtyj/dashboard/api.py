@@ -4159,9 +4159,119 @@ def _fire_escalation_alerts(escalation_id: int, customer_name: str,
             alert_type=alert_type)
 
 
+_FOLLOW_UP_ALERT_LABELS = {
+    "collecting": "Faltan datos",
+    "ready_to_call": "Listo para llamar",
+    "needs_human_answer": "Necesita respuesta",
+}
+
+
+def _build_follow_up_alert_body(follow_up: dict) -> str:
+    """Build Roberto's compact, WhatsApp-ready prospect queue alert."""
+    status = str(follow_up.get("status") or "")
+    label = _FOLLOW_UP_ALERT_LABELS.get(status, "Seguimiento actualizado")
+    name = " ".join(
+        part for part in (
+            str(follow_up.get("first_name") or "").strip(),
+            str(follow_up.get("surnames") or "").strip(),
+        ) if part
+    ) or "Contacto sin identificar"
+    phone = str(follow_up.get("phone_raw") or "").strip() or "No facilitado"
+    callback = (
+        str(follow_up.get("callback_preference") or "").strip()
+        or "No indicado"
+    )
+    lines = [
+        "🔔 Consulta Despertares",
+        "",
+        f"*{label}*",
+        f"Prospecto: {name}",
+        f"Teléfono: {phone}",
+        f"Cuándo llamar: {callback}",
+    ]
+    reason = str(follow_up.get("visit_reason") or "").strip()
+    if reason:
+        lines.append(f"Motivo de consulta: {reason}")
+    if status == "needs_human_answer":
+        lines.extend(("", "Acción: abre la conversación y responde al prospecto."))
+    elif status == "ready_to_call":
+        lines.extend(("", "Acción: la ficha está lista para que el equipo le llame."))
+    else:
+        lines.extend(("", "Acción: revisa la ficha; todavía faltan datos."))
+    dashboard_link = _resolve_dashboard_link("dashboard", 0)
+    if dashboard_link:
+        lines.extend(("", dashboard_link))
+    return "\n".join(lines)
+
+
+def _fire_follow_up_alerts(follow_up: dict,
+                           previous_status: str = None) -> None:
+    """Send one WhatsApp alert when a Despertares prospect changes queue."""
+    status = str(follow_up.get("status") or "")
+    if status not in _FOLLOW_UP_ALERT_LABELS:
+        return
+    try:
+        business = config_loader.get_business() or {}
+        default_email = (
+            business.get("support_email", "")
+            or business.get("email", "")
+        )
+    except Exception:
+        default_email = ""
+    settings = state_registry.get_alert_settings(
+        default_email_destination=default_email
+    )
+    # Follow-up queue alerts are part of the tenant's escalation/operator
+    # notifications. Respect the existing Settings switch.
+    if not ((settings or {}).get("alertTypes") or {}).get("escalations", True):
+        return
+    whatsapp = ((settings or {}).get("channels") or {}).get("whatsapp") or {}
+    if not whatsapp.get("enabled"):
+        return
+    destination = str(whatsapp.get("destination") or "").strip()
+    alert_type = f"follow_up_{status}"
+    if not destination:
+        state_registry.record_alert_delivery(
+            None, "whatsapp", "", "skipped",
+            "no whatsapp destination configured",
+            alert_type=alert_type,
+        )
+        return
+    route = state_registry.get_resolved_operator_whatsapp_route()
+    if not route:
+        state_registry.record_alert_delivery(
+            None, "whatsapp", destination, "skipped",
+            "zernio_operator_destination_not_resolved",
+            alert_type=alert_type,
+        )
+        return
+    from agents.social.zernio_dm_client import send_dm_reply
+    try:
+        sent = send_dm_reply(
+            route["conversation_id"],
+            route["account_id"],
+            _build_follow_up_alert_body(follow_up),
+        )
+        state_registry.record_alert_delivery(
+            None,
+            "whatsapp",
+            destination,
+            "sent" if sent else "failed",
+            None if sent else "zernio_send_dm_reply_returned_false",
+            alert_type=alert_type,
+        )
+    except Exception as exc:
+        state_registry.record_alert_delivery(
+            None, "whatsapp", destination, "failed",
+            f"zernio_send_dm_reply_exception: {str(exc)[:200]}",
+            alert_type=alert_type,
+        )
+
+
 # Brief 217: register the dispatcher with state_registry. Placed directly
 # after the function definition so the name resolves at module-load time.
 state_registry.set_alert_dispatcher(_fire_escalation_alerts)
+state_registry.set_follow_up_alert_dispatcher(_fire_follow_up_alerts)
 
 
 # ── Brief 227 + 235: Escalation summary generator ───────────────────────────
