@@ -1261,6 +1261,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # from every existing tenant workflow.
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     if _workflow.get("type") == "callback_follow_up":
+        # Despertares wants the old operator-alert experience for every
+        # actionable prospect queue state. Capture the state before enrichment
+        # so repeated messages in the same state do not spam Roberto.
+        _followup_alerts_enabled = _tenant_slug() == "consulta-despertares"
+        _previous_followup = (
+            state_registry.get_follow_up_request_by_conversation(phone)
+            if _followup_alerts_enabled else None
+        )
+        _previous_followup_status = (
+            _previous_followup.get("status") if _previous_followup else None
+        )
         _first_name, _surnames = _callback_name_fields(fields)
         if not _first_name and not _surnames and from_name:
             _profile_name_parts = str(from_name).strip().split(maxsplit=1)
@@ -1286,6 +1297,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         if _target_status != _followup.get("status"):
             _followup = state_registry.update_follow_up_status(
                 _followup["id"], _target_status
+            )
+        if _followup_alerts_enabled:
+            state_registry.dispatch_follow_up_alert(
+                _followup,
+                previous_status=_previous_followup_status,
             )
         bm_logger.log("callback_follow_up_updated", follow_up_id=_followup["id"],
                       status=_followup["status"])
