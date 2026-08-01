@@ -175,6 +175,8 @@ jobs:
             for path in (
                 Path("/root/clients/consulta-despertares/config/client.json"),
                 Path("/root/clients/consulta-despertares/config/client.json.bak"),
+                Path("/root/unboks-internal-control-panel/data/nr2_knowledge_cache.json"),
+                Path("/root/unboks-internal-control-panel/data/public_signup_requests.json"),
             ):
                 if not path.is_file():
                     continue
@@ -277,3 +279,17 @@ jobs:
               docker inspect "$name" --format '{{range .Mounts}}{{println "'"$name"'|" .Destination "|" .Source}}{{end}}'
             done
             echo 'AUDIT_CONTAINER_MOUNTS_END'
+
+            echo 'AUDIT_TENANT_EMAIL_CODE_REFS_BEGIN'
+            docker exec "$CONTAINER" sh -lc '
+              grep -RniE "alert_deliveries|alert.{0,40}(email|destination)|notification.{0,40}email|business.{0,20}email" \
+                /app --include="*.py" 2>/dev/null | head -160 || true
+            '
+            echo 'AUDIT_TENANT_EMAIL_CODE_REFS_END'
+
+            echo 'AUDIT_CONTROL_PANEL_EMAIL_CODE_REFS_BEGIN'
+            docker exec unboks-internal-control-panel-wtyj-admin-1 sh -lc '
+              grep -RniE "password_reset_tokens|public_signup_requests|client\\.json|tenant.{0,30}email" \
+                /app --include="*.py" 2>/dev/null | head -200 || true
+            '
+            echo 'AUDIT_CONTROL_PANEL_EMAIL_CODE_REFS_END'
