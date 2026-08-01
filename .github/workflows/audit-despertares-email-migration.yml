@@ -152,7 +152,7 @@ jobs:
             echo 'AUDIT_SQLITE_MATCHES_END'
 
             echo 'AUDIT_ACTIVE_ROOT_MATCHES_BEGIN'
-            for root in /root/clients /root/apps /opt /srv; do
+            for root in /root/clients /root/apps /root/unboks-internal-control-panel /opt /srv; do
               if [ -d "$root" ]; then
                 find "$root" \
                   -path '*/backups' -prune -o \
@@ -212,7 +212,7 @@ jobs:
 
             old = "rjr73@hotmail.com"
             new = "info@consultadespertares.com"
-            roots = ["/root/clients", "/root/apps", "/opt", "/srv"]
+            roots = ["/root/clients", "/root/apps", "/root/unboks-internal-control-panel", "/opt", "/srv"]
             excluded = {"backups", "reset_archives", ".git", "node_modules"}
             seen = set()
             for root in roots:
