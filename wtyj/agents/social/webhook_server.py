@@ -17,7 +17,13 @@ from shared import response_timing
 from shared import icp_overrides
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
-from agents.social.zernio_dm_client import parse_zernio_webhook, verify_webhook_signature, send_dm_reply, send_typing_indicator
+from agents.social.zernio_dm_client import (
+    parse_zernio_webhook,
+    parse_zernio_sent_webhook,
+    verify_webhook_signature,
+    send_dm_reply,
+    send_typing_indicator,
+)
 from agents.social.dm_agent import handle_incoming_dm
 from agents.social.channels import ZERNIO_CHANNELS, DEFAULT_ZERNIO_CHANNEL
 from agents.social.senders import send_reply
@@ -542,9 +548,106 @@ def _normalize_phone_digits(phone: str) -> str:
     return re.sub(r"[^0-9]", "", s)
 
 
+def _external_operator_message_text(msg: dict) -> str:
+    """Return visible text for a phone-app message, including media-only sends."""
+    text = str(msg.get("text") or "").strip()
+    labels = {
+        "image": "📷 Imagen enviada desde WhatsApp",
+        "video": "🎥 Vídeo enviado desde WhatsApp",
+        "audio": "🎤 Audio enviado desde WhatsApp",
+        "voice": "🎤 Nota de voz enviada desde WhatsApp",
+        "document": "📎 Documento enviado desde WhatsApp",
+        "file": "📎 Archivo enviado desde WhatsApp",
+        "sticker": "Sticker enviado desde WhatsApp",
+        "location": "📍 Ubicación enviada desde WhatsApp",
+        "contact": "👤 Contacto enviado desde WhatsApp",
+    }
+    media_lines = []
+    for attachment in msg.get("attachments") or []:
+        if not isinstance(attachment, dict):
+            continue
+        attachment_type = str(attachment.get("type") or "").lower()
+        label = labels.get(attachment_type, "📎 Archivo enviado desde WhatsApp")
+        filename = str(attachment.get("filename") or "").strip()
+        media_lines.append(f"{label}: {filename}" if filename else label)
+    if text and media_lines:
+        return text + "\n" + "\n".join(media_lines)
+    return text or "\n".join(media_lines)
+
+
+def _process_zernio_sent_event(payload: dict) -> None:
+    """Mirror a secretary reply from the WhatsApp Business app into Unboks.
+
+    Cloud-API echoes are intentionally ignored because Unboks already stores
+    its own sent messages. The outgoing event is never passed to Alia.
+    """
+    msg = parse_zernio_sent_webhook(payload)
+    if not msg:
+        return
+    if (
+        msg.get("platform") != "whatsapp"
+        or msg.get("direction") != "outgoing"
+        or msg.get("source") != "whatsappbusinessapp"
+    ):
+        log(
+            "zernio_sent_event_ignored",
+            platform=msg.get("platform", ""),
+            direction=msg.get("direction", ""),
+            source=msg.get("source", ""),
+        )
+        return
+
+    from shared.tenant_guard import is_account_allowed
+    if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
+        log(
+            "zernio_sent_event_account_not_allowlisted",
+            account_id=msg.get("account_id", "")[:20],
+        )
+        return
+
+    visible_text = _external_operator_message_text(msg)
+    if not visible_text:
+        log(
+            "zernio_sent_event_empty",
+            conversation_id=msg.get("conversation_id", "")[:20],
+            message_id=msg.get("message_id", "")[:30],
+        )
+        return
+
+    stored = state_registry.wa_store_external_operator_message(
+        message_id=msg["message_id"],
+        conversation_id=msg["conversation_id"],
+        channel=msg.get("channel") or "whatsapp",
+        text=visible_text,
+        sender_name="Secretaría",
+        created_at=msg.get("created_at") or "",
+    )
+    if not stored:
+        log(
+            "zernio_sent_event_duplicate",
+            conversation_id=msg["conversation_id"][:20],
+            message_id=msg["message_id"][:30],
+        )
+        return
+
+    # A fresh human reply should make an archived thread visible again without
+    # overwriting an existing escalation or takeover status.
+    state_registry.wa_set_archived(msg["conversation_id"], False)
+    log(
+        "zernio_whatsapp_app_reply_synced",
+        conversation_id=msg["conversation_id"][:20],
+        message_id=msg["message_id"][:30],
+        sender_name="Secretaría",
+    )
+
+
 def _process_zernio_event(payload: dict):
     """Background task: parse Zernio webhook, dedup, route DM to booking or Q&A."""
     try:
+        if payload.get("event") == "message.sent":
+            _process_zernio_sent_event(payload)
+            return
+
         msg = parse_zernio_webhook(payload)
         if not msg:
             return  # Not a message event or unparseable
