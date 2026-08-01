@@ -386,3 +386,146 @@ def test_callback_status_never_overwrites_operator_outcome():
         follow_up, {"requires_human": True, "reply": "Pending."}
     ) == "copied"
 
+
+def test_caller_number_question_replaces_hallucinated_spanish_number():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "Perfecto, el equipo te llamará."},
+    ]
+    hallucinated = "Te llamaremos desde el 910 123 456."
+
+    enforced = _enforce(
+        hallucinated,
+        "¿Desde qué número me vais a llamar?",
+        history=history,
+        fields={
+            "first_name": "Ana",
+            "surnames": "García",
+            "phone": "600111222",
+            "callback_preference": "por la tarde",
+        },
+        intents=["booking"],
+    )
+
+    assert enforced == tenant_hard_rules.CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+    assert "910 123 456" not in enforced
+    assert not any(character.isdigit() for character in enforced)
+
+
+def test_caller_number_question_uses_controlled_english_answer():
+    history = [
+        {"role": "user", "text": "I would like an appointment."},
+        {"role": "assistant", "text": "The team will call you."},
+    ]
+
+    enforced = _enforce(
+        "We will call you from +34 910 123 456.",
+        "From which number are you going to call me?",
+        history=history,
+        fields={},
+        intents=["booking"],
+    )
+
+    assert (
+        enforced
+        == tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_CALLER_NUMBER_ANSWER
+    )
+    assert not any(character.isdigit() for character in enforced)
+
+
+def test_caller_number_variants_receive_the_same_safe_answer():
+    history = [
+        {"role": "user", "text": "Necesito una cita."},
+        {"role": "assistant", "text": "De acuerdo."},
+    ]
+    variants = [
+        "¿Cuál será el número desde el que me llamaréis?",
+        "¿Me llamaréis desde un número fijo?",
+        "¿Qué número me va a contactar?",
+    ]
+
+    for inbound in variants:
+        enforced = _enforce(
+            "El número será 910000000.",
+            inbound,
+            history=history,
+            fields={},
+            intents=["booking"],
+        )
+        assert (
+            enforced
+            == tenant_hard_rules.CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+        )
+
+
+def test_first_message_caller_number_question_keeps_single_introduction():
+    enforced = _enforce(
+        "Puedes esperar una llamada desde el 910000000.",
+        "¿Desde qué número me llamaréis?",
+        history=[],
+        fields={},
+        intents=["inquiry"],
+    )
+
+    assert enforced.startswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_OTHER_GREETING + "."
+    )
+    assert enforced.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+    )
+    assert enforced.count("Alia") == 1
+    assert not any(character.isdigit() for character in enforced)
+
+
+def test_caller_number_safety_answer_is_not_mixed_with_intake_question():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "Gracias por tus datos."},
+    ]
+
+    enforced = _enforce(
+        "Te llamará el equipo desde el 910000000.",
+        "¿Desde qué número vais a llamar?",
+        history=history,
+        fields={
+            "first_name": "Ana",
+            "surnames": "García",
+            "phone": "600111222",
+            "callback_preference": "por la tarde",
+        },
+        intents=["booking"],
+    )
+
+    assert enforced == tenant_hard_rules.CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        not in enforced
+    )
+
+
+def test_caller_number_question_remains_unchanged_for_other_tenants():
+    reply = "Nuestro número es 910000000."
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="another-tenant",
+    ):
+        enforced = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply,
+            "¿Desde qué número vais a llamar?",
+            [],
+            {},
+            ["booking"],
+        )
+
+    assert enforced == reply
+
+
+def test_relationship_rule_forbids_inventing_follow_up_caller_number():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        rule = tenant_hard_rules.consulta_despertares_relationship_rule_block()
+
+    assert "Never invent, infer, or provide a caller telephone number" in rule
+    assert "depends on the professional and clinic" in rule
