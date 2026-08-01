@@ -164,3 +164,116 @@ jobs:
               fi
             done
             echo 'AUDIT_ACTIVE_ROOT_MATCHES_END'
+
+            echo 'AUDIT_JSON_EMAIL_PATHS_BEGIN'
+            python3 - <<'PY'
+            import json
+            from pathlib import Path
+
+            old = "rjr73@hotmail.com"
+            new = "info@consultadespertares.com"
+            for path in (
+                Path("/root/clients/consulta-despertares/config/client.json"),
+                Path("/root/clients/consulta-despertares/config/client.json.bak"),
+            ):
+                if not path.is_file():
+                    continue
+                try:
+                    payload = json.loads(path.read_text())
+                except Exception as exc:
+                    print(json.dumps({"file": str(path), "error": type(exc).__name__}))
+                    continue
+
+                def walk(value, location="$"):
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            walk(child, f"{location}.{key}")
+                    elif isinstance(value, list):
+                        for index, child in enumerate(value):
+                            walk(child, f"{location}[{index}]")
+                    elif isinstance(value, str):
+                        lowered = value.lower()
+                        if old in lowered or new in lowered:
+                            print(json.dumps({
+                                "file": str(path),
+                                "json_path": location,
+                                "match": "old" if old in lowered else "new",
+                            }))
+
+                walk(payload)
+            PY
+            echo 'AUDIT_JSON_EMAIL_PATHS_END'
+
+            echo 'AUDIT_HOST_SQLITE_MATCHES_BEGIN'
+            python3 - <<'PY'
+            import json
+            import os
+            import sqlite3
+
+            old = "rjr73@hotmail.com"
+            new = "info@consultadespertares.com"
+            roots = ["/root/clients", "/root/apps", "/opt", "/srv"]
+            excluded = {"backups", "reset_archives", ".git", "node_modules"}
+            seen = set()
+            for root in roots:
+                if not os.path.isdir(root):
+                    continue
+                for base, dirs, files in os.walk(root):
+                    dirs[:] = [item for item in dirs if item not in excluded]
+                    for filename in files:
+                        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
+                            continue
+                        path = os.path.join(base, filename)
+                        if path in seen:
+                            continue
+                        seen.add(path)
+                        try:
+                            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                            tables = [
+                                row[0] for row in conn.execute(
+                                    "SELECT name FROM sqlite_master "
+                                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                                )
+                            ]
+                            for table in tables:
+                                safe_table = table.replace('"', '""')
+                                columns = [
+                                    row[1] for row in conn.execute(
+                                        f'PRAGMA table_info("{safe_table}")'
+                                    )
+                                ]
+                                for column in columns:
+                                    safe_column = column.replace('"', '""')
+                                    query = (
+                                        f'SELECT '
+                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
+                                        f'LIKE ? THEN 1 ELSE 0 END), '
+                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
+                                        f'LIKE ? THEN 1 ELSE 0 END) '
+                                        f'FROM "{safe_table}"'
+                                    )
+                                    old_count, new_count = conn.execute(
+                                        query, (f"%{old}%", f"%{new}%")
+                                    ).fetchone()
+                                    if old_count or new_count:
+                                        print(json.dumps({
+                                            "db": path,
+                                            "table": table,
+                                            "column": column,
+                                            "old_count": int(old_count or 0),
+                                            "new_count": int(new_count or 0),
+                                        }))
+                            conn.close()
+                        except Exception as exc:
+                            print(json.dumps({
+                                "db": path,
+                                "scan_error": type(exc).__name__,
+                            }))
+            PY
+            echo 'AUDIT_HOST_SQLITE_MATCHES_END'
+
+            echo 'AUDIT_CONTAINER_MOUNTS_BEGIN'
+            for name in $(docker ps --format '{{.Names}}'); do
+              docker inspect "$name" --format '{{range .Mounts}}{{println "'"$name"'|" .Destination "|" .Source}}{{end}}'
+            done
+            echo 'AUDIT_CONTAINER_MOUNTS_END'
