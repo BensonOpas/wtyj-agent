@@ -101,6 +101,109 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
     }
 
 
+def parse_zernio_sent_webhook(payload: dict) -> dict | None:
+    """Normalize an outgoing Zernio inbox event.
+
+    WhatsApp Coexistence mirrors messages sent from the WhatsApp Business app
+    as message.sent with message.source=whatsappbusinessapp. This parser stays
+    separate from the inbound parser so outgoing events never enter the AI
+    reply path.
+    """
+    if payload.get("event") != "message.sent":
+        return None
+
+    raw_data = payload.get("data")
+    raw_data = raw_data if isinstance(raw_data, dict) else {}
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        nested = raw_data.get("message")
+        message = nested if isinstance(nested, dict) else raw_data
+
+    conversation = payload.get("conversation")
+    if not isinstance(conversation, dict):
+        nested = raw_data.get("conversation")
+        conversation = nested if isinstance(nested, dict) else {}
+
+    account = payload.get("account")
+    if not isinstance(account, dict):
+        nested = raw_data.get("account")
+        account = nested if isinstance(nested, dict) else {}
+
+    conversation_id = str(
+        message.get("conversationId")
+        or message.get("conversation_id")
+        or conversation.get("id")
+        or conversation.get("conversationId")
+        or ""
+    )
+    message_id = str(message.get("id") or message.get("messageId") or "")
+    account_id = str(
+        message.get("accountId")
+        or message.get("account_id")
+        or conversation.get("accountId")
+        or account.get("id")
+        or account.get("accountId")
+        or ""
+    )
+    platform = str(
+        message.get("platform")
+        or conversation.get("platform")
+        or ""
+    ).lower()
+    source = str(message.get("source") or "").replace("_", "").lower()
+    text = str(message.get("text") or message.get("message") or "")
+
+    sender = message.get("sender")
+    sender = sender if isinstance(sender, dict) else {}
+    sender_name = str(
+        sender.get("name")
+        or account.get("name")
+        or account.get("displayName")
+        or "Secretaría"
+    )
+    sender_id = str(sender.get("id") or "")
+
+    attachments = message.get("attachments")
+    if not isinstance(attachments, list):
+        attachments = []
+
+    created_at = str(
+        message.get("createdAt")
+        or message.get("sentAt")
+        or payload.get("timestamp")
+        or ""
+    )
+
+    if not conversation_id or not message_id:
+        bm_logger.log(
+            "zernio_sent_webhook_missing_ids",
+            payload_keys=list(payload.keys()),
+            message_keys=list(message.keys()),
+        )
+        return None
+
+    channel = (
+        "whatsapp"
+        if platform == "whatsapp"
+        else (f"{platform}_dm" if platform else "unknown_dm")
+    )
+    return {
+        "event": "message.sent",
+        "conversation_id": conversation_id,
+        "platform": platform,
+        "channel": channel,
+        "sender_name": sender_name,
+        "sender_id": sender_id,
+        "text": text,
+        "message_id": message_id,
+        "account_id": account_id,
+        "direction": str(message.get("direction") or "outgoing").lower(),
+        "source": source,
+        "created_at": created_at,
+        "attachments": attachments,
+    }
+
+
 class ZernioReplyError(RuntimeError):
     """Provider rejected or did not confirm an operator reply."""
 
