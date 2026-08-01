@@ -40,6 +40,15 @@ CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION = (
     "Before we finish, what day or time window would suit you best for "
     "the first appointment?"
 )
+CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER = (
+    "No puedo confirmarte un número concreto, porque depende del profesional "
+    "o del centro que se ponga en contacto contigo. La llamada puede realizarse "
+    "desde cualquiera de nuestros centros."
+)
+CONSULTA_DESPERTARES_ENGLISH_CALLER_NUMBER_ANSWER = (
+    "I can't confirm a specific number, because it depends on the professional "
+    "or clinic that contacts you. The call may come from any of our clinics."
+)
 CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION = (
     "Would you like to tell me a little more about what's been going on for "
     "you, so I can guide you toward the right support?"
@@ -78,6 +87,10 @@ These rules override generic booking pacing and checklist-like intake.
 - Store the customer's preferred SESSION day or time in appointment_preference.
   callback_preference means only when the human team may CALL the customer.
   Never copy one value into the other.
+- Never invent, infer, or provide a caller telephone number for the follow-up.
+  If the customer asks which number will call them, explain that no specific
+  number can be confirmed because it depends on the professional and clinic
+  making the call, which may come from any Consulta Despertares office.
 - Capture visit_reason as one short, neutral paraphrase of why the customer
   is seeking psychological support, using what they volunteered anywhere in the
   conversation. Do not diagnose, reinterpret, or ask for intimate detail. A
@@ -196,6 +209,18 @@ _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE = re.compile(
     r"[^?\n]*(?:cita|sesi[oó]n)"
     r"|what\s+(?:day|days|time|time\s+window)"
     r"[^?\n]*(?:appointment|session)"
+    r")",
+    re.IGNORECASE,
+)
+_CONSULTA_CALLER_NUMBER_QUERY_RE = re.compile(
+    r"(?:"
+    r"(?:desde|de|con)\s+qu[eé]\s+n[uú]mero"
+    r"|qu[eé]\s+n[uú]mero[^?\n]*(?:llamar|contactar)"
+    r"|cu[aá]l[^?\n]*n[uú]mero[^?\n]*(?:llamar|contactar)"
+    r"|(?:llamar|contactar)[^?\n]*desde\s+(?:qu[eé]|cu[aá]l|un)\s+n[uú]mero"
+    r"|(?:what|which|from\s+which)\s+(?:phone\s+)?number"
+    r"[^?\n]*(?:call|contact)"
+    r"|(?:call|contact)[^?\n]*from\s+(?:what|which)\s+(?:phone\s+)?number"
     r")",
     re.IGNORECASE,
 )
@@ -386,8 +411,8 @@ def enforce_consulta_despertares_boundaries(
 
     The model writes the conversational body and language-matched introduction.
     This final guard owns the exact website-lead greeting and the controlled
-    callback and appointment-preference questions so prompt non-compliance
-    cannot leak to a patient-facing WhatsApp reply.
+    callback and appointment-preference questions plus the safe caller-number
+    answer so prompt non-compliance cannot leak to a patient-facing WhatsApp reply.
     """
     if not reply or not is_consulta_despertares():
         return reply
@@ -400,6 +425,22 @@ def enforce_consulta_despertares_boundaries(
         for message in history
         if isinstance(message, dict)
     )
+
+    if _CONSULTA_CALLER_NUMBER_QUERY_RE.search(inbound_text or ""):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        answer = (
+            CONSULTA_DESPERTARES_ENGLISH_CALLER_NUMBER_ANSWER
+            if language == "English"
+            else CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+        )
+        if not is_first_reply:
+            return answer
+        greeting = (
+            CONSULTA_DESPERTARES_ENGLISH_GREETING
+            if language == "English"
+            else CONSULTA_DESPERTARES_OTHER_GREETING + "."
+        )
+        return f"{greeting}\n\n{answer}"
 
     clean = _strip_consulta_callback_closing(reply)
 
