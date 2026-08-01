@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from shared import config_loader
 
@@ -40,6 +41,25 @@ CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION = (
     "Before we finish, what day or time window would suit you best for "
     "the first appointment?"
 )
+CONSULTA_DESPERTARES_AUGUST_APPOINTMENT_PREFERENCE_QUESTION = (
+    "Antes de terminar, ¿qué día o franja horaria a partir del 24 de agosto "
+    "te vendría mejor para la primera cita?"
+)
+CONSULTA_DESPERTARES_ENGLISH_AUGUST_APPOINTMENT_PREFERENCE_QUESTION = (
+    "Before we finish, what day or time window from August 24 onward would "
+    "suit you best for the first appointment?"
+)
+CONSULTA_DESPERTARES_AUGUST_CLOSURE_ANSWER = (
+    "Importante: cerramos del 10 al 23 de agosto, ambos inclusive, así que "
+    "las citas se están ofreciendo para la vuelta de vacaciones, a partir "
+    "del 24 de agosto. ¿Qué día o franja horaria a partir de esa fecha te "
+    "vendría mejor?"
+)
+CONSULTA_DESPERTARES_ENGLISH_AUGUST_CLOSURE_ANSWER = (
+    "We will be closed from August 10 through August 23 inclusive, so "
+    "appointments are being offered after the holiday, from August 24 onward. "
+    "What day or time window from that date onward would suit you best?"
+)
 CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER = (
     "No puedo confirmarte un número concreto, porque depende del profesional "
     "o del centro que se ponga en contacto contigo. La llamada puede realizarse "
@@ -57,6 +77,17 @@ CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION = (
     "¿Te apetece contarme un poco más sobre lo que te está pasando, para "
     "poder orientarte hacia el apoyo más adecuado?"
 )
+CONSULTA_DESPERTARES_AUGUST_2026_RULE = """
+TEMPORARY CONSULTA DESPERTARES AUGUST 2026 SCHEDULING RULE (HIGHEST PRIORITY):
+- The clinic is closed from 10 August through 23 August 2026, both dates inclusive.
+- Appointment preferences may be accepted from 24 August 2026 onward.
+- Never offer, accept, promise, or confirm an appointment from 10-23 August.
+- Explain naturally that appointments are already being offered for the return
+  from the holiday closure, starting 24 August.
+- If the prospect asks for a closed date, ask for one preferred day or time
+  window from 24 August onward. Do not ask about timezone.
+"""
+
 CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE = """
 CONSULTA DESPERTARES RELATIONSHIP-FIRST INTAKE (HIGHEST PRIORITY):
 The goal is a natural, supportive conversation that builds a useful prospect
@@ -224,6 +255,25 @@ _CONSULTA_CALLER_NUMBER_QUERY_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_CONSULTA_AFTER_AUGUST_CLOSURE_RE = re.compile(
+    r"(?:"
+    r"despu[eé]s\s+(?:(?:del?|de\s+el)\s+)?23(?:\s+de\s+agosto)?"
+    r"|a\s+partir\s+(?:(?:del?|de\s+el)\s+)?24(?:\s+de\s+agosto)?"
+    r"|desde\s+(?:el\s+)?24(?:\s+de\s+agosto)?"
+    r"|after\s+(?:(?:the\s+)?23(?:rd)?(?:\s+of\s+august)?|august\s+23)"
+    r"|(?:from|on\s+or\s+after)\s+(?:august\s+24|(?:the\s+)?24(?:th)?"
+    r"(?:\s+of\s+august)?)"
+    r")",
+    re.IGNORECASE,
+)
+_CONSULTA_AUGUST_DATE_RE = re.compile(
+    r"\b(?:"
+    r"(?P<day_before>\d{1,2})(?:st|nd|rd|th)?\s+(?:de\s+|of\s+)?"
+    r"(?:agosto|august)"
+    r"|(?:agosto|august)\s+(?P<day_after>\d{1,2})(?:st|nd|rd|th)?"
+    r")\b",
+    re.IGNORECASE,
+)
 _CONSULTA_INTAKE_OPTOUT_RE = re.compile(
     r"\b(?:"
     r"no\s+tengo\s+preferencia|me\s+da\s+igual|"
@@ -344,10 +394,18 @@ def consulta_despertares_language_lock(
     )
 
 
+def _consulta_august_2026_scheduling_active(today: date | None = None) -> bool:
+    current = today or date.today()
+    return current <= date(2026, 8, 23)
+
+
 def consulta_despertares_relationship_rule_block() -> str:
     if not is_consulta_despertares():
         return ""
-    return CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE
+    rule = CONSULTA_DESPERTARES_RELATIONSHIP_FIRST_RULE
+    if _consulta_august_2026_scheduling_active():
+        rule = f"{rule.rstrip()}\n\n{CONSULTA_DESPERTARES_AUGUST_2026_RULE}"
+    return rule
 
 
 def phone_privacy_rule_block() -> str:
@@ -385,6 +443,40 @@ def _strip_consulta_callback_closing(reply: str) -> str:
     while "\n\n\n" in clean:
         clean = clean.replace("\n\n\n", "\n\n")
     return clean.strip()
+
+
+def _consulta_requests_closed_august_2026_date(
+    inbound_text: str,
+    fields: dict,
+) -> bool:
+    text = "\n".join(
+        value
+        for value in (
+            str(inbound_text or ""),
+            str((fields or {}).get("appointment_preference") or ""),
+        )
+        if value
+    )
+    if _CONSULTA_AFTER_AUGUST_CLOSURE_RE.search(text):
+        return False
+
+    raw_date = str((fields or {}).get("date") or "").strip()
+    if raw_date:
+        try:
+            requested = date.fromisoformat(raw_date[:10])
+        except ValueError:
+            requested = None
+        if requested and date(2026, 8, 10) <= requested <= date(2026, 8, 23):
+            return True
+
+    explicit_years = set(re.findall(r"\b20\d{2}\b", text))
+    if explicit_years and "2026" not in explicit_years:
+        return False
+    for match in _CONSULTA_AUGUST_DATE_RE.finditer(text):
+        raw_day = match.group("day_before") or match.group("day_after")
+        if raw_day and 10 <= int(raw_day) <= 23:
+            return True
+    return False
 
 
 def _consulta_has_name_and_phone(fields: dict) -> bool:
@@ -432,6 +524,22 @@ def enforce_consulta_despertares_boundaries(
             CONSULTA_DESPERTARES_ENGLISH_CALLER_NUMBER_ANSWER
             if language == "English"
             else CONSULTA_DESPERTARES_CALLER_NUMBER_ANSWER
+        )
+        if not is_first_reply:
+            return answer
+        greeting = (
+            CONSULTA_DESPERTARES_ENGLISH_GREETING
+            if language == "English"
+            else CONSULTA_DESPERTARES_OTHER_GREETING + "."
+        )
+        return f"{greeting}\n\n{answer}"
+
+    if _consulta_requests_closed_august_2026_date(inbound_text, fields):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        answer = (
+            CONSULTA_DESPERTARES_ENGLISH_AUGUST_CLOSURE_ANSWER
+            if language == "English"
+            else CONSULTA_DESPERTARES_AUGUST_CLOSURE_ANSWER
         )
         if not is_first_reply:
             return answer
@@ -548,10 +656,17 @@ def enforce_consulta_despertares_boundaries(
         and not reply_already_asks_a_question
     ):
         language = consulta_despertares_reply_language(inbound_text, history)
-        question = (
-            CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
-            if language == "English"
-            else CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
-        )
+        if _consulta_august_2026_scheduling_active():
+            question = (
+                CONSULTA_DESPERTARES_ENGLISH_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+                if language == "English"
+                else CONSULTA_DESPERTARES_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+            )
+        else:
+            question = (
+                CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
+                if language == "English"
+                else CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+            )
         clean = question if not clean else f"{clean.rstrip()}\n\n{question}"
     return clean
