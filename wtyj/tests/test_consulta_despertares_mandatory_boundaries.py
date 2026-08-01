@@ -3,7 +3,11 @@ from unittest.mock import patch
 
 from agents.marina import marina_agent
 from agents.social import social_agent
-from agents.social.webhook_server import _use_whatsapp_orchestrator
+from agents.social.webhook_server import (
+    _process_zernio_sent_event,
+    _use_whatsapp_orchestrator,
+)
+from agents.social.zernio_dm_client import parse_zernio_sent_webhook
 from dashboard import api as dashboard_api
 from shared import state_registry, tenant_hard_rules
 
@@ -800,4 +804,75 @@ def test_despertares_follow_up_alert_is_whatsapp_ready():
     assert "Cuándo llamar: Por la tarde" in alert
     assert "Motivo de consulta: Ansiedad" in alert
     assert "responde al prospecto" in alert
+
+def _whatsapp_app_sent_payload(source="whatsappbusinessapp"):
+    return {
+        "id": "webhook-event-1",
+        "event": "message.sent",
+        "message": {
+            "id": "zernio-message-1",
+            "conversationId": "conversation-1",
+            "accountId": "account-1",
+            "platform": "whatsapp",
+            "direction": "outgoing",
+            "source": source,
+            "text": "Te llamaremos mañana por la tarde.",
+            "createdAt": "2026-08-01T15:00:00+00:00",
+            "sender": {"name": "Consulta Despertares"},
+        },
+        "conversation": {
+            "id": "conversation-1",
+            "platform": "whatsapp",
+        },
+        "account": {"id": "account-1"},
+        "timestamp": "2026-08-01T15:00:01+00:00",
+    }
+
+
+def test_parses_whatsapp_business_app_sent_event():
+    parsed = parse_zernio_sent_webhook(_whatsapp_app_sent_payload())
+
+    assert parsed["event"] == "message.sent"
+    assert parsed["conversation_id"] == "conversation-1"
+    assert parsed["message_id"] == "zernio-message-1"
+    assert parsed["account_id"] == "account-1"
+    assert parsed["platform"] == "whatsapp"
+    assert parsed["direction"] == "outgoing"
+    assert parsed["source"] == "whatsappbusinessapp"
+    assert parsed["text"] == "Te llamaremos mañana por la tarde."
+
+
+def test_phone_app_reply_is_stored_as_operator_without_ai_processing():
+    with (
+        patch("shared.tenant_guard.is_account_allowed", return_value=True),
+        patch.object(
+            state_registry,
+            "wa_store_external_operator_message",
+            return_value=True,
+        ) as store_message,
+        patch.object(state_registry, "wa_set_archived") as unarchive,
+    ):
+        _process_zernio_sent_event(_whatsapp_app_sent_payload())
+
+    store_message.assert_called_once_with(
+        message_id="zernio-message-1",
+        conversation_id="conversation-1",
+        channel="whatsapp",
+        text="Te llamaremos mañana por la tarde.",
+        sender_name="Secretaría",
+        created_at="2026-08-01T15:00:00+00:00",
+    )
+    unarchive.assert_called_once_with("conversation-1", False)
+
+
+def test_cloud_api_sent_echo_is_not_stored_again():
+    with patch.object(
+        state_registry,
+        "wa_store_external_operator_message",
+    ) as store_message:
+        _process_zernio_sent_event(
+            _whatsapp_app_sent_payload(source="cloud_api")
+        )
+
+    store_message.assert_not_called()
 
