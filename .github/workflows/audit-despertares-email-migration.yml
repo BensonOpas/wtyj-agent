@@ -1,0 +1,166 @@
+name: Audit live Despertares email configuration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-despertares-email-migration.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inventory active account and alert email references
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            OLD_EMAIL='Rjr73@hotmail.com'
+            NEW_EMAIL='info@consultadespertares.com'
+            TENANT_DIR='/root/clients/consulta-despertares'
+            CONTAINER='wtyj-consulta-despertares'
+
+            echo 'AUDIT_CONTAINER_NAMES_BEGIN'
+            docker ps --format '{{.Names}}'
+            echo 'AUDIT_CONTAINER_NAMES_END'
+
+            echo 'AUDIT_TENANT_FILE_MATCHES_BEGIN'
+            if [ -d "$TENANT_DIR" ]; then
+              find "$TENANT_DIR" \
+                -path '*/backups' -prune -o \
+                -path '*/reset_archives' -prune -o \
+                -path '*/.git' -prune -o \
+                -type f -size -10M -print0 2>/dev/null |
+                xargs -0 -r grep -Ili -F "$OLD_EMAIL" 2>/dev/null || true
+            fi
+            echo 'AUDIT_TENANT_FILE_MATCHES_END'
+
+            echo 'AUDIT_TENANT_NEW_FILE_MATCHES_BEGIN'
+            if [ -d "$TENANT_DIR" ]; then
+              find "$TENANT_DIR" \
+                -path '*/backups' -prune -o \
+                -path '*/reset_archives' -prune -o \
+                -path '*/.git' -prune -o \
+                -type f -size -10M -print0 2>/dev/null |
+                xargs -0 -r grep -Ili -F "$NEW_EMAIL" 2>/dev/null || true
+            fi
+            echo 'AUDIT_TENANT_NEW_FILE_MATCHES_END'
+
+            echo 'AUDIT_ENV_KEYS_BEGIN'
+            for name in $(docker ps --format '{{.Names}}'); do
+              docker inspect "$name" --format '{{range .Config.Env}}{{println .}}{{end}}' |
+                awk -F= -v container="$name" -v old="$OLD_EMAIL" -v new="$NEW_EMAIL" '
+                  BEGIN { old=tolower(old); new=tolower(new) }
+                  {
+                    value=$0
+                    key=$1
+                    lowered=tolower(value)
+                    if (index(lowered, old) || index(lowered, new)) {
+                      print container "|" key
+                    }
+                  }
+                '
+            done
+            echo 'AUDIT_ENV_KEYS_END'
+
+            echo 'AUDIT_CONTAINER_FILE_MATCHES_BEGIN'
+            if docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER"; then
+              docker exec "$CONTAINER" sh -lc '
+                for root in /app/data /app/config /config /data; do
+                  if [ -d "$root" ]; then
+                    find "$root" -type f -size -10M -print0 2>/dev/null |
+                      xargs -0 -r grep -Ili -F "Rjr73@hotmail.com" 2>/dev/null || true
+                  fi
+                done
+              '
+            fi
+            echo 'AUDIT_CONTAINER_FILE_MATCHES_END'
+
+            echo 'AUDIT_SQLITE_MATCHES_BEGIN'
+            if docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER"; then
+              docker exec -i "$CONTAINER" python - <<'PY'
+            import json
+            import os
+            import sqlite3
+
+            old = "rjr73@hotmail.com"
+            new = "info@consultadespertares.com"
+            roots = ("/app/data", "/data")
+            seen = set()
+            for root in roots:
+                if not os.path.isdir(root):
+                    continue
+                for base, _, files in os.walk(root):
+                    for filename in files:
+                        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
+                            continue
+                        path = os.path.join(base, filename)
+                        if path in seen:
+                            continue
+                        seen.add(path)
+                        try:
+                            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                            tables = [
+                                row[0] for row in conn.execute(
+                                    "SELECT name FROM sqlite_master "
+                                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                                )
+                            ]
+                            for table in tables:
+                                safe_table = table.replace('"', '""')
+                                columns = [
+                                    row[1] for row in conn.execute(
+                                        f'PRAGMA table_info("{safe_table}")'
+                                    )
+                                ]
+                                for column in columns:
+                                    safe_column = column.replace('"', '""')
+                                    query = (
+                                        f'SELECT '
+                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
+                                        f'LIKE ? THEN 1 ELSE 0 END), '
+                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
+                                        f'LIKE ? THEN 1 ELSE 0 END) '
+                                        f'FROM "{safe_table}"'
+                                    )
+                                    old_count, new_count = conn.execute(
+                                        query, (f"%{old}%", f"%{new}%")
+                                    ).fetchone()
+                                    if old_count or new_count:
+                                        print(json.dumps({
+                                            "db": path,
+                                            "table": table,
+                                            "column": column,
+                                            "old_count": int(old_count or 0),
+                                            "new_count": int(new_count or 0),
+                                        }))
+                            conn.close()
+                        except Exception as exc:
+                            print(json.dumps({
+                                "db": path,
+                                "scan_error": type(exc).__name__,
+                            }))
+            PY
+            fi
+            echo 'AUDIT_SQLITE_MATCHES_END'
+
+            echo 'AUDIT_ACTIVE_ROOT_MATCHES_BEGIN'
+            for root in /root/clients /root/apps /opt /srv; do
+              if [ -d "$root" ]; then
+                find "$root" \
+                  -path '*/backups' -prune -o \
+                  -path '*/reset_archives' -prune -o \
+                  -path '*/.git' -prune -o \
+                  -path '*/node_modules' -prune -o \
+                  -type f -size -10M -print0 2>/dev/null |
+                  xargs -0 -r grep -Ili -F "$OLD_EMAIL" 2>/dev/null || true
+              fi
+            done
+            echo 'AUDIT_ACTIVE_ROOT_MATCHES_END'
