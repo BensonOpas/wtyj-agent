@@ -22,6 +22,11 @@ DB_PATH = os.path.join(
 # helper unit tests that don't load the dashboard router).
 _alert_dispatcher = None
 
+# Consulta Despertares: optional callback for transition-based prospect queue
+# alerts. The social agent emits a state change; dashboard.api owns delivery so
+# state_registry stays independent from provider clients.
+_follow_up_alert_dispatcher = None
+
 # Brief 227: dashboard.api registers a summary generator here. Mirrors the
 # Brief 217 alert-dispatcher pattern — one global, set once at module-load,
 # called best-effort with try/except gating so a Claude failure never blocks
@@ -124,6 +129,33 @@ def set_alert_dispatcher(fn):
     dashboard."""
     global _alert_dispatcher
     _alert_dispatcher = fn
+
+
+def set_follow_up_alert_dispatcher(fn):
+    """Register the provider-facing callback for prospect queue alerts."""
+    global _follow_up_alert_dispatcher
+    _follow_up_alert_dispatcher = fn
+
+
+def dispatch_follow_up_alert(follow_up: dict,
+                             previous_status: str | None = None) -> None:
+    """Fire one best-effort alert when a prospect enters an actionable state.
+
+    Repeated enrichment while the status is unchanged is deliberately silent,
+    preventing a WhatsApp alert for every prospect message.
+    """
+    if not isinstance(follow_up, dict) or _follow_up_alert_dispatcher is None:
+        return
+    status = str(follow_up.get("status") or "")
+    if status not in {"collecting", "ready_to_call", "needs_human_answer"}:
+        return
+    if previous_status == status:
+        return
+    try:
+        _follow_up_alert_dispatcher(follow_up, previous_status)
+    except Exception:
+        # Alert delivery must never block the prospect conversation.
+        pass
 
 
 # Brief 241: optional callback set by dashboard.api at module-import time.
@@ -4455,6 +4487,22 @@ def get_follow_up_request(request_id: int) -> dict:
                 pass
     conn.close()
     return _follow_up_row(row, thread_fields)
+
+
+def get_follow_up_request_by_conversation(conversation_id: str) -> dict:
+    """Return one callback follow-up by its provider conversation id."""
+    if not conversation_id:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, conversation_id, channel, first_name, surnames, phone_raw, "
+        "phone_normalized, callback_preference, visit_reason, status, "
+        "handoff_reason, source_message_id, created_at, updated_at, closed_at "
+        "FROM follow_up_requests WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    return _follow_up_row(row)
 
 
 def update_follow_up_status(request_id: int, status: str) -> dict:
