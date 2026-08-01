@@ -4,7 +4,8 @@ from unittest.mock import patch
 from agents.marina import marina_agent
 from agents.social import social_agent
 from agents.social.webhook_server import _use_whatsapp_orchestrator
-from shared import tenant_hard_rules
+from dashboard import api as dashboard_api
+from shared import state_registry, tenant_hard_rules
 
 
 def _enforce(reply, inbound, history=None, fields=None, intents=None):
@@ -755,3 +756,48 @@ def test_august_closure_override_is_tenant_scoped():
         )
 
     assert enforced == reply
+
+def test_follow_up_alert_dispatch_is_transition_based(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        state_registry,
+        "_follow_up_alert_dispatcher",
+        lambda follow_up, previous_status=None: calls.append(
+            (follow_up["status"], previous_status)
+        ),
+    )
+
+    state_registry.dispatch_follow_up_alert({"status": "collecting"})
+    state_registry.dispatch_follow_up_alert(
+        {"status": "collecting"}, previous_status="collecting"
+    )
+    state_registry.dispatch_follow_up_alert(
+        {"status": "ready_to_call"}, previous_status="collecting"
+    )
+    state_registry.dispatch_follow_up_alert(
+        {"status": "closed"}, previous_status="ready_to_call"
+    )
+
+    assert calls == [
+        ("collecting", None),
+        ("ready_to_call", "collecting"),
+    ]
+
+
+def test_despertares_follow_up_alert_is_whatsapp_ready():
+    alert = dashboard_api._build_follow_up_alert_body({
+        "status": "needs_human_answer",
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone_raw": "600 111 222",
+        "callback_preference": "Por la tarde",
+        "visit_reason": "Ansiedad",
+    })
+
+    assert "*Necesita respuesta*" in alert
+    assert "Prospecto: Ana García" in alert
+    assert "Teléfono: 600 111 222" in alert
+    assert "Cuándo llamar: Por la tarde" in alert
+    assert "Motivo de consulta: Ansiedad" in alert
+    assert "responde al prospecto" in alert
+
