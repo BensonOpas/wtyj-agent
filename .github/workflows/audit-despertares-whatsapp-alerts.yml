@@ -1,0 +1,297 @@
+name: Audit live Despertares WhatsApp alerts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-despertares-whatsapp-alerts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect WhatsApp alert settings and delivery pipeline
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            CONTAINER='wtyj-consulta-despertares'
+
+            docker exec -i "$CONTAINER" python - <<'PY'
+            import hashlib
+            import json
+            import sqlite3
+            from collections import Counter
+            from pathlib import Path
+
+            from shared import config_loader, state_registry
+
+            def masked(value):
+                text = str(value or "").strip()
+                if not text:
+                    return {"present": False}
+                digits = "".join(character for character in text if character.isdigit())
+                return {
+                    "present": True,
+                    "length": len(text),
+                    "last4": digits[-4:] if digits else text[-4:],
+                    "sha12": hashlib.sha256(text.encode()).hexdigest()[:12],
+                }
+
+            business = config_loader.get_business() or {}
+            default_email = (
+                business.get("support_email")
+                or business.get("email")
+                or ""
+            )
+            settings = state_registry.get_alert_settings(
+                default_email_destination=default_email
+            )
+            channels = (settings or {}).get("channels") or {}
+            safe_channels = {}
+            for name, values in channels.items():
+                values = values or {}
+                safe_channels[name] = {
+                    "enabled": bool(values.get("enabled")),
+                    "destination": masked(values.get("destination")),
+                    "alternative_destination": masked(
+                        values.get("alternativeDestination")
+                    ),
+                    "zernio_resolved": bool(values.get("zernioResolved")),
+                }
+
+            print("LIVE_ALERT_SETTINGS=" + json.dumps({
+                "alert_types": (settings or {}).get("alertTypes") or {},
+                "channels": safe_channels,
+            }, ensure_ascii=False))
+
+            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+            tables = {
+                row["name"] for row in db.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+            relevant_tables = sorted(
+                name for name in tables
+                if any(token in name.lower() for token in (
+                    "alert", "escal", "follow", "notification", "zernio"
+                ))
+            )
+            print("LIVE_RELEVANT_TABLES=" + json.dumps(relevant_tables))
+
+            for table in relevant_tables:
+                safe_table = table.replace('"', '""')
+                columns = [
+                    row["name"] for row in db.execute(
+                        f'PRAGMA table_info("{safe_table}")'
+                    )
+                ]
+                count = db.execute(
+                    f'SELECT COUNT(*) AS total FROM "{safe_table}"'
+                ).fetchone()["total"]
+                print("LIVE_TABLE=" + json.dumps({
+                    "table": table,
+                    "columns": columns,
+                    "count": int(count),
+                }))
+
+            if "follow_up_requests" in tables:
+                rows = db.execute(
+                    "SELECT status, COUNT(*) AS total, MAX(updated_at) AS latest "
+                    "FROM follow_up_requests GROUP BY status ORDER BY status"
+                ).fetchall()
+                print("LIVE_FOLLOW_UP_STATUS_COUNTS=" + json.dumps(
+                    [dict(row) for row in rows], ensure_ascii=False
+                ))
+
+            if "escalations" in tables:
+                columns = {
+                    row["name"] for row in db.execute(
+                        'PRAGMA table_info("escalations")'
+                    )
+                }
+                group_columns = [
+                    column for column in ("status", "mode", "reason", "type")
+                    if column in columns
+                ]
+                for column in group_columns:
+                    safe_column = column.replace('"', '""')
+                    rows = db.execute(
+                        f'SELECT "{safe_column}" AS value, COUNT(*) AS total '
+                        f'FROM escalations GROUP BY "{safe_column}" '
+                        f'ORDER BY total DESC'
+                    ).fetchall()
+                    print("LIVE_ESCALATION_GROUP=" + json.dumps({
+                        "column": column,
+                        "values": [dict(row) for row in rows],
+                    }, ensure_ascii=False))
+
+            if "alert_deliveries" in tables:
+                columns = [
+                    row["name"] for row in db.execute(
+                        'PRAGMA table_info("alert_deliveries")'
+                    )
+                ]
+                groupable = [
+                    column for column in ("channel", "status", "alert_type")
+                    if column in columns
+                ]
+                if groupable:
+                    quoted = ", ".join(
+                        '"' + column.replace('"', '""') + '"'
+                        for column in groupable
+                    )
+                    rows = db.execute(
+                        f"SELECT {quoted}, COUNT(*) AS total "
+                        f"FROM alert_deliveries GROUP BY {quoted} "
+                        f"ORDER BY total DESC"
+                    ).fetchall()
+                    print("LIVE_DELIVERY_GROUPS=" + json.dumps(
+                        [dict(row) for row in rows], ensure_ascii=False
+                    ))
+
+                selected = [
+                    column for column in (
+                        "id", "escalation_id", "channel", "destination",
+                        "status", "error", "error_message", "alert_type",
+                        "appointment_id", "created_at", "updated_at"
+                    )
+                    if column in columns
+                ]
+                if selected:
+                    order = "id DESC" if "id" in columns else "rowid DESC"
+                    quoted = ", ".join(
+                        '"' + column.replace('"', '""') + '"'
+                        for column in selected
+                    )
+                    rows = db.execute(
+                        f"SELECT {quoted} FROM alert_deliveries "
+                        f"ORDER BY {order} LIMIT 30"
+                    ).fetchall()
+                    safe_rows = []
+                    for row in rows:
+                        item = dict(row)
+                        if "destination" in item:
+                            item["destination"] = masked(item["destination"])
+                        safe_rows.append(item)
+                    print("LIVE_RECENT_DELIVERIES=" + json.dumps(
+                        safe_rows, ensure_ascii=False
+                    ))
+
+            db.close()
+            PY
+
+            echo 'LIVE_ALERT_LOGS_BEGIN'
+            docker logs --since 96h "$CONTAINER" 2>&1 |
+              grep -iE 'alert|escalat|whatsapp.*(fail|error|skip)|zernio.*(fail|error)' |
+              tail -240 |
+              sed -E 's/[0-9]{7,}/[number-redacted]/g' || true
+            echo 'LIVE_ALERT_LOGS_END'
+
+            echo 'BACKUP_ALERT_SETTINGS_BEGIN'
+            python3 - <<'PY'
+            import hashlib
+            import json
+            import os
+            import sqlite3
+            from pathlib import Path
+
+            def masked(value):
+                text = str(value or "").strip()
+                if not text:
+                    return {"present": False}
+                digits = "".join(character for character in text if character.isdigit())
+                return {
+                    "present": True,
+                    "last4": digits[-4:] if digits else text[-4:],
+                    "sha12": hashlib.sha256(text.encode()).hexdigest()[:12],
+                }
+
+            candidates = []
+            for root in (
+                Path("/root/backups"),
+                Path("/root/clients/consulta-despertares/reset_archives"),
+            ):
+                if not root.is_dir():
+                    continue
+                for path in root.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    lowered = path.name.lower()
+                    if not (
+                        lowered.endswith((".db", ".sqlite", ".sqlite3"))
+                        or "consulta-despertares.db" in lowered
+                    ):
+                        continue
+                    candidates.append(path)
+
+            candidates.sort(
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            emitted = 0
+            for path in candidates:
+                if emitted >= 30:
+                    break
+                try:
+                    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    has_table = db.execute(
+                        "SELECT 1 FROM sqlite_master "
+                        "WHERE type='table' AND name='alert_settings'"
+                    ).fetchone()
+                    if not has_table:
+                        db.close()
+                        continue
+                    columns = [
+                        row[1] for row in db.execute(
+                            'PRAGMA table_info("alert_settings")'
+                        )
+                    ]
+                    wanted = [
+                        column for column in (
+                            "email_enabled", "email_destination",
+                            "whatsapp_enabled", "whatsapp_destination",
+                            "whatsapp_zernio_conversation_id",
+                            "whatsapp_zernio_account_id",
+                            "whatsapp_zernio_resolved_at",
+                            "alert_type_escalation_enabled",
+                            "alert_type_appointment_enabled"
+                        )
+                        if column in columns
+                    ]
+                    if not wanted:
+                        db.close()
+                        continue
+                    quoted = ", ".join(
+                        '"' + column.replace('"', '""') + '"'
+                        for column in wanted
+                    )
+                    row = db.execute(
+                        f"SELECT {quoted} FROM alert_settings WHERE id = 1"
+                    ).fetchone()
+                    db.close()
+                    if not row:
+                        continue
+                    values = dict(zip(wanted, row))
+                    for key in list(values):
+                        if "destination" in key or key.endswith("_id"):
+                            values[key] = masked(values[key])
+                    print(json.dumps({
+                        "file": str(path),
+                        "modified": int(path.stat().st_mtime),
+                        "settings": values,
+                    }, ensure_ascii=False))
+                    emitted += 1
+                except Exception:
+                    continue
+            PY
+            echo 'BACKUP_ALERT_SETTINGS_END'
