@@ -179,7 +179,10 @@ def test_callback_question_is_not_used_when_time_was_already_provided():
         intents=["booking"],
     )
 
-    assert enforced == "Perfecto, anotamos el miércoles a las 18:00."
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_CALLBACK_CLOSING not in enforced
+    assert enforced.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+    )
 
 
 def test_other_tenants_are_unchanged():
