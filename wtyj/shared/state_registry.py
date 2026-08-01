@@ -2358,14 +2358,26 @@ def wa_get_full_history(phone: str, limit: int = 100) -> list:
     contract preserved: still oldest-first."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT id, role, text, created_at FROM whatsapp_threads "
+        "SELECT id, role, text, created_at, sender_name, channel "
+        "FROM whatsapp_threads "
         "WHERE phone = ? ORDER BY created_at DESC LIMIT ?",
         (phone, limit)
     ).fetchall()
     conn.close()
     # Brief 250: reversed() to keep the documented oldest-first output
-    # contract; SELECT picks the most-recent N rows.
-    return [{"id": r[0], "role": r[1], "text": r[2], "created_at": r[3]} for r in reversed(rows)]
+    # contract; SELECT picks the most-recent N rows. Sender metadata lets the
+    # inbox distinguish phone-app replies from Alia's automated replies.
+    return [
+        {
+            "id": r[0],
+            "role": r[1],
+            "text": r[2],
+            "created_at": r[3],
+            "sender_name": r[4] or "",
+            "channel": r[5] or "whatsapp",
+        }
+        for r in reversed(rows)
+    ]
 
 
 def wa_cleanup_stale_data() -> dict:
@@ -2386,14 +2398,18 @@ def wa_cleanup_stale_data() -> dict:
 
 
 def dm_store_message(conversation_id: str, channel: str, role: str, text: str,
-                     sender_name: str = ""):
-    """Store a DM message (IG/FB) in conversation history."""
+                     sender_name: str = "", created_at: str = ""):
+    """Store a DM message in conversation history.
+
+    created_at is optional and is used for signed provider events so an
+    external WhatsApp Business app reply keeps its real timeline position.
+    """
+    timestamp = str(created_at or "").strip() or datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     conn.execute(
         "INSERT INTO whatsapp_threads (phone, role, text, created_at, channel, sender_name) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (conversation_id, role, text, datetime.now(timezone.utc).isoformat(),
-         channel, sender_name)
+        (conversation_id, role, text, timestamp, channel, sender_name)
     )
     conn.commit()
     conn.close()
