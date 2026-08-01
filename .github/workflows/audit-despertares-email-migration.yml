@@ -1,4 +1,4 @@
-name: Audit live Despertares email configuration
+name: Migrate live Despertares account email
 
 on:
   pull_request:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  migrate:
     runs-on: ubuntu-latest
     steps:
-      - name: Inventory active account and alert email references
+      - name: Update account email, alerts, and active references
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -22,274 +22,254 @@ jobs:
           command_timeout: 10m
           script: |
             set -eu
-            OLD_EMAIL='Rjr73@hotmail.com'
-            NEW_EMAIL='info@consultadespertares.com'
-            TENANT_DIR='/root/clients/consulta-despertares'
-            CONTAINER='wtyj-consulta-despertares'
-
-            echo 'AUDIT_CONTAINER_NAMES_BEGIN'
-            docker ps --format '{{.Names}}'
-            echo 'AUDIT_CONTAINER_NAMES_END'
-
-            echo 'AUDIT_TENANT_FILE_MATCHES_BEGIN'
-            if [ -d "$TENANT_DIR" ]; then
-              find "$TENANT_DIR" \
-                -path '*/backups' -prune -o \
-                -path '*/reset_archives' -prune -o \
-                -path '*/.git' -prune -o \
-                -type f -size -10M -print0 2>/dev/null |
-                xargs -0 -r grep -Ili -F "$OLD_EMAIL" 2>/dev/null || true
-            fi
-            echo 'AUDIT_TENANT_FILE_MATCHES_END'
-
-            echo 'AUDIT_TENANT_NEW_FILE_MATCHES_BEGIN'
-            if [ -d "$TENANT_DIR" ]; then
-              find "$TENANT_DIR" \
-                -path '*/backups' -prune -o \
-                -path '*/reset_archives' -prune -o \
-                -path '*/.git' -prune -o \
-                -type f -size -10M -print0 2>/dev/null |
-                xargs -0 -r grep -Ili -F "$NEW_EMAIL" 2>/dev/null || true
-            fi
-            echo 'AUDIT_TENANT_NEW_FILE_MATCHES_END'
-
-            echo 'AUDIT_ENV_KEYS_BEGIN'
-            for name in $(docker ps --format '{{.Names}}'); do
-              docker inspect "$name" --format '{{range .Config.Env}}{{println .}}{{end}}' |
-                awk -F= -v container="$name" -v old="$OLD_EMAIL" -v new="$NEW_EMAIL" '
-                  BEGIN { old=tolower(old); new=tolower(new) }
-                  {
-                    value=$0
-                    key=$1
-                    lowered=tolower(value)
-                    if (index(lowered, old) || index(lowered, new)) {
-                      print container "|" key
-                    }
-                  }
-                '
-            done
-            echo 'AUDIT_ENV_KEYS_END'
-
-            echo 'AUDIT_CONTAINER_FILE_MATCHES_BEGIN'
-            if docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER"; then
-              docker exec "$CONTAINER" sh -lc '
-                for root in /app/data /app/config /config /data; do
-                  if [ -d "$root" ]; then
-                    find "$root" -type f -size -10M -print0 2>/dev/null |
-                      xargs -0 -r grep -Ili -F "Rjr73@hotmail.com" 2>/dev/null || true
-                  fi
-                done
-              '
-            fi
-            echo 'AUDIT_CONTAINER_FILE_MATCHES_END'
-
-            echo 'AUDIT_SQLITE_MATCHES_BEGIN'
-            if docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER"; then
-              docker exec -i "$CONTAINER" python - <<'PY'
-            import json
-            import os
-            import sqlite3
-
-            old = "rjr73@hotmail.com"
-            new = "info@consultadespertares.com"
-            roots = ("/app/data", "/data")
-            seen = set()
-            for root in roots:
-                if not os.path.isdir(root):
-                    continue
-                for base, _, files in os.walk(root):
-                    for filename in files:
-                        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-                            continue
-                        path = os.path.join(base, filename)
-                        if path in seen:
-                            continue
-                        seen.add(path)
-                        try:
-                            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                            tables = [
-                                row[0] for row in conn.execute(
-                                    "SELECT name FROM sqlite_master "
-                                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                                )
-                            ]
-                            for table in tables:
-                                safe_table = table.replace('"', '""')
-                                columns = [
-                                    row[1] for row in conn.execute(
-                                        f'PRAGMA table_info("{safe_table}")'
-                                    )
-                                ]
-                                for column in columns:
-                                    safe_column = column.replace('"', '""')
-                                    query = (
-                                        f'SELECT '
-                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
-                                        f'LIKE ? THEN 1 ELSE 0 END), '
-                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
-                                        f'LIKE ? THEN 1 ELSE 0 END) '
-                                        f'FROM "{safe_table}"'
-                                    )
-                                    old_count, new_count = conn.execute(
-                                        query, (f"%{old}%", f"%{new}%")
-                                    ).fetchone()
-                                    if old_count or new_count:
-                                        print(json.dumps({
-                                            "db": path,
-                                            "table": table,
-                                            "column": column,
-                                            "old_count": int(old_count or 0),
-                                            "new_count": int(new_count or 0),
-                                        }))
-                            conn.close()
-                        except Exception as exc:
-                            print(json.dumps({
-                                "db": path,
-                                "scan_error": type(exc).__name__,
-                            }))
-            PY
-            fi
-            echo 'AUDIT_SQLITE_MATCHES_END'
-
-            echo 'AUDIT_ACTIVE_ROOT_MATCHES_BEGIN'
-            for root in /root/clients /root/apps /root/unboks-internal-control-panel /opt /srv; do
-              if [ -d "$root" ]; then
-                find "$root" \
-                  -path '*/backups' -prune -o \
-                  -path '*/reset_archives' -prune -o \
-                  -path '*/.git' -prune -o \
-                  -path '*/node_modules' -prune -o \
-                  -type f -size -10M -print0 2>/dev/null |
-                  xargs -0 -r grep -Ili -F "$OLD_EMAIL" 2>/dev/null || true
-              fi
-            done
-            echo 'AUDIT_ACTIVE_ROOT_MATCHES_END'
-
-            echo 'AUDIT_JSON_EMAIL_PATHS_BEGIN'
             python3 - <<'PY'
             import json
+            import os
+            import re
+            import shutil
+            import sqlite3
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            old = "Rjr73@hotmail.com"
+            old_lower = old.lower()
+            new = "info@consultadespertares.com"
+
+            tenant_config = Path("/root/clients/consulta-despertares/config/client.json")
+            tenant_config_bak = Path("/root/clients/consulta-despertares/config/client.json.bak")
+            tenant_db = Path("/root/clients/consulta-despertares/data/state_registry.db")
+            unboks_db = Path("/root/clients/unboks/data/state_registry.db")
+            control_root = Path("/root/unboks-internal-control-panel/data")
+            control_db = control_root / "nr3.db"
+            knowledge_cache = control_root / "nr2_knowledge_cache.json"
+
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_root = Path("/root/backups/despertares_email_migration") / stamp
+            backup_root.mkdir(parents=True, exist_ok=False)
+
+            def backup_file(path: Path) -> None:
+                if not path.is_file():
+                    return
+                target = backup_root / path.as_posix().lstrip("/").replace("/", "__")
+                shutil.copy2(path, target)
+
+            def backup_sqlite(path: Path) -> None:
+                if not path.is_file():
+                    return
+                target = backup_root / (path.as_posix().lstrip("/").replace("/", "__") + ".db")
+                source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                destination = sqlite3.connect(target)
+                source.backup(destination)
+                destination.close()
+                source.close()
+
+            for path in (tenant_config, tenant_config_bak, knowledge_cache):
+                backup_file(path)
+            for path in (tenant_db, unboks_db, control_db):
+                backup_sqlite(path)
+
+            def replace_old(value):
+                if isinstance(value, dict):
+                    return {key: replace_old(child) for key, child in value.items()}
+                if isinstance(value, list):
+                    return [replace_old(child) for child in value]
+                if isinstance(value, str):
+                    return re.sub(re.escape(old), new, value, flags=re.IGNORECASE)
+                return value
+
+            def atomic_write_json(path: Path, payload) -> None:
+                original = path.stat()
+                temporary = path.with_name(path.name + ".email-migration-tmp")
+                temporary.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.chmod(temporary, original.st_mode)
+                os.chown(temporary, original.st_uid, original.st_gid)
+                os.replace(temporary, path)
+
+            for path in (tenant_config, tenant_config_bak):
+                payload = replace_old(json.loads(path.read_text(encoding="utf-8")))
+                payload["email"] = new
+                business = payload.setdefault("business", {})
+                business["email"] = new
+                business["support_email"] = new
+                atomic_write_json(path, payload)
+
+            if knowledge_cache.is_file():
+                cache_payload = replace_old(
+                    json.loads(knowledge_cache.read_text(encoding="utf-8"))
+                )
+                atomic_write_json(knowledge_cache, cache_payload)
+
+            tenant_conn = sqlite3.connect(tenant_db)
+            try:
+                has_alert_settings = tenant_conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='alert_settings'"
+                ).fetchone()
+                if has_alert_settings:
+                    row = tenant_conn.execute(
+                        "SELECT 1 FROM alert_settings WHERE id = 1"
+                    ).fetchone()
+                    if row:
+                        tenant_conn.execute(
+                            "UPDATE alert_settings SET "
+                            "email_destination = ?, "
+                            "email_alternative_destination = CASE "
+                            "WHEN lower(coalesce(email_alternative_destination, '')) = ? "
+                            "THEN ? ELSE email_alternative_destination END "
+                            "WHERE id = 1",
+                            (new, old_lower, new),
+                        )
+                tenant_conn.commit()
+            finally:
+                tenant_conn.close()
+
+            unboks_conn = sqlite3.connect(unboks_db)
+            try:
+                unboks_conn.execute(
+                    "UPDATE ignored_contacts SET "
+                    "email_original = ?, email_normalized = ? "
+                    "WHERE lower(coalesce(email_original, '')) = ? "
+                    "OR lower(coalesce(email_normalized, '')) = ?",
+                    (new, new.lower(), old_lower, old_lower),
+                )
+                unboks_conn.commit()
+            finally:
+                unboks_conn.close()
+
+            control_conn = sqlite3.connect(control_db)
+            try:
+                control_conn.execute(
+                    "DELETE FROM password_reset_tokens "
+                    "WHERE lower(coalesce(email, '')) = ? "
+                    "OR lower(coalesce(email_key, '')) = ?",
+                    (old_lower, old_lower),
+                )
+                control_conn.commit()
+            finally:
+                control_conn.close()
+
+            print("MIGRATION_BACKUP_CREATED=true")
+            print("MIGRATION_BACKUP_LOCATION=" + str(backup_root))
+            PY
+
+            docker restart wtyj-consulta-despertares >/dev/null
+            docker restart unboks-internal-control-panel-wtyj-admin-1 >/dev/null
+
+            for name in wtyj-consulta-despertares unboks-internal-control-panel-wtyj-admin-1; do
+              running=$(docker inspect "$name" --format '{{.State.Running}}')
+              if [ "$running" != "true" ]; then
+                echo "SERVICE_RUNNING=false:$name"
+                exit 1
+              fi
+              echo "SERVICE_RUNNING=true:$name"
+            done
+
+            docker exec -i wtyj-consulta-despertares python - <<'PY'
+            import json
+            import sqlite3
             from pathlib import Path
 
             old = "rjr73@hotmail.com"
             new = "info@consultadespertares.com"
-            for path in (
-                Path("/root/clients/consulta-despertares/config/client.json"),
-                Path("/root/clients/consulta-despertares/config/client.json.bak"),
-                Path("/root/unboks-internal-control-panel/data/nr2_knowledge_cache.json"),
-                Path("/root/unboks-internal-control-panel/data/public_signup_requests.json"),
-            ):
-                if not path.is_file():
-                    continue
-                try:
-                    payload = json.loads(path.read_text())
-                except Exception as exc:
-                    print(json.dumps({"file": str(path), "error": type(exc).__name__}))
-                    continue
+            config_path = Path("/app/config/client.json")
+            backup_path = Path("/app/config/client.json.bak")
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            business = payload.get("business") or {}
 
-                def walk(value, location="$"):
-                    if isinstance(value, dict):
-                        for key, child in value.items():
-                            walk(child, f"{location}.{key}")
-                    elif isinstance(value, list):
-                        for index, child in enumerate(value):
-                            walk(child, f"{location}[{index}]")
-                    elif isinstance(value, str):
-                        lowered = value.lower()
-                        if old in lowered or new in lowered:
-                            print(json.dumps({
-                                "file": str(path),
-                                "json_path": location,
-                                "match": "old" if old in lowered else "new",
-                            }))
+            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
+            row = db.execute(
+                "SELECT email_destination, email_alternative_destination "
+                "FROM alert_settings WHERE id = 1"
+            ).fetchone()
+            historical_old = db.execute(
+                "SELECT COUNT(*) FROM alert_deliveries "
+                "WHERE lower(coalesce(destination, '')) = ?",
+                (old,),
+            ).fetchone()[0]
+            db.close()
 
-                walk(payload)
+            stored_destination = str(row[0] or "") if row else ""
+            resolved_destination = stored_destination
+            if not resolved_destination or resolved_destination == "default":
+                resolved_destination = str(
+                    business.get("support_email")
+                    or business.get("email")
+                    or payload.get("email")
+                    or ""
+                )
+
+            print("VERIFY_ACCOUNT_EMAIL_NEW=" + str(
+                str(payload.get("email") or "").lower() == new
+            ).lower())
+            print("VERIFY_BUSINESS_EMAIL_NEW=" + str(
+                str(business.get("email") or "").lower() == new
+            ).lower())
+            print("VERIFY_SUPPORT_EMAIL_NEW=" + str(
+                str(business.get("support_email") or "").lower() == new
+            ).lower())
+            print("VERIFY_ALERT_DESTINATION_NEW=" + str(
+                resolved_destination.lower() == new
+            ).lower())
+            print("VERIFY_ACTIVE_CONFIG_OLD_COUNT=" + str(
+                config_path.read_text(encoding="utf-8").lower().count(old)
+                + backup_path.read_text(encoding="utf-8").lower().count(old)
+            ))
+            print("VERIFY_HISTORICAL_ALERT_DELIVERIES_RETAINED=" + str(
+                int(historical_old)
+            ))
             PY
-            echo 'AUDIT_JSON_EMAIL_PATHS_END'
 
-            echo 'AUDIT_HOST_SQLITE_MATCHES_BEGIN'
             python3 - <<'PY'
-            import json
-            import os
             import sqlite3
+            from pathlib import Path
 
             old = "rjr73@hotmail.com"
             new = "info@consultadespertares.com"
-            roots = ["/root/clients", "/root/apps", "/root/unboks-internal-control-panel", "/opt", "/srv"]
-            excluded = {"backups", "reset_archives", ".git", "node_modules"}
-            seen = set()
-            for root in roots:
-                if not os.path.isdir(root):
-                    continue
-                for base, dirs, files in os.walk(root):
-                    dirs[:] = [item for item in dirs if item not in excluded]
-                    for filename in files:
-                        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-                            continue
-                        path = os.path.join(base, filename)
-                        if path in seen:
-                            continue
-                        seen.add(path)
-                        try:
-                            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-                            tables = [
-                                row[0] for row in conn.execute(
-                                    "SELECT name FROM sqlite_master "
-                                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                                )
-                            ]
-                            for table in tables:
-                                safe_table = table.replace('"', '""')
-                                columns = [
-                                    row[1] for row in conn.execute(
-                                        f'PRAGMA table_info("{safe_table}")'
-                                    )
-                                ]
-                                for column in columns:
-                                    safe_column = column.replace('"', '""')
-                                    query = (
-                                        f'SELECT '
-                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
-                                        f'LIKE ? THEN 1 ELSE 0 END), '
-                                        f'SUM(CASE WHEN lower(CAST("{safe_column}" AS TEXT)) '
-                                        f'LIKE ? THEN 1 ELSE 0 END) '
-                                        f'FROM "{safe_table}"'
-                                    )
-                                    old_count, new_count = conn.execute(
-                                        query, (f"%{old}%", f"%{new}%")
-                                    ).fetchone()
-                                    if old_count or new_count:
-                                        print(json.dumps({
-                                            "db": path,
-                                            "table": table,
-                                            "column": column,
-                                            "old_count": int(old_count or 0),
-                                            "new_count": int(new_count or 0),
-                                        }))
-                            conn.close()
-                        except Exception as exc:
-                            print(json.dumps({
-                                "db": path,
-                                "scan_error": type(exc).__name__,
-                            }))
+
+            unboks = sqlite3.connect(
+                "file:/root/clients/unboks/data/state_registry.db?mode=ro",
+                uri=True,
+            )
+            ignored_old = unboks.execute(
+                "SELECT COUNT(*) FROM ignored_contacts "
+                "WHERE lower(coalesce(email_original, '')) = ? "
+                "OR lower(coalesce(email_normalized, '')) = ?",
+                (old, old),
+            ).fetchone()[0]
+            ignored_new = unboks.execute(
+                "SELECT COUNT(*) FROM ignored_contacts "
+                "WHERE lower(coalesce(email_original, '')) = ? "
+                "OR lower(coalesce(email_normalized, '')) = ?",
+                (new, new),
+            ).fetchone()[0]
+            unboks.close()
+
+            control = sqlite3.connect(
+                "file:/root/unboks-internal-control-panel/data/nr3.db?mode=ro",
+                uri=True,
+            )
+            old_tokens = control.execute(
+                "SELECT COUNT(*) FROM password_reset_tokens "
+                "WHERE lower(coalesce(email, '')) = ? "
+                "OR lower(coalesce(email_key, '')) = ?",
+                (old, old),
+            ).fetchone()[0]
+            control.close()
+
+            cache_path = Path(
+                "/root/unboks-internal-control-panel/data/nr2_knowledge_cache.json"
+            )
+            cache_old = (
+                cache_path.read_text(encoding="utf-8").lower().count(old)
+                if cache_path.is_file()
+                else 0
+            )
+
+            print("VERIFY_IGNORED_CONTACT_OLD_COUNT=" + str(int(ignored_old)))
+            print("VERIFY_IGNORED_CONTACT_NEW_COUNT=" + str(int(ignored_new)))
+            print("VERIFY_OLD_RESET_TOKEN_COUNT=" + str(int(old_tokens)))
+            print("VERIFY_ACTIVE_CACHE_OLD_COUNT=" + str(int(cache_old)))
             PY
-            echo 'AUDIT_HOST_SQLITE_MATCHES_END'
-
-            echo 'AUDIT_CONTAINER_MOUNTS_BEGIN'
-            for name in $(docker ps --format '{{.Names}}'); do
-              docker inspect "$name" --format '{{range .Mounts}}{{println "'"$name"'|" .Destination "|" .Source}}{{end}}'
-            done
-            echo 'AUDIT_CONTAINER_MOUNTS_END'
-
-            echo 'AUDIT_TENANT_EMAIL_CODE_REFS_BEGIN'
-            docker exec "$CONTAINER" sh -lc '
-              grep -RniE "alert_deliveries|alert.{0,40}(email|destination)|notification.{0,40}email|business.{0,20}email" \
-                /app --include="*.py" 2>/dev/null | head -160 || true
-            '
-            echo 'AUDIT_TENANT_EMAIL_CODE_REFS_END'
-
-            echo 'AUDIT_CONTROL_PANEL_EMAIL_CODE_REFS_BEGIN'
-            docker exec unboks-internal-control-panel-wtyj-admin-1 sh -lc '
-              grep -RniE "password_reset_tokens|public_signup_requests|client\\.json|tenant.{0,30}email" \
-                /app --include="*.py" 2>/dev/null | head -200 || true
-            '
-            echo 'AUDIT_CONTROL_PANEL_EMAIL_CODE_REFS_END'
