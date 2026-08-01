@@ -1,0 +1,173 @@
+name: Enable Despertares WhatsApp app message sync
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/enable-despertares-message-sent-webhook.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable message.sent and verify live handler
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            CONTAINER='wtyj-consulta-despertares'
+
+            docker exec -i "$CONTAINER" python - <<'PY'
+            import json
+            import os
+            from unittest.mock import patch
+            from urllib.parse import urlparse
+
+            import requests
+
+            from agents.social import webhook_server
+            from shared import state_registry
+
+            api_key = os.environ.get("LATE_API_KEY", "").strip()
+            if not api_key:
+                raise SystemExit("LATE_API_KEY is not configured")
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            endpoint = "https://zernio.com/api/v1/webhooks/settings"
+            response = requests.get(endpoint, headers=headers, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+
+            webhooks = payload.get("webhooks") or payload.get("data") or []
+            if isinstance(webhooks, dict):
+                webhooks = webhooks.get("webhooks") or webhooks.get("data") or []
+            if not isinstance(webhooks, list):
+                raise SystemExit("Unexpected webhook settings response")
+
+            zernio_hooks = [
+                item for item in webhooks
+                if isinstance(item, dict)
+                and "/webhooks/zernio" in str(item.get("url") or "")
+            ]
+            tenant_hooks = [
+                item for item in zernio_hooks
+                if "consulta-despertares" in str(item.get("url") or "").lower()
+            ]
+            if len(tenant_hooks) == 1:
+                target = tenant_hooks[0]
+            elif len(zernio_hooks) == 1:
+                target = zernio_hooks[0]
+            else:
+                safe = [
+                    {
+                        "name": str(item.get("name") or "")[:50],
+                        "host": urlparse(str(item.get("url") or "")).hostname,
+                        "path": urlparse(str(item.get("url") or "")).path,
+                        "events": item.get("events") or [],
+                        "active": bool(item.get("isActive")),
+                    }
+                    for item in zernio_hooks
+                ]
+                print("WEBHOOK_CANDIDATES=" + json.dumps(safe))
+                raise SystemExit(
+                    f"Expected one Despertares Zernio webhook, found {len(tenant_hooks)} tenant matches"
+                )
+
+            webhook_id = str(target.get("_id") or target.get("id") or "")
+            if not webhook_id:
+                raise SystemExit("Target webhook has no id")
+            before_events = list(target.get("events") or [])
+            after_events = list(dict.fromkeys([*before_events, "message.sent"]))
+
+            if after_events != before_events or not target.get("isActive"):
+                update = requests.put(
+                    endpoint,
+                    headers=headers,
+                    json={
+                        "_id": webhook_id,
+                        "events": after_events,
+                        "isActive": True,
+                    },
+                    timeout=20,
+                )
+                update.raise_for_status()
+
+            verify = requests.get(endpoint, headers=headers, timeout=20)
+            verify.raise_for_status()
+            verify_payload = verify.json()
+            verify_hooks = verify_payload.get("webhooks") or verify_payload.get("data") or []
+            if isinstance(verify_hooks, dict):
+                verify_hooks = verify_hooks.get("webhooks") or verify_hooks.get("data") or []
+            verified = next(
+                (
+                    item for item in verify_hooks
+                    if isinstance(item, dict)
+                    and str(item.get("_id") or item.get("id") or "") == webhook_id
+                ),
+                None,
+            )
+            if not verified:
+                raise SystemExit("Updated webhook could not be re-read")
+            if "message.sent" not in (verified.get("events") or []):
+                raise SystemExit("message.sent was not persisted")
+            if not verified.get("isActive"):
+                raise SystemExit("Webhook is not active")
+
+            synthetic = {
+                "event": "message.sent",
+                "message": {
+                    "id": "live-handler-verification-only",
+                    "conversationId": "live-handler-verification-only",
+                    "accountId": "live-handler-verification-only",
+                    "platform": "whatsapp",
+                    "direction": "outgoing",
+                    "source": "whatsappbusinessapp",
+                    "text": "verification",
+                    "createdAt": "2026-08-01T15:00:00+00:00",
+                },
+                "conversation": {
+                    "id": "live-handler-verification-only",
+                    "platform": "whatsapp",
+                },
+                "account": {"id": "live-handler-verification-only"},
+            }
+            with (
+                patch(
+                    "shared.tenant_guard.is_account_allowed",
+                    return_value=True,
+                ),
+                patch.object(
+                    state_registry,
+                    "wa_store_external_operator_message",
+                    return_value=True,
+                ) as store,
+                patch.object(state_registry, "wa_set_archived"),
+            ):
+                webhook_server._process_zernio_sent_event(synthetic)
+            if store.call_count != 1:
+                raise SystemExit("Deployed message.sent handler did not store the operator message")
+
+            parsed_url = urlparse(str(verified.get("url") or ""))
+            print("LIVE_SYNC_VERIFY=" + json.dumps({
+                "handler_deployed": True,
+                "handler_role": "operator",
+                "handler_sender": "Secretaría",
+                "webhook_host": parsed_url.hostname,
+                "webhook_path": parsed_url.path,
+                "message_sent_before": "message.sent" in before_events,
+                "message_sent_after": True,
+                "webhook_active": True,
+                "event_count_before": len(before_events),
+                "event_count_after": len(verified.get("events") or []),
+            }, ensure_ascii=False))
+            PY
