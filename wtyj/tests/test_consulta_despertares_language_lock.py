@@ -378,3 +378,148 @@ def test_first_website_lead_reply_introduces_alia_exactly_once():
     assert reply.count("Alia") == 1
     assert "Hola, soy la asistente virtual" not in reply
     assert "La terapia individual para adultos está disponible." in reply
+
+
+def _complete_callback_fields(**overrides):
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García López",
+        "phone": "600111222",
+        "callback_preference": "esta tarde",
+        "session_type": "Presencial",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_missing_appointment_preference_is_asked_naturally_before_handoff():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "Claro, cuéntame un poco sobre ti."},
+        {"role": "user", "text": "Me podéis llamar esta tarde."},
+    ]
+    draft = "Perfecto, trasladaré tus datos al equipo."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Me podéis llamar esta tarde.",
+            history=history,
+            fields=_complete_callback_fields(),
+            intents=["booking"],
+        )
+
+    assert reply.startswith(draft)
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+    )
+    assert reply.count("?") == 1
+
+
+def test_captured_appointment_preference_is_not_asked_again():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "¿Cuándo te podemos llamar?"},
+    ]
+    draft = "Perfecto, trasladaré tus datos al equipo."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Podéis llamarme esta tarde.",
+            history=history,
+            fields=_complete_callback_fields(
+                appointment_preference="Los martes por la mañana"
+            ),
+            intents=["booking"],
+        )
+
+    assert reply == draft
+
+
+def test_appointment_preference_question_is_never_repeated():
+    question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+    )
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": question},
+        {"role": "user", "text": "Prefiero no concretarlo ahora."},
+    ]
+    draft = "De acuerdo, el equipo te llamará para orientarte."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Prefiero no concretarlo ahora.",
+            history=history,
+            fields=_complete_callback_fields(),
+            intents=["booking"],
+        )
+
+    assert reply == draft
+    assert question not in reply
+
+
+def test_appointment_preference_opt_out_is_respected_without_pressure():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "Gracias por facilitar tus datos."},
+    ]
+    draft = "De acuerdo, el equipo te llamará para orientarte."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="No tengo preferencia, me da igual.",
+            history=history,
+            fields=_complete_callback_fields(),
+            intents=["booking"],
+        )
+
+    assert reply == draft
+
+
+def test_existing_intake_question_is_not_combined_with_appointment_schedule():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "Gracias por facilitar tus datos."},
+    ]
+    draft = "¿Preferirías que la primera sesión fuera presencial u online?"
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="Podéis llamarme esta tarde.",
+            history=history,
+            fields=_complete_callback_fields(session_type=""),
+            intents=["booking"],
+        )
+
+    assert reply == draft
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        not in reply
+    )
+
+
+def test_english_appointment_preference_question_matches_customer_language():
+    history = [
+        {"role": "user", "text": "I would like to book an appointment."},
+        {"role": "assistant", "text": "Of course. Tell me a little about yourself."},
+    ]
+    draft = "Thank you, I will pass your details to the team."
+
+    with _as_despertares():
+        reply = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply=draft,
+            inbound_text="You can call me this afternoon.",
+            history=history,
+            fields=_complete_callback_fields(callback_preference="this afternoon"),
+            intents=["booking"],
+        )
+
+    assert reply.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
+    )
+    assert "¿" not in reply

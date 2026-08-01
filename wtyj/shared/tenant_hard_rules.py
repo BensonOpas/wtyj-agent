@@ -32,6 +32,14 @@ CONSULTA_DESPERTARES_CALLBACK_CLOSING = (
 CONSULTA_DESPERTARES_ENGLISH_CALLBACK_CLOSING = (
     "When can we call you to confirm the first appointment?"
 )
+CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION = (
+    "Antes de terminar, ¿qué día o franja horaria te vendría mejor para "
+    "la primera cita?"
+)
+CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION = (
+    "Before we finish, what day or time window would suit you best for "
+    "the first appointment?"
+)
 CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION = (
     "Would you like to tell me a little more about what's been going on for "
     "you, so I can guide you toward the right support?"
@@ -59,8 +67,9 @@ These rules override generic booking pacing and checklist-like intake.
 - Treat a request for an appointment as the start of a conversation, not as a
   trigger to immediately request identity and phone data.
 - Build the card progressively. Required for the callback: first_name, surnames,
-  phone, and callback_preference. Useful enrichment: session_type,
-  appointment_preference, and visit_reason. The visit reason is always optional.
+  phone, and callback_preference. Treat appointment_preference as expected
+  enrichment: ask for it once, naturally, before the handoff when the conversation
+  is flowing. session_type is useful enrichment. The visit reason is always optional.
 - If the customer gives a full name, store the given name in first_name and every
   remaining name word in surnames; do not make them repeat it in a labelled form.
 - Store Presencial or Online in session_type only when established by what the
@@ -101,9 +110,10 @@ These rules override generic booking pacing and checklist-like intake.
   customer is comfortably engaged.
 - After callback_preference is known, continue naturally with exactly one missing
   enrichment field per reply: first session_type, then appointment_preference,
-  then an optional visit_reason invitation. Acknowledge the customer's answer
-  before asking the next question; never present a checklist or fire questions
-  back-to-back.
+  then an optional visit_reason invitation. appointment_preference should be
+  requested once before handoff whenever the exchange remains comfortable and
+  organic. Acknowledge the customer's answer before asking the next question;
+  never present a checklist or fire questions back-to-back.
 - Finish with a natural handoff only after those enrichment opportunities were
   completed, the customer declined them, or the customer is uncomfortable, in a
   hurry, or asks to stop. Never delay or block the callback because an enrichment
@@ -178,6 +188,28 @@ _CONSULTA_CALLBACK_CLOSING_RE = re.compile(
     r"\s+para\s+confirmar\s+la\s+primera\s+cita"
     r"|when\s+can\s+we\s+call\s+you\s+to\s+confirm\s+the\s+first\s+appointment"
     r")\s*\?\s*",
+    re.IGNORECASE,
+)
+_CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE = re.compile(
+    r"(?:"
+    r"¿?\s*qu[eé]\s+(?:d[ií]a|d[ií]as|franja|franjas|horario)"
+    r"[^?\n]*(?:cita|sesi[oó]n)"
+    r"|what\s+(?:day|days|time|time\s+window)"
+    r"[^?\n]*(?:appointment|session)"
+    r")",
+    re.IGNORECASE,
+)
+_CONSULTA_INTAKE_OPTOUT_RE = re.compile(
+    r"\b(?:"
+    r"no\s+tengo\s+preferencia|me\s+da\s+igual|"
+    r"cualquier\s+(?:d[ií]a|hora|momento)|cuando\s+sea|"
+    r"prefiero\s+no|no\s+quiero\s+(?:decir|responder|seguir)|"
+    r"no\s+me\s+preguntes|tengo\s+prisa|no\s+puedo\s+seguir|"
+    r"d[eé]jalo|nada\s+m[aá]s|"
+    r"no\s+preference|any\s+(?:day|time)|whenever|"
+    r"rather\s+not|don['’]?t\s+want\s+to\s+(?:say|answer|continue)|"
+    r"stop\s+asking|in\s+a\s+hurry|can['’]?t\s+continue"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -353,9 +385,9 @@ def enforce_consulta_despertares_boundaries(
     """Deterministically enforce Consulta Despertares' mandatory boundaries.
 
     The model writes the conversational body and language-matched introduction.
-    This final guard owns only the exact Spanish website-lead greeting and the
-    controlled callback closing so prompt non-compliance cannot leak to a
-    patient-facing WhatsApp reply.
+    This final guard owns the exact website-lead greeting and the controlled
+    callback and appointment-preference questions so prompt non-compliance
+    cannot leak to a patient-facing WhatsApp reply.
     """
     if not reply or not is_consulta_despertares():
         return reply
@@ -434,6 +466,20 @@ def enforce_consulta_despertares_boundaries(
     already_has_callback_preference = bool(
         str(fields.get("callback_preference") or "").strip()
     )
+    already_has_appointment_preference = bool(
+        str(fields.get("appointment_preference") or "").strip()
+    )
+    appointment_preference_already_asked = any(
+        str(message.get("role") or "").lower() == "assistant"
+        and _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE.search(
+            str(message.get("text") or "")
+        )
+        for message in history
+        if isinstance(message, dict)
+    )
+    customer_opted_out = bool(
+        _CONSULTA_INTAKE_OPTOUT_RE.search(inbound_text or "")
+    )
     reply_already_asks_a_question = "?" in clean or "¿" in clean
 
     if (
@@ -450,4 +496,21 @@ def enforce_consulta_despertares_boundaries(
             else CONSULTA_DESPERTARES_CALLBACK_CLOSING
         )
         clean = closing if not clean else f"{clean}\n\n{closing}"
+
+    if (
+        booking_intent
+        and _consulta_has_name_and_phone(fields)
+        and already_has_callback_preference
+        and not already_has_appointment_preference
+        and not appointment_preference_already_asked
+        and not customer_opted_out
+        and not reply_already_asks_a_question
+    ):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        question = (
+            CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
+            if language == "English"
+            else CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        )
+        clean = question if not clean else f"{clean.rstrip()}\n\n{question}"
     return clean
