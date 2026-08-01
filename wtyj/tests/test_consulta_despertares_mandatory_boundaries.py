@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 
 from agents.marina import marina_agent
@@ -179,10 +180,13 @@ def test_callback_question_is_not_used_when_time_was_already_provided():
         intents=["booking"],
     )
 
-    assert tenant_hard_rules.CONSULTA_DESPERTARES_CALLBACK_CLOSING not in enforced
-    assert enforced.endswith(
-        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+    expected_question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+        if tenant_hard_rules._consulta_august_2026_scheduling_active()
+        else tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
     )
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_CALLBACK_CLOSING not in enforced
+    assert enforced.endswith(expected_question)
 
 
 def test_other_tenants_are_unchanged():
@@ -529,3 +533,225 @@ def test_relationship_rule_forbids_inventing_follow_up_caller_number():
 
     assert "Never invent, infer, or provide a caller telephone number" in rule
     assert "depends on the professional and clinic" in rule
+
+
+def test_august_2026_scheduling_rule_expires_after_closure():
+    assert tenant_hard_rules._consulta_august_2026_scheduling_active(
+        date(2026, 8, 1)
+    )
+    assert tenant_hard_rules._consulta_august_2026_scheduling_active(
+        date(2026, 8, 23)
+    )
+    assert not tenant_hard_rules._consulta_august_2026_scheduling_active(
+        date(2026, 8, 24)
+    )
+
+
+def test_structured_date_inside_august_closure_is_never_accepted():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "¿Qué día te vendría bien?"},
+    ]
+
+    enforced = _enforce(
+        "Perfecto, queda confirmada para el 15 de agosto.",
+        "El día 15 me viene bien.",
+        history=history,
+        fields={"date": "2026-08-15"},
+        intents=["booking"],
+    )
+
+    assert enforced == tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_CLOSURE_ANSWER
+    assert "confirmada para el 15" not in enforced
+    assert "24 de agosto" in enforced
+
+
+def test_natural_spanish_dates_from_10_through_23_august_are_blocked():
+    history = [
+        {"role": "user", "text": "Necesito una cita."},
+        {"role": "assistant", "text": "¿Qué día te vendría bien?"},
+    ]
+    for day in (10, 15, 23):
+        enforced = _enforce(
+            f"Perfecto, la cita será el {day} de agosto.",
+            f"Me viene bien el {day} de agosto.",
+            history=history,
+            fields={},
+            intents=["booking"],
+        )
+        assert (
+            enforced
+            == tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_CLOSURE_ANSWER
+        )
+
+
+def test_natural_english_closed_date_uses_english_answer():
+    history = [
+        {"role": "user", "text": "I need an appointment."},
+        {"role": "assistant", "text": "What day would suit you?"},
+    ]
+
+    enforced = _enforce(
+        "Your appointment is confirmed for August 20.",
+        "Can I have an appointment on August 20?",
+        history=history,
+        fields={},
+        intents=["booking"],
+    )
+
+    assert (
+        enforced
+        == tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_AUGUST_CLOSURE_ANSWER
+    )
+    assert "August 24 onward" in enforced
+    assert "confirmed for August 20" not in enforced
+
+
+def test_23_august_is_closed_but_24_august_is_accepted():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "¿Qué día te vendría bien?"},
+    ]
+
+    closed = _enforce(
+        "Anotado para el 23 de agosto.",
+        "El 23 de agosto.",
+        history=history,
+        fields={"date": "2026-08-23"},
+        intents=["booking"],
+    )
+    available = _enforce(
+        "Anotado como preferencia el 24 de agosto.",
+        "El 24 de agosto.",
+        history=history,
+        fields={
+            "date": "2026-08-24",
+            "appointment_preference": "24 de agosto",
+        },
+        intents=["booking"],
+    )
+
+    assert closed == tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_CLOSURE_ANSWER
+    assert available == "Anotado como preferencia el 24 de agosto."
+
+
+def test_explicit_after_23_august_request_remains_valid():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "¿Qué día te vendría bien?"},
+    ]
+    draft = "Perfecto, buscaremos una cita para la vuelta de vacaciones."
+
+    enforced = _enforce(
+        draft,
+        "Me viene bien después del 23 de agosto.",
+        history=history,
+        fields={
+            "date": "2026-08-23",
+            "appointment_preference": "después del 23 de agosto",
+        },
+        intents=["booking"],
+    )
+
+    assert enforced == draft
+
+
+def test_august_2027_date_is_not_affected_by_temporary_2026_rule():
+    history = [
+        {"role": "user", "text": "Quiero pedir una cita."},
+        {"role": "assistant", "text": "¿Qué día te vendría bien?"},
+    ]
+    draft = "Anotado como preferencia."
+
+    enforced = _enforce(
+        draft,
+        "Me viene bien el 15 de agosto de 2027.",
+        history=history,
+        fields={
+            "date": "2027-08-15",
+            "appointment_preference": "15 de agosto de 2027",
+        },
+        intents=["booking"],
+    )
+
+    assert enforced == draft
+
+
+def test_active_august_rule_steers_new_preference_to_24_august_onward():
+    history = [
+        {"role": "user", "text": "Quiero una cita."},
+        {"role": "assistant", "text": "Gracias por facilitar tus datos."},
+    ]
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "por la tarde",
+    }
+
+    with patch(
+        "shared.tenant_hard_rules._consulta_august_2026_scheduling_active",
+        return_value=True,
+    ):
+        enforced = _enforce(
+            "Perfecto, trasladaré tus datos al equipo.",
+            "Podéis llamarme por la tarde.",
+            history=history,
+            fields=fields,
+            intents=["booking"],
+        )
+
+    assert enforced.endswith(
+        tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+    )
+
+
+def test_august_company_rule_is_only_in_prompt_while_active():
+    with (
+        patch(
+            "shared.tenant_hard_rules.current_tenant_slug",
+            return_value="consulta-despertares",
+        ),
+        patch(
+            "shared.tenant_hard_rules._consulta_august_2026_scheduling_active",
+            return_value=True,
+        ),
+    ):
+        active_rule = (
+            tenant_hard_rules.consulta_despertares_relationship_rule_block()
+        )
+
+    with (
+        patch(
+            "shared.tenant_hard_rules.current_tenant_slug",
+            return_value="consulta-despertares",
+        ),
+        patch(
+            "shared.tenant_hard_rules._consulta_august_2026_scheduling_active",
+            return_value=False,
+        ),
+    ):
+        expired_rule = (
+            tenant_hard_rules.consulta_despertares_relationship_rule_block()
+        )
+
+    assert "closed from 10 August through 23 August 2026" in active_rule
+    assert "from 24 August 2026 onward" in active_rule
+    assert "closed from 10 August through 23 August 2026" not in expired_rule
+
+
+def test_august_closure_override_is_tenant_scoped():
+    reply = "La cita queda confirmada para el 15 de agosto."
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="another-tenant",
+    ):
+        enforced = tenant_hard_rules.enforce_consulta_despertares_boundaries(
+            reply,
+            "Quiero una cita el 15 de agosto.",
+            [],
+            {"date": "2026-08-15"},
+            ["booking"],
+        )
+
+    assert enforced == reply

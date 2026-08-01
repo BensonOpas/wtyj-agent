@@ -409,10 +409,13 @@ def test_missing_appointment_preference_is_asked_naturally_before_handoff():
             intents=["booking"],
         )
 
-    assert reply.startswith(draft)
-    assert reply.endswith(
-        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+    expected_question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+        if tenant_hard_rules._consulta_august_2026_scheduling_active()
+        else tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
     )
+    assert reply.startswith(draft)
+    assert reply.endswith(expected_question)
     assert reply.count("?") == 1
 
 
@@ -519,7 +522,10 @@ def test_english_appointment_preference_question_matches_customer_language():
             intents=["booking"],
         )
 
-    assert reply.endswith(
-        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
+    expected_question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_AUGUST_APPOINTMENT_PREFERENCE_QUESTION
+        if tenant_hard_rules._consulta_august_2026_scheduling_active()
+        else tenant_hard_rules.CONSULTA_DESPERTARES_ENGLISH_APPOINTMENT_PREFERENCE_QUESTION
     )
+    assert reply.endswith(expected_question)
     assert "¿" not in reply
