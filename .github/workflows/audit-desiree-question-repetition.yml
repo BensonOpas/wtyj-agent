@@ -1,0 +1,106 @@
+name: Audit Desirée question repetition
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-desiree-question-repetition.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit Despertares conversation safely
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            docker exec -i wtyj-consulta-despertares python - <<'PY'
+            import hashlib
+            import json
+            import sqlite3
+            import unicodedata
+
+            TARGET = "desiree lopez ruiz"
+            PHRASE = (
+                "te apetece contarme un poco mas sobre lo que te esta pasando"
+            )
+
+            def norm(value):
+                text = unicodedata.normalize("NFKD", str(value or ""))
+                return "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+
+            def masked(value):
+                value = str(value or "")
+                return hashlib.sha256(value.encode()).hexdigest()[:12]
+
+            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+
+            candidate_ids = set()
+            for row in db.execute(
+                "SELECT phone, sender_name FROM whatsapp_threads "
+                "WHERE sender_name IS NOT NULL"
+            ):
+                if TARGET in norm(row["sender_name"]):
+                    candidate_ids.add(row["phone"])
+
+            for row in db.execute(
+                "SELECT phone, fields_json FROM whatsapp_booking_state"
+            ):
+                if TARGET in norm(row["fields_json"]):
+                    candidate_ids.add(row["phone"])
+
+            result = []
+            for conversation_id in sorted(candidate_ids):
+                rows = db.execute(
+                    "SELECT role, text, created_at FROM whatsapp_threads "
+                    "WHERE phone = ? ORDER BY created_at ASC",
+                    (conversation_id,),
+                ).fetchall()
+                repeated = [
+                    row for row in rows
+                    if row["role"] in ("assistant", "operator")
+                    and PHRASE in norm(row["text"])
+                ]
+                result.append({
+                    "conversation_sha12": masked(conversation_id),
+                    "total_messages": len(rows),
+                    "matching_question_count": len(repeated),
+                    "matching_timestamps": [
+                        row["created_at"] for row in repeated
+                    ],
+                    "assistant_message_count": sum(
+                        1 for row in rows if row["role"] == "assistant"
+                    ),
+                    "user_message_count": sum(
+                        1 for row in rows if row["role"] == "user"
+                    ),
+                })
+
+            all_repeated = db.execute(
+                "SELECT phone, COUNT(*) AS total FROM whatsapp_threads "
+                "WHERE role = 'assistant' AND lower(text) LIKE ? "
+                "GROUP BY phone ORDER BY total DESC",
+                ("%te apetece contarme un poco más sobre lo que te está pasando%",),
+            ).fetchall()
+            db.close()
+
+            print("DESIREE_AUDIT=" + json.dumps({
+                "matched_conversations": result,
+                "global_repeated_question_conversations": [
+                    {
+                        "conversation_sha12": masked(row["phone"]),
+                        "count": row["total"],
+                    }
+                    for row in all_repeated
+                ],
+            }, ensure_ascii=False))
+            PY
