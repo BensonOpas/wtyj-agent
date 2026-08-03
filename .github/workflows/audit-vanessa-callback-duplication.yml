@@ -1,0 +1,102 @@
+name: Audit Vanessa callback duplication
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-vanessa-callback-duplication.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit conversation without exposing personal message text
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            docker exec -i wtyj-consulta-despertares python - <<'PY'
+            import hashlib
+            import json
+            import re
+            import sqlite3
+            import unicodedata
+
+            TARGET = "vanessa arteaga"
+            CALLBACK = (
+                r"cuando\s+(?:te\s+podemos\s+llamar|podemos\s+llamarte)"
+                r"\s+para\s+confirmar\s+la\s+primera\s+cita"
+            )
+
+            def norm(value):
+                text = unicodedata.normalize("NFKD", str(value or ""))
+                return "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+
+            def digest(value):
+                return hashlib.sha256(str(value).encode()).hexdigest()[:12]
+
+            db = sqlite3.connect("file:/app/data/state_registry.db?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+            candidates = set()
+            for row in db.execute(
+                "SELECT phone, sender_name FROM whatsapp_threads "
+                "WHERE sender_name IS NOT NULL"
+            ):
+                if TARGET in norm(row["sender_name"]):
+                    candidates.add(row["phone"])
+            for row in db.execute(
+                "SELECT phone, fields_json FROM whatsapp_booking_state"
+            ):
+                if TARGET in norm(row["fields_json"]):
+                    candidates.add(row["phone"])
+
+            reports = []
+            for conversation_id in sorted(candidates):
+                rows = db.execute(
+                    "SELECT role, text, created_at FROM whatsapp_threads "
+                    "WHERE phone = ? ORDER BY created_at ASC",
+                    (conversation_id,),
+                ).fetchall()
+                callback_rows = [
+                    row for row in rows
+                    if row["role"] == "assistant"
+                    and re.search(CALLBACK, norm(row["text"]), re.I)
+                ]
+                user_after_first = []
+                if callback_rows:
+                    first_at = callback_rows[0]["created_at"]
+                    user_after_first = [
+                        row for row in rows
+                        if row["role"] == "user" and row["created_at"] > first_at
+                    ]
+                state = db.execute(
+                    "SELECT fields_json FROM whatsapp_booking_state WHERE phone = ?",
+                    (conversation_id,),
+                ).fetchone()
+                fields = json.loads(state["fields_json"] or "{}") if state else {}
+                reports.append({
+                    "conversation_sha12": digest(conversation_id),
+                    "total_messages": len(rows),
+                    "callback_question_count": len(callback_rows),
+                    "callback_question_timestamps": [r["created_at"] for r in callback_rows],
+                    "user_messages_after_first_callback_question": len(user_after_first),
+                    "has_callback_preference_saved": bool(
+                        str(fields.get("callback_preference") or "").strip()
+                    ),
+                    "saved_callback_preference_sha12": (
+                        digest(fields.get("callback_preference"))
+                        if fields.get("callback_preference") else None
+                    ),
+                })
+            db.close()
+            print("VANESSA_CALLBACK_AUDIT=" + json.dumps(
+                {"matched_conversations": reports}, ensure_ascii=False
+            ))
+            PY
