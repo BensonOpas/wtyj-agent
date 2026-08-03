@@ -1832,10 +1832,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # output boundaries, not optional style guidance. Apply them after every
     # model/booking rewrite so no later branch can remove or misplace them.
     _reply_before_tenant_boundaries = reply_text
+    _boundary_history = history
+    if tenant_hard_rules.is_consulta_despertares():
+        # The prompt uses a short recent window, but a hard anti-repetition
+        # guard must consider the whole active timeline. Otherwise a question
+        # can return as soon as it falls out of the ten-message prompt window.
+        try:
+            _boundary_history = state_registry.wa_get_full_history(phone, limit=200)
+        except Exception:
+            _boundary_history = history
     reply_text = tenant_hard_rules.enforce_consulta_despertares_boundaries(
         reply=reply_text,
         inbound_text=text,
-        history=history,
+        history=_boundary_history,
         fields=fields,
         intents=result.get("intents", []),
     )
