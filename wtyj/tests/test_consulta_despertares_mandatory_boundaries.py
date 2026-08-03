@@ -876,3 +876,40 @@ def test_cloud_api_sent_echo_is_not_stored_again():
 
     store_message.assert_not_called()
 
+def test_prospect_support_question_is_never_reinserted_after_it_was_asked():
+    previous_question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+    )
+    history = [
+        {"role": "assistant", "text": previous_question},
+        {"role": "user", "text": "Me cuesta dormir desde hace semanas."},
+    ]
+
+    enforced = _enforce(
+        "Entiendo que debe ser agotador. ¿Hay algo más en lo que pueda ayudarte?",
+        "También tengo mucha ansiedad.",
+        history=history,
+    )
+
+    assert previous_question not in enforced
+    assert "¿Hay algo más en lo que pueda ayudarte?" not in enforced
+    assert enforced == "Entiendo que debe ser agotador."
+
+
+def test_model_cannot_repeat_the_exact_prospect_support_question():
+    previous_question = (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+    )
+    history = [{"role": "assistant", "text": previous_question}]
+
+    enforced = _enforce(
+        previous_question,
+        "Sigo igual.",
+        history=history,
+    )
+
+    assert previous_question not in enforced
+    assert enforced == (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT
+    )
+

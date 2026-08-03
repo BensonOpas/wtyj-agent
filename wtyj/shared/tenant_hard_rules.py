@@ -77,6 +77,12 @@ CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION = (
     "¿Te apetece contarme un poco más sobre lo que te está pasando, para "
     "poder orientarte hacia el apoyo más adecuado?"
 )
+CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT = (
+    "Gracias por compartirlo. Podemos seguir hablando a tu ritmo."
+)
+CONSULTA_DESPERTARES_ENGLISH_SUPPORT_ACKNOWLEDGEMENT = (
+    "Thank you for sharing that. We can continue at your pace."
+)
 CONSULTA_DESPERTARES_AUGUST_2026_RULE = """
 TEMPORARY CONSULTA DESPERTARES AUGUST 2026 SCHEDULING RULE (HIGHEST PRIORITY):
 - The clinic is closed from 10 August through 23 August 2026, both dates inclusive.
@@ -206,6 +212,16 @@ _CONSULTA_SUPPORT_CONTEXT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_CONSULTA_PROSPECT_QUESTION_RE = re.compile(
+    r"(?:"
+    r"¿?\s*te\s+apetece\s+contarme\s+un\s+poco\s+m[aá]s\s+sobre\s+"
+    r"lo\s+que\s+te\s+est[aá]\s+pasando[^?]*\?"
+    r"|would\s+you\s+like\s+to\s+tell\s+me\s+a\s+little\s+more\s+"
+    r"about\s+what(?:'s|\s+is)\s+been\s+going\s+on\s+for\s+you[^?]*\?"
+    r")",
+    re.IGNORECASE,
+)
+
 _CONSULTA_GENERIC_HELP_CLOSING_RE = re.compile(
     r"(?:\s*\n*)?(?:"
     r"is\s+there\s+(?:anything|something)(?:\s+else)?\s+"
@@ -552,23 +568,43 @@ def enforce_consulta_despertares_boundaries(
 
     clean = _strip_consulta_callback_closing(reply)
 
+    # The relationship-first prompt contains this gentle invitation as an
+    # example, but it must never become a mechanical loop. Check every prior
+    # Alia reply before adding it, and remove a model-generated duplicate too.
+    prospect_question_already_asked = any(
+        str(message.get("role") or "").lower() == "assistant"
+        and _CONSULTA_PROSPECT_QUESTION_RE.search(
+            str(message.get("text") or "")
+        )
+        for message in history
+        if isinstance(message, dict)
+    )
+    if not is_first_reply and prospect_question_already_asked:
+        clean = _CONSULTA_PROSPECT_QUESTION_RE.sub("", clean).strip()
+
     if not is_first_reply and _CONSULTA_GENERIC_HELP_CLOSING_RE.search(clean):
         language = consulta_despertares_reply_language(inbound_text, history)
-        prospect_question = (
-            CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
-            if language == "English"
-            else CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
-        )
-        clean = _CONSULTA_GENERIC_HELP_CLOSING_RE.sub(
-            f"\n\n{prospect_question}",
-            clean,
-        ).strip()
+        if prospect_question_already_asked:
+            # Do not exchange one repetitive service-desk closing for the same
+            # repeated emotional-support question. Keep the useful answer only.
+            clean = _CONSULTA_GENERIC_HELP_CLOSING_RE.sub("", clean).strip()
+        else:
+            prospect_question = (
+                CONSULTA_DESPERTARES_ENGLISH_PROSPECT_QUESTION
+                if language == "English"
+                else CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+            )
+            clean = _CONSULTA_GENERIC_HELP_CLOSING_RE.sub(
+                f"\n\n{prospect_question}",
+                clean,
+            ).strip()
 
     if (
         not is_first_reply
         and _CONSULTA_SUPPORT_CONTEXT_RE.search(inbound_text or "")
         and "?" not in clean
         and "¿" not in clean
+        and not prospect_question_already_asked
     ):
         language = consulta_despertares_reply_language(inbound_text, history)
         prospect_question = (
@@ -577,6 +613,14 @@ def enforce_consulta_despertares_boundaries(
             else CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
         )
         clean = f"{clean.rstrip()}\n\n{prospect_question}"
+
+    if not clean and prospect_question_already_asked:
+        language = consulta_despertares_reply_language(inbound_text, history)
+        clean = (
+            CONSULTA_DESPERTARES_ENGLISH_SUPPORT_ACKNOWLEDGEMENT
+            if language == "English"
+            else CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT
+        )
 
     if is_first_reply:
         language = consulta_despertares_reply_language(inbound_text, history)
