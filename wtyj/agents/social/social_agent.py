@@ -1250,6 +1250,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
 
     # Step 3: Merge fields — overwrite when Claude returns non-empty values
     new_fields = result.get("fields", {}) or {}
+    if tenant_hard_rules.is_consulta_despertares():
+        # A concise answer such as "15:30" may be unambiguous only because
+        # the prior Alia turn asked when the team may call. Preserve it even
+        # if the model misses the field extraction on that turn.
+        _callback_answer = (
+            tenant_hard_rules.consulta_despertares_callback_preference_from_reply(
+                text, history, fields
+            )
+        )
+        if _callback_answer and not str(
+            new_fields.get("callback_preference") or ""
+        ).strip():
+            new_fields = dict(new_fields)
+            new_fields["callback_preference"] = _callback_answer
     for k, v in new_fields.items():
         if v is not None and v != "":
             fields[k] = v

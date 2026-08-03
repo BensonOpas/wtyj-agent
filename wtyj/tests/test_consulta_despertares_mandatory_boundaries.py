@@ -913,3 +913,52 @@ def test_model_cannot_repeat_the_exact_prospect_support_question():
         tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT
     )
 
+
+
+def test_callback_question_is_never_repeated_after_a_short_unsaved_answer():
+    prior_question = (
+        "¿Cuándo os podemos llamar para confirmar la primera cita?"
+    )
+    history = [
+        {"role": "assistant", "text": prior_question},
+        {"role": "user", "text": "15:30"},
+    ]
+    fields = {
+        "first_name": "Vanessa",
+        "surnames": "Arteaga",
+        "phone": "600111222",
+    }
+
+    enforced = _enforce(
+        "¿Cuándo os podemos llamar para confirmar la primera cita?",
+        "15:30",
+        history=history,
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_CALLBACK_CLOSING not in enforced
+    assert "¿Cuándo os podemos llamar para confirmar la primera cita?" not in enforced
+    assert enforced == (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_CALLBACK_ACKNOWLEDGEMENT
+    )
+
+
+def test_short_reply_to_callback_question_is_recovered_for_the_prospect_card():
+    history = [
+        {
+            "role": "assistant",
+            "text": "¿Cuándo os podemos llamar para confirmar la primera cita?",
+        },
+    ]
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        recovered = (
+            tenant_hard_rules.consulta_despertares_callback_preference_from_reply(
+                "15:30", history, {}
+            )
+        )
+
+    assert recovered == "15:30"

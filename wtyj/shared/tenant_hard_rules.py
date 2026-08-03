@@ -83,6 +83,12 @@ CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT = (
 CONSULTA_DESPERTARES_ENGLISH_SUPPORT_ACKNOWLEDGEMENT = (
     "Thank you for sharing that. We can continue at your pace."
 )
+CONSULTA_DESPERTARES_SPANISH_CALLBACK_ACKNOWLEDGEMENT = (
+    "Perfecto, gracias por indicárnoslo."
+)
+CONSULTA_DESPERTARES_ENGLISH_CALLBACK_ACKNOWLEDGEMENT = (
+    "Perfect, thank you for letting us know."
+)
 CONSULTA_DESPERTARES_AUGUST_2026_RULE = """
 TEMPORARY CONSULTA DESPERTARES AUGUST 2026 SCHEDULING RULE (HIGHEST PRIORITY):
 - The clinic is closed from 10 August through 23 August 2026, both dates inclusive.
@@ -244,12 +250,23 @@ _CONSULTA_GENERIC_HELP_CLOSING_RE = re.compile(
 
 _CONSULTA_CALLBACK_CLOSING_RE = re.compile(
     r"(?:\s*\n*)?(?:"
-    r"¿?\s*cu[aá]ndo\s+(?:te\s+podemos\s+llamar|podemos\s+llamarte)"
-    r"\s+para\s+confirmar\s+la\s+primera\s+cita"
+    r"¿?\s*cu[aá]ndo\s+(?:(?:te|os)\s+podemos\s+llamar|"
+    r"podemos\s+llamar(?:te|os))\s+para\s+confirmar\s+la\s+primera\s+cita"
     r"|when\s+can\s+we\s+call\s+you\s+to\s+confirm\s+the\s+first\s+appointment"
     r")\s*\?\s*",
     re.IGNORECASE,
 )
+_CONSULTA_CALLBACK_ANSWER_RE = re.compile(
+    r"(?:"
+    r"\b(?:[01]?\d|2[0-3])[:.]?[0-5]\d\b"
+    r"|\b(?:por\s+la\s+(?:ma[ñn]ana|tarde|noche)|"
+    r"por\s+la\s+manana|a\s+cualquier\s+hora|cuando\s+quer[aá]is|"
+    r"cuando\s+pued[aá]is|en\s+cualquier\s+momento|"
+    r"morning|afternoon|evening|any(?:\s+time)?|whenever)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE = re.compile(
     r"(?:"
     r"¿?\s*qu[eé]\s+(?:d[ií]a|d[ií]as|franja|franjas|horario)"
@@ -508,6 +525,44 @@ def _consulta_has_name_and_phone(fields: dict) -> bool:
     return bool(first_name and surnames and 9 <= len(digits) <= 15)
 
 
+def _consulta_callback_question_already_asked(history: list) -> bool:
+    """Return whether Alia already asked the controlled callback question."""
+
+    return any(
+        str(message.get("role") or "").lower() == "assistant"
+        and _CONSULTA_CALLBACK_CLOSING_RE.search(str(message.get("text") or ""))
+        for message in (history or [])
+        if isinstance(message, dict)
+    )
+
+
+def consulta_despertares_callback_preference_from_reply(
+    inbound_text: str,
+    history: list,
+    fields: dict | None = None,
+) -> str:
+    """Safely recover a concise answer to Alia's prior callback question.
+
+    This is intentionally narrow: it runs only after Alia has asked the
+    callback question, only when the dedicated field is still empty, and only
+    for a short availability answer containing an explicit time or time window.
+    """
+
+    if not is_consulta_despertares():
+        return ""
+    if str((fields or {}).get("callback_preference") or "").strip():
+        return ""
+    if not _consulta_callback_question_already_asked(history):
+        return ""
+
+    answer = str(inbound_text or "").strip()
+    if not answer or len(answer) > 120 or "?" in answer or "¿" in answer:
+        return ""
+    if not _CONSULTA_CALLBACK_ANSWER_RE.search(answer):
+        return ""
+    return answer
+
+
 def enforce_consulta_despertares_boundaries(
     reply: str,
     inbound_text: str,
@@ -567,6 +622,9 @@ def enforce_consulta_despertares_boundaries(
         return f"{greeting}\n\n{answer}"
 
     clean = _strip_consulta_callback_closing(reply)
+    callback_question_already_asked = _consulta_callback_question_already_asked(
+        history
+    )
 
     # The relationship-first prompt contains this gentle invitation as an
     # example, but it must never become a mechanical loop. Check every prior
@@ -614,13 +672,22 @@ def enforce_consulta_despertares_boundaries(
         )
         clean = f"{clean.rstrip()}\n\n{prospect_question}"
 
-    if not clean and prospect_question_already_asked:
+    if not clean and (
+        prospect_question_already_asked or callback_question_already_asked
+    ):
         language = consulta_despertares_reply_language(inbound_text, history)
-        clean = (
-            CONSULTA_DESPERTARES_ENGLISH_SUPPORT_ACKNOWLEDGEMENT
-            if language == "English"
-            else CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT
-        )
+        if callback_question_already_asked:
+            clean = (
+                CONSULTA_DESPERTARES_ENGLISH_CALLBACK_ACKNOWLEDGEMENT
+                if language == "English"
+                else CONSULTA_DESPERTARES_SPANISH_CALLBACK_ACKNOWLEDGEMENT
+            )
+        else:
+            clean = (
+                CONSULTA_DESPERTARES_ENGLISH_SUPPORT_ACKNOWLEDGEMENT
+                if language == "English"
+                else CONSULTA_DESPERTARES_SPANISH_SUPPORT_ACKNOWLEDGEMENT
+            )
 
     if is_first_reply:
         language = consulta_despertares_reply_language(inbound_text, history)
@@ -679,6 +746,7 @@ def enforce_consulta_despertares_boundaries(
         booking_intent
         and _consulta_has_name_and_phone(fields)
         and not already_has_callback_preference
+        and not callback_question_already_asked
         and not reply_already_asks_a_question
     ):
         clean = clean.rstrip()
