@@ -915,6 +915,36 @@ def test_model_cannot_repeat_the_exact_prospect_support_question():
 
 
 
+def test_named_visit_reason_does_not_trigger_the_generic_more_question():
+    history = [{"role": "assistant", "text": "Gracias por escribirnos."}]
+
+    enforced = _enforce(
+        "Gracias por compartirlo.",
+        "Sufro de ansiedad y ya estoy en terapia.",
+        history=history,
+    )
+
+    assert enforced == "Gracias por compartirlo."
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+        not in enforced
+    )
+
+
+def test_model_generated_generic_question_is_removed_after_named_visit_reason():
+    history = [{"role": "assistant", "text": "Gracias por escribirnos."}]
+    question = tenant_hard_rules.CONSULTA_DESPERTARES_SPANISH_PROSPECT_QUESTION
+
+    enforced = _enforce(
+        f"Gracias por compartirlo. {question}",
+        "Sufro de ansiedad.",
+        history=history,
+    )
+
+    assert enforced == "Gracias por compartirlo."
+    assert question not in enforced
+
+
 def test_callback_question_is_never_repeated_after_a_short_unsaved_answer():
     prior_question = (
         "¿Cuándo os podemos llamar para confirmar la primera cita?"
