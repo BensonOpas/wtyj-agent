@@ -390,8 +390,8 @@ def consulta_despertares_reply_language(
     inbound_text: str,
     history: list | None = None,
 ) -> str:
-    """Lock Despertares to the latest identifiable customer language."""
-    if not is_consulta_despertares():
+    """Lock Spanish clinic tenants to the latest identifiable customer language."""
+    if not (is_consulta_despertares() or is_clinica_roberto()):
         return ""
 
     detected = detect_english_or_spanish(inbound_text)
@@ -410,6 +410,47 @@ def consulta_despertares_reply_language(
     # The clinic's normal operating language is Spanish when the message is
     # genuinely language-neutral (numbers, punctuation, or emoji only).
     return "Spanish"
+
+
+def reply_violates_tenant_language_lock(
+    reply: str,
+    target_language: str,
+) -> bool:
+    """Catch a wrong or materially mixed English/Spanish visible reply.
+
+    Language detection alone can classify a mostly-Spanish reply as Spanish even
+    when it opens with a complete English sentence. A Spanish clinic must never
+    send that kind of mixed response.
+    """
+
+    if not reply or not target_language:
+        return False
+    detected = detect_english_or_spanish(reply)
+    if detected and detected != target_language:
+        return True
+
+    tokens = [
+        token.lower()
+        for token in _LANGUAGE_TOKEN_RE.findall(reply)
+    ]
+    english_hits = sum(token in _ENGLISH_LANGUAGE_MARKERS for token in tokens)
+    spanish_hits = sum(token in _SPANISH_LANGUAGE_MARKERS for token in tokens)
+    normalized = " ".join(tokens)
+
+    if target_language == "Spanish":
+        return bool(
+            english_hits >= 3
+            or re.search(
+                r"\b(?:that\s+makes\s+(?:complete\s+)?sense|"
+                r"you\s+can\s+(?:absolutely\s+)?(?:share|tell|contact)|"
+                r"we(?:'re|\s+are)\s+here\s+to\s+help)\b",
+                normalized,
+                re.IGNORECASE,
+            )
+        )
+    if target_language == "English":
+        return spanish_hits >= 3
+    return False
 
 
 def consulta_despertares_language_lock(

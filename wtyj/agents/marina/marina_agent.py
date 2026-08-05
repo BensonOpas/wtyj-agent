@@ -1637,13 +1637,8 @@ def process_message(
             body,
             messages or [],
         )
-        actual_language = tenant_hard_rules.detect_english_or_spanish(
-            result["reply"]
-        )
-        if (
-            target_language
-            and actual_language
-            and target_language != actual_language
+        if tenant_hard_rules.reply_violates_tenant_language_lock(
+            result["reply"], target_language
         ):
             result["reply"] = _correct_reply_language(
                 client=client,
