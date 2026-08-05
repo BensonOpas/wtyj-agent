@@ -29,12 +29,12 @@ def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
     )
 
     assert events == [
-        ("send", "0123456789abcdef01234567", "Hola, Lucia", True),
-        ("store", "0123456789abcdef01234567", "operator", "Hola, Lucia"),
+        ("send", "0123456789abcdef01234567", "  Hola, Lucia  ", True),
+        ("store", "0123456789abcdef01234567", "operator", "  Hola, Lucia  "),
     ]
     assert result == {
         "ok": True,
-        "reply": "Hola, Lucia",
+        "reply": "  Hola, Lucia  ",
         "channel": "whatsapp",
         "role": "operator",
         "delivery_mode": "free_text",
@@ -163,7 +163,7 @@ def test_whatsapp_window_closed_is_not_reported_as_sent(monkeypatch):
         )
 
     assert exc_info.value.status_code == 409
-    assert "pendiente" in str(exc_info.value.detail)
+    assert "No se ha enviado ningún mensaje" in str(exc_info.value.detail)
     assert stored == []
 
 
@@ -194,8 +194,9 @@ def test_provider_delivery_failure_is_not_stored(monkeypatch):
     assert "fallido" in str(exc_info.value.detail)
     assert stored == []
 
-def test_closed_window_sends_template_and_stores_template_text(monkeypatch):
+def test_closed_window_never_substitutes_a_template(monkeypatch):
     stored = []
+    template_calls = []
 
     def raise_window_closed(*_args, **_kwargs):
         raise api.WhatsAppWindowClosedError("window closed")
@@ -204,11 +205,7 @@ def test_closed_window_sends_template_and_stores_template_text(monkeypatch):
     monkeypatch.setattr(
         api,
         "send_whatsapp_template_message",
-        lambda conversation_id, template_name, language="es": (
-            conversation_id == "0123456789abcdef01234567"
-            and template_name == "consulta_despertares_seguimiento"
-            and language == "es"
-        ),
+        lambda *args, **kwargs: template_calls.append((args, kwargs)) or True,
     )
     monkeypatch.setattr(
         api.state_registry,
@@ -216,19 +213,16 @@ def test_closed_window_sends_template_and_stores_template_text(monkeypatch):
         lambda *args: stored.append(args),
     )
 
-    result = asyncio.run(
-        api.reply_to_whatsapp_conversation(
-            "0123456789abcdef01234567",
-            api.WhatsAppConversationReplyRequest(message="texto libre"),
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api.reply_to_whatsapp_conversation(
+                "0123456789abcdef01234567",
+                api.WhatsAppConversationReplyRequest(message="texto libre"),
+            )
         )
-    )
 
-    assert result["delivery_mode"] == "template"
-    assert result["original_message_sent"] is False
-    assert result["reply"] == api._DESPERTARES_REENGAGEMENT_TEXT
-    assert stored == [(
-        "0123456789abcdef01234567",
-        "operator",
-        api._DESPERTARES_REENGAGEMENT_TEXT,
-    )]
+    assert exc_info.value.status_code == 409
+    assert "No se ha enviado ningún mensaje" in str(exc_info.value.detail)
+    assert template_calls == []
+    assert stored == []
 
