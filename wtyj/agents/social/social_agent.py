@@ -41,6 +41,19 @@ _BOOKING_FLAGS_TO_RESET = {
 
 _PERSISTENT_FIELDS = {"customer_name", "phone", "email"}
 
+# Consulta Despertares' goal is progressive intake, not a one-day transaction.
+# These facts are explicitly provided by the prospect and must remain available
+# if they return after WhatsApp's 24-hour free-text window has closed.
+_CONSULTA_PERSISTENT_INTAKE_FIELDS = _PERSISTENT_FIELDS | {
+    "first_name",
+    "surnames",
+    "phone_raw",
+    "callback_preference",
+    "appointment_preference",
+    "session_type",
+    "visit_reason",
+}
+
 _ORDER_DRAFT_FIELDS_TO_RESET = {
     "products", "product_name", "quantity", "delivery_address", "address",
     "order_total", "unit_price", "subtotal", "comments", "special_requests",
@@ -862,8 +875,15 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
         }
         completed_bookings.append(archived)
 
-    # Reset fields — keep customer identity
-    preserved = {k: v for k, v in fields.items() if k in _PERSISTENT_FIELDS}
+    # Consulta Despertares retains its progressively collected intake after
+    # inactivity. A WhatsApp free-text window closing is a delivery rule, not a
+    # reason to make a prospect repeat their name, preferences, or concern.
+    persistent_fields = (
+        _CONSULTA_PERSISTENT_INTAKE_FIELDS
+        if tenant_hard_rules.is_consulta_despertares()
+        else _PERSISTENT_FIELDS
+    )
+    preserved = {k: v for k, v in fields.items() if k in persistent_fields}
     fields.clear()
     fields.update(preserved)
 
@@ -947,8 +967,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
 
-    # Get conversation history (last 10 messages, 24h window)
-    history = state_registry.wa_get_history(phone, limit=10)
+    # Consulta Despertares must not restart intake after the WhatsApp 24-hour
+    # delivery window. Use the active stored conversation (up to 200 messages)
+    # so Alia can see what the prospect already shared. Other tenants retain
+    # the standard short, recent prompt window.
+    if tenant_hard_rules.is_consulta_despertares():
+        try:
+            history = state_registry.wa_get_full_history(phone, limit=200)
+        except Exception:
+            history = state_registry.wa_get_history(phone, limit=10)
+    else:
+        history = state_registry.wa_get_history(phone, limit=10)
     if inbound_already_stored and history:
         # The webhook layer may persist the inbound before model/order
         # processing for reliability. Keep the current inbound out of the
