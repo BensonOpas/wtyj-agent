@@ -897,6 +897,23 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
     return True
 
 
+def _history_for_agent(phone: str) -> list:
+    """Return the appropriate prompt context for a WhatsApp conversation."""
+
+    # Consulta Despertares must not restart intake after the WhatsApp 24-hour
+    # delivery window. Use the active stored conversation (up to 200 messages)
+    # so Alia can see what the prospect already shared. Other tenants retain
+    # the standard short, recent prompt window.
+    if tenant_hard_rules.is_consulta_despertares():
+        try:
+            return state_registry.wa_get_full_history(phone, limit=200)
+        except Exception:
+            # Preserve service continuity if the longer-history lookup is
+            # temporarily unavailable.
+            return state_registry.wa_get_history(phone, limit=10)
+    return state_registry.wa_get_history(phone, limit=10)
+
+
 def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                                      inbound_already_stored: bool = False,
                                      include_media: bool = False) -> str | dict:
@@ -967,17 +984,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
 
-    # Consulta Despertares must not restart intake after the WhatsApp 24-hour
-    # delivery window. Use the active stored conversation (up to 200 messages)
-    # so Alia can see what the prospect already shared. Other tenants retain
-    # the standard short, recent prompt window.
-    if tenant_hard_rules.is_consulta_despertares():
-        try:
-            history = state_registry.wa_get_full_history(phone, limit=200)
-        except Exception:
-            history = state_registry.wa_get_history(phone, limit=10)
-    else:
-        history = state_registry.wa_get_history(phone, limit=10)
+    history = _history_for_agent(phone)
     if inbound_already_stored and history:
         # The webhook layer may persist the inbound before model/order
         # processing for reliability. Keep the current inbound out of the
