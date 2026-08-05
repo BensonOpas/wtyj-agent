@@ -220,11 +220,25 @@ _CONSULTA_SUPPORT_CONTEXT_RE = re.compile(
 )
 _CONSULTA_PROSPECT_QUESTION_RE = re.compile(
     r"(?:"
-    r"¿?\s*te\s+apetece\s+contarme\s+un\s+poco\s+m[aá]s\s+sobre\s+"
-    r"lo\s+que\s+te\s+est[aá]\s+pasando[^?]*\?"
-    r"|would\s+you\s+like\s+to\s+tell\s+me\s+a\s+little\s+more\s+"
+    r"¿?\s*(?:te\s+apetece|te\s+gustar[ií]a|quieres|podr[ií]as)\s+"
+    r"(?:contarme|contarnos|decirme|explicarme)\s+(?:un\s+poco\s+)?m[aá]s\s+"
+    r"(?:sobre\s+)?lo\s+que\s+te\s+est[aá]\s+pasando[^?]*\?"
+    r"|would\s+you\s+like\s+to\s+tell\s+(?:me|us)\s+a\s+little\s+more\s+"
     r"about\s+what(?:'s|\s+is)\s+been\s+going\s+on\s+for\s+you[^?]*\?"
     r")",
+    re.IGNORECASE,
+)
+
+# A named concern is already a useful, optional visit reason. Do not turn that
+# disclosure into a generic request to repeat it.
+_CONSULTA_SHARED_VISIT_REASON_RE = re.compile(
+    r"\b(?:"
+    r"anxiety|anxious|panic|stress|depress(?:ed|ion)?|sad|grief|"
+    r"sleep|insomnia|trauma|fear|phobia|therapy|therapist|"
+    r"ansiedad|ansioso|ataques?\s+de\s+p[aá]nico|estr[eé]s|"
+    r"depresi[oó]n|deprimido|triste|duelo|sue[nñ]o|dormir|"
+    r"insomnio|trauma|miedo|fobia|terapia|psic[oó]log[oa]|psiquiatra"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -577,6 +591,21 @@ def _consulta_callback_question_already_asked(history: list) -> bool:
     )
 
 
+def _consulta_visit_reason_already_shared(inbound_text: str, history: list) -> bool:
+    """Return whether the prospect has already given a concrete visit reason."""
+
+    if _CONSULTA_SHARED_VISIT_REASON_RE.search(inbound_text or ""):
+        return True
+    return any(
+        str(message.get("role") or "").lower() in {"user", "customer", "prospect"}
+        and _CONSULTA_SHARED_VISIT_REASON_RE.search(
+            str(message.get("text") or "")
+        )
+        for message in (history or [])
+        if isinstance(message, dict)
+    )
+
+
 def consulta_despertares_callback_preference_from_reply(
     inbound_text: str,
     history: list,
@@ -678,14 +707,23 @@ def enforce_consulta_despertares_boundaries(
         for message in history
         if isinstance(message, dict)
     )
-    if not is_first_reply and prospect_question_already_asked:
+    visit_reason_already_shared = _consulta_visit_reason_already_shared(
+        inbound_text, history
+    )
+    # Once a prospect has named a concern, acknowledge it and continue the
+    # intake. Never ask the broad "tell me more" question, even if the model
+    # generated that wording itself.
+    prospect_question_must_not_be_asked = (
+        prospect_question_already_asked or visit_reason_already_shared
+    )
+    if prospect_question_must_not_be_asked:
         clean = _CONSULTA_PROSPECT_QUESTION_RE.sub("", clean).strip()
 
     if not is_first_reply and _CONSULTA_GENERIC_HELP_CLOSING_RE.search(clean):
         language = consulta_despertares_reply_language(inbound_text, history)
-        if prospect_question_already_asked:
-            # Do not exchange one repetitive service-desk closing for the same
-            # repeated emotional-support question. Keep the useful answer only.
+        if prospect_question_must_not_be_asked:
+            # Keep the useful answer without replacing a named concern with an
+            # unnecessary open-ended request for the same information.
             clean = _CONSULTA_GENERIC_HELP_CLOSING_RE.sub("", clean).strip()
         else:
             prospect_question = (
@@ -703,7 +741,7 @@ def enforce_consulta_despertares_boundaries(
         and _CONSULTA_SUPPORT_CONTEXT_RE.search(inbound_text or "")
         and "?" not in clean
         and "¿" not in clean
-        and not prospect_question_already_asked
+        and not prospect_question_must_not_be_asked
     ):
         language = consulta_despertares_reply_language(inbound_text, history)
         prospect_question = (
@@ -714,7 +752,7 @@ def enforce_consulta_despertares_boundaries(
         clean = f"{clean.rstrip()}\n\n{prospect_question}"
 
     if not clean and (
-        prospect_question_already_asked or callback_question_already_asked
+        prospect_question_must_not_be_asked or callback_question_already_asked
     ):
         language = consulta_despertares_reply_language(inbound_text, history)
         if callback_question_already_asked:
