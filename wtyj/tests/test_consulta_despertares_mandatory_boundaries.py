@@ -962,3 +962,42 @@ def test_short_reply_to_callback_question_is_recovered_for_the_prospect_card():
         )
 
     assert recovered == "15:30"
+
+
+def test_clinica_roberto_locks_a_spanish_prospect_to_spanish():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="clinica-roberto",
+    ):
+        target = tenant_hard_rules.consulta_despertares_reply_language(
+            "Prefiero comentar mis miedos directamente con la psicóloga."
+        )
+        lock = tenant_hard_rules.consulta_despertares_language_lock(
+            "Prefiero comentar mis miedos directamente con la psicóloga."
+        )
+
+    assert target == "Spanish"
+    assert "ENTIRE visible reply in Spanish" in lock
+
+
+def test_mixed_english_opening_is_a_language_violation_for_spanish():
+    reply = (
+        "That makes complete sense, you can absolutely share the details "
+        "with her directly. El equipo se pondrá en contacto contigo."
+    )
+
+    assert tenant_hard_rules.reply_violates_tenant_language_lock(
+        reply, "Spanish"
+    )
+
+
+def test_english_prospect_is_not_forced_to_spanish():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="clinica-roberto",
+    ):
+        target = tenant_hard_rules.consulta_despertares_reply_language(
+            "I would like to arrange an appointment."
+        )
+
+    assert target == "English"
