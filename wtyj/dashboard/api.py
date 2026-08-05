@@ -3037,15 +3037,6 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
 # ids are routed by send_whatsapp_message through the configured tenant account.
 # The local timeline is updated only after the provider confirms the send.
 
-_DESPERTARES_REENGAGEMENT_TEMPLATE = "consulta_despertares_seguimiento"
-_DESPERTARES_REENGAGEMENT_LANGUAGE = "es"
-_DESPERTARES_REENGAGEMENT_TEXT = (
-    "Hola. Te escribimos de Consulta Psicológica Despertares para continuar "
-    "con la solicitud que nos enviaste. Responde a este mensaje cuando puedas "
-    "y te ayudamos con la cita."
-)
-
-
 class WhatsAppConversationReplyRequest(BaseModel):
     message: str
 
@@ -3058,40 +3049,40 @@ async def reply_to_whatsapp_conversation(
 ):
     """Send an operator-authored WhatsApp reply verbatim through Zernio."""
     customer_id = (conversation_id or "").replace("\r", "").replace("\n", "").strip()
-    message = (req.message or "").strip()
+    # This is an operator-authored message. Preserve every character exactly
+    # as entered; validation must never rewrite, translate, summarize, or
+    # replace it with a template.
+    message = req.message if isinstance(req.message, str) else ""
 
     if not customer_id:
         raise HTTPException(status_code=400, detail="Conversation id is required")
-    if not message:
+    if not message.strip():
         raise HTTPException(status_code=400, detail="`message` is required")
     if len(message) > 4096:
         raise HTTPException(status_code=400, detail="WhatsApp messages cannot exceed 4096 characters")
 
-    delivery_mode = "free_text"
-    sent_message = message
     try:
         sent_ok = send_whatsapp_message(
             customer_id,
             message,
             confirm_delivery=True,
         )
-    except WhatsAppWindowClosedError:
-        try:
-            sent_ok = send_whatsapp_template_message(
-                customer_id,
-                _DESPERTARES_REENGAGEMENT_TEMPLATE,
-                language=_DESPERTARES_REENGAGEMENT_LANGUAGE,
-            )
-        except ZernioReplyError as exc:
-            bm_logger.log(
-                "dashboard_conversation_reply_send_failed",
-                conversation_id=customer_id[:60],
-                channel="whatsapp",
-                error=str(exc)[:200],
-            )
-            raise HTTPException(status_code=409, detail=str(exc))
-        delivery_mode = "template"
-        sent_message = _DESPERTARES_REENGAGEMENT_TEXT
+    except WhatsAppWindowClosedError as exc:
+        # Never substitute a human reply with a template. The operator must
+        # choose an explicit template action in a future dedicated workflow.
+        bm_logger.log(
+            "dashboard_conversation_reply_not_sent_window_closed",
+            conversation_id=customer_id[:60],
+            channel="whatsapp",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No se ha enviado ningún mensaje. Han pasado más de 24 horas "
+                "desde el último mensaje del contacto y WhatsApp no permite "
+                "enviar este texto libre."
+            ),
+        ) from exc
     except ZernioReplyError as exc:
         bm_logger.log(
             "dashboard_conversation_reply_send_failed",
@@ -3124,21 +3115,21 @@ async def reply_to_whatsapp_conversation(
             detail="WhatsApp no confirmó el envío.",
         )
 
-    state_registry.wa_store_message(customer_id, "operator", sent_message)
+    state_registry.wa_store_message(customer_id, "operator", message)
     bm_logger.log(
         "dashboard_conversation_reply_sent",
         conversation_id=customer_id[:60],
         channel="whatsapp",
         role="operator",
-        delivery_mode=delivery_mode,
+        delivery_mode="free_text",
     )
     return {
         "ok": True,
-        "reply": sent_message,
+        "reply": message,
         "channel": "whatsapp",
         "role": "operator",
-        "delivery_mode": delivery_mode,
-        "original_message_sent": delivery_mode == "free_text",
+        "delivery_mode": "free_text",
+        "original_message_sent": True,
     }
 
 
