@@ -1031,3 +1031,68 @@ def test_english_prospect_is_not_forced_to_spanish():
         )
 
     assert target == "English"
+
+
+def test_conversation_inbox_hydrates_zernio_participant_name():
+    conversation_id = "a" * 24
+    items = [{
+        "phone": conversation_id,
+        "customer_name": conversation_id,
+        "last_message": "Mensaje de Secretaría",
+    }]
+
+    with patch.object(
+        dashboard_api,
+        "resolve_zernio_conversation_contacts",
+        return_value={
+            conversation_id: {
+                "name": "María García",
+                "phone": "whatsapp:+34600111222",
+            }
+        },
+    ) as resolve_contacts:
+        hydrated = dashboard_api._hydrate_conversation_contact_identities(items)
+
+    resolve_contacts.assert_called_once_with([conversation_id])
+    assert hydrated[0]["customer_name"] == "María García"
+
+
+def test_conversation_inbox_falls_back_to_participant_phone_without_name():
+    conversation_id = "b" * 24
+    items = [{
+        "phone": conversation_id,
+        "customer_name": "Unknown contact",
+        "last_message": "Mensaje de Secretaría",
+    }]
+
+    with patch.object(
+        dashboard_api,
+        "resolve_zernio_conversation_contacts",
+        return_value={
+            conversation_id: {
+                "name": "",
+                "phone": "whatsapp:+34600999888",
+            }
+        },
+    ):
+        hydrated = dashboard_api._hydrate_conversation_contact_identities(items)
+
+    assert hydrated[0]["customer_name"] == "+34600999888"
+
+
+def test_conversation_inbox_preserves_existing_prospect_name():
+    conversation_id = "c" * 24
+    items = [{
+        "phone": conversation_id,
+        "customer_name": "Ana López",
+        "last_message": "Hola",
+    }]
+
+    with patch.object(
+        dashboard_api,
+        "resolve_zernio_conversation_contacts",
+    ) as resolve_contacts:
+        hydrated = dashboard_api._hydrate_conversation_contact_identities(items)
+
+    resolve_contacts.assert_called_once_with([])
+    assert hydrated[0]["customer_name"] == "Ana López"
