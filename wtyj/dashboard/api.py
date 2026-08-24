@@ -2782,12 +2782,76 @@ async def delete_brand_rule_endpoint(rule_id: int):
 
 # ── Messages (WhatsApp conversations) ────────────────────────────────────────
 
+_UNKNOWN_CONVERSATION_NAMES = {
+    "",
+    "unknown",
+    "unknown contact",
+    "contacto desconocido",
+    "contacto sin identificar",
+}
+
+
+def _hydrate_conversation_contact_identities(items: list[dict]) -> list[dict]:
+    """Resolve Zernio-only inbox rows to the participant's name or phone.
+
+    Outbound WhatsApp Business app messages can create a local thread before
+    the prospect replies. Those rows contain a Zernio conversation id but no
+    inbound sender_name or prospect-card name, so the frontend has no useful
+    label. Reuse the tenant-isolated Zernio resolver already used by follow-up
+    cards without treating the profile name as a verified intake field.
+    """
+    candidates = []
+    for item in items:
+        conversation_id = str(item.get("phone") or "").strip()
+        current_name = str(item.get("customer_name") or "").strip()
+        if (
+            conversation_id
+            and (
+                not current_name
+                or current_name == conversation_id
+                or current_name.lower() in _UNKNOWN_CONVERSATION_NAMES
+            )
+        ):
+            candidates.append(conversation_id)
+
+    contacts = resolve_zernio_conversation_contacts(candidates)
+    if not contacts:
+        return items
+
+    for item in items:
+        conversation_id = str(item.get("phone") or "").strip()
+        contact = contacts.get(conversation_id)
+        if not contact:
+            continue
+
+        current_name = str(item.get("customer_name") or "").strip()
+        if (
+            current_name
+            and current_name != conversation_id
+            and current_name.lower() not in _UNKNOWN_CONVERSATION_NAMES
+        ):
+            continue
+
+        participant_name = str(contact.get("name") or "").strip()
+        participant_phone = str(contact.get("phone") or "").strip()
+        if participant_phone.lower().startswith("whatsapp:"):
+            participant_phone = participant_phone.split(":", 1)[1].strip()
+
+        display_name = participant_name or participant_phone
+        if display_name:
+            item["customer_name"] = display_name
+
+    return items
+
+
 @router.get("/messages/conversations", dependencies=[Depends(_check_auth)])
 async def list_conversations():
     """Brief 171: List WhatsApp + email conversations merged, sorted newest first.
     Email conversation rows have phone prefixed with `email::` so the detail
     endpoint can route to the email helper."""
-    wa_convos = state_registry.wa_list_conversations()
+    wa_convos = _hydrate_conversation_contact_identities(
+        state_registry.wa_list_conversations()
+    )
     if _callback_followups_enabled():
         # Callback tenants use the follow-up queue instead of the generic
         # order/appointment classifier. Preserve the underlying historical
@@ -2819,7 +2883,9 @@ async def list_archived_conversations():
     can swap data source by URL. Cross-device-consistent because the
     archive state is server-side (email flags.deleted +
     conversation_status.deleted)."""
-    wa = state_registry.wa_list_archived_conversations()
+    wa = _hydrate_conversation_contact_identities(
+        state_registry.wa_list_archived_conversations()
+    )
     for c in wa:
         c.setdefault("channel", "whatsapp")
     email = state_registry.email_list_archived_conversations()
