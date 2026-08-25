@@ -74,11 +74,11 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         sender_name = ""
         sender_id = ""
 
-    platform = data.get("platform", "")
-    # Brief 170: normalize platform strings. Zernio's X / Twitter platform value
-    # has been reported as both "x" and "twitter" in different docs — map both
-    # to "twitter" internally so downstream routing and channel strings are stable.
-    if platform in ("x", "X"):
+    platform = str(data.get("platform") or "").strip().lower()
+    # Brief 170: normalize provider platform strings before routing. Zernio has
+    # reported X as both "x" and "twitter", and provider casing must never divert
+    # WhatsApp into the generic DM path.
+    if platform == "x":
         platform = "twitter"
 
     if not conversation_id or not message_id:
