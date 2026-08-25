@@ -42,6 +42,7 @@ AFFIRMATIVE = {
 NEGATION = {"no", "not", "nee", "niet", "no ta", "kein", "nicht", "aber", "but", "ma"}
 _CATALOG_CACHE = {"expires_at": 0.0, "value": None}
 _CATALOG_CACHE_SECONDS = 60.0
+QUOTE_PROCESSING_DELAY_SECONDS = 3 * 60
 _FORBIDDEN_CONTACT_REDIRECT = re.compile(
     r"(?:https?://)?wa\.me/|mailto:|tel:|[\w.+-]+@[\w.-]+\.[a-z]{2,}",
     flags=re.IGNORECASE,
@@ -72,6 +73,24 @@ def _now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def seconds_until_quote_processing(
+    quote: dict,
+    *,
+    now: datetime | None = None,
+    delay_seconds: int = QUOTE_PROCESSING_DELAY_SECONDS,
+) -> float:
+    """Return the remaining durable delay from the stored confirmation time."""
+    try:
+        confirmed_at = datetime.fromisoformat(
+            str(quote["confirmed_at"]).replace("Z", "+00:00")
+        ).astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AliQuoteError("invalid_confirmation_timestamp") from exc
+    current = (now or _now()).astimezone(timezone.utc)
+    eligible_at = confirmed_at + timedelta(seconds=max(0, int(delay_seconds)))
+    return max(0.0, (eligible_at - current).total_seconds())
 
 
 def tenant_configured(raw: dict | None = None) -> bool:
@@ -507,6 +526,9 @@ def process_quote(
     switches: dict[str, bool] | None = None,
     output_root: str = "/app/data/ali-quotes",
     logo_path: str | None = None,
+    delay_seconds: int = QUOTE_PROCESSING_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], datetime] = _now,
 ) -> dict:
     quote = get_quote(public_id)
     if not quote:
@@ -516,6 +538,11 @@ def process_quote(
         adapters.escalate(quote, "automation_disabled")
         return update_quote(public_id, status="attention_required", last_error_code="automation_disabled")
     try:
+        remaining_delay = seconds_until_quote_processing(
+            quote, now=now(), delay_seconds=delay_seconds,
+        )
+        if remaining_delay:
+            sleep(remaining_delay)
         pricing = json.loads(quote["pricing_json"]) if quote.get("pricing_json") else None
         if pricing is None:
             update_quote(public_id, status="pricing")
