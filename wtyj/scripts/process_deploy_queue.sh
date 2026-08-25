@@ -55,22 +55,38 @@ for client in $DEPLOY_CLIENTS; do
   cd /root/clients/$client
   if ! (
     COMPOSE_IMAGES=$(docker compose config --images)
+    APP_IMAGE_FOUND=0
     for image in $COMPOSE_IMAGES; do
       case "$image" in
+        sha256:*)
+          echo "unverifiable raw image digest for $client: $image"
+          exit 1
+          ;;
         wtyj-agent|wtyj-agent:*)
+          APP_IMAGE_FOUND=1
           docker tag wtyj-agent:latest "$image"
           ;;
       esac
     done
+    if [ "$APP_IMAGE_FOUND" != "1" ]; then
+      echo "no verifiable wtyj-agent image configured for $client"
+      exit 1
+    fi
     docker compose down
     docker compose up -d --force-recreate
 
     # A green health endpoint is not sufficient if Compose recreated a stale
     # pinned image. Assert every application container is on the latest image.
+    APP_CONTAINER_VERIFIED=0
     for container_id in $(docker compose ps -q); do
       configured_image=$(docker inspect --format '{{.Config.Image}}' "$container_id")
       case "$configured_image" in
+        sha256:*)
+          echo "running application uses raw image digest for $client"
+          exit 1
+          ;;
         wtyj-agent|wtyj-agent:*)
+          APP_CONTAINER_VERIFIED=1
           running_image_id=$(docker inspect --format '{{.Image}}' "$container_id")
           if [ "$running_image_id" != "$LATEST_IMAGE_ID" ]; then
             echo "stale application image for $client: $configured_image"
@@ -79,6 +95,10 @@ for client in $DEPLOY_CLIENTS; do
           ;;
       esac
     done
+    if [ "$APP_CONTAINER_VERIFIED" != "1" ]; then
+      echo "no running wtyj-agent container verified for $client"
+      exit 1
+    fi
   ); then
     STATUS="failed"
     break
