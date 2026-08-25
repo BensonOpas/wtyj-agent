@@ -134,6 +134,20 @@ def test_paused_master_switch_does_not_fetch_catalog_or_collect_details(monkeypa
     assert "email, telephone, a website, or a form" in prompt
 
 
+def test_bad_canary_contact_redirect_is_replaced_by_safe_same_chat_fallback():
+    bad_reply = (
+        "For bookings, message us on WhatsApp at wa.me/9677145 or email "
+        "info@alicarrental.com."
+    )
+
+    reply = workflow.sanitize_intake_reply(bad_reply, "en")
+
+    assert reply == "I couldn't complete that step safely. Please try again here in a moment."
+    assert "wa.me" not in reply
+    assert "@" not in reply
+
+
+
 def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
     fields = {
