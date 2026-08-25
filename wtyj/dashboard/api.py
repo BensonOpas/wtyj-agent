@@ -4249,6 +4249,9 @@ def _build_follow_up_alert_body(follow_up: dict) -> str:
     reason = str(follow_up.get("visit_reason") or "").strip()
     if reason:
         lines.append(f"Motivo de consulta: {reason}")
+    preferred_clinic = str(follow_up.get("preferred_clinic") or "").strip()
+    if preferred_clinic:
+        lines.append(f"Centro preferido: {preferred_clinic}")
     if status == "needs_human_answer":
         lines.extend(("", "Acción: abre la conversación y responde al prospecto."))
     elif status == "ready_to_call":
