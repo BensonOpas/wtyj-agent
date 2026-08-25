@@ -1213,3 +1213,32 @@ def test_explicit_no_clinic_preference_is_recovered_from_short_reply():
         )
 
     assert recovered == "Sin preferencia"
+
+
+def test_no_clinic_preference_continues_to_appointment_schedule():
+    history = [{
+        "role": "assistant",
+        "text": "¿Qué centro preferirías para la sesión?",
+    }]
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "Por la tarde",
+        "session_type": "Presencial",
+        "preferred_clinic": "Sin preferencia",
+    }
+
+    enforced = _enforce(
+        "Perfecto, no hay problema.",
+        "Me da igual, cualquier centro.",
+        history=history,
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION not in enforced
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        in enforced
+    )
