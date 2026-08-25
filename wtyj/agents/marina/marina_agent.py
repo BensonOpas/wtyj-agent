@@ -161,6 +161,10 @@ MARINA_TOOL = {
                         "type": "string",
                         "description": "Session format explicitly established in context, normally Presencial or Online. Choosing a physical clinic after locations are offered is explicit evidence for Presencial.",
                     },
+                    "preferred_clinic": {
+                        "type": "string",
+                        "description": "Consulta Despertares only: the official clinic or centre explicitly chosen by the prospect for an in-person session. Never infer it from their home area. Store 'Sin preferencia' only when the prospect explicitly has no preference.",
+                    },
                     "visit_reason": {
                         "type": "string",
                         "description": "A short, neutral paraphrase of why the customer is seeking psychological support, using only what they volunteered. Never diagnose or add clinical conclusions. Never put a location, clinic, callback time, appointment time, or session format in this field.",
@@ -985,8 +989,12 @@ collecting those four fields is NOT permission to stop or hand off immediately.
 Extract every useful field the customer has already volunteered anywhere in the complete
 conversation. Never ask for known information and never repeat a question.
 Ask at most one question per reply. Listen or answer first, then ask the most natural missing
-question. After callback_preference is known, continue with session_type, then
-appointment_preference, then invite visit_reason only if it was not already volunteered.
+question. After callback_preference is known, continue with session_type. If the prospect
+chooses Presencial, collect preferred_clinic next, then appointment_preference. For Online,
+skip preferred_clinic and continue directly with appointment_preference. Ask about the clinic
+only once, never infer it from where the prospect lives, and only use official Consulta
+Despertares centres found in the tenant knowledge. Accept "Sin preferencia" when the prospect
+explicitly does not mind. Then invite visit_reason only if it was not already volunteered.
 The visit reason is optional and must be a neutral description of why psychological support
 is wanted. A location, clinic, callback time, appointment time, or session format is never a
 visit reason.
