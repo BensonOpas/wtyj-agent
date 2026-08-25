@@ -36,6 +36,8 @@ async def lifespan(app):
     if config_loader.get_raw().get("features", {}).get("content_pipeline", False):
         from agents.social.scheduler import start_scheduler
         start_scheduler()
+    from agents.social.ali_quote_workflow import resume_pending_processing
+    resume_pending_processing()
     yield
 
 app = FastAPI(title="WTYJ Agent", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -75,6 +77,13 @@ app.include_router(dashboard_router)
 # /api/unboks/tasks calls (after nginx prefix-strip → /tasks) hit it directly.
 from dashboard.tasks_api import router as tasks_router
 app.include_router(tasks_router)
+
+
+@app.get("/api/public/ali-quote/{public_id}")
+async def download_ali_quote(public_id: str, expires: int, signature: str):
+    """Serve one private quote through a 60-minute HMAC URL."""
+    from agents.social.ali_quote_download import quote_download_response
+    return quote_download_response(public_id, expires, signature)
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0

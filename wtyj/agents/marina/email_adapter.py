@@ -14,6 +14,7 @@ import re
 import urllib.request
 import urllib.parse
 from email.header import decode_header as _decode_header
+from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, make_msgid
@@ -139,7 +140,7 @@ def imap_connect():
 
 # ========= SENDING =========
 def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None,
-              html_body: str = None):
+              html_body: str = None, pdf_attachment: tuple[str, bytes] | None = None):
     """Brief 204: Gmail app password mode when EMAIL_PASSWORD is set; else
     Microsoft OAuth XOAUTH2 (existing path).
 
@@ -154,7 +155,9 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     # purpose - clients may show both parts as separate attachments.
     if not EMAIL_ADDR or "@" not in EMAIL_ADDR:
         raise RuntimeError("SMTP sender email is not configured")
-    if html_body is not None:
+    if pdf_attachment is not None:
+        msg = MIMEMultipart('mixed')
+    elif html_body is not None:
         msg = MIMEMultipart('alternative')
     else:
         msg = MIMEMultipart()
@@ -170,9 +173,22 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
         msg["Reply-To"] = reply_to
     # Brief 243: text part FIRST so HTML-stripping clients pick it as
     # the body. Text-only clients ignore the HTML and pick text.
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-    if html_body is not None:
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+    if pdf_attachment is not None and html_body is not None:
+        content = MIMEMultipart('alternative')
+        content.attach(MIMEText(body, "plain", "utf-8"))
+        content.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(content)
+    else:
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        if html_body is not None:
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
+    if pdf_attachment is not None:
+        filename, pdf_bytes = pdf_attachment
+        if not filename or not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
+            raise ValueError("PDF attachment is invalid")
+        attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+        attachment.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(attachment)
 
     if EMAIL_PASSWORD:
         # Gmail app password — basic LOGIN auth via STARTTLS.

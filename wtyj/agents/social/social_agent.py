@@ -22,6 +22,7 @@ from agents.marina import marina_agent
 from agents.marina import gws_calendar
 from agents.marina import payment_stub
 from agents.marina import sheets_writer
+from agents.social.ali_quote_workflow import handle_ali_quote_turn, tenant_enabled as ali_quote_tenant_enabled
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
@@ -1386,6 +1387,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # not mean "customer needs reply". Once the customer confirms an order
     # summary, create a dedicated ORDER escalation for the operator to call.
     _skip_booking = False
+    _ali_workflow_on = ali_quote_tenant_enabled()
+    if _ali_workflow_on:
+        _ali_reply = handle_ali_quote_turn(
+            conversation_id=phone,
+            zernio_account_id=str(message.get("_zernio_account_id") or ""),
+            whatsapp_number=str(message.get("_zernio_sender_id") or phone),
+            message_text=text,
+            fields=fields,
+            flags=flags,
+            from_name=from_name,
+        )
+        if _ali_reply:
+            reply_text = _ali_reply
+        _skip_booking = True
     # A callback-follow-up tenant never enters the generic booking engine:
     # its human team coordinates appointments after the callback instead.
     _callback_workflow_on = (_workflow.get("type") == "callback_follow_up")
