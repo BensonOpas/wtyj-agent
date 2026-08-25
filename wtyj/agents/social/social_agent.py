@@ -24,6 +24,7 @@ from agents.marina import payment_stub
 from agents.marina import sheets_writer
 from agents.social.ali_quote_workflow import (
     handle_ali_quote_turn,
+    sanitize_intake_reply as sanitize_ali_intake_reply,
     tenant_configured as ali_quote_tenant_configured,
     tenant_enabled as ali_quote_tenant_enabled,
 )
@@ -1405,6 +1406,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         )
         if _ali_reply:
             reply_text = _ali_reply
+        else:
+            reply_text = sanitize_ali_intake_reply(
+                reply_text,
+                fields.get("conversation_language"),
+            )
     if _ali_workflow_configured:
         # The generic booking engine must never create holds or contact redirects
         # for Ali, including while its master automation switch is off.
