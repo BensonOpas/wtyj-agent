@@ -41,6 +41,16 @@ AFFIRMATIVE = {
 NEGATION = {"no", "not", "nee", "niet", "no ta", "kein", "nicht", "aber", "but", "ma"}
 _CATALOG_CACHE = {"expires_at": 0.0, "value": None}
 _CATALOG_CACHE_SECONDS = 60.0
+_FORBIDDEN_CONTACT_REDIRECT = re.compile(
+    r"(?:https?://)?wa\.me/|mailto:|tel:|[\w.+-]+@[\w.-]+\.[a-z]{2,}",
+    flags=re.IGNORECASE,
+)
+_INTAKE_SAFETY_FALLBACK = {
+    "en": "I couldn't complete that step safely. Please try again here in a moment.",
+    "nl": "Ik kon die stap niet veilig afronden. Probeer het hier over een moment opnieuw.",
+    "pap": "Mi no por a kompletá e paso ei na un manera sigur. Purba atrobe aki den un momentu.",
+    "de": "Ich konnte diesen Schritt nicht sicher abschließen. Bitte versuchen Sie es gleich hier erneut.",
+}
 
 
 class AliQuoteError(RuntimeError):
@@ -419,6 +429,15 @@ def catalog_prompt_context(catalog: dict) -> dict:
         "categories": categories,
         "vehicles": vehicles,
     }
+
+
+def sanitize_intake_reply(reply: str, locale: str | None = None) -> str:
+    """Fail closed if Marina tries to redirect an Ali WhatsApp customer."""
+    text = str(reply or "").strip()
+    if not _FORBIDDEN_CONTACT_REDIRECT.search(text):
+        return text
+    selected_locale = str(locale or "en").lower()
+    return _INTAKE_SAFETY_FALLBACK.get(selected_locale, _INTAKE_SAFETY_FALLBACK["en"])
 
 
 def _normalize_catalog_label(value: object) -> str:
