@@ -98,8 +98,11 @@ def _business_sender_emails() -> set:
     addresses are skipped unless they match a relay/escalation reply subject.
 
     Pulls from client.json business.email, business.support_email,
-    business.booking_email, business.demo_support_email. Deduplicates and
-    lowercases. Empty/None values are filtered out.
+    business.booking_email, business.demo_support_email, and the authenticated
+    sender mailbox. Including EMAIL_ADDR prevents an outbound staff email sent
+    back to that same mailbox from being mistaken for a customer message and
+    creating a self-reply loop. Deduplicates and lowercases. Empty/None values
+    are filtered out.
     """
     biz = config_loader.get_business()
     candidates = (
@@ -107,6 +110,7 @@ def _business_sender_emails() -> set:
         biz.get("support_email"),
         biz.get("booking_email"),
         biz.get("demo_support_email"),
+        EMAIL_ADDR,
     )
     return {e.strip().lower() for e in candidates if e and isinstance(e, str) and e.strip()}
 

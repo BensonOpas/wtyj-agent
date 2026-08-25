@@ -42,11 +42,27 @@ def test_business_sender_emails_handles_missing_fields(mock_get_business):
     assert result == {"hello@test.com"}
 
 
+@patch("agents.marina.email_poller.EMAIL_ADDR", "")
 @patch("agents.marina.email_poller.config_loader.get_business")
 def test_business_sender_emails_empty_when_no_business(mock_get_business):
-    """Brief 164: empty business dict returns empty set (guard is a no-op)."""
+    """No business fields and no sender mailbox leave the guard empty."""
     mock_get_business.return_value = {}
     assert email_poller._business_sender_emails() == set()
+
+
+@patch("agents.marina.email_poller.EMAIL_ADDR", "StaffMailbox@Example.com")
+@patch("agents.marina.email_poller.config_loader.get_business")
+def test_authenticated_sender_mailbox_is_always_business_owned(mock_get_business):
+    """A quote emailed back to the sender mailbox cannot enter customer intake."""
+    mock_get_business.return_value = {}
+    assert email_poller._business_sender_emails() == {"staffmailbox@example.com"}
+
+
+@patch("agents.marina.email_poller.EMAIL_ADDR", "same@example.com")
+@patch("agents.marina.email_poller.config_loader.get_business")
+def test_authenticated_sender_mailbox_is_deduplicated(mock_get_business):
+    mock_get_business.return_value = {"support_email": "same@example.com"}
+    assert email_poller._business_sender_emails() == {"same@example.com"}
 
 
 @patch("agents.marina.email_poller.config_loader.get_business")
