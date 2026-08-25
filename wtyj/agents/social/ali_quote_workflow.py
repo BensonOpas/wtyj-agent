@@ -535,16 +535,19 @@ def process_quote(
         if hashlib.sha256(pdf_bytes).hexdigest() != quote["pdf_sha256"]:
             raise AliQuoteError("pdf_integrity_failed")
         quote = update_quote(public_id, status="delivering")
-        if switches.get("staff_email") and quote["staff_email_status"] != "sent":
-            ok = _attempt_twice(adapters.send_staff_email, quote, pdf_bytes)
-            quote = update_quote(public_id, staff_email_status="sent" if ok else "failed")
-            if not ok:
-                raise AliQuoteError("staff_email_failed")
+        delivery_errors = []
         if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
             ok = _attempt_twice(adapters.send_whatsapp, quote, quote["pdf_path"])
             quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
             if not ok:
-                raise AliQuoteError("whatsapp_delivery_failed")
+                delivery_errors.append("whatsapp_delivery_failed")
+        if switches.get("staff_email") and quote["staff_email_status"] != "sent":
+            ok = _attempt_twice(adapters.send_staff_email, quote, pdf_bytes)
+            quote = update_quote(public_id, staff_email_status="sent" if ok else "failed")
+            if not ok:
+                delivery_errors.append("staff_email_failed")
+        if delivery_errors:
+            raise AliQuoteError(delivery_errors[0])
         if switches.get("operator_alerts") and quote.get("notification_status_json") in (None, "", "{}"):
             outcomes = adapters.send_operator_alerts(quote)
             quote = update_quote(public_id, notification_status_json=_json(outcomes))
@@ -558,17 +561,17 @@ def process_quote(
 
 
 SUMMARY_LABELS = {
-    "en": ("Please confirm these rental details", "Name", "Rental period", "Pickup", "Return", "Car", "Reply yes if everything is correct."),
-    "nl": ("Bevestig deze huurgegevens", "Naam", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Antwoord ja als alles klopt."),
-    "pap": ("Konfirmá e det ayenan di huur", "Nòmber", "Periodo di huur", "Busca", "Devolvé", "Outo", "Kontestá si si tur kos ta korekto."),
-    "de": ("Bitte bestätigen Sie diese Mietdaten", "Name", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Antworten Sie mit Ja, wenn alles stimmt."),
+    "en": ("Just checking I’ve got everything right:", "Name", "Rental period", "Pickup", "Return", "Car", "Does that all look right?"),
+    "nl": ("Even controleren of ik alles goed heb:", "Naam", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt dit zo?"),
+    "pap": ("Laga mi wak si mi tin tur kos korekto:", "Nòmber", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon asina?"),
+    "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Name", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Passt das so?"),
 }
 
 PREPARING = {
-    "en": "Perfect - I have everything I need. I'm preparing your official quote now and will send it here on WhatsApp within 30 minutes.",
-    "nl": "Perfect - ik heb alles wat ik nodig heb. Ik maak je officiële offerte en stuur die binnen 30 minuten hier via WhatsApp.",
-    "pap": "Perfekto - mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial i lo manda esaki aki via WhatsApp denter di 30 minüt.",
-    "de": "Perfekt - ich habe alle Angaben. Ich erstelle jetzt Ihr offizielles Angebot und sende es innerhalb von 30 Minuten hier in WhatsApp.",
+    "en": "Great, I have everything I need. I’ll prepare your official quote and send it here on WhatsApp within 30 minutes.",
+    "nl": "Prima, ik heb alles wat ik nodig heb. Ik maak je officiële offerte en stuur die binnen 30 minuten hier via WhatsApp.",
+    "pap": "Bon, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial i lo manda esaki aki via WhatsApp denter di 30 minüt.",
+    "de": "Alles klar, ich habe alle Angaben. Ich erstelle jetzt Ihr offizielles Angebot und sende es innerhalb von 30 Minuten hier per WhatsApp.",
 }
 
 FALLBACK = {

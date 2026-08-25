@@ -115,6 +115,33 @@ def test_confirmation_variants_and_corrections_change_the_summary_hash():
     assert first != second
 
 
+def test_carlos_confirmation_copy_is_human_in_all_locales():
+    expected = {
+        "en": ("Just checking I’ve got everything right:", "Does that all look right?"),
+        "nl": ("Even controleren of ik alles goed heb:", "Klopt dit zo?"),
+        "pap": ("Laga mi wak si mi tin tur kos korekto:", "Tur kos ta bon asina?"),
+        "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Passt das so?"),
+    }
+    banned = (
+        "reply yes", "please confirm", "antwoord ja", "konfirmá e det",
+        "antworten sie mit ja",
+    )
+    for locale, (opening, closing) in expected.items():
+        summary, _ = workflow.normalized_summary(customer(), rental(locale))
+        text = workflow._summary_text(summary)
+        assert text.startswith(opening)
+        assert text.endswith(closing)
+        assert not any(phrase in text.lower() for phrase in banned)
+
+
+def test_carlos_progress_copy_is_direct_and_natural_in_all_locales():
+    for locale in ("en", "nl", "pap", "de"):
+        text = workflow.PREPARING[locale]
+        assert "WhatsApp" in text
+        assert "30" in text
+        assert "reply yes" not in text.lower()
+
+
 def test_duplicate_confirmation_creates_one_quote_and_ali_request_has_no_pii(monkeypatch, tmp_path):
     configure_db(monkeypatch, tmp_path)
     _, digest = workflow.normalized_summary(customer(), rental())
@@ -224,9 +251,9 @@ def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
     assert counts == {"whatsapp": 1, "email": 1, "alerts": 1, "escalate": 0}
 
 
-def test_transient_delivery_retries_once_then_escalates(monkeypatch, tmp_path):
+def test_staff_email_failure_does_not_block_customer_whatsapp(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
-    counts = {"email": 0, "escalate": 0}
+    counts = {"whatsapp": 0, "email": 0, "escalate": 0}
 
     class Client:
         def create_quote(self, request, idempotency_key):
@@ -237,15 +264,46 @@ def test_transient_delivery_retries_once_then_escalates(monkeypatch, tmp_path):
         return False
 
     adapters = workflow.DeliveryAdapters(
-        send_whatsapp=lambda *_: True,
+        send_whatsapp=lambda *_: counts.__setitem__("whatsapp", counts["whatsapp"] + 1) or True,
         send_staff_email=failed_email,
         send_operator_alerts=lambda *_: {},
         escalate=lambda *_: counts.__setitem__("escalate", counts["escalate"] + 1),
     )
     result = workflow.process_quote(
         quote["public_id"], Client(), adapters,
-        {"automation": True, "customer_delivery": False, "staff_email": True, "operator_alerts": False},
+        {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": False},
         output_root=str(tmp_path),
     )
     assert result["status"] == "attention_required"
-    assert counts == {"email": 2, "escalate": 1}
+    assert result["whatsapp_status"] == "accepted"
+    assert result["staff_email_status"] == "failed"
+    assert counts == {"whatsapp": 1, "email": 2, "escalate": 1}
+
+
+def test_whatsapp_failure_does_not_block_staff_email(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    counts = {"whatsapp": 0, "email": 0, "escalate": 0}
+
+    class Client:
+        def create_quote(self, request, idempotency_key):
+            return pricing()
+
+    def failed_whatsapp(*_args):
+        counts["whatsapp"] += 1
+        return False
+
+    adapters = workflow.DeliveryAdapters(
+        send_whatsapp=failed_whatsapp,
+        send_staff_email=lambda *_: counts.__setitem__("email", counts["email"] + 1) or True,
+        send_operator_alerts=lambda *_: {},
+        escalate=lambda *_: counts.__setitem__("escalate", counts["escalate"] + 1),
+    )
+    result = workflow.process_quote(
+        quote["public_id"], Client(), adapters,
+        {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": False},
+        output_root=str(tmp_path),
+    )
+    assert result["status"] == "attention_required"
+    assert result["whatsapp_status"] == "failed"
+    assert result["staff_email_status"] == "sent"
+    assert counts == {"whatsapp": 2, "email": 1, "escalate": 1}
