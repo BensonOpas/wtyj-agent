@@ -33,6 +33,12 @@ CONSULTA_DESPERTARES_CALLBACK_CLOSING = (
 CONSULTA_DESPERTARES_ENGLISH_CALLBACK_CLOSING = (
     "When can we call you to confirm the first appointment?"
 )
+CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION = (
+    "Perfecto. ¿En cuál de nuestros centros te gustaría realizar la sesión?"
+)
+CONSULTA_DESPERTARES_ENGLISH_PREFERRED_CLINIC_QUESTION = (
+    "Perfect. Which of our clinics would you prefer for the session?"
+)
 CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION = (
     "Antes de terminar, ¿qué día o franja horaria te vendría mejor para "
     "la primera cita?"
@@ -119,14 +125,19 @@ These rules override generic booking pacing and checklist-like intake.
 - Treat a request for an appointment as the start of a conversation, not as a
   trigger to immediately request identity and phone data.
 - Build the card progressively. Required for the callback: first_name, surnames,
-  phone, and callback_preference. Treat appointment_preference as expected
-  enrichment: ask for it once, naturally, before the handoff when the conversation
-  is flowing. session_type is useful enrichment. The visit reason is always optional.
+  phone, and callback_preference. Treat session_type and appointment_preference as
+  expected enrichment. When session_type is Presencial, preferred_clinic is also
+  expected enrichment; visit reason is always optional. Ask for preferred_clinic
+  once, naturally, before the handoff.
 - If the customer gives a full name, store the given name in first_name and every
   remaining name word in surnames; do not make them repeat it in a labelled form.
 - Store Presencial or Online in session_type only when established by what the
   customer says. Choosing a physical clinic or branch after locations are
   offered is explicit evidence for Presencial.
+- When the prospect chooses Presencial, ask once which official Consulta
+  Despertares centre they prefer. Store only an explicitly chosen official centre
+  in preferred_clinic; never infer it from their home area. If they explicitly do
+  not mind, store "Sin preferencia". Skip this question entirely for Online.
 - Store the customer's preferred SESSION day or time in appointment_preference.
   callback_preference means only when the human team may CALL the customer.
   Never copy one value into the other.
@@ -165,11 +176,12 @@ These rules override generic booking pacing and checklist-like intake.
   the details to the team while useful enrichment is still missing and the
   customer is comfortably engaged.
 - After callback_preference is known, continue naturally with exactly one missing
-  enrichment field per reply: first session_type, then appointment_preference,
-  then an optional visit_reason invitation. appointment_preference should be
-  requested once before handoff whenever the exchange remains comfortable and
-  organic. Acknowledge the customer's answer before asking the next question;
-  never present a checklist or fire questions back-to-back.
+  enrichment field per reply: first session_type; then preferred_clinic only for
+  Presencial; then appointment_preference; then an optional visit_reason invitation.
+  preferred_clinic and appointment_preference should each be requested once before
+  handoff whenever the exchange remains comfortable and organic. Acknowledge the
+  customer's answer before asking the next question; never present a checklist or
+  fire questions back-to-back.
 - Finish with a natural handoff only after those enrichment opportunities were
   completed, the customer declined them, or the customer is uncomfortable, in a
   hurry, or asks to stop. Never delay or block the callback because an enrichment
@@ -288,6 +300,26 @@ _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE = re.compile(
     r"|what\s+(?:day|days|time|time\s+window)"
     r"[^?\n]*(?:appointment|session)"
     r")",
+    re.IGNORECASE,
+)
+_CONSULTA_PREFERRED_CLINIC_QUESTION_RE = re.compile(
+    r"(?:"
+    r"¿?\s*(?:en\s+)?(?:cu[aá]l|qu[eé])\s+(?:de\s+)?(?:nuestros?\s+)?"
+    r"(?:centros?|cl[ií]nicas?|sedes?)[^?\n]*"
+    r"(?:sesi[oó]n|cita|atender|prefer|gustar[ií]a|vendr[ií]a\s+mejor)"
+    r"|which\s+(?:of\s+our\s+)?(?:clinics?|centres?|centers?|locations?|offices?)"
+    r"[^?\n]*(?:session|appointment|prefer)"
+    r")",
+    re.IGNORECASE,
+)
+_CONSULTA_PRESENCIAL_RE = re.compile(
+    r"\b(?:presencial|en\s+persona|in[\s-]*person)\b",
+    re.IGNORECASE,
+)
+_CONSULTA_NO_CLINIC_PREFERENCE_RE = re.compile(
+    r"\b(?:sin\s+preferencia|no\s+tengo\s+preferencia|me\s+da\s+igual|"
+    r"cualquier\s+(?:centro|cl[ií]nica|sede)|(?:any|either|whichever)\s+"
+    r"(?:clinic|centre|center|location|office)|no\s+preference)\b",
     re.IGNORECASE,
 )
 _CONSULTA_CALLER_NUMBER_QUERY_RE = re.compile(
@@ -591,6 +623,19 @@ def _consulta_callback_question_already_asked(history: list) -> bool:
     )
 
 
+def _consulta_preferred_clinic_question_already_asked(history: list) -> bool:
+    """Return whether Alia already asked which physical centre is preferred."""
+
+    return any(
+        str(message.get("role") or "").lower() == "assistant"
+        and _CONSULTA_PREFERRED_CLINIC_QUESTION_RE.search(
+            str(message.get("text") or "")
+        )
+        for message in (history or [])
+        if isinstance(message, dict)
+    )
+
+
 def _consulta_visit_reason_already_shared(inbound_text: str, history: list) -> bool:
     """Return whether the prospect has already given a concrete visit reason."""
 
@@ -631,6 +676,28 @@ def consulta_despertares_callback_preference_from_reply(
     if not _CONSULTA_CALLBACK_ANSWER_RE.search(answer):
         return ""
     return answer
+
+
+def consulta_despertares_preferred_clinic_from_reply(
+    inbound_text: str,
+    history: list,
+    fields: dict | None = None,
+) -> str:
+    """Recover an explicit no-preference answer to Alia's clinic question."""
+
+    if not is_consulta_despertares():
+        return ""
+    if str((fields or {}).get("preferred_clinic") or "").strip():
+        return ""
+    if not _consulta_preferred_clinic_question_already_asked(history):
+        return ""
+
+    answer = str(inbound_text or "").strip()
+    if not answer or len(answer) > 120 or "?" in answer or "¿" in answer:
+        return ""
+    if not _CONSULTA_NO_CLINIC_PREFERENCE_RE.search(answer):
+        return ""
+    return "Sin preferencia"
 
 
 def enforce_consulta_despertares_boundaries(
@@ -808,6 +875,15 @@ def enforce_consulta_despertares_boundaries(
     already_has_appointment_preference = bool(
         str(fields.get("appointment_preference") or "").strip()
     )
+    session_is_presencial = bool(
+        _CONSULTA_PRESENCIAL_RE.search(str(fields.get("session_type") or ""))
+    )
+    already_has_preferred_clinic = bool(
+        str(fields.get("preferred_clinic") or "").strip()
+    )
+    preferred_clinic_already_asked = (
+        _consulta_preferred_clinic_question_already_asked(history)
+    )
     appointment_preference_already_asked = any(
         str(message.get("role") or "").lower() == "assistant"
         and _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE.search(
@@ -816,9 +892,13 @@ def enforce_consulta_despertares_boundaries(
         for message in history
         if isinstance(message, dict)
     )
+    clinic_no_preference_answer = bool(
+        preferred_clinic_already_asked
+        and _CONSULTA_NO_CLINIC_PREFERENCE_RE.search(inbound_text or "")
+    )
     customer_opted_out = bool(
         _CONSULTA_INTAKE_OPTOUT_RE.search(inbound_text or "")
-    )
+    ) and not clinic_no_preference_answer
     reply_already_asks_a_question = "?" in clean or "¿" in clean
 
     if (
@@ -836,6 +916,24 @@ def enforce_consulta_despertares_boundaries(
             else CONSULTA_DESPERTARES_CALLBACK_CLOSING
         )
         clean = closing if not clean else f"{clean}\n\n{closing}"
+
+    if (
+        booking_intent
+        and _consulta_has_name_and_phone(fields)
+        and already_has_callback_preference
+        and session_is_presencial
+        and not already_has_preferred_clinic
+        and not preferred_clinic_already_asked
+        and not customer_opted_out
+        and not reply_already_asks_a_question
+    ):
+        language = consulta_despertares_reply_language(inbound_text, history)
+        question = (
+            CONSULTA_DESPERTARES_ENGLISH_PREFERRED_CLINIC_QUESTION
+            if language == "English"
+            else CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION
+        )
+        return question if not clean else f"{clean.rstrip()}\n\n{question}"
 
     if (
         booking_intent

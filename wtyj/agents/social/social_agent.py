@@ -1306,6 +1306,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         ).strip():
             new_fields = dict(new_fields)
             new_fields["callback_preference"] = _callback_answer
+
+        # "Me da igual" is meaningful only in the context of Alia's prior
+        # preferred-clinic question. Preserve that explicit answer even when
+        # the model omits the structured field on a very short reply.
+        _clinic_answer = (
+            tenant_hard_rules.consulta_despertares_preferred_clinic_from_reply(
+                text, history, fields
+            )
+        )
+        if _clinic_answer and not str(
+            new_fields.get("preferred_clinic") or ""
+        ).strip():
+            new_fields = dict(new_fields)
+            new_fields["preferred_clinic"] = _clinic_answer
     for k, v in new_fields.items():
         if v is not None and v != "":
             fields[k] = v
@@ -1355,6 +1369,12 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 _followup["id"], _target_status
             )
         if _followup_alerts_enabled:
+            # Context fields live in the conversation state instead of the
+            # follow_up_requests table. Include the just-extracted clinic in
+            # the transition alert before the state record is saved below.
+            _followup["preferred_clinic"] = str(
+                fields.get("preferred_clinic") or ""
+            ).strip()
             state_registry.dispatch_follow_up_alert(
                 _followup,
                 previous_status=_previous_followup_status,

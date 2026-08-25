@@ -222,7 +222,7 @@ def test_relationship_first_rule_is_tenant_scoped_and_covers_intake_pacing():
     assert "Choosing a physical clinic" in rule
     assert "visit reason is always optional" in rule
     assert "NOT a signal to" in rule
-    assert "session_type, then appointment_preference" in rule
+    assert "session_type; then preferred_clinic only for" in rule
     assert "normal request to speak with a psychologist" in rule
     assert "location, clinic, callback time" in rule
     assert "Do not ask which timezone applies" in rule
@@ -240,6 +240,7 @@ def test_marina_schema_supports_a_complete_non_invasive_prospect_card():
     properties = fields["properties"]
 
     assert "session_type" in properties
+    assert "preferred_clinic" in properties
     assert "full history" in fields["description"]
     assert "Never use the preferred appointment" in (
         properties["callback_preference"]["description"]
@@ -248,6 +249,9 @@ def test_marina_schema_supports_a_complete_non_invasive_prospect_card():
         properties["appointment_preference"]["description"]
     )
     assert "Choosing a physical clinic" in properties["session_type"]["description"]
+    assert "Never infer it from their home area" in (
+        properties["preferred_clinic"]["description"]
+    )
     assert "neutral paraphrase" in properties["visit_reason"]["description"]
     assert "Never put a location" in properties["visit_reason"]["description"]
 
@@ -313,6 +317,8 @@ def test_despertares_callback_prompt_does_not_stop_at_minimum_fields():
 
     assert "NOT permission to stop or hand off immediately" in prompt
     assert "continue with session_type" in prompt
+    assert "collect preferred_clinic next" in prompt
+    assert "For Online,\nskip preferred_clinic" in prompt
     assert "Do NOT set requires_human for those requests" in prompt
     assert "A location, clinic, callback time" in prompt
 
@@ -795,6 +801,7 @@ def test_despertares_follow_up_alert_is_whatsapp_ready():
         "surnames": "García",
         "phone_raw": "600 111 222",
         "callback_preference": "Por la tarde",
+        "preferred_clinic": "Leganés",
         "visit_reason": "Ansiedad",
     })
 
@@ -803,6 +810,7 @@ def test_despertares_follow_up_alert_is_whatsapp_ready():
     assert "Teléfono: 600 111 222" in alert
     assert "Cuándo llamar: Por la tarde" in alert
     assert "Motivo de consulta: Ansiedad" in alert
+    assert "Centro preferido: Leganés" in alert
     assert "responde al prospecto" in alert
 
 def _whatsapp_app_sent_payload(source="whatsappbusinessapp"):
@@ -1096,3 +1104,143 @@ def test_conversation_inbox_preserves_existing_prospect_name():
 
     resolve_contacts.assert_called_once_with([])
     assert hydrated[0]["customer_name"] == "Ana López"
+
+
+def test_presencial_lead_is_asked_once_for_preferred_clinic_before_schedule():
+    fields = {
+        "first_name": "Gimena",
+        "surnames": "Salcedo Marquez",
+        "phone": "685427447",
+        "callback_preference": "Hoy por la tarde, sobre las 19:30",
+        "session_type": "Presencial",
+    }
+
+    enforced = _enforce(
+        "Perfecto, gracias por indicarlo.",
+        "Quiero una cita presencial.",
+        history=[{"role": "assistant", "text": "Gracias por escribirnos."}],
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION in enforced
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        not in enforced
+    )
+
+
+def test_online_lead_skips_preferred_clinic_and_continues_with_schedule():
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "Por la tarde",
+        "session_type": "Online",
+    }
+
+    enforced = _enforce(
+        "Perfecto, gracias por indicarlo.",
+        "Quiero una cita online.",
+        history=[{"role": "assistant", "text": "Gracias por escribirnos."}],
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION not in enforced
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        in enforced
+    )
+
+
+def test_preferred_clinic_question_is_not_repeated_when_already_asked():
+    history = [{
+        "role": "assistant",
+        "text": tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION,
+    }]
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "Por la tarde",
+        "session_type": "Presencial",
+    }
+
+    enforced = _enforce(
+        "Perfecto, seguimos con tus preferencias.",
+        "Todavía no lo sé.",
+        history=history,
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION not in enforced
+
+
+def test_known_preferred_clinic_is_never_requested_again():
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "Por la tarde",
+        "session_type": "Presencial",
+        "preferred_clinic": "Leganés",
+    }
+
+    enforced = _enforce(
+        "Perfecto, gracias.",
+        "Prefiero el centro de Leganés.",
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION not in enforced
+
+
+def test_explicit_no_clinic_preference_is_recovered_from_short_reply():
+    history = [{
+        "role": "assistant",
+        "text": tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION,
+    }]
+
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        recovered = (
+            tenant_hard_rules.consulta_despertares_preferred_clinic_from_reply(
+                "Me da igual, cualquier centro.", history, {}
+            )
+        )
+
+    assert recovered == "Sin preferencia"
+
+
+def test_no_clinic_preference_continues_to_appointment_schedule():
+    history = [{
+        "role": "assistant",
+        "text": "¿Qué centro preferirías para la sesión?",
+    }]
+    fields = {
+        "first_name": "Ana",
+        "surnames": "García",
+        "phone": "600111222",
+        "callback_preference": "Por la tarde",
+        "session_type": "Presencial",
+        "preferred_clinic": "Sin preferencia",
+    }
+
+    enforced = _enforce(
+        "Perfecto, no hay problema.",
+        "Me da igual, cualquier centro.",
+        history=history,
+        fields=fields,
+        intents=["booking"],
+    )
+
+    assert tenant_hard_rules.CONSULTA_DESPERTARES_PREFERRED_CLINIC_QUESTION not in enforced
+    assert (
+        tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
+        in enforced
+    )

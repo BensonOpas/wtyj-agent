@@ -41,6 +41,7 @@ def test_follow_up_rows_include_complete_prospect_context(tmp_path, monkeypatch)
         "+34600111222",
         {
             "service_name": "Terapia individual",
+            "preferred_clinic": "Leganés",
             "appointment_preference": "Viernes por la mañana",
             "date": "2026-08-01",
             "slot_time": "18:00",
@@ -54,8 +55,10 @@ def test_follow_up_rows_include_complete_prospect_context(tmp_path, monkeypatch)
     selected = state_registry.get_follow_up_request(request_id)
 
     assert listed[0]["session_type"] == "Terapia individual"
+    assert listed[0]["preferred_clinic"] == "Leganés"
     assert listed[0]["appointment_preference"] == "Viernes por la mañana"
     assert selected["session_type"] == "Terapia individual"
+    assert selected["preferred_clinic"] == "Leganés"
     assert selected["appointment_preference"] == "Viernes por la mañana"
     assert selected["callback_preference"] == "por la tarde"
     assert selected["visit_reason"] == "Ansiedad"

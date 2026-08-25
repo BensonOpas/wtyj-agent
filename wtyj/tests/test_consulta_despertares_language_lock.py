@@ -387,6 +387,7 @@ def _complete_callback_fields(**overrides):
         "phone": "600111222",
         "callback_preference": "esta tarde",
         "session_type": "Presencial",
+        "preferred_clinic": "Leganés",
     }
     fields.update(overrides)
     return fields

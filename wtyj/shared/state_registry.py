@@ -4484,6 +4484,7 @@ def _follow_up_context(fields: dict = None) -> dict:
         ).strip()
     return {
         "session_type": str(session_type).strip(),
+        "preferred_clinic": str(fields.get("preferred_clinic") or "").strip(),
         "appointment_preference": str(appointment_preference).strip(),
     }
 
