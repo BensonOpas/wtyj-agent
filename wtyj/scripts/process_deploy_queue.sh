@@ -43,7 +43,7 @@ bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 # Runtime compose files may intentionally pin a tenant-specific tag. Refresh
 # those local wtyj-agent tags from latest before forcing container recreation.
 STATUS="success"
-DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus consulta-despertares unboks wibrandt}"
+DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus ali-car-rental consulta-despertares unboks wibrandt}"
 HEALTH_PORTS=""
 VERIFY_DESPERTARES=0
 LATEST_IMAGE_ID=$(docker image inspect --format '{{.Id}}' wtyj-agent:latest)
@@ -86,6 +86,7 @@ for client in $DEPLOY_CLIENTS; do
   case "$client" in
     bluemarlin) HEALTH_PORTS="$HEALTH_PORTS 8001" ;;
     adamus) HEALTH_PORTS="$HEALTH_PORTS 8002" ;;
+    ali-car-rental) HEALTH_PORTS="$HEALTH_PORTS 8101" ;;
     consulta-despertares)
       HEALTH_PORTS="$HEALTH_PORTS 8103"
       VERIFY_DESPERTARES=1
