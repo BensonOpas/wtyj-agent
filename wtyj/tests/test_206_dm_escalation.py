@@ -43,6 +43,34 @@ def test_booking_redirect_omitted_when_booking_flow_false(mock_config):
     assert "wa.me/59912345" not in prompt
 
 
+
+@patch("agents.social.dm_agent.config_loader")
+def test_fallback_booking_redirect_omitted_when_booking_flow_false(mock_config):
+    """The no-master-prompt path must honor the same booking-flow gate."""
+    from agents.social.dm_agent import _build_dm_system_prompt
+
+    mock_config.get_business.return_value = {
+        "agent_name": "Ali", "name": "Ali Car Rental",
+        "whatsapp": "+5990000000", "booking_email": "legacy@example.com",
+        "languages": ["English"],
+    }
+    mock_config.get_common_sense_knowledge.return_value = {}
+    mock_config.get_services.return_value = {}
+    mock_config.get_faq.return_value = {}
+    mock_config.get_raw.return_value = {
+        "slug": "ali-car-rental",
+        "terminology": {"service_label": "car rental"},
+        "agent_persona": {"freeform_notes": ""},
+        "workflow": {"type": "ali_quote"},
+        "features": {"booking_flow": False},
+    }
+
+    prompt = _build_dm_system_prompt("whatsapp")
+
+    assert "BOOKING REDIRECT" not in prompt
+    assert "wa.me/" not in prompt
+    assert "legacy@example.com" not in prompt
+
 @patch("agents.social.dm_agent.config_loader")
 def test_booking_redirect_present_when_booking_flow_true(mock_config):
     """When tenant has booking_flow:true (BlueMarlin path), the BOOKING
