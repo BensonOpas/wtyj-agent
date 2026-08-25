@@ -1118,6 +1118,7 @@ def test_presencial_lead_is_asked_once_for_preferred_clinic_before_schedule():
     enforced = _enforce(
         "Perfecto, gracias por indicarlo.",
         "Quiero una cita presencial.",
+        history=[{"role": "assistant", "text": "Gracias por escribirnos."}],
         fields=fields,
         intents=["booking"],
     )
@@ -1141,6 +1142,7 @@ def test_online_lead_skips_preferred_clinic_and_continues_with_schedule():
     enforced = _enforce(
         "Perfecto, gracias por indicarlo.",
         "Quiero una cita online.",
+        history=[{"role": "assistant", "text": "Gracias por escribirnos."}],
         fields=fields,
         intents=["booking"],
     )
