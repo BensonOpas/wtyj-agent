@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
-import re
 import time
 from hashlib import sha256
 from pathlib import Path
@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from fastapi.responses import FileResponse, Response
 
 from agents.social.ali_quote_workflow import get_quote
+from agents.social.ali_quote_presentation import build_quote_filename
 
 
 def sign_download(public_id: str, expires: int, secret: str) -> str:
@@ -50,9 +51,16 @@ def quote_download_response(public_id: str, expires: int, signature: str):
         return Response(status_code=404)
     if not path.is_file() or not (quote or {}).get("pdf_sha256"):
         return Response(status_code=404)
-    reference = re.sub(r"[^A-Za-z0-9_-]", "-", str(quote.get("quote_reference") or "ali-quote"))[:80]
+    try:
+        customer = json.loads(quote.get("customer_json") or "{}")
+        pricing = json.loads(quote.get("pricing_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        customer, pricing = {}, {}
+    filename = build_quote_filename(
+        customer.get("name", ""), quote.get("quote_reference", ""),
+        pricing.get("createdAt", ""),
+    )
     return FileResponse(
-        str(path), media_type="application/pdf", filename=f"{reference}.pdf",
+        str(path), media_type="application/pdf", filename=filename,
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
-

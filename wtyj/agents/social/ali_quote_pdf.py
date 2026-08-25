@@ -6,9 +6,7 @@ import hashlib
 import html
 import os
 import re
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT
@@ -26,11 +24,15 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from agents.social.ali_quote_presentation import (
+    format_curacao_datetime,
+    format_rental_period,
+)
+
 NAVY = colors.HexColor("#102A43")
 GOLD = colors.HexColor("#D49A12")
 PALE = colors.HexColor("#F2F8FC")
 MUTED = colors.HexColor("#486581")
-CURACAO_TZ = ZoneInfo("America/Curacao")
 MAX_TEXT = 180
 
 LABELS = {
@@ -130,11 +132,6 @@ def _money(value) -> str:
     return f"USD {amount}"
 
 
-def _curacao_time(value: str) -> str:
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(CURACAO_TZ)
-    return dt.strftime("%d %b %Y, %H:%M AST")
-
-
 def render_quote_pdf(
     public_id: str,
     locale: str,
@@ -183,13 +180,26 @@ def render_quote_pdf(
         [Paragraph(f"<b>{_safe(labels['customer'])}</b>", small), Paragraph(_safe(customer.get("name"), 90), body)],
         [Paragraph("WhatsApp", small), Paragraph(_safe(mask_whatsapp(customer.get("whatsapp", ""))), body)],
         [Paragraph(f"<b>{_safe(labels['vehicle'])}</b>", small), Paragraph(_safe(rental.get("vehicle_name") or rental.get("vehicle_class_name"), 100), body)],
-        [Paragraph(f"<b>{_safe(labels['period'])}</b>", small), Paragraph(f"{_safe(rental.get('rental_start'), 20)} - {_safe(rental.get('rental_end'), 20)}", body)],
+        [
+            Paragraph(f"<b>{_safe(labels['period'])}</b>", small),
+            Paragraph(
+                _safe(format_rental_period(
+                    rental.get("rental_start", ""),
+                    rental.get("rental_end", ""),
+                    locale,
+                ), 80),
+                body,
+            ),
+        ],
     ]
     right = [
         [Paragraph(f"<b>{_safe(labels['pickup'])}</b>", small), Paragraph(_safe(rental.get("pickup_location")), body)],
         [Paragraph(f"<b>{_safe(labels['return'])}</b>", small), Paragraph(_safe(rental.get("return_location")), body)],
         [Paragraph(f"<b>{_safe(labels['days'])}</b>", small), Paragraph(_safe(pricing.get("rentalDays"), 5), body)],
-        [Paragraph(f"<b>{_safe(labels['expires'])}</b>", small), Paragraph(_safe(_curacao_time(pricing.get("expiresAt", ""))), body)],
+        [
+            Paragraph(f"<b>{_safe(labels['expires'])}</b>", small),
+            Paragraph(_safe(format_curacao_datetime(pricing.get("expiresAt", ""), locale)), body),
+        ],
     ]
     details = Table([[Table(left, colWidths=[30 * mm, 54 * mm]), Table(right, colWidths=[28 * mm, 54 * mm])]], colWidths=[88 * mm, 88 * mm])
     details.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#C9D9E5")), ("BACKGROUND", (0, 0), (-1, -1), PALE), ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)]))
@@ -211,7 +221,7 @@ def render_quote_pdf(
         [Paragraph(f"<b>{_safe(labels['deposit'])}</b>", body), Paragraph(_safe(_money(pricing.get("refundableSecurityDeposit"))), ParagraphStyle("AliDeposit", parent=body, fontName="Helvetica-Bold", alignment=TA_RIGHT))],
     ], colWidths=[108 * mm, 68 * mm])
     totals.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 1, GOLD), ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#E6D5A8")), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF9E8")), ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)]))
-    story.append(KeepTogether([totals, Spacer(1, 5 * mm), Paragraph(f"<b>{_safe(labels['issued'])}:</b> {_safe(_curacao_time(pricing.get('createdAt', '')))}<br/>{_safe(labels['validity'])}<br/><b>{_safe(labels['availability'])}</b><br/>{_safe(labels['reply'])}", small)]))
+    story.append(KeepTogether([totals, Spacer(1, 5 * mm), Paragraph(f"<b>{_safe(labels['issued'])}:</b> {_safe(format_curacao_datetime(pricing.get('createdAt', ''), locale))}<br/>{_safe(labels['validity'])}<br/><b>{_safe(labels['availability'])}</b><br/>{_safe(labels['reply'])}", small)]))
     document.build(story)
 
     data = target.read_bytes()

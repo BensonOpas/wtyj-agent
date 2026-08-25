@@ -6,6 +6,7 @@ import httpx
 from pypdf import PdfReader
 
 from agents.social import ali_quote_delivery as delivery
+from agents.social import ali_quote_download as download
 from agents.social import ali_quote_workflow as workflow
 from agents.social.ali_quote_download import sign_download, verify_download
 from agents.social.ali_quote_pdf import render_quote_pdf
@@ -131,6 +132,8 @@ def test_carlos_confirmation_copy_is_human_in_all_locales():
         text = workflow._summary_text(summary)
         assert text.startswith(opening)
         assert text.endswith(closing)
+        assert "2026-09-01" not in text
+        assert "2026-09-08" not in text
         assert not any(phrase in text.lower() for phrase in banned)
 
 
@@ -188,6 +191,8 @@ def test_pdf_is_one_page_in_all_locales_and_displays_exact_snapshot_totals(tmp_p
         assert "USD 280.00" in text
         assert "USD 150.00" in text
         assert pricing()["quoteReference"] in text
+        assert "2026-09-01" not in text
+        assert "2026-09-08" not in text
 
 
 def test_signed_download_rejects_tampering_and_expiry():
@@ -209,10 +214,16 @@ def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
         "public_id": "quote-public-id", "conversation_id": "conversation-synthetic",
         "zernio_account_id": "account-synthetic", "locale": "en",
         "quote_reference": pricing()["quoteReference"], "pricing_json": json.dumps(pricing()),
+        "customer_json": json.dumps(customer()),
     }
     assert delivery.send_customer_whatsapp(quote, "/private/quote.pdf")
     assert captured["kwargs"]["attachment_type"] == "file"
+    assert captured["kwargs"]["attachment_name"] == (
+        "Ali-Car-Rental-Quote-Synthetic-Customer-2026-09-01-ABCD1234.pdf"
+    )
     assert captured["args"][3].startswith("https://unboks.example/api/public/ali-quote/")
+    assert "4 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
+    assert "T" not in captured["args"][2].split("Valid until:", 1)[1].split("\n", 1)[0]
 
 
 def test_staff_email_attaches_identical_pdf_bytes(monkeypatch):
@@ -227,7 +238,39 @@ def test_staff_email_attaches_identical_pdf_bytes(monkeypatch):
     }
     assert delivery.send_staff_email(quote, pdf)
     assert captured[0][1]["pdf_attachment"][1] == pdf
+    assert captured[0][1]["pdf_attachment"][0] == (
+        "Ali-Car-Rental-Quote-Synthetic-Customer-2026-09-01-ABCD1234.pdf"
+    )
     assert hashlib.sha256(captured[0][1]["pdf_attachment"][1]).hexdigest() == hashlib.sha256(pdf).hexdigest()
+
+
+def test_signed_download_uses_same_official_customer_filename(monkeypatch, tmp_path):
+    quote_root = tmp_path / "quotes"
+    quote_path = quote_root / "quote-public-id" / "quote.pdf"
+    quote_path.parent.mkdir(parents=True)
+    quote_path.write_bytes(b"%PDF-1.4\nsynthetic quote")
+    quote = {
+        "pdf_path": str(quote_path), "pdf_sha256": "synthetic-sha",
+        "quote_reference": pricing()["quoteReference"],
+        "customer_json": json.dumps(customer()),
+        "pricing_json": json.dumps(pricing()),
+    }
+    monkeypatch.setenv("ALI_QUOTE_DATA_ROOT", str(quote_root))
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
+    monkeypatch.setattr(download, "get_quote", lambda _public_id: quote)
+    expires = int(datetime.now(timezone.utc).timestamp()) + 3600
+    signature = download.sign_download(
+        "quote-public-id", expires, "synthetic-signing-secret",
+    )
+
+    response = download.quote_download_response(
+        "quote-public-id", expires, signature,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="Ali-Car-Rental-Quote-Synthetic-Customer-2026-09-01-ABCD1234.pdf"'
+    )
 
 
 def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
