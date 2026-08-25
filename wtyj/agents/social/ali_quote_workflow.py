@@ -22,6 +22,7 @@ from typing import Callable
 import httpx
 
 from agents.social.ali_quote_pdf import render_quote_pdf
+from agents.social.ali_quote_presentation import format_rental_period
 from shared import config_loader, state_registry
 
 TENANT_SLUG = "ali-car-rental"
@@ -587,9 +588,13 @@ def _summary_text(summary: dict) -> str:
     customer = summary["customer"]
     labels = SUMMARY_LABELS[rental["conversation_language"]]
     vehicle = rental.get("vehicle_name") or rental.get("vehicle_class_name") or "-"
+    period = format_rental_period(
+        rental["rental_start"], rental["rental_end"],
+        rental["conversation_language"],
+    )
     return (
         f"{labels[0]}\n\n{labels[1]}: {customer.get('name', '')}\n"
-        f"{labels[2]}: {rental['rental_start']} - {rental['rental_end']}\n"
+        f"{labels[2]}: {period}\n"
         f"{labels[3]}: {rental['pickup_location']}\n{labels[4]}: {rental['return_location']}\n"
         f"{labels[5]}: {vehicle}\n\n{labels[6]}"
     )

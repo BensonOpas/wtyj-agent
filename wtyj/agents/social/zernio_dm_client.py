@@ -585,7 +585,8 @@ def send_dm_template(
 
 def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
                                   attachment_url: str,
-                                  attachment_type: str = "image") -> bool:
+                                  attachment_type: str = "image",
+                                  attachment_name: str = "") -> bool:
     """Send a Zernio inbox message with a public attachment URL.
 
     The current Python SDK wrapper only exposes text parameters for
@@ -609,6 +610,12 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
         "attachmentUrl": attachment_url,
         "attachmentType": attachment_type,
     }
+    if attachment_type == "file" and str(attachment_name or "").strip():
+        safe_name = os.path.basename(
+            str(attachment_name).replace("\x00", "").replace("\r", "").replace("\n", "")
+        ).strip()[:160]
+        if safe_name:
+            body["attachmentName"] = safe_name
     try:
         resp = http_requests.post(
             url,

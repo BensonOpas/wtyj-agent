@@ -10,6 +10,11 @@ from zoneinfo import ZoneInfo
 
 from agents.marina.email_adapter import smtp_send
 from agents.social.ali_quote_download import build_signed_url
+from agents.social.ali_quote_presentation import (
+    build_quote_filename,
+    format_curacao_datetime,
+    format_rental_period,
+)
 from agents.social.ali_quote_workflow import DeliveryAdapters
 from agents.social.zernio_dm_client import send_dm_reply, send_dm_reply_with_attachment
 from shared import config_loader, state_registry
@@ -21,6 +26,13 @@ MESSAGES = {
     "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Reageer hier om te accepteren of iets te vragen.", "Onder voorbehoud van definitieve beschikbaarheid."),
     "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Kontestá aki pa aseptá of hasi un pregunta.", "Suhéto na konfirmashon final di disponibilidat."),
     "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Antworten Sie hier, um anzunehmen oder etwas zu fragen.", "Vorbehaltlich der endgültigen Fahrzeugverfügbarkeit."),
+}
+
+VALID_UNTIL = {
+    "en": "Valid until",
+    "nl": "Geldig tot",
+    "pap": "Válido te ku",
+    "de": "Gültig bis",
 }
 
 
@@ -60,15 +72,18 @@ def send_staff_email(quote: dict, pdf_bytes: bytes) -> bool:
         f"Customer: {customer.get('name', '')}\n"
         f"WhatsApp: {customer.get('whatsapp', '')}\n"
         f"Vehicle: {vehicle}\n"
-        f"Rental period: {rental.get('rental_start')} to {rental.get('rental_end')}\n"
+        f"Rental period: {format_rental_period(rental.get('rental_start', ''), rental.get('rental_end', ''), 'en')}\n"
         f"Pickup: {rental.get('pickup_location')}\nReturn: {rental.get('return_location')}\n"
         f"Rental total: USD {pricing['rentalTotal']['amount']}\n"
         f"Refundable deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
-        f"Valid until: {pricing.get('expiresAt')}\nElapsed SLA time: {elapsed} minutes\n"
+        f"Valid until: {format_curacao_datetime(pricing.get('expiresAt', ''), 'en')}\nElapsed SLA time: {elapsed} minutes\n"
         f"Conversation: {_dashboard_link(quote['conversation_id'])}"
     )
     subject = f"New Ali quote - {quote['quote_reference']} - {customer.get('name', '')}"
-    filename = f"{quote['quote_reference']}.pdf"
+    filename = build_quote_filename(
+        customer.get("name", ""), quote["quote_reference"],
+        pricing.get("createdAt", ""),
+    )
     try:
         for recipient in recipients:
             smtp_send(recipient, subject, body, pdf_attachment=(filename, pdf_bytes))
@@ -83,18 +98,24 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
     if not base_url.startswith("https://") or not secret:
         return False
     pricing = json.loads(quote["pricing_json"])
+    customer = json.loads(quote["customer_json"])
     locale = quote.get("locale") if quote.get("locale") in MESSAGES else "en"
     ready, reply, availability = MESSAGES[locale]
     text = (
         f"{ready}\n\nQuote: {quote['quote_reference']}\n"
         f"Rental total: USD {pricing['rentalTotal']['amount']}\n"
         f"Refundable security deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
-        f"Valid until: {pricing['expiresAt']}\n\n{reply}\n{availability}"
+        f"{VALID_UNTIL[locale]}: {format_curacao_datetime(pricing['expiresAt'], locale)}\n\n"
+        f"{reply}\n{availability}"
     )
     url = build_signed_url(base_url, quote["public_id"], secret)
+    filename = build_quote_filename(
+        customer.get("name", ""), quote["quote_reference"],
+        pricing.get("createdAt", ""),
+    )
     return send_dm_reply_with_attachment(
         quote["conversation_id"], quote["zernio_account_id"], text,
-        url, attachment_type="file",
+        url, attachment_type="file", attachment_name=filename,
     )
 
 
@@ -140,4 +161,3 @@ def production_adapters() -> DeliveryAdapters:
         send_operator_alerts=send_operator_alerts,
         escalate=escalate,
     )
-
