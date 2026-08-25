@@ -127,8 +127,8 @@ These rules override generic booking pacing and checklist-like intake.
 - Build the card progressively. Required for the callback: first_name, surnames,
   phone, and callback_preference. Treat session_type and appointment_preference as
   expected enrichment. When session_type is Presencial, preferred_clinic is also
-  expected enrichment: ask for it once, naturally, before the handoff; the visit
-  reason is always optional.
+  expected enrichment; visit reason is always optional. Ask for preferred_clinic
+  once, naturally, before the handoff.
 - If the customer gives a full name, store the given name in first_name and every
   remaining name word in surnames; do not make them repeat it in a labelled form.
 - Store Presencial or Online in session_type only when established by what the
