@@ -26,7 +26,7 @@ The existing `ali_quote_automation` flag is now the master intake kill switch. A
 
 ## Tests
 
-Focused tests cover authenticated catalog reads, sanitized prompt context, fixed-rate visibility, name-to-ID resolution, fabricated-ID rejection, paused-state behavior, contact-redirect prohibition, and a complete natural intake producing the deterministic summary. The complete repository suite passes with 1,437 tests and six unrelated existing deprecation warnings.
+Focused tests cover authenticated catalog reads, sanitized prompt context, fixed-rate visibility, name-to-ID resolution, fabricated-ID rejection, paused-state behavior, contact-redirect prohibition, and a complete natural intake producing the deterministic summary. The complete repository suite passes with 1,438 tests and six unrelated existing deprecation warnings.
 
 ## Success Condition
 
