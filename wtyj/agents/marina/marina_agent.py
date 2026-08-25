@@ -130,14 +130,14 @@ MARINA_TOOL = {
                     "rental_end": {"type": "string", "description": "Ali only: return date in YYYY-MM-DD format."},
                     "pickup_location": {"type": "string", "description": "Ali only: customer-confirmed pickup location."},
                     "return_location": {"type": "string", "description": "Ali only: customer-confirmed return location."},
-                    "vehicle_id": {"type": "string", "description": "Ali only: exact published vehicle UUID when selected."},
-                    "vehicle_name": {"type": "string", "description": "Ali only: exact published vehicle name when selected."},
-                    "vehicle_class_id": {"type": "string", "description": "Ali only: exact published category UUID when selected."},
-                    "vehicle_class_name": {"type": "string", "description": "Ali only: exact published category name when selected."},
+                    "vehicle_id": {"type": "string", "description": "Ali only: Python-owned published vehicle UUID. Never invent or populate this field."},
+                    "vehicle_name": {"type": "string", "description": "Ali only: exact published vehicle name when the customer selects one."},
+                    "vehicle_class_id": {"type": "string", "description": "Ali only: Python-owned published category UUID. Never invent or populate this field."},
+                    "vehicle_class_name": {"type": "string", "description": "Ali only: exact published category name when the customer selects one."},
                     "driver_age": {"type": "integer", "description": "Ali only: main driver's stated age."},
                     "passenger_count": {"type": "integer", "description": "Ali only and optional when the customer has not selected a vehicle."},
                     "luggage_count": {"type": "integer", "description": "Ali only and optional when the customer has not selected a vehicle."},
-                    "extra_ids": {"type": "array", "items": {"type": "string"}, "description": "Ali only: exact published extra UUIDs."},
+                    "extra_ids": {"type": "array", "items": {"type": "string"}, "description": "Ali only: Python-owned published extra UUIDs. Never invent values."},
                     "conversation_language": {"type": "string", "enum": ["en", "nl", "pap", "de"], "description": "Ali only: current conversation language."},
                     "order_total": {"type": "number"},
                     "currency": {"type": "string"},
@@ -804,6 +804,59 @@ Do not use booking_confirmed for Wibrandt product orders.
 """
 
 
+def _build_ali_quote_block() -> str:
+    """Build the highest-priority Ali intake contract from the live catalog."""
+    raw = config_loader.get_raw() or {}
+    try:
+        from agents.social import ali_quote_workflow
+    except Exception:
+        return ""
+    if not ali_quote_workflow.tenant_configured(raw):
+        return ""
+    if not ali_quote_workflow.tenant_enabled(raw):
+        return """
+ALI CAR RENTAL QUOTE WORKFLOW IS PAUSED (HIGHEST PRIORITY):
+Do not collect or confirm rental details. Do not redirect the customer to WhatsApp,
+email, telephone, a website, or a form. They are already in the correct WhatsApp
+conversation. Briefly say in their language that quote service is temporarily
+unavailable and the team will continue with them here.
+"""
+    try:
+        catalog = ali_quote_workflow.catalog_prompt_context(
+            ali_quote_workflow.get_intake_catalog()
+        )
+    except ali_quote_workflow.AliQuoteError:
+        return """
+ALI CAR RENTAL CATALOG IS TEMPORARILY UNAVAILABLE (HIGHEST PRIORITY):
+Do not invent a vehicle, category, price, ID, availability, or quote. Do not redirect
+the customer to another channel. Briefly say in their language that the fleet details
+cannot be checked right now and that the team will continue with them here.
+"""
+    return f"""
+ALI CAR RENTAL WHATSAPP QUOTE INTAKE (HIGHEST PRIORITY):
+Current published catalog, supplied digitally by Ali and containing no customer data:
+{json.dumps(catalog, ensure_ascii=False, sort_keys=True)}
+
+- The customer is already talking to Ali on WhatsApp. Never tell them to contact or
+  message Ali on WhatsApp, by email, by telephone, through a website, or through a form.
+- This block overrides generic booking, email-collection, contact-info, payment, service,
+  trip, and confirmation instructions elsewhere in this prompt.
+- Re-read the complete history and extract every rental fact explicitly supplied.
+- Required facts are customer_name, rental_start, rental_end, pickup_location,
+  return_location, driver_age, conversation_language, and exactly one vehicle or category.
+- Ask at most one short question for the most important missing or ambiguous fact.
+- Dates must be YYYY-MM-DD and must come from the customer's words. Never invent them.
+- Set vehicle_class_name to one exact category name from the current catalog, or
+  vehicle_name to one exact vehicle name. If the choice is ambiguous, ask one question.
+- Never populate vehicle_id, vehicle_class_id, or extra_ids. Python resolves server-owned
+  IDs against the same catalog after your one response.
+- Do not calculate or promise a price. Do not claim availability or a confirmed booking.
+  Ali's deterministic API creates the official quote after the customer confirms the summary.
+- Your reply should only answer a direct question when needed and ask the next missing
+  detail. Once all details are present, Python replaces your reply with the exact summary.
+"""
+
+
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
@@ -973,6 +1026,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
         tenant_hard_rules.consulta_despertares_relationship_rule_block()
     )
     _wibrandt_order_block = _build_wibrandt_order_block(business)
+    _ali_quote_block = _build_ali_quote_block()
     _workflow = config_loader.get_raw().get("workflow", {}) or {}
     _callback_followup_block = ""
     if _workflow.get("type") == "callback_follow_up":
@@ -1249,7 +1303,8 @@ Only include service_key if you're certain. If the customer's description is amb
 {_tenant_hard_rule_block}
 {_icp_final_override_block}
 {_live_product_catalog_block}
-{_consulta_relationship_block}"""
+{_consulta_relationship_block}
+{_ali_quote_block}"""
 
 
 def _build_user_prompt(

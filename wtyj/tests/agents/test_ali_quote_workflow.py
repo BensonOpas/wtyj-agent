@@ -15,12 +15,12 @@ CLASS_ID = "30000000-0000-4000-8000-000000000001"
 DEPOSIT_ID = "90000000-0000-4000-8000-000000000001"
 
 
-def raw_config():
+def raw_config(automation=True):
     return {
         "slug": "ali-car-rental",
         "workflow": {"type": "ali_quote", "required_deposit_charge_id": DEPOSIT_ID},
         "features": {
-            "ali_quote_automation": False,
+            "ali_quote_automation": automation,
             "ali_quote_customer_delivery": False,
             "ali_quote_staff_email": False,
             "ali_quote_operator_alerts": False,
@@ -89,8 +89,12 @@ def confirmed_quote(monkeypatch, tmp_path):
     return quote
 
 
-def test_workflow_is_strictly_ali_tenant_scoped():
+def test_workflow_is_strictly_ali_tenant_scoped_and_master_switched():
+    assert workflow.tenant_configured(raw_config())
     assert workflow.tenant_enabled(raw_config())
+    paused = raw_config(automation=False)
+    assert workflow.tenant_configured(paused)
+    assert not workflow.tenant_enabled(paused)
     wrong = raw_config()
     wrong["slug"] = "other-tenant"
     assert not workflow.tenant_enabled(wrong)

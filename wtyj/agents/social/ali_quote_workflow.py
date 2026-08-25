@@ -39,6 +39,18 @@ AFFIRMATIVE = {
     "ta bon", "correcto", "si", "stimmt", "passt", "ja stimmt",
 }
 NEGATION = {"no", "not", "nee", "niet", "no ta", "kein", "nicht", "aber", "but", "ma"}
+_CATALOG_CACHE = {"expires_at": 0.0, "value": None}
+_CATALOG_CACHE_SECONDS = 60.0
+_FORBIDDEN_CONTACT_REDIRECT = re.compile(
+    r"(?:https?://)?wa\.me/|mailto:|tel:|[\w.+-]+@[\w.-]+\.[a-z]{2,}",
+    flags=re.IGNORECASE,
+)
+_INTAKE_SAFETY_FALLBACK = {
+    "en": "I couldn't complete that step safely. Please try again here in a moment.",
+    "nl": "Ik kon die stap niet veilig afronden. Probeer het hier over een moment opnieuw.",
+    "pap": "Mi no por a kompletá e paso ei na un manera sigur. Purba atrobe aki den un momentu.",
+    "de": "Ich konnte diesen Schritt nicht sicher abschließen. Bitte versuchen Sie es gleich hier erneut.",
+}
 
 
 class AliQuoteError(RuntimeError):
@@ -61,10 +73,16 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def tenant_enabled(raw: dict | None = None) -> bool:
+def tenant_configured(raw: dict | None = None) -> bool:
     raw = raw if raw is not None else (config_loader.get_raw() or {})
     slug = str(raw.get("slug") or (raw.get("business") or {}).get("slug") or "").strip().lower()
     return slug == TENANT_SLUG and (raw.get("workflow") or {}).get("type") == WORKFLOW_TYPE
+
+
+def tenant_enabled(raw: dict | None = None) -> bool:
+    """Master kill switch for Ali intake and quote processing."""
+    raw = raw if raw is not None else (config_loader.get_raw() or {})
+    return tenant_configured(raw) and feature_switches(raw)["automation"]
 
 
 def feature_switches(raw: dict | None = None) -> dict[str, bool]:
@@ -288,6 +306,46 @@ class AliQuoteClient:
         self.service_token = service_token
         self.client = client or httpx.Client(timeout=12.0)
 
+    def get_catalog(self) -> dict:
+        for attempt in range(2):
+            try:
+                response = self.client.get(
+                    f"{self.base_url}/api/v1/catalog",
+                    headers={
+                        "Authorization": f"Bearer {self.service_token}",
+                        "Accept": "application/json",
+                    },
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt == 0:
+                    continue
+                raise AliQuoteError("ali_catalog_temporary_failure") from exc
+            if response.status_code == 200:
+                payload = response.json()
+                required = {
+                    "catalogVersion", "currency", "availabilityMode",
+                    "vehicleClasses", "vehicles", "extras",
+                }
+                if (
+                    not required.issubset(payload)
+                    or payload.get("currency") != "USD"
+                    or payload.get("availabilityMode") != "request_only"
+                    or not isinstance(payload.get("vehicleClasses"), list)
+                    or not isinstance(payload.get("vehicles"), list)
+                    or not isinstance(payload.get("extras"), list)
+                ):
+                    raise AliQuoteError("ali_catalog_invalid")
+                for item in [*payload["vehicleClasses"], *payload["vehicles"]]:
+                    if not isinstance(item, dict) or not str(item.get("id") or "").strip() or not str(item.get("name") or "").strip():
+                        raise AliQuoteError("ali_catalog_invalid")
+                return payload
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt == 0:
+                    continue
+                raise AliQuoteError("ali_catalog_temporary_failure")
+            raise AliQuoteError(f"ali_catalog_http_{response.status_code}")
+        raise AliQuoteError("ali_catalog_temporary_failure")
+
     def create_quote(self, request: dict, idempotency_key: str) -> dict:
         if set(request) != ALI_REQUEST_KEYS:
             raise AliQuoteError("ali_request_boundary_failed")
@@ -318,6 +376,107 @@ class AliQuoteClient:
                 raise AliQuoteError("ali_temporary_failure")
             raise AliQuoteError(f"ali_http_{response.status_code}")
         raise AliQuoteError("ali_temporary_failure")
+
+
+def get_intake_catalog(
+    client: AliQuoteClient | None = None,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    """Return the current published Ali catalog without customer data."""
+    now = time.monotonic()
+    cached = _CATALOG_CACHE.get("value")
+    if not force_refresh and cached is not None and now < float(_CATALOG_CACHE["expires_at"]):
+        return cached
+    active_client = client or AliQuoteClient(
+        os.environ.get("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com"),
+        os.environ.get("ALI_QUOTE_API_TOKEN", ""),
+    )
+    catalog = active_client.get_catalog()
+    _CATALOG_CACHE["value"] = catalog
+    _CATALOG_CACHE["expires_at"] = now + _CATALOG_CACHE_SECONDS
+    return catalog
+
+
+def catalog_prompt_context(catalog: dict) -> dict:
+    """Expose only current public names and fixed rates to the intake prompt."""
+    rates_by_class: dict[str, set[str]] = {}
+    vehicles = []
+    for vehicle in catalog.get("vehicles") or []:
+        class_id = str(vehicle.get("classId") or "")
+        amount = str((vehicle.get("dailyRate") or {}).get("amount") or "")
+        if class_id and amount:
+            rates_by_class.setdefault(class_id, set()).add(amount)
+        vehicles.append({
+            "name": str(vehicle.get("name") or ""),
+            "category": next((
+                str(item.get("name") or "")
+                for item in catalog.get("vehicleClasses") or []
+                if item.get("id") == class_id
+            ), ""),
+        })
+    categories = []
+    for item in catalog.get("vehicleClasses") or []:
+        rates = sorted(rates_by_class.get(str(item.get("id") or ""), set()))
+        categories.append({
+            "name": str(item.get("name") or ""),
+            "daily_usd": rates[0] if len(rates) == 1 else None,
+        })
+    return {
+        "catalog_version": catalog.get("catalogVersion"),
+        "availability_mode": "request_only",
+        "currency": "USD",
+        "categories": categories,
+        "vehicles": vehicles,
+    }
+
+
+def sanitize_intake_reply(reply: str, locale: str | None = None) -> str:
+    """Fail closed if Marina tries to redirect an Ali WhatsApp customer."""
+    text = str(reply or "").strip()
+    if not _FORBIDDEN_CONTACT_REDIRECT.search(text):
+        return text
+    selected_locale = str(locale or "en").lower()
+    return _INTAKE_SAFETY_FALLBACK.get(selected_locale, _INTAKE_SAFETY_FALLBACK["en"])
+
+
+def _normalize_catalog_label(value: object) -> str:
+    normalized = str(value or "").casefold()
+    normalized = re.sub(r"\bor\s+similar\b", " ", normalized)
+    normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+    ignored = {"car", "cars", "vehicle", "vehicles", "category", "class", "rental"}
+    return " ".join(part for part in normalized.split() if part not in ignored)
+
+
+def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
+    """Map a customer-facing selection to one current server-owned ID."""
+    resolved = dict(fields or {})
+    classes = [item for item in catalog.get("vehicleClasses") or [] if isinstance(item, dict)]
+    vehicles = [item for item in catalog.get("vehicles") or [] if isinstance(item, dict)]
+    class_by_id = {str(item.get("id")): item for item in classes if item.get("id")}
+    vehicle_by_id = {str(item.get("id")): item for item in vehicles if item.get("id")}
+
+    def unique_name_match(items: list[dict], value: object) -> dict | None:
+        target = _normalize_catalog_label(value)
+        if not target:
+            return None
+        matches = [item for item in items if _normalize_catalog_label(item.get("name")) == target]
+        return matches[0] if len(matches) == 1 else None
+
+    vehicle = vehicle_by_id.get(str(resolved.get("vehicle_id") or ""))
+    vehicle = vehicle or unique_name_match(vehicles, resolved.get("vehicle_name"))
+    vehicle_class = class_by_id.get(str(resolved.get("vehicle_class_id") or ""))
+    vehicle_class = vehicle_class or unique_name_match(classes, resolved.get("vehicle_class_name"))
+
+    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+        resolved.pop(key, None)
+    if vehicle:
+        resolved["vehicle_id"] = str(vehicle["id"])
+        resolved["vehicle_name"] = str(vehicle["name"])
+    elif vehicle_class:
+        resolved["vehicle_class_id"] = str(vehicle_class["id"])
+        resolved["vehicle_class_name"] = str(vehicle_class["name"])
+    return resolved
 
 
 @dataclass
@@ -469,6 +628,15 @@ def handle_ali_quote_turn(
     raw = raw_config if raw_config is not None else (config_loader.get_raw() or {})
     if not tenant_enabled(raw):
         return None
+    try:
+        resolved_fields = resolve_catalog_selection(fields, get_intake_catalog())
+    except AliQuoteError:
+        return None
+    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+        if key in resolved_fields:
+            fields[key] = resolved_fields[key]
+        else:
+            fields.pop(key, None)
     rental = {key: fields.get(key) for key in (
         "rental_start", "rental_end", "pickup_location", "return_location",
         "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
