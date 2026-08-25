@@ -60,15 +60,36 @@ app.add_middleware(
 
 
 def _use_whatsapp_orchestrator(channel: str) -> bool:
-    """Use the structured agent for bookings and callback-follow-up tenants."""
+    """Use the structured agent for booking and dedicated WhatsApp workflows."""
     raw = config_loader.get_raw() or {}
     if (raw.get("features") or {}).get("booking_flow", True):
         return True
     workflow = raw.get("workflow") or {}
     return (
-        channel == "whatsapp"
-        and workflow.get("type") == "callback_follow_up"
+        str(channel or "").strip().lower() == "whatsapp"
+        and workflow.get("type") in {"callback_follow_up", "ali_quote"}
     )
+
+
+def _sanitize_tenant_whatsapp_reply(reply_text: str, channel: str) -> str:
+    """Apply tenant-specific safety at the final AI outbound boundary."""
+    text = str(reply_text or "").strip()
+    if not text or str(channel or "").strip().lower() != "whatsapp":
+        return text
+    try:
+        from agents.social.ali_quote_workflow import (
+            sanitize_intake_reply,
+            tenant_configured,
+        )
+        if not tenant_configured():
+            return text
+        safe_text = sanitize_intake_reply(text)
+        if safe_text != text:
+            log("ali_quote_outbound_reply_sanitized", channel="whatsapp")
+        return safe_text
+    except Exception as exc:
+        log("ali_quote_outbound_safety_failed", error=str(exc)[:200])
+        return ""
 
 from dashboard.api import router as dashboard_router
 app.include_router(dashboard_router)
@@ -438,6 +459,8 @@ def _flush_buffer(phone):
                         sender_name=_zernio_sender,
                     )
                     reply_text = handle_incoming_dm(_dm_msg)
+                reply_text = _sanitize_tenant_whatsapp_reply(
+                    reply_text, _zernio_channel)
                 if reply_text:
                     attachment_url = str((reply_media or {}).get("url") or "")
                     ok = send_reply(
@@ -500,6 +523,8 @@ def _flush_buffer(phone):
                 state_registry.wa_store_message(phone, "user", combined_text)
                 reply_text = handle_incoming_whatsapp_message(
                     final_msg, inbound_already_stored=True)
+                reply_text = _sanitize_tenant_whatsapp_reply(
+                    reply_text, "whatsapp")
                 if reply_text:
                     ok = send_text_message(to=phone, text=reply_text)
                     if not ok:
@@ -860,6 +885,7 @@ def _process_zernio_event(payload: dict):
                 reply_text = handle_incoming_dm(msg)
                 reply_media = None
 
+            reply_text = _sanitize_tenant_whatsapp_reply(reply_text, channel)
             if reply_text:
                 attachment_url = str((reply_media or {}).get("url") or "")
                 # Send reply via the sender registry (Brief 187 — dispatched by channel)

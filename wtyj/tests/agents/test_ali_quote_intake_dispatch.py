@@ -18,6 +18,7 @@ def raw_config(automation=True):
             "required_deposit_charge_id": "90000000-0000-4000-8000-000000000001",
         },
         "features": {
+            "booking_flow": False,
             "ali_quote_automation": automation,
             "ali_quote_customer_delivery": False,
             "ali_quote_staff_email": False,
