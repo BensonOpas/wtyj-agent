@@ -174,7 +174,7 @@ def test_quote_processing_waits_only_the_remaining_three_minutes(monkeypatch, tm
     ) == 0
 
 
-def test_quote_processing_delays_pricing_and_delivery(monkeypatch, tmp_path):
+def test_only_customer_quote_message_waits_three_minutes(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
     confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
     events = []
@@ -199,7 +199,7 @@ def test_quote_processing_delays_pricing_and_delivery(monkeypatch, tmp_path):
     )
 
     assert result["status"] == "complete"
-    assert events == [("sleep", 120.0), "pricing", "whatsapp", "email"]
+    assert events == ["pricing", "email", ("sleep", 120.0), "whatsapp"]
 
 
 def test_ali_client_retries_one_transient_failure_and_validates_72_hours():

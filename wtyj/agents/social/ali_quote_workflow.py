@@ -538,11 +538,6 @@ def process_quote(
         adapters.escalate(quote, "automation_disabled")
         return update_quote(public_id, status="attention_required", last_error_code="automation_disabled")
     try:
-        remaining_delay = seconds_until_quote_processing(
-            quote, now=now(), delay_seconds=delay_seconds,
-        )
-        if remaining_delay:
-            sleep(remaining_delay)
         pricing = json.loads(quote["pricing_json"]) if quote.get("pricing_json") else None
         if pricing is None:
             update_quote(public_id, status="pricing")
@@ -564,21 +559,26 @@ def process_quote(
             raise AliQuoteError("pdf_integrity_failed")
         quote = update_quote(public_id, status="delivering")
         delivery_errors = []
-        if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
-            ok = _attempt_twice(adapters.send_whatsapp, quote, quote["pdf_path"])
-            quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
-            if not ok:
-                delivery_errors.append("whatsapp_delivery_failed")
         if switches.get("staff_email") and quote["staff_email_status"] != "sent":
             ok = _attempt_twice(adapters.send_staff_email, quote, pdf_bytes)
             quote = update_quote(public_id, staff_email_status="sent" if ok else "failed")
             if not ok:
                 delivery_errors.append("staff_email_failed")
-        if delivery_errors:
-            raise AliQuoteError(delivery_errors[0])
         if switches.get("operator_alerts") and quote.get("notification_status_json") in (None, "", "{}"):
             outcomes = adapters.send_operator_alerts(quote)
             quote = update_quote(public_id, notification_status_json=_json(outcomes))
+        if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
+            remaining_delay = seconds_until_quote_processing(
+                quote, now=now(), delay_seconds=delay_seconds,
+            )
+            if remaining_delay:
+                sleep(remaining_delay)
+            ok = _attempt_twice(adapters.send_whatsapp, quote, quote["pdf_path"])
+            quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
+            if not ok:
+                delivery_errors.append("whatsapp_delivery_failed")
+        if delivery_errors:
+            raise AliQuoteError(delivery_errors[0])
         complete = quote["staff_email_status"] == "sent" and quote["whatsapp_status"] == "accepted"
         return update_quote(public_id, status="complete" if complete else "pdf_ready")
     except AliQuoteError as exc:
