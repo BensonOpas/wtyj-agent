@@ -174,7 +174,8 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
         raw_config=raw_config(),
     )
 
-    assert reply.startswith("Please confirm these rental details")
+    assert reply.startswith("Just checking I’ve got everything right:")
+    assert reply.endswith("Does that all look right?")
     assert "Economy" in reply
     assert "wa.me" not in reply
     assert "@" not in reply
