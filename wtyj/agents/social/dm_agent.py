@@ -179,8 +179,11 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         fallback_parts.append(approved_answers_block)
     fallback_parts.extend([
         services_block, faq_block, writing_style_block,
-        booking_redirect_block, language_block, avoid_block,
-        emoji_block, output_rule,
+    ])
+    if booking_flow:
+        fallback_parts.append(booking_redirect_block)
+    fallback_parts.extend([
+        language_block, avoid_block, emoji_block, output_rule,
     ])
     return "\n\n".join(fallback_parts)
 
