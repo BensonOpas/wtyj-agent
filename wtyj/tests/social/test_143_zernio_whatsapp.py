@@ -184,7 +184,9 @@ def test_zernio_whatsapp_booking_flow_off_uses_dm_agent(mock_orchestrator, mock_
 
     raw = config_loader._cache
     original = raw.get("features", {}).get("booking_flow", True)
+    original_workflow = raw.get("workflow")
     raw.setdefault("features", {})["booking_flow"] = False
+    raw["workflow"] = {"type": "qa_only"}
     try:
         with _buffer_lock:
             _message_buffers[conv_id] = {
@@ -209,4 +211,149 @@ def test_zernio_whatsapp_booking_flow_off_uses_dm_agent(mock_orchestrator, mock_
         mock_send.assert_called_once()
     finally:
         raw["features"]["booking_flow"] = original
+        if original_workflow is None:
+            raw.pop("workflow", None)
+        else:
+            raw["workflow"] = original_workflow
         _cleanup(conv_id)
+
+
+
+def test_zernio_whatsapp_platform_is_case_normalized():
+    from agents.social.zernio_dm_client import parse_zernio_webhook
+
+    payload = _make_zernio_wa_payload("conv_163_case", "hello")
+    payload["data"]["platform"] = " WhatsApp "
+
+    msg = parse_zernio_webhook(payload)
+
+    assert msg is not None
+    assert msg["platform"] == "whatsapp"
+    assert msg["channel"] == "whatsapp"
+
+
+def test_ali_quote_whatsapp_selector_ignores_booking_flow_switch():
+    from agents.social.webhook_server import _use_whatsapp_orchestrator
+
+    raw = {
+        "slug": "ali-car-rental",
+        "workflow": {"type": "ali_quote"},
+        "features": {"booking_flow": False},
+    }
+    with patch.object(config_loader, "get_raw", return_value=raw):
+        assert _use_whatsapp_orchestrator("whatsapp") is True
+        assert _use_whatsapp_orchestrator("WhatsApp") is True
+        assert _use_whatsapp_orchestrator("instagram_dm") is False
+        assert _use_whatsapp_orchestrator("facebook_dm") is False
+
+
+@patch("agents.social.webhook_server.send_reply")
+@patch("agents.social.webhook_server.handle_incoming_dm")
+@patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
+def test_ali_quote_zernio_ingress_uses_orchestrator_and_final_safety(
+    mock_orchestrator, mock_dm, mock_send
+):
+    from agents.social.webhook_server import (
+        _buffer_lock,
+        _flush_buffer,
+        _message_buffers,
+    )
+
+    conv_id = "conv_163_ali_quote"
+    _cleanup(conv_id)
+    mock_orchestrator.return_value = (
+        "For bookings, please reach out on WhatsApp at wa.me/96777145 "
+        "or email info@alicarrental.com, that's where we handle everything!"
+    )
+    raw = {
+        "slug": "ali-car-rental",
+        "workflow": {"type": "ali_quote"},
+        "features": {
+            "booking_flow": False,
+            "ali_quote_automation": True,
+        },
+    }
+
+    with patch.object(config_loader, "get_raw", return_value=raw):
+        with _buffer_lock:
+            _message_buffers[conv_id] = {
+                "messages": [{
+                    "from": conv_id,
+                    "text": "My complete synthetic rental details",
+                    "from_name": "Synthetic Calvin",
+                    "_zernio_conversation_id": conv_id,
+                    "_zernio_account_id": "wa_acc_123",
+                    "_zernio_channel": "whatsapp",
+                    "_zernio_sender_name": "Synthetic Calvin",
+                }],
+                "timer": None,
+                "started": time.time(),
+            }
+
+        _flush_buffer(conv_id)
+
+    mock_orchestrator.assert_called_once()
+    mock_dm.assert_not_called()
+    mock_send.assert_called_once()
+    sent_text = mock_send.call_args[0][3]
+    assert sent_text == (
+        "I couldn't complete that step safely. "
+        "Please try again here in a moment."
+    )
+    assert "wa.me" not in sent_text
+    assert "@" not in sent_text
+    _cleanup(conv_id)
+
+
+
+@patch("agents.social.webhook_server.send_text_message")
+@patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
+def test_ali_quote_legacy_meta_outbound_boundary_sanitizes(
+    mock_orchestrator, mock_send
+):
+    from agents.social.webhook_server import (
+        _buffer_lock,
+        _flush_buffer,
+        _message_buffers,
+    )
+
+    phone = "synthetic_meta_163"
+    _cleanup(phone)
+    mock_orchestrator.return_value = (
+        "For bookings, message us on WhatsApp at wa.me/96777145 "
+        "or email info@alicarrental.com."
+    )
+    raw = {
+        "slug": "ali-car-rental",
+        "workflow": {"type": "ali_quote"},
+        "features": {
+            "booking_flow": False,
+            "ali_quote_automation": True,
+        },
+    }
+
+    with patch.object(config_loader, "get_raw", return_value=raw):
+        with _buffer_lock:
+            _message_buffers[phone] = {
+                "messages": [{
+                    "from": phone,
+                    "text": "Complete synthetic rental details",
+                    "from_name": "Synthetic Calvin",
+                    "message_id": "test_143_meta_163",
+                }],
+                "timer": None,
+                "started": time.time(),
+            }
+
+        _flush_buffer(phone)
+
+    mock_orchestrator.assert_called_once()
+    mock_send.assert_called_once()
+    sent_text = mock_send.call_args.kwargs["text"]
+    assert sent_text == (
+        "I couldn't complete that step safely. "
+        "Please try again here in a moment."
+    )
+    assert "wa.me" not in sent_text
+    assert "@" not in sent_text
+    _cleanup(phone)
