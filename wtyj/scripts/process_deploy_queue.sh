@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # Process deploy queue: deploy claimed SHAs to paying clients if off-hours.
 # Idempotent: safe to run on cron every 30 min — no-ops when nothing to do.
