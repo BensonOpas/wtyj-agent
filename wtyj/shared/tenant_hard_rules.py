@@ -305,7 +305,8 @@ _CONSULTA_APPOINTMENT_PREFERENCE_QUESTION_RE = re.compile(
 _CONSULTA_PREFERRED_CLINIC_QUESTION_RE = re.compile(
     r"(?:"
     r"¿?\s*(?:en\s+)?(?:cu[aá]l|qu[eé])\s+(?:de\s+)?(?:nuestros?\s+)?"
-    r"(?:centros?|cl[ií]nicas?|sedes?)[^?\n]*(?:sesi[oó]n|cita|atender)"
+    r"(?:centros?|cl[ií]nicas?|sedes?)[^?\n]*"
+    r"(?:sesi[oó]n|cita|atender|prefer|gustar[ií]a|vendr[ií]a\s+mejor)"
     r"|which\s+(?:of\s+our\s+)?(?:clinics?|centres?|centers?|locations?|offices?)"
     r"[^?\n]*(?:session|appointment|prefer)"
     r")",
@@ -891,9 +892,13 @@ def enforce_consulta_despertares_boundaries(
         for message in history
         if isinstance(message, dict)
     )
+    clinic_no_preference_answer = bool(
+        preferred_clinic_already_asked
+        and _CONSULTA_NO_CLINIC_PREFERENCE_RE.search(inbound_text or "")
+    )
     customer_opted_out = bool(
         _CONSULTA_INTAKE_OPTOUT_RE.search(inbound_text or "")
-    )
+    ) and not clinic_no_preference_answer
     reply_already_asks_a_question = "?" in clean or "¿" in clean
 
     if (
