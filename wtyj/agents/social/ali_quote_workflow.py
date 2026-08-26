@@ -30,6 +30,18 @@ TENANT_SLUG = "ali-car-rental"
 WORKFLOW_TYPE = "ali_quote"
 LOCALES = {"en", "nl", "pap", "de"}
 PENDING_STATUSES = ("confirmed", "pricing", "quoted", "pdf_ready", "delivering")
+ALI_PHASES = {
+    "COLLECTING", "DISCOVERY", "SUMMARY_PRESENTED",
+    "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
+}
+ALI_PRIMARY_INTENTS = {
+    "continue_intake", "ask_question", "reject_or_hesitate",
+    "request_recommendation", "repeat_summary", "confirm_summary", "other",
+}
+ALI_OUTBOUND_KINDS = {
+    "agent_reply", "vehicle_recommendation", "summary",
+    "quote_preparing", "escalation",
+}
 REQUIRED_RENTAL_FIELDS = {
     "rental_start", "rental_end", "pickup_location", "return_location",
     "driver_age", "conversation_language",
@@ -114,6 +126,45 @@ class AliQuoteError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+@dataclass(frozen=True)
+class AliTurnPlan:
+    """One deterministic customer-visible action for an Ali inbound turn."""
+
+    outbound_kind: str
+    text: str
+    phase: str
+    primary_intent: str
+    reason_code: str
+    action_id: str
+    draft_hash: str = ""
+    summary_hash: str = ""
+    summary_version: int = 0
+    quote_public_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.outbound_kind not in ALI_OUTBOUND_KINDS:
+            raise AliQuoteError("invalid_turn_outbound_kind")
+        if self.phase not in ALI_PHASES:
+            raise AliQuoteError("invalid_turn_phase")
+        if self.primary_intent not in ALI_PRIMARY_INTENTS:
+            raise AliQuoteError("invalid_turn_primary_intent")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.action_id):
+            raise AliQuoteError("invalid_turn_action_id")
+
+    def delivery_commit(self) -> dict:
+        return {
+            "outbound_kind": self.outbound_kind,
+            "phase": self.phase,
+            "primary_intent": self.primary_intent,
+            "reason_code": self.reason_code,
+            "action_id": self.action_id,
+            "draft_hash": self.draft_hash,
+            "summary_hash": self.summary_hash,
+            "summary_version": self.summary_version,
+            "quote_public_id": self.quote_public_id,
+        }
 
 
 def _json(value) -> str:
@@ -309,6 +360,8 @@ def ensure_schema() -> None:
         "pdf_path TEXT, pdf_sha256 TEXT, whatsapp_status TEXT NOT NULL DEFAULT 'pending', "
         "brand_image_path TEXT, brand_image_sha256 TEXT, "
         "brand_image_status TEXT NOT NULL DEFAULT 'pending', "
+        "customer_delivery_superseded_at TEXT, "
+        "customer_delivery_superseded_by_hash TEXT, "
         "staff_email_status TEXT NOT NULL DEFAULT 'pending', "
         "notification_status_json TEXT NOT NULL DEFAULT '{}', "
         "attempt_count INTEGER NOT NULL DEFAULT 0, last_error_code TEXT, "
@@ -323,6 +376,8 @@ def ensure_schema() -> None:
         "brand_image_path": "TEXT",
         "brand_image_sha256": "TEXT",
         "brand_image_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "customer_delivery_superseded_at": "TEXT",
+        "customer_delivery_superseded_by_hash": "TEXT",
     }
     for name, definition in additions.items():
         if name not in columns:
@@ -406,6 +461,7 @@ def update_quote(public_id: str, **changes) -> dict:
         "status", "quote_reference", "quote_snapshot_id", "pricing_json", "expires_at",
         "pdf_path", "pdf_sha256", "whatsapp_status", "staff_email_status",
         "brand_image_path", "brand_image_sha256", "brand_image_status",
+        "customer_delivery_superseded_at", "customer_delivery_superseded_by_hash",
         "notification_status_json", "attempt_count", "last_error_code",
     }
     if not changes or set(changes) - allowed:
@@ -429,6 +485,205 @@ def resumable_quotes() -> list[dict]:
     rows = conn.execute(f"SELECT * FROM ali_quotes WHERE status IN ({placeholders}) ORDER BY id", PENDING_STATUSES).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def supersede_pending_customer_delivery(
+    conversation_id: str,
+    replacement_draft_hash: str,
+) -> str | None:
+    """Supersede only the customer assets for the newest undelivered quote."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(replacement_draft_hash or "")):
+        return None
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM ali_quotes WHERE conversation_id = ? "
+            "AND status IN ('confirmed','pricing','quoted','pdf_ready','delivering') "
+            "AND whatsapp_status != 'accepted' "
+            "AND customer_delivery_superseded_at IS NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if not row:
+            conn.commit()
+            return None
+        timestamp = _iso(_now())
+        conn.execute(
+            "UPDATE ali_quotes SET customer_delivery_superseded_at = ?, "
+            "customer_delivery_superseded_by_hash = ?, updated_at = ? "
+            "WHERE public_id = ? AND customer_delivery_superseded_at IS NULL",
+            (timestamp, replacement_draft_hash, timestamp, row["public_id"]),
+        )
+        conn.commit()
+        return str(row["public_id"])
+    finally:
+        conn.close()
+
+
+def customer_delivery_is_superseded(quote: dict | None) -> bool:
+    return bool((quote or {}).get("customer_delivery_superseded_at"))
+
+
+def commit_ali_turn_delivery(
+    conversation_id: str,
+    commit: dict,
+    assistant_text: str,
+    inbound_message_ids: list[str] | None = None,
+    *,
+    channel: str = "whatsapp",
+    recommendation_state_hash: str = "",
+    recommendation_delivery: str = "",
+) -> bool:
+    """Atomically commit provider-confirmed Ali state, timeline, and inbound rows.
+
+    Returns ``True`` only when this action id is committed for the first time.
+    No customer content is copied into flags or logs.
+    """
+    kind = str((commit or {}).get("outbound_kind") or "")
+    phase = str((commit or {}).get("phase") or "")
+    intent = str((commit or {}).get("primary_intent") or "")
+    action_id = str((commit or {}).get("action_id") or "")
+    draft_hash = str((commit or {}).get("draft_hash") or "")
+    summary_hash = str((commit or {}).get("summary_hash") or "")
+    summary_version = int((commit or {}).get("summary_version") or 0)
+    quote_public_id = str((commit or {}).get("quote_public_id") or "")
+    if (
+        kind not in ALI_OUTBOUND_KINDS
+        or phase not in ALI_PHASES
+        or intent not in ALI_PRIMARY_INTENTS
+        or not re.fullmatch(r"[0-9a-f]{64}", action_id)
+        or (draft_hash and not re.fullmatch(r"[0-9a-f]{64}", draft_hash))
+        or (summary_hash and not re.fullmatch(r"[0-9a-f]{64}", summary_hash))
+    ):
+        raise AliQuoteError("invalid_turn_delivery_commit")
+    if kind == "summary" and (not summary_hash or summary_version < 1):
+        raise AliQuoteError("invalid_summary_delivery_commit")
+
+    conn = state_registry._get_conn()
+    now = _iso(_now())
+    ids = list(dict.fromkeys(
+        str(value) for value in (inbound_message_ids or []) if str(value)
+    ))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (conversation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            raise AliQuoteError("turn_state_not_found")
+        flags = json.loads(row[0] or "{}")
+        if flags.get("ali_last_delivery_action_id") == action_id:
+            for message_id in ids:
+                conn.execute(
+                    "UPDATE inbound_processing_events SET status = 'replied', "
+                    "reason = 'provider_send_ok', updated_at = ? WHERE message_id = ?",
+                    (now, message_id),
+                )
+            conn.commit()
+            return False
+
+        flags["ali_phase"] = phase
+        flags["ali_last_delivered_kind"] = kind
+        flags["ali_last_delivery_action_id"] = action_id
+        if draft_hash:
+            flags["ali_draft_hash"] = draft_hash
+        if quote_public_id:
+            flags["ali_active_quote_public_id"] = quote_public_id
+            flags["ali_quote_public_id"] = quote_public_id
+        if kind == "summary":
+            flags["ali_presented_summary_hash"] = summary_hash
+            flags["ali_summary_hash"] = summary_hash
+            flags["ali_summary_version"] = summary_version
+            flags["awaiting_quote_confirmation"] = True
+        else:
+            flags.pop("ali_presented_summary_hash", None)
+            flags.pop("awaiting_quote_confirmation", None)
+            if kind not in {"quote_preparing"}:
+                flags.pop("ali_summary_hash", None)
+                flags.pop("ali_summary_version", None)
+
+        if kind == "vehicle_recommendation" and re.fullmatch(
+            r"[0-9a-f]{64}", recommendation_state_hash
+        ) and recommendation_delivery in {"image", "carousel", "fallback"}:
+            existing = flags.get("ali_vehicle_recommendation_deliveries") or []
+            normalized = [
+                item for item in existing
+                if isinstance(item, dict)
+                and re.fullmatch(r"[0-9a-f]{64}", str(item.get("hash") or ""))
+            ]
+            if not any(item["hash"] == recommendation_state_hash for item in normalized):
+                normalized.append({
+                    "hash": recommendation_state_hash,
+                    "delivery": recommendation_delivery,
+                    "action_id": action_id,
+                })
+            flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
+
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
+            "WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), now, conversation_id),
+        )
+        conn.execute(
+            "INSERT INTO whatsapp_threads "
+            "(phone, role, text, created_at, channel, sender_name) "
+            "VALUES (?, 'assistant', ?, ?, ?, '')",
+            (conversation_id, str(assistant_text or ""), now, channel),
+        )
+        for message_id in ids:
+            conn.execute(
+                "UPDATE inbound_processing_events SET status = 'replied', "
+                "reason = 'provider_send_ok', last_error = '', updated_at = ? "
+                "WHERE message_id = ?",
+                (now, message_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    bm_logger.log(
+        "ali_turn_delivery_committed",
+        phase=phase,
+        primary_intent=intent,
+        route=kind,
+        reason_code=str((commit or {}).get("reason_code") or "")[:60],
+        draft_hash_prefix=draft_hash[:12],
+        action_id_prefix=action_id[:12],
+    )
+    return True
+
+
+def _set_quote_conversation_phase(quote: dict, phase: str) -> None:
+    """Advance only the still-active quote pointer; never reopen an old quote."""
+    if phase not in {"QUOTED", "ESCALATED"}:
+        return
+    conn = state_registry._get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (quote["conversation_id"],),
+        ).fetchone()
+        if not row:
+            conn.commit()
+            return
+        flags = json.loads(row[0] or "{}")
+        active = flags.get("ali_active_quote_public_id") or flags.get("ali_quote_public_id")
+        if active == quote["public_id"]:
+            flags["ali_phase"] = phase
+            conn.execute(
+                "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+                (json.dumps(flags, ensure_ascii=False), quote["conversation_id"]),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _quote_lead_missing_fields(fields: dict) -> list[str]:
@@ -940,12 +1195,13 @@ def log_rental_change_decision(outcome: str, changed_fields: tuple[str, ...]) ->
 
 
 def invalidate_active_quote_summary(flags: dict) -> None:
-    """Require confirmation of a corrected summary without touching quote rows."""
+    """Suspend the delivered summary without deleting immutable quote linkage."""
     for key in (
         "ali_summary_hash", "ali_summary_version",
-        "awaiting_quote_confirmation", "ali_quote_public_id",
+        "ali_presented_summary_hash", "awaiting_quote_confirmation",
     ):
         flags.pop(key, None)
+    flags["ali_phase"] = "DISCOVERY"
 
 
 def _money_cents(amount: object) -> int:
@@ -1032,6 +1288,21 @@ def _attempt_twice(operation: Callable, *args) -> bool:
         if attempt == 0:
             continue
     return False
+
+
+def _finish_superseded_customer_delivery(public_id: str) -> dict:
+    quote = get_quote(public_id)
+    if not quote:
+        raise AliQuoteError("quote_not_found")
+    changes = {
+        "status": "superseded",
+        "last_error_code": None,
+    }
+    if quote.get("brand_image_status") != "accepted":
+        changes["brand_image_status"] = "superseded"
+    if quote.get("whatsapp_status") != "accepted":
+        changes["whatsapp_status"] = "superseded"
+    return update_quote(public_id, **changes)
 
 
 def process_quote(
@@ -1122,7 +1393,13 @@ def process_quote(
             )
             if remaining_delay:
                 sleep(remaining_delay)
+            quote = get_quote(public_id)
+            if customer_delivery_is_superseded(quote):
+                return _finish_superseded_customer_delivery(public_id)
         if switches.get("customer_delivery") and quote["brand_image_status"] != "accepted":
+            quote = get_quote(public_id)
+            if customer_delivery_is_superseded(quote):
+                return _finish_superseded_customer_delivery(public_id)
             ok = brand_image_ready and _attempt_twice(
                 adapters.send_brand_image, quote, quote["brand_image_path"],
             )
@@ -1132,6 +1409,9 @@ def process_quote(
             if not ok:
                 delivery_errors.append("brand_image_delivery_failed")
         if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
+            quote = get_quote(public_id)
+            if customer_delivery_is_superseded(quote):
+                return _finish_superseded_customer_delivery(public_id)
             ok = _attempt_twice(adapters.send_whatsapp, quote, quote["pdf_path"])
             quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
             if not ok:
@@ -1143,10 +1423,14 @@ def process_quote(
             and quote["brand_image_status"] == "accepted"
             and quote["whatsapp_status"] == "accepted"
         )
-        return update_quote(public_id, status="complete" if complete else "pdf_ready")
+        result = update_quote(public_id, status="complete" if complete else "pdf_ready")
+        if result["status"] == "complete":
+            _set_quote_conversation_phase(result, "QUOTED")
+        return result
     except AliQuoteError as exc:
         attempts = int(quote.get("attempt_count") or 0) + 1
         failed = update_quote(public_id, status="attention_required", attempt_count=attempts, last_error_code=exc.code)
+        _set_quote_conversation_phase(failed, "ESCALATED")
         adapters.escalate(failed, exc.code)
         return failed
 
@@ -1249,6 +1533,363 @@ def _process_production(public_id: str) -> None:
         quote = get_quote(public_id)
         if quote:
             production_adapters().escalate(quote, "processor_unconfigured")
+
+
+def _turn_action_id(
+    conversation_id: str,
+    message_text: str,
+    supplied_action_id: str,
+) -> str:
+    if re.fullmatch(r"[0-9a-f]{64}", str(supplied_action_id or "")):
+        return str(supplied_action_id)
+    return hashlib.sha256(
+        f"{conversation_id}\x1f{message_text}".encode("utf-8")
+    ).hexdigest()
+
+
+def _legacy_or_explicit_phase(flags: dict, current_summary_hash: str) -> str:
+    phase = str(flags.get("ali_phase") or "")
+    if phase in ALI_PHASES:
+        return phase
+    if (
+        flags.get("awaiting_quote_confirmation")
+        and hmac.compare_digest(
+            str(flags.get("ali_summary_hash") or ""), current_summary_hash,
+        )
+    ):
+        return "SUMMARY_PRESENTED"
+    if flags.get("ali_active_quote_public_id") or flags.get("ali_quote_public_id"):
+        return "QUOTE_PROCESSING"
+    return "DISCOVERY"
+
+
+def _log_turn_plan(plan: AliTurnPlan, changed_fields: tuple[str, ...]) -> None:
+    bm_logger.log(
+        "ali_turn_planned",
+        phase=plan.phase,
+        primary_intent=plan.primary_intent,
+        route=plan.outbound_kind,
+        reason_code=plan.reason_code,
+        changed_fields=list(changed_fields),
+        draft_hash_prefix=plan.draft_hash[:12],
+        action_id_prefix=plan.action_id[:12],
+    )
+
+
+def fail_closed_turn_plan(
+    conversation_id: str,
+    message_text: str,
+    conversation_language: object,
+    supplied_action_id: str = "",
+) -> AliTurnPlan:
+    """Return a delivered-state-safe response when planning crashes."""
+    locale = str(conversation_language or "en")
+    if locale not in _INTAKE_SAFETY_FALLBACK:
+        locale = "en"
+    plan = AliTurnPlan(
+        "agent_reply",
+        _INTAKE_SAFETY_FALLBACK[locale],
+        "DISCOVERY",
+        "other",
+        "turn_planner_failed_closed",
+        _turn_action_id(conversation_id, message_text, supplied_action_id),
+    )
+    _log_turn_plan(plan, ())
+    return plan
+
+
+def plan_ali_quote_turn(
+    conversation_id: str,
+    zernio_account_id: str,
+    whatsapp_number: str,
+    message_text: str,
+    fields: dict,
+    flags: dict,
+    model_reply: str,
+    *,
+    from_name: str = "",
+    raw_config: dict | None = None,
+    processor: Callable[[str], None] | None = None,
+    primary_intent: object = None,
+    requires_human: bool = False,
+    recommendation_requested: bool = False,
+    summary_action: object = None,
+    change_outcome: str = "not_applicable",
+    changed_fields: tuple[str, ...] = (),
+    supplied_action_id: str = "",
+) -> AliTurnPlan:
+    """Build exactly one Ali outbound action without marking it delivered."""
+    raw = raw_config if raw_config is not None else (config_loader.get_raw() or {})
+    if not tenant_enabled(raw):
+        raise AliQuoteError("wrong_tenant_or_workflow")
+    action_id = _turn_action_id(
+        conversation_id, message_text, supplied_action_id,
+    )
+
+    try:
+        catalog = get_intake_catalog()
+        resolved_fields = resolve_catalog_selection(fields, catalog)
+        resolved_fields = resolve_catalog_supplements(resolved_fields, catalog)
+    except AliQuoteError:
+        plan = AliTurnPlan(
+            "agent_reply", model_reply, "COLLECTING", "other",
+            "catalog_validation_failed", action_id,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+        if key in resolved_fields:
+            fields[key] = resolved_fields[key]
+        else:
+            fields.pop(key, None)
+    fields["supplements"] = resolved_fields.get("supplements") or []
+    fields.pop("extra_ids", None)
+
+    rental = {key: fields.get(key) for key in (
+        "rental_start", "rental_end", "pickup_location", "return_location",
+        "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+        "driver_age", "passenger_count", "luggage_count", "supplements", "comments",
+        "conversation_language",
+    )}
+    customer = {
+        "name": fields.get("customer_name") or " ".join(
+            value for value in (fields.get("first_name"), fields.get("surnames")) if value
+        ) or from_name,
+        "whatsapp": whatsapp_number,
+    }
+    try:
+        _state_summary, state_hash = normalized_summary(customer, rental, version=0)
+    except AliQuoteError:
+        flags["ali_phase"] = "COLLECTING"
+        flags.pop("ali_draft_hash", None)
+        flags.pop("ali_presented_summary_hash", None)
+        flags.pop("awaiting_quote_confirmation", None)
+        intent = str(primary_intent or "continue_intake")
+        if intent not in ALI_PRIMARY_INTENTS:
+            intent = "continue_intake"
+        plan = AliTurnPlan(
+            "escalation" if requires_human else "agent_reply",
+            model_reply,
+            "ESCALATED" if requires_human else "COLLECTING",
+            intent,
+            "required_fields_incomplete",
+            action_id,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    previous_draft_hash = str(flags.get("ali_draft_hash") or "")
+    previous_version = int(
+        flags.get("ali_draft_version")
+        or flags.get("ali_summary_version")
+        or 0
+    )
+    draft_changed = not hmac.compare_digest(previous_draft_hash, state_hash)
+    summary_version = (
+        max(1, previous_version + 1) if previous_draft_hash and draft_changed
+        else max(1, previous_version)
+    )
+    summary, summary_hash = normalized_summary(
+        customer, rental, version=summary_version,
+    )
+    phase = _legacy_or_explicit_phase(flags, summary_hash)
+    flags["ali_draft_hash"] = state_hash
+    flags["ali_draft_summary_hash"] = summary_hash
+    flags["ali_draft_version"] = summary_version
+
+    structured_intent = str(primary_intent or "")
+    if structured_intent not in ALI_PRIMARY_INTENTS:
+        if recommendation_requested:
+            intent = "request_recommendation"
+        elif isinstance(summary_action, dict) and summary_action.get("mode") == "repeat":
+            intent = "repeat_summary"
+        elif confirmation_decision(message_text)[0]:
+            intent = "confirm_summary"
+        elif change_outcome == "clarify":
+            intent = "reject_or_hesitate"
+        else:
+            intent = "other"
+    else:
+        intent = structured_intent
+
+    if recommendation_requested:
+        intent = "request_recommendation"
+    if change_outcome in {"changed", "clarify", "unchanged"} and intent == "confirm_summary":
+        intent = "continue_intake" if change_outcome == "changed" else "other"
+
+    active_quote_id = str(
+        flags.get("ali_active_quote_public_id")
+        or flags.get("ali_quote_public_id")
+        or ""
+    )
+    if change_outcome == "changed" or intent in {
+        "reject_or_hesitate", "request_recommendation",
+    }:
+        superseded = supersede_pending_customer_delivery(
+            conversation_id, state_hash,
+        )
+        if superseded:
+            flags["ali_superseded_quote_public_id"] = superseded
+            flags.pop("ali_active_quote_public_id", None)
+            flags.pop("ali_quote_public_id", None)
+            active_quote_id = ""
+        elif active_quote_id:
+            flags["ali_replaces_quote_public_id"] = active_quote_id
+            flags.pop("ali_active_quote_public_id", None)
+            flags.pop("ali_quote_public_id", None)
+            active_quote_id = ""
+
+    if requires_human:
+        plan = AliTurnPlan(
+            "escalation", model_reply, "ESCALATED", intent,
+            "human_required", action_id, state_hash,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if intent == "request_recommendation":
+        plan = AliTurnPlan(
+            "vehicle_recommendation", model_reply, "DISCOVERY", intent,
+            "recommendation_requested", action_id, state_hash,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if change_outcome == "clarify" or intent in {
+        "ask_question", "reject_or_hesitate",
+    }:
+        reason = "change_needs_clarification" if change_outcome == "clarify" else intent
+        target_phase = (
+            phase if intent == "ask_question" and phase in {
+                "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
+            }
+            else "DISCOVERY"
+        )
+        plan = AliTurnPlan(
+            "agent_reply", model_reply, target_phase, intent,
+            reason, action_id, state_hash,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if intent == "repeat_summary":
+        if phase in {"QUOTE_PROCESSING", "QUOTED", "ESCALATED"}:
+            plan = AliTurnPlan(
+                "agent_reply", model_reply, phase, intent,
+                "summary_repeat_blocked_by_terminal_phase", action_id,
+                state_hash, quote_public_id=active_quote_id,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        plan = AliTurnPlan(
+            "summary", _summary_text(summary), "SUMMARY_PRESENTED", intent,
+            "explicit_summary_repeat", action_id, state_hash,
+            summary_hash, summary_version,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if intent == "confirm_summary":
+        accepted, confirmation_reason = confirmation_decision(message_text)
+        presented_hash = str(
+            flags.get("ali_presented_summary_hash")
+            or flags.get("ali_summary_hash")
+            or ""
+        )
+        last_kind = str(flags.get("ali_last_delivered_kind") or "")
+        legacy_presented = (
+            not flags.get("ali_phase")
+            and bool(flags.get("awaiting_quote_confirmation"))
+            and hmac.compare_digest(presented_hash, summary_hash)
+        )
+        eligible = (
+            accepted
+            and phase == "SUMMARY_PRESENTED"
+            and hmac.compare_digest(presented_hash, summary_hash)
+            and (last_kind == "summary" or legacy_presented)
+            and change_outcome == "not_applicable"
+            and not recommendation_requested
+        )
+        _log_confirmation_decision(
+            eligible,
+            confirmation_reason if eligible else "summary_not_delivery_eligible",
+            summary_hash,
+            summary_version,
+        )
+        if eligible:
+            workflow = raw.get("workflow") or {}
+            deposit_id = workflow.get("required_deposit_charge_id") or (
+                raw.get("ali_quote") or {}
+            ).get("required_deposit_charge_id")
+            try:
+                quote, created = create_confirmed_quote(
+                    conversation_id, zernio_account_id, customer, rental,
+                    summary_hash, message_text, deposit_id,
+                    summary_version=summary_version, raw_config=raw,
+                )
+            except AliQuoteError as exc:
+                state_registry.create_pending_notification(
+                    "escalation", "whatsapp", conversation_id, customer["name"],
+                    "[ALI QUOTE CONFIGURATION REQUIRED]",
+                    f"Confirmed quote could not start safely. Code: {exc.code}.",
+                    mode="hard",
+                )
+                plan = AliTurnPlan(
+                    "escalation", FALLBACK[rental["conversation_language"]],
+                    "ESCALATED", intent, exc.code, action_id, state_hash,
+                )
+                _log_turn_plan(plan, changed_fields)
+                return plan
+            flags["ali_phase"] = "QUOTE_PROCESSING"
+            flags["ali_active_quote_public_id"] = quote["public_id"]
+            flags["ali_quote_public_id"] = quote["public_id"]
+            if created:
+                import threading
+                threading.Thread(
+                    target=processor or _process_production,
+                    args=(quote["public_id"],), daemon=True,
+                ).start()
+            plan = AliTurnPlan(
+                "quote_preparing", PREPARING[rental["conversation_language"]],
+                "QUOTE_PROCESSING", intent, "current_summary_confirmed",
+                action_id, state_hash, summary_hash, summary_version,
+                quote["public_id"],
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        plan = AliTurnPlan(
+            "agent_reply", model_reply,
+            phase if phase in {"QUOTE_PROCESSING", "QUOTED", "ESCALATED"}
+            else "DISCOVERY",
+            intent,
+            "confirmation_not_eligible", action_id, state_hash,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if draft_changed and (
+        not previous_draft_hash or change_outcome == "changed"
+    ):
+        plan = AliTurnPlan(
+            "summary", _summary_text(summary), "SUMMARY_PRESENTED",
+            intent, "initial_or_corrected_complete_draft", action_id,
+            state_hash, summary_hash, summary_version,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    plan_phase = (
+        phase if phase in {"QUOTE_PROCESSING", "QUOTED", "ESCALATED"}
+        else "QUOTE_PROCESSING" if active_quote_id
+        else "DISCOVERY"
+    )
+    plan = AliTurnPlan(
+        "agent_reply", model_reply, plan_phase, intent,
+        "preserve_agent_reply", action_id, state_hash,
+        quote_public_id=active_quote_id,
+    )
+    _log_turn_plan(plan, changed_fields)
+    return plan
 
 
 def handle_ali_quote_turn(

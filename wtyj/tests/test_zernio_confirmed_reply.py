@@ -68,12 +68,13 @@ def test_confirmed_reply_requires_provider_success_status(monkeypatch):
             }]
         }),
     ])
+    posts = []
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     monkeypatch.setattr(client.http_requests, "get", lambda *a, **k: next(gets))
     monkeypatch.setattr(
         client.http_requests,
         "post",
-        lambda *a, **k: FakeResponse(
+        lambda *a, **k: posts.append((a, k)) or FakeResponse(
             201,
             {"data": {"messageId": "message-1"}},
         ),
@@ -85,7 +86,9 @@ def test_confirmed_reply_requires_provider_success_status(monkeypatch):
         "account-1",
         "test",
         confirm_delivery=True,
+        idempotency_key="ali-turn-abc123",
     ) is True
+    assert posts[0][1]["headers"]["Idempotency-Key"] == "ali-turn-abc123"
 
 
 def test_confirmed_reply_rejects_provider_failed_status(monkeypatch):
@@ -186,4 +189,3 @@ def test_template_send_confirms_provider_delivery(monkeypatch):
         "account-1",
         "consulta_despertares_seguimiento",
     ) is True
-

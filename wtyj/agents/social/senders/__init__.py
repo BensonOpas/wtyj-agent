@@ -20,7 +20,9 @@ DEFAULT_SENDER: type[Sender] = ZernioSender
 
 
 def send_reply(channel: str, conversation_id: str, account_id: str, text: str,
-               attachment_url: str = "", attachment_type: str = "image") -> bool:
+               attachment_url: str = "", attachment_type: str = "image",
+               confirm_delivery: bool = False,
+               idempotency_key: str = "") -> bool:
     """Dispatch a reply to the right sender based on channel name.
 
     This is the single public entry point for sending outbound replies. Call
@@ -31,7 +33,9 @@ def send_reply(channel: str, conversation_id: str, account_id: str, text: str,
     sender_cls = SENDERS.get(channel, DEFAULT_SENDER)
     return sender_cls.send(conversation_id, account_id, text,
                            attachment_url=attachment_url,
-                           attachment_type=attachment_type)
+                           attachment_type=attachment_type,
+                           confirm_delivery=confirm_delivery,
+                           idempotency_key=idempotency_key)
 
 
 __all__ = ["Sender", "ZernioSender", "SENDERS", "DEFAULT_SENDER", "send_reply"]

@@ -26,6 +26,7 @@ _RESPONSE_DEFAULTS = {
     "ali_vehicle_recommendation": None,
     "ali_rental_change": None,
     "ali_summary_action": None,
+    "ali_primary_intent": None,
 }
 
 
@@ -314,6 +315,23 @@ MARINA_TOOL = {
                 },
                 "required": ["mode"],
                 "additionalProperties": False,
+            },
+            "ali_primary_intent": {
+                "type": "string",
+                "enum": [
+                    "continue_intake",
+                    "ask_question",
+                    "reject_or_hesitate",
+                    "request_recommendation",
+                    "repeat_summary",
+                    "confirm_summary",
+                    "other",
+                ],
+                "description": (
+                    "Ali only: the single primary intent of the newest customer "
+                    "message. Choose exactly one. This intent is independent from "
+                    "ali_rental_change, so a correction may also request a recommendation."
+                ),
             },
             "semi_escalation": {
                 "type": "boolean",
@@ -961,6 +979,12 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   naturally. Do not repeat the unchanged summary for a question, rejection, hesitation,
   or vehicle exploration. Set `ali_summary_action.mode` to `repeat` only when the customer
   explicitly asks to see the current summary again, in any supported language.
+- Set exactly one `ali_primary_intent` for every Ali turn. Use `ask_question` for a factual
+  or price question, `reject_or_hesitate` for rejection/uncertainty/alternative exploration,
+  `request_recommendation` for images or vehicle options, `repeat_summary` only for an
+  explicit summary resend, `confirm_summary` only for a clear confirmation of the latest
+  displayed summary, `continue_intake` while supplying or collecting rental facts, and
+  `other` only when none applies. Keep `ali_rental_change` independent for combined turns.
 - When the newest message corrects a displayed summary or an already quoted rental, populate
   `ali_rental_change`. Use mode `apply` and list only the facts explicitly replaced in that
   newest message. Map a vehicle or category correction to `vehicle_selection`, set

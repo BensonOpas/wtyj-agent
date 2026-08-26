@@ -243,6 +243,7 @@ def _confirmed_text_reply(
     account_id: str,
     text: str,
     api_key: str,
+    idempotency_key: str = "",
 ) -> bool:
     """Send free text only inside WhatsApp's active window and confirm status."""
     base_url = (
@@ -253,6 +254,8 @@ def _confirmed_text_reply(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
 
     detail_response = http_requests.get(
         base_url,
@@ -627,7 +630,8 @@ def send_dm_vehicle_recommendation(
 def send_dm_reply(conversation_id: str, account_id: str, text: str,
                   attachment_url: str = "",
                   attachment_type: str = "image",
-                  confirm_delivery: bool = False) -> bool:
+                  confirm_delivery: bool = False,
+                  idempotency_key: str = "") -> bool:
     """Send a DM reply; optionally require provider delivery confirmation."""
     if attachment_url:
         return send_dm_reply_with_attachment(
@@ -636,6 +640,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
             text=text,
             attachment_url=attachment_url,
             attachment_type=attachment_type,
+            idempotency_key=idempotency_key,
         )
 
     api_key = os.environ.get("LATE_API_KEY", "")
@@ -649,6 +654,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
             account_id=account_id,
             text=text,
             api_key=api_key,
+            idempotency_key=idempotency_key,
         )
 
     client = _get_client()
@@ -806,7 +812,8 @@ def send_dm_template(
 def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
                                   attachment_url: str,
                                   attachment_type: str = "image",
-                                  attachment_name: str = "") -> bool:
+                                  attachment_name: str = "",
+                                  idempotency_key: str = "") -> bool:
     """Send a Zernio inbox message with a public attachment URL.
 
     The current Python SDK wrapper only exposes text parameters for
@@ -837,12 +844,15 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
         if safe_name:
             body["attachmentName"] = safe_name
     try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         resp = http_requests.post(
             url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             json=body,
             timeout=15,
         )

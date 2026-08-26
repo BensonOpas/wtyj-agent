@@ -13,6 +13,7 @@ os.environ.setdefault("META_ACCESS_TOKEN", "test")
 os.environ.setdefault("ZERNIO_WEBHOOK_SECRET", "test_secret")
 
 from agents.social.webhook_server import _buffer_message, _flush_buffer, _message_buffers, _buffer_lock
+from agents.social import ali_quote_workflow as workflow
 from shared import state_registry
 
 
@@ -140,6 +141,100 @@ def test_zernio_success_marks_inbound_replied_and_stores_once(mock_handle, mock_
         assert history[1]["text"] == "Sure."
         assert _ledger(msg_id)[0] == "replied"
         assert mock_handle.call_args.kwargs["inbound_already_stored"] is True
+    finally:
+        _cleanup(prefix)
+
+
+def _summary_commit(action_id: str):
+    return {
+        "outbound_kind": "summary",
+        "phase": "SUMMARY_PRESENTED",
+        "primary_intent": "continue_intake",
+        "reason_code": "initial_or_corrected_complete_draft",
+        "action_id": action_id,
+        "draft_hash": "a" * 64,
+        "summary_hash": "b" * 64,
+        "summary_version": 1,
+        "quote_public_id": "",
+    }
+
+
+@patch("agents.social.webhook_server.send_reply", return_value=True)
+def test_provider_success_atomically_anchors_summary_confirmation(mock_send):
+    prefix = "p0rel_ali_anchor_ok"
+    conv = f"{prefix}_conv"
+    msg_id = f"{prefix}_msg"
+    action_id = "c" * 64
+    _cleanup(prefix)
+    state_registry.wa_save_booking_state(conv, {}, {"ali_phase": "DISCOVERY"})
+    try:
+        with patch(
+            "agents.social.webhook_server.handle_incoming_whatsapp_message",
+            return_value={
+                "text": "Synthetic summary",
+                "media": None,
+                "vehicle_recommendation": None,
+                "ali_turn_commit": _summary_commit(action_id),
+            },
+        ):
+            _buffer_message({
+                "from": conv, "text": "details", "from_name": "Synthetic",
+                "message_id": msg_id, "_zernio_conversation_id": conv,
+                "_zernio_account_id": "acct123", "_zernio_channel": "whatsapp",
+                "_zernio_sender_name": "Synthetic",
+            })
+            with _buffer_lock:
+                _message_buffers[conv]["timer"].cancel()
+            _flush_buffer(conv)
+
+        state = state_registry.wa_get_booking_state(conv)
+        history = state_registry.wa_get_full_history(conv, limit=10)
+        assert state["flags"]["ali_presented_summary_hash"] == "b" * 64
+        assert state["flags"]["ali_last_delivered_kind"] == "summary"
+        assert state["flags"]["awaiting_quote_confirmation"] is True
+        assert [item["role"] for item in history] == ["user", "assistant"]
+        assert _ledger(msg_id)[0] == "replied"
+        assert mock_send.call_args.kwargs["confirm_delivery"] is True
+        assert mock_send.call_args.kwargs["idempotency_key"] == (
+            f"ali-turn-{action_id}"
+        )
+    finally:
+        _cleanup(prefix)
+
+
+@patch("agents.social.webhook_server.send_reply", return_value=False)
+def test_provider_failure_never_makes_summary_confirmable(mock_send):
+    prefix = "p0rel_ali_anchor_fail"
+    conv = f"{prefix}_conv"
+    msg_id = f"{prefix}_msg"
+    _cleanup(prefix)
+    state_registry.wa_save_booking_state(conv, {}, {"ali_phase": "DISCOVERY"})
+    try:
+        with patch(
+            "agents.social.webhook_server.handle_incoming_whatsapp_message",
+            return_value={
+                "text": "Synthetic summary",
+                "media": None,
+                "vehicle_recommendation": None,
+                "ali_turn_commit": _summary_commit("d" * 64),
+            },
+        ):
+            _buffer_message({
+                "from": conv, "text": "details", "from_name": "Synthetic",
+                "message_id": msg_id, "_zernio_conversation_id": conv,
+                "_zernio_account_id": "acct123", "_zernio_channel": "whatsapp",
+                "_zernio_sender_name": "Synthetic",
+            })
+            with _buffer_lock:
+                _message_buffers[conv]["timer"].cancel()
+            _flush_buffer(conv)
+
+        state = state_registry.wa_get_booking_state(conv)
+        history = state_registry.wa_get_full_history(conv, limit=10)
+        assert "ali_presented_summary_hash" not in state["flags"]
+        assert "awaiting_quote_confirmation" not in state["flags"]
+        assert [item["role"] for item in history] == ["user"]
+        assert _ledger(msg_id)[0] == "send_failed"
     finally:
         _cleanup(prefix)
 

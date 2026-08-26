@@ -456,6 +456,61 @@ def test_resume_at_three_minute_boundary_sends_without_wait(monkeypatch, tmp_pat
     assert events == ["image", "whatsapp"]
 
 
+def test_change_during_customer_delay_supersedes_both_assets_only(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
+    events = []
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            events.append("pricing")
+            return pricing()
+
+    def interrupt_delay(seconds):
+        events.append(("sleep", seconds))
+        assert workflow.supersede_pending_customer_delivery(
+            quote["conversation_id"], "a" * 64,
+        ) == quote["public_id"]
+
+    adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: events.append("image") or True,
+        send_whatsapp=lambda *_: events.append("whatsapp") or True,
+        send_staff_email=lambda *_: events.append("email") or True,
+        send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
+        escalate=lambda *_: events.append("escalate"),
+    )
+    result = workflow.process_quote(
+        quote["public_id"], Client(), adapters,
+        {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": True},
+        output_root=str(tmp_path), sleep=interrupt_delay, now=lambda: confirmed_at,
+    )
+
+    assert result["status"] == "superseded"
+    assert result["staff_email_status"] == "sent"
+    assert result["brand_image_status"] == "superseded"
+    assert result["whatsapp_status"] == "superseded"
+    assert result["pdf_path"]
+    assert events == ["pricing", "email", "alerts", ("sleep", 180.0)]
+
+
+def test_summary_versions_make_a_to_b_to_a_three_immutable_quotes(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    selected_a = rental()
+    selected_b = {**rental(), "return_location": "Synthetic hotel B"}
+    rows = []
+    for version, selected in enumerate((selected_a, selected_b, selected_a), start=1):
+        _, digest = workflow.normalized_summary(customer(), selected, version=version)
+        row, created = workflow.create_confirmed_quote(
+            "synthetic-a-b-a", "synthetic-account", customer(), selected,
+            digest, "yes", DEPOSIT_ID, summary_version=version,
+            raw_config=raw_config(),
+        )
+        assert created
+        rows.append(row)
+    assert len({row["public_id"] for row in rows}) == 3
+    assert len({row["summary_hash"] for row in rows}) == 3
+
+
 def test_ali_client_retries_one_transient_failure_and_validates_72_hours():
     calls = []
 

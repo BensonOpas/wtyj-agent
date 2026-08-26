@@ -12,17 +12,20 @@ class ZernioSender(Sender):
 
     @classmethod
     def send(cls, conversation_id: str, account_id: str, text: str,
-             attachment_url: str = "", attachment_type: str = "image") -> bool:
+             attachment_url: str = "", attachment_type: str = "image",
+             confirm_delivery: bool = False,
+             idempotency_key: str = "") -> bool:
         # Brief 238 — tenant isolation: refuse outbound sends to accounts
         # not allowlisted in this tenant's client.json. Strict mode blocks
         # the call entirely; permissive mode logs and proceeds.
         from shared.tenant_guard import is_account_allowed
         if not is_account_allowed(account_id, direction="outbound"):
             return False
-        return send_dm_reply(
-            conversation_id,
-            account_id,
-            text,
-            attachment_url=attachment_url,
-            attachment_type=attachment_type,
-        )
+        kwargs = {
+            "attachment_url": attachment_url,
+            "attachment_type": attachment_type,
+        }
+        if confirm_delivery or idempotency_key:
+            kwargs["confirm_delivery"] = confirm_delivery
+            kwargs["idempotency_key"] = idempotency_key
+        return send_dm_reply(conversation_id, account_id, text, **kwargs)
