@@ -50,7 +50,27 @@ async def lifespan(app):
         start_scheduler()
     from agents.social.ali_quote_workflow import resume_pending_processing
     resume_pending_processing()
-    yield
+    recovery_stop = None
+    recovery_thread = None
+    workflow_type = str(
+        (config_loader.get_raw().get("workflow") or {}).get("type") or ""
+    )
+    if workflow_type == "ali_quote":
+        recovery_stop = threading.Event()
+        recovery_thread = threading.Thread(
+            target=_ali_inbound_recovery_loop,
+            args=(recovery_stop,),
+            name="ali-inbound-recovery",
+            daemon=True,
+        )
+        recovery_thread.start()
+    try:
+        yield
+    finally:
+        if recovery_stop is not None:
+            recovery_stop.set()
+        if recovery_thread is not None:
+            recovery_thread.join(timeout=2)
 
 app = FastAPI(title="WTYJ Agent", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -157,7 +177,97 @@ def _record_inbound(msg: dict, channel: str, conversation_id: str):
         conversation_id=conversation_id or msg.get("from", ""),
         channel=channel,
         status="received",
+        payload=msg,
     )
+
+
+_ALI_HEARTBEAT_COPY = {
+    "en": "I’m still checking that for you. I’ll continue here shortly.",
+    "nl": "Ik ben dit nog voor je aan het nakijken. Ik ga hier zo verder.",
+    "pap": "Mi ta sigui wak esaki pa bo. Mi ta sigui aki mes un tiki mas lat.",
+    "de": "Ich prüfe das noch für Sie. Ich mache hier gleich weiter.",
+}
+
+
+def _ali_recovery_heartbeat(conversation_id: str) -> str:
+    state = state_registry.wa_get_booking_state(conversation_id) or {}
+    locale = str((state.get("fields") or {}).get("conversation_language") or "en")
+    return _ALI_HEARTBEAT_COPY.get(locale.lower(), _ALI_HEARTBEAT_COPY["en"])
+
+
+def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
+    """Resume abandoned Ali WhatsApp turns without waiting for new inbound."""
+    claimed = state_registry.inbound_processing_claim_recoverable(
+        max_age_seconds=max_age_seconds,
+    )
+    grouped = {}
+    for item in claimed:
+        payload = item.get("payload") or {}
+        if payload.get("platform") != "whatsapp":
+            state_registry.inbound_processing_update(
+                item.get("message_id", ""), "processing_failed",
+                reason="unsupported_recovery_payload",
+            )
+            continue
+        grouped.setdefault(item.get("conversation_id", ""), []).append(item)
+
+    recovered = 0
+    for conversation_id, items in grouped.items():
+        items.sort(key=lambda item: str(item.get("created_at") or ""))
+        message_ids = [str(item.get("message_id") or "") for item in items]
+        latest_payload = items[-1].get("payload") or {}
+        account_id = str(latest_payload.get("account_id") or "")
+        heartbeat_already_sent = any(
+            str(item.get("heartbeat_sent_at") or "") for item in items
+        )
+        if not heartbeat_already_sent and account_id:
+            heartbeat_ok = send_reply(
+                "whatsapp",
+                conversation_id,
+                account_id,
+                _ali_recovery_heartbeat(conversation_id),
+                confirm_delivery=True,
+                idempotency_key=(
+                    "ali-turn-heartbeat-"
+                    + hashlib.sha256("\x1f".join(message_ids).encode()).hexdigest()
+                ),
+            )
+            if heartbeat_ok:
+                state_registry.inbound_processing_mark_heartbeat(message_ids)
+                log(
+                    "ali_inbound_recovery_heartbeat_sent",
+                    conversation_id=conversation_id[:20],
+                    message_count=len(message_ids),
+                )
+
+        for item in items:
+            payload = item.get("payload") or {}
+            adapter_cls = ZERNIO_CHANNELS.get(
+                payload.get("channel", "whatsapp"), DEFAULT_ZERNIO_CHANNEL,
+            )
+            _buffer_message(adapter_cls.from_zernio(payload))
+        with _buffer_lock:
+            buffered = _message_buffers.get(conversation_id)
+            if buffered and buffered.get("timer") is not None:
+                buffered["timer"].cancel()
+        _flush_buffer(conversation_id)
+        recovered += len(items)
+        log(
+            "ali_inbound_recovery_completed",
+            conversation_id=conversation_id[:20],
+            message_count=len(items),
+        )
+    return recovered
+
+
+def _ali_inbound_recovery_loop(stop_event: threading.Event) -> None:
+    """Continuously reclaim turns lost to a crash or production deployment."""
+    while not stop_event.is_set():
+        try:
+            _recover_stale_ali_inbound_once()
+        except Exception as exc:
+            log("ali_inbound_recovery_failed", error=type(exc).__name__)
+        stop_event.wait(5)
 
 
 def _mark_delivery_failed(channel: str, conversation_id: str, customer_name: str,
@@ -374,6 +484,13 @@ def _flush_buffer(phone):
     _lock_key = final_msg.get("_zernio_conversation_id") or phone
     _phone_lock = _get_phone_lock(_lock_key)
     with _phone_lock:
+        if ids and state_registry.inbound_processing_all_terminal(ids):
+            log(
+                "whatsapp_recovery_superseded",
+                conversation_id=str(_lock_key)[:20],
+                message_count=len(ids),
+            )
+            return
         try:
             # Check if this came from Zernio (has _zernio metadata)
             _zernio_conv = final_msg.get("_zernio_conversation_id")
@@ -411,20 +528,18 @@ def _flush_buffer(phone):
                     return  # exits the with _phone_lock block
                 # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
                 if state_registry.get_ai_muted(_zernio_conv):
-                    state_registry.dm_store_message(
-                        conversation_id=_zernio_conv, channel=_zernio_channel,
-                        role="user", text=combined_text, sender_name=_zernio_sender)
+                    state_registry.dm_store_inbound_message(
+                        _zernio_conv, _zernio_channel, combined_text,
+                        _zernio_sender, ids,
+                    )
                     log("whatsapp_zernio_ai_muted", conversation_id=_zernio_conv[:20])
                     state_registry.inbound_processing_bulk_update(
                         ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
                 if not icp_overrides.auto_reply_enabled():
-                    state_registry.dm_store_message(
-                        conversation_id=_zernio_conv,
-                        channel=_zernio_channel,
-                        role="user",
-                        text=combined_text,
-                        sender_name=_zernio_sender,
+                    state_registry.dm_store_inbound_message(
+                        _zernio_conv, _zernio_channel, combined_text,
+                        _zernio_sender, ids,
                     )
                     log("tenant_agent_paused",
                         conversation_id=_zernio_conv[:20],
@@ -440,12 +555,9 @@ def _flush_buffer(phone):
                 reply_quote_confirmation = None
                 ali_turn_commit = None
                 if _orchestrator_on:
-                    state_registry.dm_store_message(
-                        conversation_id=_zernio_conv,
-                        channel=_zernio_channel,
-                        role="user",
-                        text=combined_text,
-                        sender_name=_zernio_sender,
+                    state_registry.dm_store_inbound_message(
+                        _zernio_conv, _zernio_channel, combined_text,
+                        _zernio_sender, ids,
                     )
                     reply_result = handle_incoming_whatsapp_message(
                         final_msg, channel=_zernio_channel,
@@ -484,12 +596,9 @@ def _flush_buffer(phone):
                         "message_id": final_msg.get("message_id", ""),
                     }
                     # Store user message before DM agent (same as DM path)
-                    state_registry.dm_store_message(
-                        conversation_id=_zernio_conv,
-                        channel=_zernio_channel,
-                        role="user",
-                        text=combined_text,
-                        sender_name=_zernio_sender,
+                    state_registry.dm_store_inbound_message(
+                        _zernio_conv, _zernio_channel, combined_text,
+                        _zernio_sender, ids,
                     )
                     reply_text = handle_incoming_dm(_dm_msg)
                 reply_text = _sanitize_tenant_whatsapp_reply(

@@ -263,6 +263,48 @@ def test_text_vehicle_dump_is_converted_to_one_curated_visual_action():
     assert decision["reason"] == "catalog_names_in_reply"
 
 
+@pytest.mark.parametrize(
+    ("locale", "message_text"),
+    [
+        ("en", "I want the cheapest option"),
+        ("nl", "Wat is de goedkoopste auto?"),
+        ("pap", "Kua ta e mas barata?"),
+        ("de", "Welches Auto ist am günstigsten?"),
+    ],
+)
+def test_explicit_cheapest_request_overrides_model_prose_with_catalog_truth(
+    locale, message_text,
+):
+    catalog = _catalog()
+    catalog["vehicles"][0]["name"] = "Toyota Agya"
+    catalog["vehicles"][0]["displayOrder"] = 99
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Picanto 2024 or similar",
+                "Kia Picanto 2026 or similar",
+            ],
+        },
+        "The Picanto is the cheapest automatic.",
+        {
+            "conversation_language": locale,
+            "passenger_count": 3,
+            "luggage_count": 2,
+        },
+        {},
+        catalog,
+        message_text=message_text,
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "lowest_price_catalog"
+    assert decision["action"]["vehicle_names"][0] == "Toyota Agya"
+    assert "30.00" in decision["reply_text"]
+    assert "Picanto is the cheapest" not in decision["reply_text"]
+
+
 def test_rejection_excludes_last_recommendation_and_prefers_unseen_options():
     decision = derive_media_first_action(
         "reject_or_hesitate",

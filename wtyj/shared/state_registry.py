@@ -303,6 +303,17 @@ def _get_conn():
         "updated_at TEXT NOT NULL"
         ")"
     )
+    for column, definition in (
+        ("payload_json", "TEXT NOT NULL DEFAULT '{}'") ,
+        ("heartbeat_sent_at", "TEXT NOT NULL DEFAULT ''"),
+        ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE inbound_processing_events ADD COLUMN {column} {definition}"
+            )
+        except sqlite3.OperationalError:
+            pass
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inbound_processing_conversation "
         "ON inbound_processing_events(conversation_id, updated_at)"
@@ -329,6 +340,17 @@ def _get_conn():
         conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN sender_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass  # Column already exists
+    try:
+        conn.execute(
+            "ALTER TABLE whatsapp_threads ADD COLUMN source_message_key TEXT DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_threads_source_message "
+        "ON whatsapp_threads(phone, source_message_key) "
+        "WHERE source_message_key != ''"
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_whatsapp_threads_channel "
         "ON whatsapp_threads(channel, phone, created_at)"
@@ -1323,25 +1345,32 @@ def wa_store_external_operator_message(
 
 def inbound_processing_record(message_id: str, conversation_id: str,
                               channel: str, status: str = "received",
-                              reason: str = "", error: str = ""):
+                              reason: str = "", error: str = "",
+                              payload: dict | None = None):
     """Create/update the durable processing state for one inbound message."""
     if not message_id:
         return
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
+    serialized_payload = json.dumps(
+        payload or {}, ensure_ascii=False, separators=(",", ":"),
+    )
     conn.execute(
         "INSERT INTO inbound_processing_events "
-        "(message_id, conversation_id, channel, status, reason, last_error, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "(message_id, conversation_id, channel, status, reason, last_error, "
+        "payload_json, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(message_id) DO UPDATE SET "
         "conversation_id = excluded.conversation_id, "
         "channel = excluded.channel, "
         "status = excluded.status, "
         "reason = excluded.reason, "
         "last_error = excluded.last_error, "
+        "payload_json = CASE WHEN excluded.payload_json != '{}' "
+        "THEN excluded.payload_json ELSE inbound_processing_events.payload_json END, "
         "updated_at = excluded.updated_at",
         (message_id, conversation_id or "", channel or "", status,
-         (reason or "")[:500], (error or "")[:500], now, now)
+         (reason or "")[:500], (error or "")[:500], serialized_payload, now, now)
     )
     conn.commit()
     conn.close()
@@ -1404,6 +1433,109 @@ def inbound_processing_mark_stale_failures(max_age_seconds: int = 300) -> int:
     count = cur.rowcount
     conn.close()
     return count
+
+
+def inbound_processing_claim_recoverable(
+    max_age_seconds: int = 40,
+    limit: int = 50,
+) -> list[dict]:
+    """Claim durable WhatsApp turns abandoned before a terminal reply."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+    ).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE inbound_processing_events AS inbound "
+            "SET status = 'superseded', reason = 'newer_outbound_exists', "
+            "updated_at = ? "
+            "WHERE status IN ('received', 'processing', 'recovering') "
+            "AND ((status IN ('received', 'processing') AND created_at < ?) "
+            "OR (status = 'recovering' AND updated_at < ?)) AND EXISTS ("
+            " SELECT 1 FROM whatsapp_threads AS thread "
+            " WHERE thread.phone = inbound.conversation_id "
+            " AND thread.role IN ('assistant', 'operator') "
+            " AND thread.created_at > inbound.created_at"
+            ")",
+            (now, cutoff, cutoff),
+        )
+        rows = conn.execute(
+            "SELECT message_id, conversation_id, channel, payload_json, "
+            "created_at, heartbeat_sent_at, attempt_count "
+            "FROM inbound_processing_events AS inbound "
+            "WHERE status IN ('received', 'processing', 'recovering') "
+            "AND ((status IN ('received', 'processing') AND created_at < ?) "
+            "OR (status = 'recovering' AND updated_at < ?)) "
+            "AND payload_json != '{}' "
+            "AND NOT EXISTS ("
+            " SELECT 1 FROM whatsapp_threads AS thread "
+            " WHERE thread.phone = inbound.conversation_id "
+            " AND thread.role IN ('assistant', 'operator') "
+            " AND thread.created_at > inbound.created_at"
+            ") ORDER BY created_at ASC LIMIT ?",
+            (cutoff, cutoff, max(1, min(int(limit), 200))),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE inbound_processing_events SET status = 'recovering', "
+                "reason = 'stale_turn_reclaimed', attempt_count = attempt_count + 1, "
+                "updated_at = ? WHERE message_id = ?",
+                (now, row[0]),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    result = []
+    for row in rows:
+        try:
+            payload = json.loads(row[3] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        result.append({
+            "message_id": row[0], "conversation_id": row[1],
+            "channel": row[2], "payload": payload, "created_at": row[4],
+            "heartbeat_sent_at": row[5],
+            "attempt_count": int(row[6] or 0) + 1,
+        })
+    return result
+
+
+def inbound_processing_mark_heartbeat(message_ids: list[str]) -> None:
+    """Record the single customer liveness message for a recovered batch."""
+    ids = [str(value) for value in message_ids or [] if str(value)]
+    if not ids:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.executemany(
+            "UPDATE inbound_processing_events SET heartbeat_sent_at = ? "
+            "WHERE message_id = ? AND heartbeat_sent_at = ''",
+            [(now, message_id) for message_id in ids],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def inbound_processing_all_terminal(message_ids: list[str]) -> bool:
+    ids = [str(value) for value in message_ids or [] if str(value)]
+    if not ids:
+        return True
+    placeholders = ",".join("?" for _ in ids)
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            f"SELECT COUNT(*), SUM(CASE WHEN status IN "
+            "('received', 'processing', 'recovering') THEN 1 ELSE 0 END) "
+            f"FROM inbound_processing_events WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row[0] or 0) == len(ids) and int(row[1] or 0) == 0
 
 
 def wa_store_message(phone: str, role: str, text: str):
@@ -2898,6 +3030,35 @@ def dm_store_message(conversation_id: str, channel: str, role: str, text: str,
     )
     conn.commit()
     conn.close()
+
+
+def dm_store_inbound_message(
+    conversation_id: str,
+    channel: str,
+    text: str,
+    sender_name: str,
+    message_ids: list[str],
+) -> bool:
+    """Persist one inbound batch exactly once across crash recovery."""
+    normalized_ids = sorted({
+        str(value).strip() for value in message_ids or [] if str(value).strip()
+    })
+    source_key = hashlib.sha256(
+        "\x1f".join(normalized_ids).encode("utf-8")
+    ).hexdigest() if normalized_ids else ""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO whatsapp_threads "
+            "(phone, role, text, created_at, channel, sender_name, source_message_key) "
+            "VALUES (?, 'user', ?, ?, ?, ?, ?)",
+            (conversation_id, text, now, channel, sender_name, source_key),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
 
 
 def dm_get_history(conversation_id: str, channel: str, limit: int = 10) -> list:
