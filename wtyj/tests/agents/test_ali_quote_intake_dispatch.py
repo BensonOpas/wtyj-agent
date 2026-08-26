@@ -392,7 +392,9 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     )
 
     assert reply.startswith("I have these details from you:")
-    assert reply.endswith("Are these details correct?")
+    assert reply.endswith(
+        "If everything is correct, tap below and I’ll prepare your official quote."
+    )
     assert "Economy" in reply
     assert "WhatsApp: +351000000000" in reply
     assert "wa.me" not in reply
@@ -819,9 +821,10 @@ def test_delivered_question_preserves_summary_for_following_confirmation(monkeyp
     assert state["flags"]["ali_presented_summary_hash"] == initial.summary_hash
     assert state["flags"]["awaiting_quote_confirmation"] is True
     bare_yes = workflow.plan_ali_quote_turn(
-        phone, "synthetic-account", "+351000000000", "yes",
+        phone, "synthetic-account", "+351000000000", "Yes\nHow much",
         state["fields"], state["flags"], "Your quote is on its way.",
-        raw_config=raw_config(), primary_intent="confirm_summary",
+        # The deterministic fallback must outrank a wrong model intent label.
+        raw_config=raw_config(), primary_intent="ask_question",
         processor=lambda _public_id: None,
         supplied_action_id="3" * 64,
     )
@@ -1084,6 +1087,12 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                     flags["ali_summary_hash"] = seed.summary_hash
                     flags["ali_summary_version"] = seed.summary_version
                     flags["awaiting_quote_confirmation"] = True
+                    flags["ali_summary_anchor"] = {
+                        "summary_hash": seed.summary_hash,
+                        "summary_version": seed.summary_version,
+                        "delivery": "plain_text",
+                        "interaction_payload": "",
+                    }
                 if phase in terminal_phases:
                     flags["ali_active_quote_public_id"] = f"historical-{case_number}"
 
@@ -1114,6 +1123,11 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                 else:
                     expected_kind = "summary"
                     expected_phase = "SUMMARY_PRESENTED"
+            elif intent == "confirm_summary" and phase in {
+                "QUOTE_PROCESSING", "QUOTED",
+            }:
+                expected_kind = "quote_preparing"
+                expected_phase = "QUOTE_PROCESSING"
             else:
                 expected_kind = "agent_reply"
                 if phase in terminal_phases and intent in {

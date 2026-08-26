@@ -462,6 +462,52 @@ def test_closed_session_attempts_no_interactive_or_free_text(monkeypatch):
     assert posts == []
 
 
+def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [_incoming()]}),
+    ])
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
+    )
+
+    def fake_post(url, headers, json, timeout):
+        posts.append({"headers": headers, "json": json})
+        return _Response(400 if len(posts) == 1 else 201)
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+    confirmation = {
+        "state_hash": "a" * 64,
+        "idempotency_key": "ali-quote-confirm-" + "a" * 64,
+        "text": "Synthetic current rental summary",
+        "fallback_text": (
+            "Synthetic current rental summary\n\n"
+            "Reply SEND QUOTE to continue."
+        ),
+        "button": {
+            "type": "postback",
+            "title": "Send my quote",
+            "payload": "ali_quote_confirm:v1:" + "b" * 64,
+        },
+    }
+
+    result = zernio_dm_client.send_dm_quote_confirmation(
+        "conversation-1", "account-1", confirmation,
+    )
+
+    assert result == {"success": True, "delivery": "text_fallback"}
+    assert posts[0]["json"]["buttons"] == [confirmation["button"]]
+    assert posts[1]["json"] == {
+        "accountId": "account-1",
+        "message": confirmation["fallback_text"],
+    }
+    assert posts[1]["headers"]["Idempotency-Key"].endswith("-fallback")
+
+
 def test_specific_vehicle_posts_one_image_message(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     posts = []

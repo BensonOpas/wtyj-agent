@@ -27,11 +27,14 @@ from agents.social.ali_quote_workflow import (
     apply_latest_rental_change,
     apply_recommendation_selection_context,
     confirmation_decision,
+    build_quote_confirmation_control,
     fail_closed_turn_plan,
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
     log_rental_change_decision,
+    plan_repeated_quote_confirmation,
     plan_ali_quote_turn,
+    resolve_quote_confirmation_interaction,
     sanitize_intake_reply as sanitize_ali_intake_reply,
     tenant_configured as ali_quote_tenant_configured,
     tenant_enabled as ali_quote_tenant_enabled,
@@ -1019,6 +1022,75 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                       count=len(_reply_times))
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
+
+    # Brief 285: quote confirmation postbacks are signed protocol events, not
+    # prose. Resolve them before Claude and reload all quote facts from this
+    # tenant's persisted state; the interaction payload carries no rental data.
+    _ali_interactive_type = message.get("_zernio_interactive_type")
+    _ali_interactive_id = message.get("_zernio_interactive_id")
+    _ali_quote_interaction = None
+    if channel == "whatsapp" and ali_quote_tenant_enabled():
+        _ali_quote_interaction = resolve_quote_confirmation_interaction(
+            _ali_interactive_type,
+            _ali_interactive_id,
+            phone,
+            flags,
+        )
+    if _ali_quote_interaction:
+        _action_id = str(
+            message.get("_ali_action_id")
+            or message.get("message_id")
+            or ""
+        )
+        if _ali_quote_interaction == "repeated":
+            _quote_plan = plan_repeated_quote_confirmation(
+                phone, fields, flags, _action_id,
+            )
+        else:
+            _quote_plan = plan_ali_quote_turn(
+                conversation_id=phone,
+                zernio_account_id=str(message.get("_zernio_account_id") or ""),
+                whatsapp_number=str(message.get("_zernio_sender_id") or phone),
+                message_text=(
+                    "SEND QUOTE"
+                    if _ali_quote_interaction == "current"
+                    else ""
+                ),
+                fields=fields,
+                flags=flags,
+                model_reply="",
+                from_name=from_name,
+                primary_intent=(
+                    "confirm_summary"
+                    if _ali_quote_interaction == "current"
+                    else "repeat_summary"
+                ),
+                summary_action=(
+                    None
+                    if _ali_quote_interaction == "current"
+                    else {"mode": "repeat"}
+                ),
+                supplied_action_id=_action_id,
+            )
+        _reply_times.append(int(time.time()))
+        flags["reply_times"] = _reply_times
+        state_registry.wa_save_booking_state(
+            phone, fields, flags, completed_bookings,
+        )
+        confirmation_control = None
+        if _quote_plan.outbound_kind == "summary":
+            confirmation_control = build_quote_confirmation_control(
+                phone, _quote_plan,
+            )
+        if include_media:
+            return {
+                "text": _quote_plan.text,
+                "media": None,
+                "vehicle_recommendation": None,
+                "quote_confirmation": confirmation_control,
+                "ali_turn_commit": _quote_plan.delivery_commit(),
+            }
+        return _quote_plan.text
 
     # Issue 198: native picker taps are catalog commands, not prose for the
     # model to interpret. Resolve them before Claude and make a clear typed
@@ -2478,10 +2550,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                   intents=result.get("intents", []), reply_length=len(reply_text))
 
     if include_media:
+        quote_confirmation = None
+        if (
+            _ali_turn_plan is not None
+            and _ali_turn_plan.outbound_kind == "summary"
+        ):
+            quote_confirmation = build_quote_confirmation_control(
+                phone, _ali_turn_plan,
+            )
         return {
             "text": reply_text,
             "media": selected_media,
             "vehicle_recommendation": vehicle_recommendation,
+            "quote_confirmation": quote_confirmation,
             "ali_turn_commit": (
                 _ali_turn_plan.delivery_commit()
                 if _ali_turn_plan is not None else None

@@ -140,6 +140,10 @@ def _stored_fields(locale="en"):
 
 def _configure(monkeypatch, tmp_path, model_result):
     monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setenv(
+        "ALI_QUOTE_CONFIRMATION_SECRET",
+        "synthetic-confirmation-secret-32-bytes",
+    )
     monkeypatch.setattr(social_agent.config_loader, "get_raw", lambda: raw_config())
     monkeypatch.setattr(social_agent, "get_ali_intake_catalog", correction_catalog)
     monkeypatch.setattr(workflow, "get_intake_catalog", correction_catalog)
@@ -190,6 +194,91 @@ def _commit_result(phone, result, action_suffix):
             if isinstance(option, dict)
         ],
     )
+
+
+def test_send_my_quote_tap_bypasses_model_and_duplicate_tap_creates_one_quote(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-send-my-quote"
+    fields = _stored_fields()
+    _configure(monkeypatch, tmp_path, {})
+    monkeypatch.setenv(
+        "ALI_QUOTE_CONFIRMATION_SECRET",
+        "synthetic-confirmation-secret-32-bytes",
+    )
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("structured quote tap must bypass the model")
+        ),
+    )
+    monkeypatch.setattr(workflow, "_process_production", lambda _public_id: None)
+
+    flags = {}
+    state_registry.wa_save_booking_state(phone, fields, flags)
+    summary_plan = workflow.plan_ali_quote_turn(
+        phone,
+        "synthetic-account",
+        "+351000000000",
+        "complete details",
+        fields,
+        flags,
+        "Thanks.",
+        raw_config=raw_config(),
+        primary_intent="continue_intake",
+        supplied_action_id="a" * 64,
+    )
+    state_registry.wa_save_booking_state(phone, fields, flags)
+    control = workflow.build_quote_confirmation_control(phone, summary_plan)
+    workflow.commit_ali_turn_delivery(
+        phone,
+        summary_plan.delivery_commit(),
+        summary_plan.text,
+        ["summary-inbound"],
+        confirmation_delivery="interactive",
+        confirmation_payload=control["button"]["payload"],
+        confirmation_provider_message_ids=["provider-summary-1"],
+    )
+
+    tap = {
+        "from": phone,
+        "text": "Send my quote",
+        "from_name": "Synthetic Customer",
+        "message_id": "quote-tap-1",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+        "_zernio_interactive_type": "button_reply",
+        "_zernio_interactive_id": control["button"]["payload"],
+    }
+    first = social_agent.handle_incoming_whatsapp_message(
+        tap, include_media=True,
+    )
+    assert first["ali_turn_commit"]["outbound_kind"] == "quote_preparing"
+    assert first["text"] == workflow.PREPARING["en"]
+    workflow.commit_ali_turn_delivery(
+        phone,
+        first["ali_turn_commit"],
+        first["text"],
+        ["quote-tap-1"],
+    )
+
+    tap["message_id"] = "quote-tap-2"
+    repeated = social_agent.handle_incoming_whatsapp_message(
+        tap, include_media=True,
+    )
+    assert repeated["text"] == workflow.QUOTE_ALREADY_PROCESSING["en"]
+    workflow.ensure_schema()
+    connection = workflow._connection()
+    try:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM ali_quotes WHERE conversation_id = ?",
+            (phone,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert count == 1
 
 
 def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeypatch, tmp_path):

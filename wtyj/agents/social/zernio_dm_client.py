@@ -566,6 +566,14 @@ def _messages_after_visible_message(messages: list[dict], text: str) -> list[dic
     return []
 
 
+def _messages_after_latest_incoming(messages: list[dict]) -> list[dict]:
+    """Return only messages newer than the latest customer inbound."""
+    for index, item in enumerate(messages):
+        if str(item.get("direction") or "").lower() == "incoming":
+            return messages[:index]
+    return []
+
+
 def _response_message_id(response) -> str:
     payload = _response_json(response)
     data = payload.get("data")
@@ -674,9 +682,16 @@ def _send_recommendation_part(
     body: dict,
     idempotency_key: str,
     visible_text: str,
+    reconcile_after_latest_incoming: bool = False,
 ) -> tuple[str, int | None, bool, str]:
     """Send or reconcile one idempotent visible part of a discovery bundle."""
-    visible = _recommendation_visible_message(existing_messages, visible_text)
+    reconciliation_messages = (
+        _messages_after_latest_incoming(existing_messages)
+        if reconcile_after_latest_incoming else existing_messages
+    )
+    visible = _recommendation_visible_message(
+        reconciliation_messages, visible_text,
+    )
     if visible:
         return "sent", None, True, str(visible.get("id") or visible.get("messageId") or "")
     headers = dict(base_headers)
@@ -704,12 +719,106 @@ def _send_recommendation_part(
     except http_requests.RequestException:
         response = None
     if response is not None and 200 <= response.status_code < 300:
-        visible = _recommendation_visible_message(
-            _payload_messages(_response_json(response)), visible_text,
-        )
+        retry_messages = _payload_messages(_response_json(response))
+        if reconcile_after_latest_incoming:
+            retry_messages = _messages_after_latest_incoming(retry_messages)
+        visible = _recommendation_visible_message(retry_messages, visible_text)
         if visible:
             return "sent", status, True, str(visible.get("id") or visible.get("messageId") or "")
     return outcome, status, False, ""
+
+
+def send_dm_quote_confirmation(
+    conversation_id: str,
+    account_id: str,
+    confirmation: dict,
+) -> dict:
+    """Send one replay-safe signed Ali summary confirmation control."""
+    api_key = os.environ.get("LATE_API_KEY", "")
+    state_hash = str((confirmation or {}).get("state_hash") or "")
+    idempotency_key = str((confirmation or {}).get("idempotency_key") or "")
+    text = str((confirmation or {}).get("text") or "")
+    fallback_text = str((confirmation or {}).get("fallback_text") or "")
+    button = (confirmation or {}).get("button")
+    button = button if isinstance(button, dict) else {}
+    if (
+        not api_key
+        or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
+        or not idempotency_key
+        or not text
+        or not fallback_text.endswith("Reply SEND QUOTE to continue.")
+        or button.get("type") != "postback"
+        or button.get("title") != "Send my quote"
+        or not str(button.get("payload") or "").startswith("ali_quote_confirm:v1:")
+    ):
+        return {"success": False, "delivery": "invalid"}
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}"
+    )
+    request_url = f"{base_url}/messages"
+    base_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    window_open, existing_messages = _recommendation_session_open(
+        base_url, base_headers, account_id,
+    )
+    if not window_open:
+        bm_logger.log(
+            "ali_quote_confirmation_window_closed",
+            confirmation_hash=state_hash[:12],
+        )
+        return {"success": False, "delivery": "window_closed"}
+    outcome, status, reconciled, provider_id = _send_recommendation_part(
+        request_url,
+        base_headers,
+        account_id,
+        existing_messages,
+        body={
+            "accountId": account_id,
+            "message": text,
+            "buttons": [button],
+        },
+        idempotency_key=f"{idempotency_key}-interactive",
+        visible_text=text,
+        reconcile_after_latest_incoming=True,
+    )
+    if outcome == "sent":
+        bm_logger.log(
+            "ali_quote_confirmation_reconciled" if reconciled
+            else "ali_quote_confirmation_sent",
+            confirmation_hash=state_hash[:12],
+        )
+        return _delivery_result(True, "interactive", provider_id)
+    fallback_outcome, fallback_status, _, fallback_provider_id = _send_recommendation_part(
+        request_url,
+        base_headers,
+        account_id,
+        existing_messages,
+        body={"accountId": account_id, "message": fallback_text},
+        idempotency_key=f"{idempotency_key}-fallback",
+        visible_text=fallback_text,
+        reconcile_after_latest_incoming=True,
+    )
+    if fallback_outcome == "sent":
+        bm_logger.log(
+            "ali_quote_confirmation_fallback_sent",
+            interactive_status=status,
+            confirmation_hash=state_hash[:12],
+        )
+        # Only the provider-confirmed fallback anchors this summary.  The
+        # interactive message may have received an ID before later reporting
+        # a terminal failure; retaining that failed ID would make its late
+        # webhook look like a failure of the successful fallback delivery.
+        return _delivery_result(True, "text_fallback", fallback_provider_id)
+    bm_logger.log(
+        "ali_quote_confirmation_failed",
+        interactive_status=status,
+        fallback_status=fallback_status,
+        confirmation_hash=state_hash[:12],
+    )
+    return {"success": False, "delivery": "confirmation_failed"}
 
 
 def send_dm_vehicle_recommendation(

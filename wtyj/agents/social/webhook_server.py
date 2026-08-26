@@ -24,13 +24,19 @@ from agents.social.zernio_dm_client import (
     parse_zernio_sent_webhook,
     verify_webhook_signature,
     send_dm_reply,
+    send_dm_quote_confirmation,
     send_dm_vehicle_recommendation,
     send_typing_indicator,
 )
 from agents.social.dm_agent import handle_incoming_dm
 from agents.social.channels import ZERNIO_CHANNELS, DEFAULT_ZERNIO_CHANNEL
 from agents.social.senders import send_reply
-from agents.social.ali_quote_workflow import commit_ali_turn_delivery
+from agents.social.ali_quote_workflow import (
+    QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION,
+    commit_ali_turn_delivery,
+    mark_quote_confirmation_failure_recovered,
+    reconcile_quote_confirmation_failure,
+)
 
 from contextlib import asynccontextmanager
 
@@ -429,6 +435,7 @@ def _flush_buffer(phone):
                 _orchestrator_on = _use_whatsapp_orchestrator(_zernio_channel)
                 reply_media = None
                 reply_vehicle_recommendation = None
+                reply_quote_confirmation = None
                 ali_turn_commit = None
                 if _orchestrator_on:
                     state_registry.dm_store_message(
@@ -449,6 +456,11 @@ def _flush_buffer(phone):
                         reply_vehicle_recommendation = (
                             reply_result.get("vehicle_recommendation")
                             if isinstance(reply_result.get("vehicle_recommendation"), dict)
+                            else None
+                        )
+                        reply_quote_confirmation = (
+                            reply_result.get("quote_confirmation")
+                            if isinstance(reply_result.get("quote_confirmation"), dict)
                             else None
                         )
                         ali_turn_commit = (
@@ -483,6 +495,7 @@ def _flush_buffer(phone):
                 if reply_text:
                     attachment_url = str((reply_media or {}).get("url") or "")
                     recommendation_delivery = None
+                    confirmation_delivery = None
                     if (
                         _zernio_channel == "whatsapp"
                         and reply_vehicle_recommendation
@@ -497,6 +510,24 @@ def _flush_buffer(phone):
                             reply_vehicle_recommendation,
                         )
                         ok = bool(recommendation_delivery.get("success"))
+                    elif (
+                        _zernio_channel == "whatsapp"
+                        and reply_quote_confirmation
+                    ):
+                        reply_quote_confirmation = dict(
+                            reply_quote_confirmation
+                        )
+                        reply_quote_confirmation["text"] = reply_text
+                        reply_quote_confirmation["fallback_text"] = (
+                            f"{reply_text.rstrip()}\n\n"
+                            f"{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
+                        )
+                        confirmation_delivery = send_dm_quote_confirmation(
+                            _zernio_conv,
+                            _zernio_acct,
+                            reply_quote_confirmation,
+                        )
+                        ok = bool(confirmation_delivery.get("success"))
                     else:
                         ok = send_reply(
                             _zernio_channel,
@@ -520,6 +551,14 @@ def _flush_buffer(phone):
                         _mark_delivery_failed(
                             _zernio_channel, _zernio_conv, _zernio_sender,
                             ids, "provider returned false")
+                        if reply_quote_confirmation:
+                            state_registry.create_pending_notification(
+                                "escalation", "whatsapp", _zernio_conv,
+                                _zernio_sender or "Ali quote customer",
+                                "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
+                                "The rental summary and Send my quote control could not be delivered. Open the conversation in Unboks.",
+                                mode="hard",
+                            )
                         return
                     if ali_turn_commit:
                         commit_ali_turn_delivery(
@@ -541,6 +580,16 @@ def _flush_buffer(phone):
                             ],
                             recommendation_provider_message_ids=list(
                                 (recommendation_delivery or {}).get("provider_message_ids") or []
+                            ),
+                            confirmation_delivery=str(
+                                (confirmation_delivery or {}).get("delivery") or ""
+                            ),
+                            confirmation_payload=str(
+                                ((reply_quote_confirmation or {}).get("button") or {}).get("payload")
+                                or ""
+                            ),
+                            confirmation_provider_message_ids=list(
+                                (confirmation_delivery or {}).get("provider_message_ids") or []
                             ),
                         )
                     else:
@@ -792,6 +841,9 @@ def _process_zernio_event(payload: dict):
                 reconciled = state_registry.wa_reconcile_vehicle_recommendation_failure(
                     failed["conversation_id"], failed["message_id"],
                 )
+                confirmation_failure = reconcile_quote_confirmation_failure(
+                    failed["conversation_id"], failed["message_id"],
+                )
                 fallback_attempted = False
                 fallback_sent = False
                 workflow = (config_loader.get_raw() or {}).get("workflow") or {}
@@ -828,6 +880,78 @@ def _process_zernio_event(payload: dict):
                         conversation_id=failed["conversation_id"][:20],
                         message_id=failed["message_id"][:30],
                     )
+                confirmation_recovery_attempted = False
+                confirmation_recovery_sent = False
+                if (
+                    workflow.get("type") == "ali_quote"
+                    and confirmation_failure
+                    and confirmation_failure.get("matched")
+                    and not confirmation_failure.get("already_recovered")
+                    and failed.get("account_id")
+                ):
+                    confirmation_recovery_attempted = True
+                    source_text = str(failed.get("text") or "").strip()
+                    if not source_text:
+                        history = state_registry.wa_get_full_history(
+                            failed["conversation_id"], limit=20,
+                        )
+                        source_text = next(
+                            (
+                                str(item.get("text") or "").strip()
+                                for item in reversed(history)
+                                if item.get("role") == "assistant"
+                                and str(item.get("text") or "").strip()
+                            ),
+                            "",
+                        )
+                    recovery_text = source_text
+                    if QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION not in recovery_text:
+                        recovery_text = (
+                            f"{source_text}\n\n{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
+                            if source_text
+                            else QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION
+                        )
+                    fallback_key = hashlib.sha256(
+                        str(failed["message_id"]).encode("utf-8")
+                    ).hexdigest()
+                    try:
+                        confirmation_recovery_sent = send_reply(
+                            "whatsapp",
+                            failed["conversation_id"],
+                            failed["account_id"],
+                            recovery_text,
+                            confirm_delivery=True,
+                            idempotency_key=(
+                                f"ali-late-confirmation-fallback-{fallback_key}"
+                            ),
+                        )
+                    except Exception as exc:
+                        log(
+                            "ali_quote_confirmation_late_fallback_error",
+                            conversation_id=failed["conversation_id"][:20],
+                            error=type(exc).__name__,
+                        )
+                    if confirmation_recovery_sent:
+                        mark_quote_confirmation_failure_recovered(
+                            failed["conversation_id"], failed["message_id"],
+                        )
+                    else:
+                        state_registry.create_pending_notification(
+                            "escalation",
+                            "whatsapp",
+                            failed["conversation_id"],
+                            "Ali quote customer",
+                            "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
+                            "The Send my quote control failed and its text fallback could not be delivered. Open the conversation in Unboks.",
+                            mode="hard",
+                        )
+                    log(
+                        "ali_quote_confirmation_late_fallback_sent"
+                        if confirmation_recovery_sent
+                        else "ali_quote_confirmation_late_fallback_failed",
+                        conversation_id=failed["conversation_id"][:20],
+                        message_id=failed["message_id"][:30],
+                    )
                 log(
                     "zernio_failed_event_reconciled",
                     conversation_id=failed["conversation_id"][:20],
@@ -835,6 +959,9 @@ def _process_zernio_event(payload: dict):
                     vehicle_recommendation=reconciled,
                     fallback_attempted=fallback_attempted,
                     fallback_sent=fallback_sent,
+                    quote_confirmation=bool(confirmation_failure),
+                    confirmation_recovery_attempted=confirmation_recovery_attempted,
+                    confirmation_recovery_sent=confirmation_recovery_sent,
                     failure_reason=str(failed.get("failure_reason") or "")[:120],
                 )
             return
