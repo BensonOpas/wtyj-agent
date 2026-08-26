@@ -559,6 +559,78 @@ def test_curated_recommendation_recovers_omitted_independent_vehicle_patch(
     )
 
 
+def test_incomplete_discovery_builds_carousel_before_personal_details(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-208-incomplete-media"
+    fields = {
+        "rental_start": "2026-08-29",
+        "rental_end": "2026-09-26",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic airport",
+        "passenger_count": 4,
+        "luggage_count": 3,
+        "conversation_language": "en",
+        "supplements": [],
+    }
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Here are two options that suit your trip.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+        "ali_vehicle_recommendation": {
+            "mode": "curated",
+            "vehicle_names": [
+                "Toyota Yaris or similar",
+                "Kia Seltos or similar",
+            ],
+            "availability_note": "Final availability still needs confirmation.",
+            "cta_label": "View car",
+        },
+    }
+    test_catalog = media_catalog()
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: test_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: test_catalog)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    response = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "I want to change the car for another one",
+            "from_name": "",
+            "message_id": "synthetic-incomplete-recommendation",
+            "_ali_action_id": "a" * 64,
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    saved = state_registry.wa_get_booking_state(phone)
+    recommendation = response["vehicle_recommendation"]
+
+    assert recommendation["kind"] == "carousel"
+    assert [option["id"] for option in recommendation["options"]] == [
+        YARIS_VEHICLE_ID,
+        SUV_VEHICLE_ID,
+    ]
+    assert [
+        row["id"]
+        for row in recommendation["picker"]["sections"][0]["rows"]
+    ] == [
+        vehicle_selection_payload(YARIS_VEHICLE_ID),
+        vehicle_selection_payload(SUV_VEHICLE_ID),
+    ]
+    assert response["ali_turn_commit"]["phase"] == "DISCOVERY"
+    assert response["ali_turn_commit"]["draft_hash"] == ""
+    assert "awaiting_quote_confirmation" not in saved["flags"]
+    assert "ali_summary_hash" not in saved["flags"]
+
+
 def test_explicit_suv_picture_request_overrides_model_continue_intake(
     monkeypatch,
     tmp_path,

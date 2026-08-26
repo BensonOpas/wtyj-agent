@@ -1775,6 +1775,26 @@ def plan_ali_quote_turn(
     fields["supplements"] = resolved_fields.get("supplements") or []
     fields.pop("extra_ids", None)
 
+    structured_intent = str(primary_intent or "")
+    if structured_intent not in ALI_PRIMARY_INTENTS:
+        if recommendation_requested:
+            intent = "request_recommendation"
+        elif isinstance(summary_action, dict) and summary_action.get("mode") == "repeat":
+            intent = "repeat_summary"
+        elif confirmation_decision(message_text)[0]:
+            intent = "confirm_summary"
+        elif change_outcome == "clarify":
+            intent = "reject_or_hesitate"
+        else:
+            intent = "other"
+    else:
+        intent = structured_intent
+
+    if recommendation_requested:
+        intent = "request_recommendation"
+    if change_outcome in {"changed", "clarify", "unchanged"} and intent == "confirm_summary":
+        intent = "continue_intake" if change_outcome == "changed" else "other"
+
     rental = {key: fields.get(key) for key in (
         "rental_start", "rental_end", "pickup_location", "return_location",
         "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
@@ -1794,14 +1814,22 @@ def plan_ali_quote_turn(
         flags.pop("ali_draft_hash", None)
         flags.pop("ali_presented_summary_hash", None)
         flags.pop("awaiting_quote_confirmation", None)
-        intent = str(primary_intent or "continue_intake")
-        if intent not in ALI_PRIMARY_INTENTS:
-            intent = "continue_intake"
+        if requires_human:
+            plan = AliTurnPlan(
+                "escalation", model_reply, "ESCALATED", intent,
+                "required_fields_incomplete", action_id,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        if recommendation_requested and intent == "request_recommendation":
+            plan = AliTurnPlan(
+                "vehicle_recommendation", model_reply, "DISCOVERY", intent,
+                "recommendation_requested_before_quote_complete", action_id,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
         plan = AliTurnPlan(
-            "escalation" if requires_human else "agent_reply",
-            model_reply,
-            "ESCALATED" if requires_human else "COLLECTING",
-            intent,
+            "agent_reply", model_reply, "COLLECTING", intent,
             "required_fields_incomplete",
             action_id,
         )
@@ -1826,26 +1854,6 @@ def plan_ali_quote_turn(
     flags["ali_draft_hash"] = state_hash
     flags["ali_draft_summary_hash"] = summary_hash
     flags["ali_draft_version"] = summary_version
-
-    structured_intent = str(primary_intent or "")
-    if structured_intent not in ALI_PRIMARY_INTENTS:
-        if recommendation_requested:
-            intent = "request_recommendation"
-        elif isinstance(summary_action, dict) and summary_action.get("mode") == "repeat":
-            intent = "repeat_summary"
-        elif confirmation_decision(message_text)[0]:
-            intent = "confirm_summary"
-        elif change_outcome == "clarify":
-            intent = "reject_or_hesitate"
-        else:
-            intent = "other"
-    else:
-        intent = structured_intent
-
-    if recommendation_requested:
-        intent = "request_recommendation"
-    if change_outcome in {"changed", "clarify", "unchanged"} and intent == "confirm_summary":
-        intent = "continue_intake" if change_outcome == "changed" else "other"
 
     active_quote_id = str(
         flags.get("ali_active_quote_public_id")

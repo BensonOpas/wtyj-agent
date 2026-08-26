@@ -1010,12 +1010,12 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                 supplied_action_id=f"{case_number:064x}",
             )
 
-            if phase == "COLLECTING":
-                expected_kind = "agent_reply"
-                expected_phase = "COLLECTING"
-            elif intent == "request_recommendation":
+            if intent == "request_recommendation":
                 expected_kind = "vehicle_recommendation"
                 expected_phase = "DISCOVERY"
+            elif phase == "COLLECTING":
+                expected_kind = "agent_reply"
+                expected_phase = "COLLECTING"
             elif intent == "repeat_summary" and phase not in terminal_phases:
                 expected_kind = "summary"
                 expected_phase = "SUMMARY_PRESENTED"
@@ -1035,6 +1035,59 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
             assert (plan.outbound_kind, plan.phase) == (
                 expected_kind, expected_phase,
             ), (locale, phase, intent, plan)
+
+
+def test_incomplete_quote_allows_valid_media_discovery_but_not_summary(monkeypatch):
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    fields = {
+        "rental_start": "2026-08-29",
+        "rental_end": "2026-09-26",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic airport",
+        "passenger_count": 4,
+        "luggage_count": 3,
+        "conversation_language": "en",
+        "supplements": [],
+    }
+    flags = {
+        "ali_phase": "COLLECTING",
+        "ali_summary_hash": "a" * 64,
+        "awaiting_quote_confirmation": True,
+    }
+
+    plan = workflow.plan_ali_quote_turn(
+        "synthetic-incomplete-media", "synthetic-account", "+351000000000",
+        "I want to see another car", fields, flags,
+        "Here are a few suitable options.", raw_config=raw_config(),
+        primary_intent="request_recommendation",
+        recommendation_requested=True,
+        supplied_action_id="8" * 64,
+    )
+
+    assert plan.outbound_kind == "vehicle_recommendation"
+    assert plan.phase == "DISCOVERY"
+    assert plan.reason_code == "recommendation_requested_before_quote_complete"
+    assert plan.draft_hash == ""
+    assert plan.summary_hash == ""
+    assert "awaiting_quote_confirmation" not in flags
+    assert "ali_summary_hash" in flags
+
+
+def test_incomplete_quote_keeps_human_escalation_above_media(monkeypatch):
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    plan = workflow.plan_ali_quote_turn(
+        "synthetic-incomplete-escalation", "synthetic-account", "+351000000000",
+        "I need help choosing", {"conversation_language": "en"}, {},
+        "I’ll have the team help with that.", raw_config=raw_config(),
+        primary_intent="request_recommendation",
+        requires_human=True,
+        recommendation_requested=True,
+        supplied_action_id="9" * 64,
+    )
+
+    assert plan.outbound_kind == "escalation"
+    assert plan.phase == "ESCALATED"
+    assert plan.reason_code == "required_fields_incomplete"
 
 
 def test_turn_delivery_commit_is_idempotent_and_logs_no_customer_content(monkeypatch, tmp_path):
