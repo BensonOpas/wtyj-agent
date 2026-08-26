@@ -28,4 +28,10 @@ class WhatsAppZernioChannel(Channel):
             "_zernio_channel": zernio_msg["channel"],
             "_zernio_sender_name": sender_name,
             "_zernio_sender_id": str(zernio_msg.get("sender_id") or "").strip(),
+            "_zernio_interactive_type": str(
+                zernio_msg.get("interactive_type") or ""
+            ).strip(),
+            "_zernio_interactive_id": str(
+                zernio_msg.get("interactive_id") or ""
+            ).strip(),
         }

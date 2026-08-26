@@ -535,6 +535,7 @@ def commit_ali_turn_delivery(
     channel: str = "whatsapp",
     recommendation_state_hash: str = "",
     recommendation_delivery: str = "",
+    recommendation_vehicle_ids: list[str] | None = None,
 ) -> bool:
     """Atomically commit provider-confirmed Ali state, timeline, and inbound rows.
 
@@ -566,6 +567,17 @@ def commit_ali_turn_delivery(
     ids = list(dict.fromkeys(
         str(value) for value in (inbound_message_ids or []) if str(value)
     ))
+    recommendation_ids = []
+    for value in recommendation_vehicle_ids or []:
+        vehicle_id = str(value or "").strip()
+        if (
+            vehicle_id
+            and len(vehicle_id) <= 160
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", vehicle_id)
+            and vehicle_id not in recommendation_ids
+        ):
+            recommendation_ids.append(vehicle_id)
+    recommendation_ids = recommendation_ids[:5]
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -608,7 +620,10 @@ def commit_ali_turn_delivery(
 
         if kind == "vehicle_recommendation" and re.fullmatch(
             r"[0-9a-f]{64}", recommendation_state_hash
-        ) and recommendation_delivery in {"image", "carousel", "fallback"}:
+        ) and recommendation_delivery in {
+            "image", "carousel", "fallback", "carousel_picker",
+            "carousel_picker_fallback",
+        }:
             existing = flags.get("ali_vehicle_recommendation_deliveries") or []
             normalized = [
                 item for item in existing
@@ -622,6 +637,17 @@ def commit_ali_turn_delivery(
                     "action_id": action_id,
                 })
             flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
+            if recommendation_ids:
+                flags["ali_last_recommendation_ids"] = recommendation_ids
+                shown = [
+                    str(value).strip()
+                    for value in flags.get("ali_shown_vehicle_ids") or []
+                    if isinstance(value, str) and str(value).strip()
+                ]
+                for vehicle_id in recommendation_ids:
+                    if vehicle_id not in shown:
+                        shown.append(vehicle_id)
+                flags["ali_shown_vehicle_ids"] = shown[-40:]
 
         conn.execute(
             "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "

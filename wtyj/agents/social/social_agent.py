@@ -39,6 +39,17 @@ from agents.social.ali_vehicle_recommendations import (
     AliVehicleRecommendationError,
     build_vehicle_recommendation,
 )
+from agents.social.ali_media_first import (
+    derive_media_first_action,
+    infer_media_first_intent,
+    media_first_clarification,
+)
+from agents.social.ali_vehicle_selection import (
+    AliVehicleSelectionError,
+    invalid_vehicle_selection_reply,
+    resolve_typed_vehicle_selection,
+    resolve_vehicle_selection,
+)
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
@@ -1002,6 +1013,92 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
 
+    # Issue 198: native picker taps are catalog commands, not prose for the
+    # model to interpret. Resolve them before Claude and make a clear typed
+    # exact vehicle choice follow the same deterministic path. The canonical
+    # fields are re-applied after model extraction below so the model cannot
+    # replace a provider-validated selection with a label guess.
+    _ali_selected_this_turn = None
+    _ali_selection_source = ""
+    if channel == "whatsapp" and ali_quote_tenant_enabled():
+        try:
+            _selection_catalog = get_ali_intake_catalog()
+            _interactive_type = message.get("_zernio_interactive_type")
+            _interactive_id = message.get("_zernio_interactive_id")
+            if str(_interactive_id or "").strip():
+                _ali_selected_this_turn = resolve_vehicle_selection(
+                    _interactive_type,
+                    _interactive_id,
+                    _selection_catalog,
+                )
+                if _ali_selected_this_turn:
+                    _ali_selection_source = "native_picker"
+            else:
+                _ali_selected_this_turn = resolve_typed_vehicle_selection(
+                    text,
+                    _selection_catalog,
+                )
+                if _ali_selected_this_turn:
+                    _ali_selection_source = "typed_exact"
+        except AliVehicleSelectionError as exc:
+            clarification = invalid_vehicle_selection_reply(
+                fields.get("conversation_language")
+            )
+            invalid_plan = fail_closed_turn_plan(
+                phone,
+                text,
+                fields.get("conversation_language"),
+                str(
+                    message.get("_ali_action_id")
+                    or message.get("message_id")
+                    or ""
+                ),
+            )
+            invalid_plan = replace(
+                invalid_plan,
+                text=clarification,
+                primary_intent="ask_question",
+                reason_code=str(exc)[:60],
+            )
+            flags["reply_times"] = [*_reply_times, int(time.time())]
+            state_registry.wa_save_booking_state(
+                phone, fields, flags, completed_bookings
+            )
+            bm_logger.log(
+                "ali_vehicle_selection_invalid",
+                source="native_picker",
+                reason=str(exc)[:80],
+            )
+            if include_media:
+                return {
+                    "text": clarification,
+                    "media": None,
+                    "vehicle_recommendation": None,
+                    "ali_turn_commit": invalid_plan.delivery_commit(),
+                }
+            return clarification
+
+    if _ali_selected_this_turn:
+        for key in (
+            "vehicle_id", "vehicle_name", "vehicle_class_id",
+            "vehicle_class_name",
+        ):
+            fields.pop(key, None)
+        fields.update(_ali_selected_this_turn)
+        invalidate_active_quote_summary(flags)
+        flags.pop("ali_summary_deferred_for_recommendation", None)
+        # Some provider taps contain only metadata. Give the single normal
+        # model turn the canonical catalog name instead of an empty body.
+        if not str(text or "").strip():
+            text = _ali_selected_this_turn["vehicle_name"]
+        bm_logger.log(
+            "ali_vehicle_selection_applied",
+            source=_ali_selection_source,
+            vehicle_id_prefix=str(
+                _ali_selected_this_turn.get("vehicle_id") or ""
+            )[:12],
+        )
+
     history = _history_for_agent(phone)
     if inbound_already_stored and history:
         # The webhook layer may persist the inbound before model/order
@@ -1336,7 +1433,25 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         ).strip():
             new_fields = dict(new_fields)
             new_fields["preferred_clinic"] = _clinic_answer
-    if _ali_change_configured and isinstance(_ali_change_action, dict):
+    if _ali_selected_this_turn:
+        _ali_change_outcome = "changed"
+        _ali_change_fields = ("vehicle_selection",)
+        _quote_vehicle_keys = {
+            "vehicle_id", "vehicle_name", "vehicle_class_id",
+            "vehicle_class_name",
+        }
+        for k, v in new_fields.items():
+            if k in _quote_vehicle_keys:
+                continue
+            if v is not None and v != "":
+                fields[k] = v
+            elif v == "" and k in fields:
+                del fields[k]
+        for key in _quote_vehicle_keys:
+            fields.pop(key, None)
+        fields.update(_ali_selected_this_turn)
+        log_rental_change_decision(_ali_change_outcome, _ali_change_fields)
+    elif _ali_change_configured and isinstance(_ali_change_action, dict):
         try:
             changed_state, _ali_change_outcome, _ali_change_fields = (
                 apply_latest_rental_change(
@@ -1490,11 +1605,84 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_workflow_configured = ali_quote_tenant_configured()
     _ali_workflow_on = ali_quote_tenant_enabled()
     _ali_turn_plan = None
-    recommendation_action = result.get("ali_vehicle_recommendation")
+    recommendation_action = (
+        None
+        if _ali_selected_this_turn
+        else result.get("ali_vehicle_recommendation")
+    )
+    media_first_status = "not_evaluated"
+    media_first_reason = ""
+    media_first_intent = ""
+    _ali_catalog_for_media = None
+    if (
+        include_media
+        and channel == "whatsapp"
+        and _ali_workflow_on
+        and not result.get("requires_human")
+        and not _ali_selected_this_turn
+    ):
+        try:
+            _ali_catalog_for_media = get_ali_intake_catalog()
+            media_first_intent = str(
+                result.get("ali_primary_intent") or ""
+            ).strip().lower()
+            if not media_first_intent:
+                media_first_intent = infer_media_first_intent(
+                    text,
+                    reply_text,
+                    recommendation_action,
+                    fields,
+                    flags,
+                    _ali_catalog_for_media,
+                )
+            media_first = derive_media_first_action(
+                media_first_intent,
+                recommendation_action,
+                reply_text,
+                fields,
+                flags,
+                _ali_catalog_for_media,
+            )
+            media_first_status = str(media_first.get("status") or "")
+            media_first_reason = str(media_first.get("reason") or "")
+            if media_first_status == "planned":
+                recommendation_action = media_first["action"]
+                reply_text = str(media_first.get("reply_text") or reply_text)
+            elif media_first_status == "needs_context":
+                recommendation_action = None
+                reply_text = str(media_first.get("reply_text") or reply_text)
+        except Exception as exc:
+            media_first_status = "invalid"
+            media_first_reason = type(exc).__name__
+            if media_first_intent or isinstance(recommendation_action, dict):
+                recommendation_action = None
+                reply_text = media_first_clarification(fields)
+            bm_logger.log(
+                "ali_media_first_policy_failed",
+                reason=media_first_reason[:80],
+            )
+    _ali_effective_primary_intent = (
+        "continue_intake"
+        if _ali_selected_this_turn
+        else media_first_intent or result.get("ali_primary_intent")
+    )
     recommendation_requested = (
         isinstance(recommendation_action, dict)
         and not result.get("requires_human")
     )
+    if (
+        media_first_intent == "reject_or_hesitate"
+        and flags.get("ali_last_recommendation_ids")
+    ):
+        rejected = [
+            str(value)
+            for value in flags.get("ali_rejected_vehicle_ids") or []
+            if str(value).strip()
+        ]
+        for vehicle_id in flags.get("ali_last_recommendation_ids") or []:
+            if str(vehicle_id).strip() and str(vehicle_id) not in rejected:
+                rejected.append(str(vehicle_id))
+        flags["ali_rejected_vehicle_ids"] = rejected[-20:]
     vehicle_recommendation = None
     if _ali_workflow_on:
         reply_text = sanitize_ali_intake_reply(
@@ -1511,7 +1699,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 flags=flags,
                 model_reply=reply_text,
                 from_name=from_name,
-                primary_intent=result.get("ali_primary_intent"),
+                primary_intent=_ali_effective_primary_intent,
                 requires_human=bool(result.get("requires_human")),
                 recommendation_requested=recommendation_requested,
                 summary_action=result.get("ali_summary_action"),
@@ -1562,27 +1750,25 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             reply_text = ""
             _ali_turn_plan = None
         else:
-            replay_flags = dict(flags)
-            replay_flags["ali_vehicle_recommendation_deliveries"] = []
             try:
                 vehicle_recommendation = build_vehicle_recommendation(
                     recommendation_action,
-                    get_ali_intake_catalog(),
+                    _ali_catalog_for_media or get_ali_intake_catalog(),
                     fields,
-                    replay_flags,
+                    flags,
                     reply_text,
+                    turn_id=str(message.get("message_id") or ""),
                 )
             except AliVehicleRecommendationError as exc:
+                media_first_status = "invalid"
+                media_first_reason = str(exc)
+                reply_text = media_first_clarification(fields)
                 bm_logger.log(
                     "ali_vehicle_recommendation_rejected",
                     reason=str(exc)[:80],
                     mode=str(recommendation_action.get("mode") or "")[:20],
                 )
             if vehicle_recommendation:
-                vehicle_recommendation = dict(vehicle_recommendation)
-                vehicle_recommendation["idempotency_key"] = (
-                    f"ali-vehicle-{_ali_turn_plan.action_id}"
-                )
                 reply_text = vehicle_recommendation["text"]
                 _ali_turn_plan = replace(_ali_turn_plan, text=reply_text)
             else:
@@ -1601,6 +1787,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 if _ali_turn_plan is not None else "model_reply"
             ),
             change_outcome=_ali_change_outcome,
+            media_first_status=media_first_status,
+            media_first_reason=media_first_reason[:80],
         )
     if _ali_workflow_configured:
         # The generic booking engine must never create holds or contact redirects
