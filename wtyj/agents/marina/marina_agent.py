@@ -24,6 +24,7 @@ _RESPONSE_DEFAULTS = {
     "flags": {},
     "internal_note": "",
     "ali_vehicle_recommendation": None,
+    "ali_rental_change": None,
 }
 
 
@@ -260,6 +261,43 @@ MARINA_TOOL = {
                     },
                 },
                 "required": ["mode", "vehicle_names", "availability_note", "cta_label"],
+                "additionalProperties": False,
+            },
+            "ali_rental_change": {
+                "type": "object",
+                "description": (
+                    "Ali only and optional: describe only a correction explicitly made in "
+                    "the newest customer message. Use `apply` when the message supplies one "
+                    "or more replacement values, and list only those canonical fields. Use "
+                    "`clarify` when the customer only says they want a change or the new "
+                    "vehicle/category is not an exact catalog match. Omit for ordinary intake."
+                ),
+                "properties": {
+                    "mode": {"type": "string", "enum": ["apply", "clarify"]},
+                    "changed_fields": {
+                        "type": "array",
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "customer_name", "rental_start", "rental_end",
+                                "pickup_location", "return_location", "vehicle_selection",
+                                "driver_age", "passenger_count", "luggage_count",
+                                "supplements", "comments",
+                            ],
+                        },
+                    },
+                    "vehicle_selection_kind": {
+                        "type": "string",
+                        "enum": ["vehicle", "category"],
+                        "description": (
+                            "Required when changed_fields contains vehicle_selection. "
+                            "Identify whether the newest explicit choice is an exact "
+                            "catalog vehicle or a catalog category."
+                        ),
+                    },
+                },
+                "required": ["mode", "changed_fields"],
                 "additionalProperties": False,
             },
             "semi_escalation": {
@@ -904,6 +942,16 @@ Current published catalog, supplied digitally by Ali and containing no customer 
 - This block overrides generic booking, email-collection, contact-info, payment, service,
   trip, and confirmation instructions elsewhere in this prompt.
 - Re-read the complete history and extract every rental fact explicitly supplied.
+- When the newest message corrects a displayed summary or an already quoted rental, populate
+  `ali_rental_change`. Use mode `apply` and list only the facts explicitly replaced in that
+  newest message. Map a vehicle or category correction to `vehicle_selection`, set
+  `vehicle_selection_kind` to `vehicle` or `category`, and put its exact current catalog name
+  in `vehicle_name` or `vehicle_class_name` respectively. Map a
+  special-request correction to `comments`. For supplement removal, return the complete new
+  `supplements` list, including an empty list when all supplements are removed. Do not list
+  facts merely repeated from history. If the customer only says they want to change something,
+  or names no exact catalog vehicle/category, use mode `clarify`, keep `changed_fields` empty,
+  and ask one concise clarification. Apply this naturally in EN, NL, PAP, and DE.
 - Required facts are customer_name, rental_start, rental_end, pickup_location,
   return_location, driver_age, conversation_language, and exactly one vehicle or category.
 - Ask exactly one short question at a time for the most important missing or ambiguous fact.
