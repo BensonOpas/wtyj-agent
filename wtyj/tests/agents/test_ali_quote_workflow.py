@@ -105,10 +105,29 @@ def test_workflow_is_strictly_ali_tenant_scoped_and_master_switched():
 
 
 def test_confirmation_variants_and_corrections_change_the_summary_hash():
-    for phrase in ("yes", "correct", "ja", "klopt", "ta bon", "correcto", "stimmt", "passt"):
+    accepted = (
+        "yes", "yes it does", "yes, it does look right", "That’s correct.",
+        "Everything looks right.", "All good.", "Go ahead.",
+        "ja dat klopt", "alles ziet er goed uit", "ga maar door",
+        "si tur kos ta bon", "esaki ta korekto", "por sigui",
+        "ja das stimmt", "alles sieht richtig aus", "machen Sie weiter",
+    )
+    for phrase in accepted:
         assert workflow.is_unambiguous_confirmation(phrase)
-    for phrase in ("no", "yes but change it", "ja?", "niet correct"):
+    rejected = (
+        "no", "not correct", "yes but change the dates", "it looks right except for pickup",
+        "yes, can you add a child seat?", "yes add a child seat", "I think so?", "almost right",
+        "nee", "ja maar wijzig de datum", "bijna goed", "si pero cambia e fecha",
+        "kisas", "nein", "ja aber ändern Sie die Abholung", "fast richtig",
+    )
+    for phrase in rejected:
         assert not workflow.is_unambiguous_confirmation(phrase)
+    assert workflow.confirmation_decision("yes it does") == (
+        True, "affirmative_allowlist",
+    )
+    assert workflow.confirmation_decision("yes add a child seat") == (
+        False, "correction_or_new_detail",
+    )
     _, first = workflow.normalized_summary(customer(), rental())
     changed = rental()
     changed["return_location"] = "Synthetic hotel return"
