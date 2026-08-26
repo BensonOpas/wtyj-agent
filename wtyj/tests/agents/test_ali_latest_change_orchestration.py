@@ -9,6 +9,7 @@ ECONOMY_VEHICLE_ID = "40000000-0000-4000-8000-000000000001"
 VAN_CLASS_ID = "30000000-0000-4000-8000-000000000002"
 SUV_CLASS_ID = "30000000-0000-4000-8000-000000000003"
 SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000003"
+SECOND_SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000004"
 
 
 def raw_config():
@@ -390,6 +391,86 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
     finally:
         conn.close()
     assert quote_count == 1
+
+
+def test_curated_recommendation_recovers_omitted_independent_vehicle_patch(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-195-recommendation-fallback"
+    fields = _stored_fields()
+    for key in ("vehicle_id", "vehicle_name"):
+        fields.pop(key)
+    fields["vehicle_class_id"] = VAN_CLASS_ID
+    fields["vehicle_class_name"] = "Van"
+    flags = {
+        "ali_phase": "SUMMARY_PRESENTED",
+        "ali_presented_summary_hash": "a" * 64,
+        "ali_summary_hash": "a" * 64,
+        "ali_summary_version": 1,
+        "ali_last_delivered_kind": "summary",
+        "awaiting_quote_confirmation": True,
+    }
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Here are two compact SUV options.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+        # The live model omitted ali_rental_change on this combined turn.
+        "ali_vehicle_recommendation": {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Seltos or similar",
+                "Synthetic second SUV or similar",
+            ],
+            "availability_note": "Final availability still needs confirmation.",
+            "cta_label": "View car",
+        },
+    }
+    test_catalog = correction_catalog()
+    test_catalog["vehicles"].append({
+        "id": SECOND_SUV_VEHICLE_ID,
+        "slug": "synthetic-second-suv",
+        "classId": SUV_CLASS_ID,
+        "name": "Synthetic second SUV or similar",
+        "seats": 5,
+        "transmission": "automatic",
+        "features": ["Air conditioning"],
+        "dailyRate": {"currency": "USD", "amount": "65.00"},
+        "weeklyRate": {"currency": "USD", "amount": "455.00"},
+        "images": [{
+            "url": "/brand/vehicles/synthetic-second-suv.png",
+            "alt": "Ali synthetic second SUV",
+        }],
+    })
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: test_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: test_catalog)
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    response = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "I want an SUV, can you show me an image?",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-recommendation-fallback",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["vehicle_recommendation"]["kind"] == "carousel"
+    assert saved["fields"]["vehicle_class_id"] == SUV_CLASS_ID
+    assert saved["fields"]["vehicle_class_name"] == "Compact SUV"
+    assert "vehicle_id" not in saved["fields"]
+    assert "vehicle_name" not in saved["fields"]
+    assert "awaiting_quote_confirmation" not in saved["flags"]
+    assert response["ali_turn_commit"]["phase"] == "DISCOVERY"
 
 
 def test_generic_change_request_asks_clarification_without_old_summary(monkeypatch, tmp_path):

@@ -1184,6 +1184,88 @@ def apply_latest_rental_change(
     return candidate, outcome, tuple(sorted(changed_fields))
 
 
+def apply_recommendation_selection_context(
+    stored_fields: dict,
+    recommendation_action: object,
+    catalog: dict,
+) -> tuple[dict, str, tuple[str, ...]]:
+    """Use a validated recommendation as the selection fallback.
+
+    Marina should emit ``ali_rental_change`` for a combined selection change
+    and media request. If it omits only that independent patch, the catalog-
+    validated recommendation still proves the safe selection context without
+    parsing customer language in Python: one exact option selects that vehicle;
+    curated options from one class select the class; mixed options reopen
+    discovery and clear the stale selection.
+    """
+    current = dict(stored_fields or {})
+    if not isinstance(recommendation_action, dict):
+        return current, "not_applicable", ()
+    mode = recommendation_action.get("mode")
+    names = recommendation_action.get("vehicle_names")
+    if mode not in {"specific", "curated"} or not isinstance(names, list):
+        return current, "clarify", ()
+    requested_names = [str(name or "").strip() for name in names]
+    if not requested_names or any(not name for name in requested_names):
+        return current, "clarify", ()
+    vehicles = {
+        str(item.get("name") or "").strip().casefold(): item
+        for item in catalog.get("vehicles") or []
+        if isinstance(item, dict) and item.get("id") and item.get("name")
+    }
+    options = [vehicles.get(name.casefold()) for name in requested_names]
+    if any(option is None for option in options):
+        return current, "clarify", ()
+
+    if mode == "specific":
+        if len(options) != 1:
+            return current, "clarify", ()
+        return apply_latest_rental_change(
+            current,
+            {"vehicle_name": options[0]["name"]},
+            {
+                "mode": "apply",
+                "changed_fields": ["vehicle_selection"],
+                "vehicle_selection_kind": "vehicle",
+            },
+            catalog,
+        )
+
+    class_ids = {str(option.get("classId") or "") for option in options}
+    class_ids.discard("")
+    if len(class_ids) == 1:
+        class_id = next(iter(class_ids))
+        vehicle_class = next(
+            (
+                item for item in catalog.get("vehicleClasses") or []
+                if isinstance(item, dict) and str(item.get("id") or "") == class_id
+            ),
+            None,
+        )
+        if vehicle_class and vehicle_class.get("name"):
+            return apply_latest_rental_change(
+                current,
+                {"vehicle_class_name": vehicle_class["name"]},
+                {
+                    "mode": "apply",
+                    "changed_fields": ["vehicle_selection"],
+                    "vehicle_selection_kind": "category",
+                },
+                catalog,
+            )
+
+    candidate = dict(current)
+    for key in (
+        "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+    ):
+        candidate.pop(key, None)
+    return (
+        candidate,
+        "changed" if candidate != current else "unchanged",
+        ("vehicle_selection",) if candidate != current else (),
+    )
+
+
 def log_rental_change_decision(outcome: str, changed_fields: tuple[str, ...]) -> None:
     """Record only fixed metadata; never message text, values, or PII."""
     bm_logger.log(
