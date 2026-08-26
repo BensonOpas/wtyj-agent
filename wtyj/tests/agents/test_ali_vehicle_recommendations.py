@@ -88,6 +88,9 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
     assert option["image_url"] == (
         "https://alicarrental.com/brand/vehicles/vehicle-1.png"
     )
+    assert option["whatsapp_image_url"] == (
+        "https://alicarrental.com/api/v1/vehicle-media/vehicle-1?v=13"
+    )
     assert option["detail_url"] == "https://alicarrental.com/en/fleet/vehicle-1"
     assert "Economy" in plan["text"]
     assert "4 seats" in plan["text"]
@@ -492,7 +495,7 @@ def test_specific_vehicle_posts_one_image_message(monkeypatch):
     assert posts[0]["json"] == {
         "accountId": "account-1",
         "message": plan["text"],
-        "attachmentUrl": plan["options"][0]["image_url"],
+        "attachmentUrl": plan["options"][0]["whatsapp_image_url"],
         "attachmentType": "image",
         "buttons": plan["buttons"],
     }
@@ -583,7 +586,10 @@ def test_parses_late_zernio_message_failure():
         "message": {
             "id": "provider-image-1",
             "conversationId": "conversation-1",
-            "failureReason": "synthetic media rejection",
+            "accountId": "account-1",
+            "message": "Here is the selected car.",
+            "attachments": [{"type": "image", "url": "https://assets.invalid/car.webp"}],
+            "deliveryError": {"message": "Media upload error"},
         },
     })
 
@@ -591,8 +597,31 @@ def test_parses_late_zernio_message_failure():
         "event": "message.failed",
         "conversation_id": "conversation-1",
         "message_id": "provider-image-1",
-        "failure_reason": "synthetic media rejection",
+        "account_id": "account-1",
+        "text": "Here is the selected car.",
+        "recoverable_media": True,
+        "failure_reason": "Media upload error",
     }
+
+
+def test_parses_failed_media_account_from_conversation_and_singular_attachment():
+    parsed = zernio_dm_client.parse_zernio_failed_webhook({
+        "event": "message.failed",
+        "conversation": {
+            "id": "conversation-1",
+            "accountId": "account-from-conversation",
+        },
+        "message": {
+            "id": "provider-image-2",
+            "message": "Here is the selected car.",
+            "attachmentUrl": "https://assets.invalid/car.webp",
+            "attachmentType": "image",
+        },
+    })
+
+    assert parsed is not None
+    assert parsed["account_id"] == "account-from-conversation"
+    assert parsed["recoverable_media"] is True
 
 
 def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatch):

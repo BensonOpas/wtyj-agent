@@ -407,14 +407,78 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
             AssertionError("failed delivery must not enter inbound parsing")
         ),
     )
+    sent = []
+    monkeypatch.setattr(
+        webhook_server.config_loader,
+        "get_raw",
+        lambda: {"workflow": {"type": "ali_quote"}},
+    )
+    monkeypatch.setattr(
+        webhook_server,
+        "send_reply",
+        lambda channel, conversation_id, account_id, text, **kwargs: (
+            sent.append((channel, conversation_id, account_id, text, kwargs)) or True
+        ),
+    )
 
     webhook_server._process_zernio_event({
         "event": "message.failed",
         "message": {
             "id": "provider-image-1",
             "conversationId": "conversation-1",
-            "failureReason": "synthetic media rejection",
+            "accountId": "account-1",
+            "message": "Here is one suitable car.",
+            "attachments": [{"type": "image", "url": "https://assets.invalid/car.webp"}],
+            "deliveryError": {"message": "Media upload error"},
         },
     })
 
     assert reconciled == [("conversation-1", "provider-image-1")]
+    assert sent == [(
+        "whatsapp",
+        "conversation-1",
+        "account-1",
+        "Here is one suitable car.",
+        {
+            "confirm_delivery": True,
+            "idempotency_key": (
+                "ali-late-media-fallback-"
+                "9c37280072f66b8db4c460f0abeff143675688447fd6f3562f22"
+                "e3c1fb4f1389"
+            ),
+        },
+    )]
+
+
+def test_failed_plain_text_does_not_trigger_recursive_fallback(monkeypatch):
+    from agents.social import webhook_server
+
+    monkeypatch.setattr(
+        webhook_server.config_loader,
+        "get_raw",
+        lambda: {"workflow": {"type": "ali_quote"}},
+    )
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "wa_reconcile_vehicle_recommendation_failure",
+        lambda *_args: True,
+    )
+    sends = []
+    monkeypatch.setattr(
+        webhook_server,
+        "send_reply",
+        lambda *args, **kwargs: sends.append((args, kwargs)) or True,
+    )
+
+    webhook_server._process_zernio_event({
+        "event": "message.failed",
+        "message": {
+            "id": "provider-text-fallback-1",
+            "conversationId": "conversation-1",
+            "accountId": "account-1",
+            "message": "Here is one suitable car.",
+            "deliveryError": {"message": "Synthetic text failure"},
+        },
+    })
+
+    assert sends == []

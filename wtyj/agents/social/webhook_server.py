@@ -792,11 +792,50 @@ def _process_zernio_event(payload: dict):
                 reconciled = state_registry.wa_reconcile_vehicle_recommendation_failure(
                     failed["conversation_id"], failed["message_id"],
                 )
+                fallback_attempted = False
+                fallback_sent = False
+                workflow = (config_loader.get_raw() or {}).get("workflow") or {}
+                if (
+                    workflow.get("type") == "ali_quote"
+                    and reconciled
+                    and failed.get("recoverable_media")
+                    and failed.get("account_id")
+                    and failed.get("text")
+                ):
+                    fallback_attempted = True
+                    fallback_key = hashlib.sha256(
+                        str(failed["message_id"]).encode("utf-8")
+                    ).hexdigest()
+                    try:
+                        fallback_sent = send_reply(
+                            "whatsapp",
+                            failed["conversation_id"],
+                            failed["account_id"],
+                            failed["text"],
+                            confirm_delivery=True,
+                            idempotency_key=f"ali-late-media-fallback-{fallback_key}",
+                        )
+                    except Exception as exc:
+                        log(
+                            "zernio_failed_media_fallback_error",
+                            conversation_id=failed["conversation_id"][:20],
+                            error=type(exc).__name__,
+                        )
+                    log(
+                        "zernio_failed_media_fallback_sent"
+                        if fallback_sent
+                        else "zernio_failed_media_fallback_failed",
+                        conversation_id=failed["conversation_id"][:20],
+                        message_id=failed["message_id"][:30],
+                    )
                 log(
                     "zernio_failed_event_reconciled",
                     conversation_id=failed["conversation_id"][:20],
                     message_id=failed["message_id"][:30],
                     vehicle_recommendation=reconciled,
+                    fallback_attempted=fallback_attempted,
+                    fallback_sent=fallback_sent,
+                    failure_reason=str(failed.get("failure_reason") or "")[:120],
                 )
             return
         if payload.get("event") == "message.sent":
