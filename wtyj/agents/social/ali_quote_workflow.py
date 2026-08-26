@@ -434,6 +434,7 @@ def catalog_prompt_context(catalog: dict) -> dict:
                 for item in catalog.get("vehicleClasses") or []
                 if item.get("id") == class_id
             ), ""),
+            "daily_usd": amount or None,
         })
     categories = []
     for item in catalog.get("vehicleClasses") or []:

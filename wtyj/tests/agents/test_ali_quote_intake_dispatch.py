@@ -76,7 +76,11 @@ def test_prompt_context_contains_names_and_rates_but_no_server_ids():
     assert context["catalog_version"] == 11
     assert context["categories"] == [{"name": "Economy", "daily_usd": "35.00"}]
     assert context["vehicles"] == [
-        {"name": "Kia Picanto 2024 or similar", "category": "Economy"},
+        {
+            "name": "Kia Picanto 2024 or similar",
+            "category": "Economy",
+            "daily_usd": "35.00",
+        },
     ]
     assert CLASS_ID not in serialized
     assert ECONOMY_VEHICLE_ID not in serialized
@@ -115,6 +119,40 @@ def test_ali_prompt_uses_live_catalog_and_forbids_contact_redirects(monkeypatch)
     assert CLASS_ID not in prompt
     assert "Never tell them to contact or" in prompt
     assert "Never populate vehicle_id, vehicle_class_id, or extra_ids" in prompt
+
+
+def test_ali_prompt_answers_known_prices_immediately_and_continues_intake(monkeypatch):
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+
+    prompt = marina_agent._build_ali_quote_block()
+    normalized = " ".join(prompt.split())
+
+    assert "answer that question immediately" in normalized
+    assert "Do not make them finish the intake" in normalized
+    assert "state the exact rate as USD {daily_usd} per day" in normalized
+    assert "has exactly one unambiguous match" in normalized
+    assert "ask one concise clarifying question instead of guessing" in normalized
+    assert "continue the one-question-at-a-time intake normally" in normalized
+    assert "Do not repeat a known question or detail" in normalized
+    assert "Do not calculate rental totals" in normalized
+    assert "discounts, duration rates, dynamic" in normalized
+
+
+def test_ali_prompt_sets_official_quote_expectation_in_all_supported_languages(monkeypatch):
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+
+    prompt = marina_agent._build_ali_quote_block()
+
+    expected = (
+        "Your final price will be shown in the official quote I'll prepare and send here in a few minutes.",
+        "Je definitieve prijs staat in de officiële offerte die ik klaarmaak en hier over een paar minuten stuur.",
+        "Bo preis final lo ta den e oferta ofisial ku mi ta prepara i manda aki den un par di minüt.",
+        "Der endgültige Preis steht im offiziellen Angebot, das ich vorbereite und Ihnen hier in wenigen Minuten sende.",
+    )
+    for wording in expected:
+        assert wording in prompt
 
 
 def test_paused_master_switch_does_not_fetch_catalog_or_collect_details(monkeypatch):
@@ -184,7 +222,8 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     assert flags["awaiting_quote_confirmation"] is True
 
 
-def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch):
+def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
     fields = {
         "customer_name": "Synthetic Calvin",
