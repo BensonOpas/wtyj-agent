@@ -129,6 +129,23 @@ def _configure(monkeypatch, tmp_path, model_result):
     )
 
 
+def _commit_result(phone, result, action_suffix):
+    assert isinstance(result, dict)
+    commit = result["ali_turn_commit"]
+    recommendation = result.get("vehicle_recommendation") or {}
+    workflow.commit_ali_turn_delivery(
+        phone,
+        commit,
+        result["text"],
+        [f"synthetic-{action_suffix}"],
+        recommendation_state_hash=str(recommendation.get("state_hash") or ""),
+        recommendation_delivery=(
+            str(recommendation.get("kind") or "")
+            if recommendation else ""
+        ),
+    )
+
+
 def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeypatch, tmp_path):
     phone = "synthetic-issue-190"
     fields = _stored_fields()
@@ -155,6 +172,7 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
         "reply": "Of course. I’ll update the vehicle.",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "continue_intake",
         "ali_rental_change": {
             "mode": "apply", "changed_fields": ["vehicle_selection"],
             "vehicle_selection_kind": "category",
@@ -177,9 +195,10 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
     assert "Kia Picanto" not in reply
     assert saved["fields"]["vehicle_class_id"] == VAN_CLASS_ID
     assert "vehicle_id" not in saved["fields"]
-    assert saved["flags"]["ali_summary_hash"] != old_hash
-    assert saved["flags"]["awaiting_quote_confirmation"] is True
+    assert saved["flags"]["ali_draft_summary_hash"] != old_hash
+    assert "awaiting_quote_confirmation" not in saved["flags"]
     assert "ali_quote_public_id" not in saved["flags"]
+    assert saved["flags"]["ali_replaces_quote_public_id"] == "immutable-old-quote"
     assert saved["fields"]["return_location"] == "Synthetic hotel"
 
     second = social_agent.handle_incoming_whatsapp_message({
@@ -226,6 +245,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         "reply": "I can show you an SUV option. Does this size suit your trip?",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "request_recommendation",
         "ali_rental_change": {
             "mode": "apply",
             "changed_fields": ["vehicle_selection"],
@@ -259,7 +279,10 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
     assert "Just checking" not in visual["text"]
     assert after_visual["fields"]["vehicle_class_id"] == SUV_CLASS_ID
     assert "vehicle_id" not in after_visual["fields"]
-    assert after_visual["flags"]["ali_summary_deferred_for_recommendation"] is True
+    _commit_result(phone, visual, "visual")
+    after_visual = state_registry.wa_get_booking_state(phone)
+    assert after_visual["flags"]["ali_phase"] == "DISCOVERY"
+    assert after_visual["flags"]["ali_last_delivered_kind"] == "vehicle_recommendation"
     assert "ali_summary_hash" not in after_visual["flags"]
     assert "awaiting_quote_confirmation" not in after_visual["flags"]
     assert "ali_quote_public_id" not in after_visual["flags"]
@@ -271,6 +294,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         "reply": "No problem. Would you prefer something roomier or more compact?",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "reject_or_hesitate",
     }
     monkeypatch.setattr(
         social_agent.marina_agent,
@@ -290,6 +314,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
     assert rejection["text"] == rejection_result["reply"]
     assert rejection["vehicle_recommendation"] is None
     assert "Just checking" not in rejection["text"]
+    _commit_result(phone, rejection, "rejection")
 
     choice_result = {
         "intents": ["inquiry"],
@@ -298,6 +323,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         "reply": "I’ll use the Kia Seltos option.",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "continue_intake",
         "ali_rental_change": {
             "mode": "apply",
             "changed_fields": ["vehicle_selection"],
@@ -323,9 +349,11 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
 
     assert corrected["text"].count("Just checking I’ve got everything right:") == 1
     assert "Car: Kia Seltos or similar" in corrected["text"]
+    _commit_result(phone, corrected, "corrected-summary")
+    after_choice = state_registry.wa_get_booking_state(phone)
     assert after_choice["fields"]["vehicle_id"] == SUV_VEHICLE_ID
     assert after_choice["flags"]["awaiting_quote_confirmation"] is True
-    assert "ali_summary_deferred_for_recommendation" not in after_choice["flags"]
+    assert after_choice["flags"]["ali_last_delivered_kind"] == "summary"
 
     confirmation_result = {
         "intents": ["inquiry"],
@@ -334,24 +362,25 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         "reply": "Thank you.",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "confirm_summary",
     }
     monkeypatch.setattr(
         social_agent.marina_agent,
         "process_message",
         lambda **_kwargs: confirmation_result,
     )
-    for _ in range(2):
-        prepared = social_agent.handle_incoming_whatsapp_message(
-            {
-                "from": phone,
-                "text": "Yes, it does look right.",
-                "from_name": "Synthetic Customer",
-                "_zernio_sender_id": "+351000000000",
-                "_zernio_account_id": "synthetic-account",
-            },
-            include_media=True,
-        )
-        assert prepared["text"] == workflow.PREPARING["en"]
+    prepared = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "Yes, it does look right.",
+            "from_name": "Synthetic Customer",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    assert prepared["text"] == workflow.PREPARING["en"]
+    _commit_result(phone, prepared, "preparing")
     conn = workflow._connection()
     try:
         quote_count = conn.execute(
@@ -374,6 +403,7 @@ def test_generic_change_request_asks_clarification_without_old_summary(monkeypat
         "reply": "What would you like me to change?",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "reject_or_hesitate",
         "ali_rental_change": {"mode": "clarify", "changed_fields": []},
     }
     _configure(monkeypatch, tmp_path, result)
@@ -425,6 +455,7 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
         ),
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "ask_question",
     }
     _configure(monkeypatch, tmp_path, price_result)
     state_registry.wa_save_booking_state(phone, fields, flags)
@@ -435,13 +466,15 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
         "from_name": "Synthetic Customer",
         "_zernio_sender_id": "+351000000000",
         "_zernio_account_id": "synthetic-account",
-    })
+    }, include_media=True)
+    _commit_result(phone, answer, "price-answer")
     after_answer = state_registry.wa_get_booking_state(phone)
 
-    assert answer == price_result["reply"]
-    assert "Just checking" not in answer
-    assert after_answer["flags"]["ali_summary_hash"] == summary_hash
-    assert after_answer["flags"]["awaiting_quote_confirmation"] is True
+    assert answer["text"] == price_result["reply"]
+    assert "Just checking" not in answer["text"]
+    assert "ali_presented_summary_hash" not in after_answer["flags"]
+    assert "awaiting_quote_confirmation" not in after_answer["flags"]
+    assert after_answer["flags"]["ali_last_delivered_kind"] == "agent_reply"
 
     repeat_result = {
         "intents": ["inquiry"],
@@ -450,6 +483,7 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
         "reply": "Here it is.",
         "requires_human": False,
         "flags": {},
+        "ali_primary_intent": "repeat_summary",
         "ali_summary_action": {"mode": "repeat"},
     }
     monkeypatch.setattr(
@@ -467,6 +501,61 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
 
     assert repeated.count("Just checking I’ve got everything right:") == 1
     assert "Car: Kia Picanto 2024 or similar" in repeated
+
+
+def test_unexpected_turn_planner_failure_suspends_old_confirmation_after_send(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-195-fail-closed"
+    fields = _stored_fields()
+    flags = {
+        "ali_phase": "SUMMARY_PRESENTED",
+        "ali_presented_summary_hash": "a" * 64,
+        "ali_summary_hash": "a" * 64,
+        "ali_summary_version": 1,
+        "ali_last_delivered_kind": "summary",
+        "awaiting_quote_confirmation": True,
+    }
+    result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "A model reply that must not bypass state safety.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "ask_question",
+    }
+    _configure(monkeypatch, tmp_path, result)
+    monkeypatch.setattr(
+        social_agent,
+        "plan_ali_quote_turn",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    response = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "What does that mean?",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-fail-closed-message",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+
+    assert response["ali_turn_commit"]["reason_code"] == (
+        "turn_planner_failed_closed"
+    )
+    assert response["text"] != result["reply"]
+    _commit_result(phone, response, "fail-closed")
+    saved = state_registry.wa_get_booking_state(phone)
+    assert saved["flags"]["ali_phase"] == "DISCOVERY"
+    assert saved["flags"]["ali_last_delivered_kind"] == "agent_reply"
+    assert "ali_presented_summary_hash" not in saved["flags"]
+    assert "awaiting_quote_confirmation" not in saved["flags"]
 
 
 def test_four_language_vehicle_change_actions_use_same_canonical_state():

@@ -219,6 +219,12 @@ def test_marina_tool_accepts_catalog_name_and_quantity_but_no_supplement_id_or_p
     assert item["additionalProperties"] is False
 
 
+def test_ali_primary_intent_contract_is_one_structured_value():
+    schema = marina_agent.MARINA_TOOL["input_schema"]["properties"]["ali_primary_intent"]
+    assert set(schema["enum"]) == workflow.ALI_PRIMARY_INTENTS
+    assert marina_agent._RESPONSE_DEFAULTS["ali_primary_intent"] is None
+
+
 def test_ali_prompt_uses_live_catalog_and_forbids_contact_redirects(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
@@ -749,7 +755,339 @@ def test_real_change_invalidates_only_active_summary_pointer():
     }
     workflow.invalidate_active_quote_summary(flags)
 
-    assert flags == {"reply_times": [1, 2]}
+    assert flags == {
+        "ali_phase": "DISCOVERY",
+        "ali_quote_public_id": "historical-quote-id",
+        "reply_times": [1, 2],
+    }
+
+
+def test_delivered_non_summary_suspends_bare_yes_until_summary_repeat(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    phone = "synthetic-delivery-anchor"
+    fields = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {}
+    workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+
+    initial = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "complete details",
+        fields, flags, "Thanks.", raw_config=raw_config(),
+        primary_intent="continue_intake", supplied_action_id="1" * 64,
+    )
+    workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+    assert initial.outbound_kind == "summary"
+    workflow.commit_ali_turn_delivery(
+        phone, initial.delivery_commit(), initial.text, ["anchor-summary"],
+    )
+
+    state = workflow.state_registry.wa_get_booking_state(phone)
+    answer = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "What is the price?",
+        state["fields"], state["flags"], "USD 35.00 per day.",
+        raw_config=raw_config(), primary_intent="ask_question",
+        supplied_action_id="2" * 64,
+    )
+    workflow.state_registry.wa_save_booking_state(
+        phone, state["fields"], state["flags"],
+    )
+    workflow.commit_ali_turn_delivery(
+        phone, answer.delivery_commit(), answer.text, ["anchor-answer"],
+    )
+
+    state = workflow.state_registry.wa_get_booking_state(phone)
+    bare_yes = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "yes",
+        state["fields"], state["flags"], "Which detail are you confirming?",
+        raw_config=raw_config(), primary_intent="confirm_summary",
+        supplied_action_id="3" * 64,
+    )
+    assert bare_yes.outbound_kind == "agent_reply"
+    assert bare_yes.reason_code == "confirmation_not_eligible"
+    workflow.ensure_schema()
+    connection = workflow._connection()
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM ali_quotes").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+    repeated = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "show the summary again",
+        state["fields"], state["flags"], "Here it is.",
+        raw_config=raw_config(), primary_intent="repeat_summary",
+        summary_action={"mode": "repeat"}, supplied_action_id="4" * 64,
+    )
+    workflow.state_registry.wa_save_booking_state(
+        phone, state["fields"], state["flags"],
+    )
+    workflow.commit_ali_turn_delivery(
+        phone, repeated.delivery_commit(), repeated.text, ["anchor-repeat"],
+    )
+    final_state = workflow.state_registry.wa_get_booking_state(phone)
+    assert final_state["flags"]["ali_phase"] == "SUMMARY_PRESENTED"
+    assert final_state["flags"]["ali_last_delivered_kind"] == "summary"
+
+
+def test_summary_presented_transition_matrix_has_one_primary_action(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    base_fields = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    cases = (
+        ("continue_intake", "one more thought", False, None, "agent_reply"),
+        ("ask_question", "what is the price?", False, None, "agent_reply"),
+        ("reject_or_hesitate", "I am not sure", False, None, "agent_reply"),
+        (
+            "request_recommendation", "show me a suitable option", True, None,
+            "vehicle_recommendation",
+        ),
+        (
+            "repeat_summary", "show the details again", False, {"mode": "repeat"},
+            "summary",
+        ),
+        ("confirm_summary", "yes", False, None, "quote_preparing"),
+        ("other", "thanks", False, None, "agent_reply"),
+    )
+
+    for index, (intent, text, recommendation, summary_action, expected) in enumerate(cases):
+        phone = f"synthetic-matrix-{index}"
+        fields = dict(base_fields)
+        flags = {}
+        workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+        initial = workflow.plan_ali_quote_turn(
+            phone, "synthetic-account", "+351000000000", "complete details",
+            fields, flags, "Thanks.", raw_config=raw_config(),
+            primary_intent="continue_intake", supplied_action_id=f"{index + 1:064x}",
+        )
+        workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+        workflow.commit_ali_turn_delivery(
+            phone, initial.delivery_commit(), initial.text,
+            [f"matrix-summary-{index}"],
+        )
+        state = workflow.state_registry.wa_get_booking_state(phone)
+        plan = workflow.plan_ali_quote_turn(
+            phone, "synthetic-account", "+351000000000", text,
+            state["fields"], state["flags"], "Natural customer answer.",
+            raw_config=raw_config(), primary_intent=intent,
+            recommendation_requested=recommendation,
+            summary_action=summary_action,
+            processor=lambda _public_id: None,
+            supplied_action_id=f"{index + 100:064x}",
+        )
+
+        assert plan.outbound_kind == expected
+        assert plan.primary_intent == intent
+
+
+def test_processing_and_quoted_phases_cannot_reconfirm_stale_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    fields = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    for index, phase in enumerate(("QUOTE_PROCESSING", "QUOTED")):
+        phone = f"synthetic-closed-phase-{index}"
+        flags = {
+            "ali_phase": phase,
+            "ali_draft_hash": "1" * 64,
+            "ali_draft_summary_hash": "2" * 64,
+            "ali_draft_version": 1,
+            "ali_presented_summary_hash": "2" * 64,
+            "ali_last_delivered_kind": "summary",
+            "awaiting_quote_confirmation": True,
+        }
+        workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+        state = workflow.state_registry.wa_get_booking_state(phone)
+        question = workflow.plan_ali_quote_turn(
+            phone, "synthetic-account", "+351000000000", "what is the price?",
+            state["fields"], state["flags"], "USD 35.00 per day.",
+            raw_config=raw_config(), primary_intent="ask_question",
+            supplied_action_id=f"{index + 200:064x}",
+        )
+        confirmation = workflow.plan_ali_quote_turn(
+            phone, "synthetic-account", "+351000000000", "yes",
+            state["fields"], state["flags"], "That quote is already being handled.",
+            raw_config=raw_config(), primary_intent="confirm_summary",
+            supplied_action_id=f"{index + 210:064x}",
+        )
+
+        assert question.outbound_kind == "agent_reply"
+        assert question.phase == phase
+        assert confirmation.outbound_kind == "agent_reply"
+        assert confirmation.phase == phase
+
+
+def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    complete_fields = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    intents = (
+        "continue_intake", "ask_question", "reject_or_hesitate",
+        "request_recommendation", "repeat_summary", "confirm_summary", "other",
+    )
+    phases = (
+        "COLLECTING", "DISCOVERY", "SUMMARY_PRESENTED",
+        "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
+    )
+    terminal_phases = {"QUOTE_PROCESSING", "QUOTED", "ESCALATED"}
+    case_number = 500
+
+    for locale, phase, intent in (
+        (locale, phase, intent)
+        for locale in ("en", "nl", "pap", "de")
+        for phase in phases
+        for intent in intents
+    ):
+            case_number += 1
+            phone = f"synthetic-phase-intent-{locale}-{case_number}"
+            fields = dict(complete_fields)
+            fields["conversation_language"] = locale
+            flags = {}
+            if phase == "COLLECTING":
+                fields.pop("rental_end")
+                flags["ali_phase"] = phase
+            else:
+                seed = workflow.plan_ali_quote_turn(
+                    phone, "synthetic-account", "+351000000000", "complete details",
+                    fields, flags, "Thanks.", raw_config=raw_config(),
+                    primary_intent="continue_intake",
+                    supplied_action_id=f"{case_number + 1000:064x}",
+                )
+                assert seed.draft_hash and seed.summary_hash
+                flags["ali_phase"] = phase
+                flags["ali_last_delivered_kind"] = (
+                    "summary" if phase == "SUMMARY_PRESENTED" else "agent_reply"
+                )
+                if phase == "SUMMARY_PRESENTED":
+                    flags["ali_presented_summary_hash"] = seed.summary_hash
+                    flags["ali_summary_hash"] = seed.summary_hash
+                    flags["ali_summary_version"] = seed.summary_version
+                    flags["awaiting_quote_confirmation"] = True
+                if phase in terminal_phases:
+                    flags["ali_active_quote_public_id"] = f"historical-{case_number}"
+
+            plan = workflow.plan_ali_quote_turn(
+                phone, "synthetic-account", "+351000000000",
+                "yes" if intent == "confirm_summary" else f"synthetic {intent}",
+                fields, flags, "Natural customer answer.",
+                raw_config=raw_config(), primary_intent=intent,
+                recommendation_requested=intent == "request_recommendation",
+                summary_action={"mode": "repeat"} if intent == "repeat_summary" else None,
+                processor=lambda _public_id: None,
+                supplied_action_id=f"{case_number:064x}",
+            )
+
+            if phase == "COLLECTING":
+                expected_kind = "agent_reply"
+                expected_phase = "COLLECTING"
+            elif intent == "request_recommendation":
+                expected_kind = "vehicle_recommendation"
+                expected_phase = "DISCOVERY"
+            elif intent == "repeat_summary" and phase not in terminal_phases:
+                expected_kind = "summary"
+                expected_phase = "SUMMARY_PRESENTED"
+            elif intent == "confirm_summary" and phase == "SUMMARY_PRESENTED":
+                expected_kind = "quote_preparing"
+                expected_phase = "QUOTE_PROCESSING"
+            else:
+                expected_kind = "agent_reply"
+                if phase in terminal_phases and intent in {
+                    "continue_intake", "ask_question", "repeat_summary",
+                    "confirm_summary", "other",
+                }:
+                    expected_phase = phase
+                else:
+                    expected_phase = "DISCOVERY"
+
+            assert (plan.outbound_kind, plan.phase) == (
+                expected_kind, expected_phase,
+            ), (locale, phase, intent, plan)
+
+
+def test_turn_delivery_commit_is_idempotent_and_logs_no_customer_content(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    events = []
+    monkeypatch.setattr(
+        workflow.bm_logger, "log",
+        lambda event, **fields: events.append({"event": event, **fields}),
+    )
+    phone = "synthetic-idempotent-commit"
+    fields = {
+        "customer_name": "Private Synthetic Name",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Private synthetic airport",
+        "return_location": "Private synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {}
+    workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+    plan = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351963618055", "private message text",
+        fields, flags, "Private model reply.", raw_config=raw_config(),
+        primary_intent="continue_intake", changed_fields=("pickup_location",),
+        supplied_action_id="f" * 64,
+    )
+    workflow.state_registry.wa_save_booking_state(phone, fields, flags)
+
+    assert workflow.commit_ali_turn_delivery(
+        phone, plan.delivery_commit(), plan.text, ["provider-inbound-1"],
+    ) is True
+    assert workflow.commit_ali_turn_delivery(
+        phone, plan.delivery_commit(), plan.text, ["provider-inbound-1"],
+    ) is False
+
+    connection = workflow.state_registry._get_conn()
+    try:
+        assistant_count = connection.execute(
+            "SELECT COUNT(*) FROM whatsapp_threads "
+            "WHERE phone = ? AND role = 'assistant'",
+            (phone,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert assistant_count == 1
+    serialized = json.dumps(events, ensure_ascii=False).lower()
+    assert "private synthetic name" not in serialized
+    assert "+351963618055" not in serialized
+    assert "private message text" not in serialized
+    assert "private model reply" not in serialized
 
 
 def test_change_action_contract_and_prompt_cover_universal_corrections(monkeypatch):

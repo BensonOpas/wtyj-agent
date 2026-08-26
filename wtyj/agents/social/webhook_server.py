@@ -4,6 +4,7 @@
 # Purpose: FastAPI webhook receiver for Meta WhatsApp Cloud API
 
 import json as _json
+import hashlib
 import os
 import time
 import threading
@@ -28,6 +29,7 @@ from agents.social.zernio_dm_client import (
 from agents.social.dm_agent import handle_incoming_dm
 from agents.social.channels import ZERNIO_CHANNELS, DEFAULT_ZERNIO_CHANNEL
 from agents.social.senders import send_reply
+from agents.social.ali_quote_workflow import commit_ali_turn_delivery
 
 from contextlib import asynccontextmanager
 
@@ -347,6 +349,9 @@ def _flush_buffer(phone):
     # Use last message's metadata
     final_msg = messages[-1].copy()
     final_msg["text"] = combined_text
+    final_msg["_ali_action_id"] = hashlib.sha256(
+        "\x1f".join(ids or [str(final_msg.get("message_id") or "")]).encode("utf-8")
+    ).hexdigest()
     batched_count = len(messages)
     timing = buf.get("timing") if isinstance(buf, dict) else {}
     if batched_count > 1:
@@ -423,6 +428,7 @@ def _flush_buffer(phone):
                 _orchestrator_on = _use_whatsapp_orchestrator(_zernio_channel)
                 reply_media = None
                 reply_vehicle_recommendation = None
+                ali_turn_commit = None
                 if _orchestrator_on:
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
@@ -442,6 +448,11 @@ def _flush_buffer(phone):
                         reply_vehicle_recommendation = (
                             reply_result.get("vehicle_recommendation")
                             if isinstance(reply_result.get("vehicle_recommendation"), dict)
+                            else None
+                        )
+                        ali_turn_commit = (
+                            reply_result.get("ali_turn_commit")
+                            if isinstance(reply_result.get("ali_turn_commit"), dict)
                             else None
                         )
                     else:
@@ -493,6 +504,11 @@ def _flush_buffer(phone):
                             reply_text,
                             attachment_url=attachment_url,
                             attachment_type="image" if attachment_url else "image",
+                            confirm_delivery=bool(ali_turn_commit),
+                            idempotency_key=(
+                                f"ali-turn-{ali_turn_commit['action_id']}"
+                                if ali_turn_commit else ""
+                            ),
                         )
                     if not ok:
                         log("zernio_reply_send_failed",
@@ -504,12 +520,27 @@ def _flush_buffer(phone):
                             _zernio_channel, _zernio_conv, _zernio_sender,
                             ids, "provider returned false")
                         return
-                    state_registry.dm_store_message(
-                        conversation_id=_zernio_conv,
-                        channel=_zernio_channel,
-                        role="assistant",
-                        text=reply_text,
-                    )
+                    if ali_turn_commit:
+                        commit_ali_turn_delivery(
+                            _zernio_conv,
+                            ali_turn_commit,
+                            reply_text,
+                            ids,
+                            channel=_zernio_channel,
+                            recommendation_state_hash=str(
+                                (reply_vehicle_recommendation or {}).get("state_hash") or ""
+                            ),
+                            recommendation_delivery=str(
+                                (recommendation_delivery or {}).get("delivery") or ""
+                            ),
+                        )
+                    else:
+                        state_registry.dm_store_message(
+                            conversation_id=_zernio_conv,
+                            channel=_zernio_channel,
+                            role="assistant",
+                            text=reply_text,
+                        )
                     if recommendation_delivery:
                         delivery = str(
                             recommendation_delivery.get("delivery") or ""
@@ -517,11 +548,12 @@ def _flush_buffer(phone):
                         state_hash = str(
                             reply_vehicle_recommendation.get("state_hash") or ""
                         )
-                        state_registry.wa_mark_vehicle_recommendation_delivered(
-                            _zernio_conv,
-                            state_hash,
-                            delivery,
-                        )
+                        if not ali_turn_commit:
+                            state_registry.wa_mark_vehicle_recommendation_delivered(
+                                _zernio_conv,
+                                state_hash,
+                                delivery,
+                            )
                         state_registry.dm_store_message(
                             conversation_id=_zernio_conv,
                             channel=_zernio_channel,
@@ -539,8 +571,9 @@ def _flush_buffer(phone):
                             role="system",
                             text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
                         )
-                    state_registry.inbound_processing_bulk_update(
-                        ids, "replied", reason="provider_send_ok")
+                    if not ali_turn_commit:
+                        state_registry.inbound_processing_bulk_update(
+                            ids, "replied", reason="provider_send_ok")
                 else:
                     state_registry.inbound_processing_bulk_update(
                         ids, "ignored", reason="no_reply_returned")
@@ -566,8 +599,18 @@ def _flush_buffer(phone):
                     return
                 # Meta WhatsApp (legacy) — original path
                 state_registry.wa_store_message(phone, "user", combined_text)
-                reply_text = handle_incoming_whatsapp_message(
+                reply_result = handle_incoming_whatsapp_message(
                     final_msg, inbound_already_stored=True)
+                ali_turn_commit = None
+                if isinstance(reply_result, dict):
+                    reply_text = str(reply_result.get("text") or "")
+                    ali_turn_commit = (
+                        reply_result.get("ali_turn_commit")
+                        if isinstance(reply_result.get("ali_turn_commit"), dict)
+                        else None
+                    )
+                else:
+                    reply_text = reply_result
                 reply_text = _sanitize_tenant_whatsapp_reply(
                     reply_text, "whatsapp")
                 if reply_text:
@@ -577,9 +620,15 @@ def _flush_buffer(phone):
                             "whatsapp", phone, final_msg.get("from_name", ""),
                             ids, "provider returned false")
                         return
-                    state_registry.wa_store_message(phone, "assistant", reply_text)
-                    state_registry.inbound_processing_bulk_update(
-                        ids, "replied", reason="provider_send_ok")
+                    if ali_turn_commit:
+                        commit_ali_turn_delivery(
+                            phone, ali_turn_commit, reply_text, ids,
+                            channel="whatsapp",
+                        )
+                    else:
+                        state_registry.wa_store_message(phone, "assistant", reply_text)
+                        state_registry.inbound_processing_bulk_update(
+                            ids, "replied", reason="provider_send_ok")
                 else:
                     state_registry.inbound_processing_bulk_update(
                         ids, "ignored", reason="no_reply_returned")
