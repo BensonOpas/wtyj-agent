@@ -27,6 +27,9 @@ from reportlab.platypus import (
 from agents.social.ali_quote_presentation import (
     format_curacao_datetime,
     format_rental_period,
+    format_usd_money,
+    total_quote_amount,
+    usd_cents,
 )
 
 NAVY = colors.HexColor("#102A43")
@@ -52,7 +55,9 @@ LABELS = {
         "per_day": "per rental day",
         "per_rental": "per rental",
         "days_suffix": "days",
-        "rental_total": "Rental total",
+        "grand_total": "Total quote amount",
+        "deposit_included": "Includes a refundable security deposit of {amount}.",
+        "rental_total": "Rental charges",
         "deposit": "Refundable security deposit",
         "issued": "Issued",
         "expires": "Valid until",
@@ -76,7 +81,9 @@ LABELS = {
         "per_day": "per huurdag",
         "per_rental": "per huur",
         "days_suffix": "dagen",
-        "rental_total": "Huurbedrag",
+        "grand_total": "Totaalbedrag offerte",
+        "deposit_included": "Inclusief een terugbetaalbare borg van {amount}.",
+        "rental_total": "Huurkosten",
         "deposit": "Terugbetaalbare borg",
         "issued": "Uitgegeven",
         "expires": "Geldig tot",
@@ -100,7 +107,9 @@ LABELS = {
         "per_day": "pa dia di huur",
         "per_rental": "pa huur",
         "days_suffix": "dia",
-        "rental_total": "Total di huur",
+        "grand_total": "Montante total di oferta",
+        "deposit_included": "Ta inkluí un depósito reembolsabel di {amount}.",
+        "rental_total": "Gastunan di huur",
         "deposit": "Depósito reembolsabel",
         "issued": "Emití",
         "expires": "Válido te ku",
@@ -124,7 +133,9 @@ LABELS = {
         "per_day": "pro Miettag",
         "per_rental": "pro Miete",
         "days_suffix": "Tage",
-        "rental_total": "Mietpreis",
+        "grand_total": "Gesamtbetrag des Angebots",
+        "deposit_included": "Enthält eine rückerstattbare Kaution von {amount}.",
+        "rental_total": "Mietkosten",
         "deposit": "Rückerstattbare Kaution",
         "issued": "Ausgestellt",
         "expires": "Gültig bis",
@@ -148,12 +159,7 @@ def mask_whatsapp(value: str) -> str:
 
 
 def _money(value) -> str:
-    if not isinstance(value, dict) or value.get("currency") != "USD":
-        raise ValueError("PDF requires an authoritative USD money object")
-    amount = str(value.get("amount") or "")
-    if not re.fullmatch(r"(?:0|[1-9]\d*)\.\d{2}", amount):
-        raise ValueError("PDF received an invalid money amount")
-    return f"USD {amount}"
+    return format_usd_money(value)
 
 
 def _item_description(item: dict, labels: dict, supplement_name: str = "") -> str:
@@ -195,7 +201,9 @@ def render_quote_pdf(
     body = ParagraphStyle("AliBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9.5, leading=13, textColor=NAVY)
     small = ParagraphStyle("AliSmall", parent=body, fontSize=8, leading=11, textColor=MUTED)
     heading = ParagraphStyle("AliHeading", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=NAVY, spaceAfter=3 * mm)
-    total_style = ParagraphStyle("AliTotal", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=22, textColor=NAVY, alignment=TA_RIGHT)
+    total_style = ParagraphStyle("AliTotal", parent=body, fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=NAVY, alignment=TA_RIGHT)
+    total_label_style = ParagraphStyle("AliTotalLabel", parent=body, fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=NAVY)
+    deposit_note_style = ParagraphStyle("AliDepositNote", parent=small, fontName="Helvetica-Bold", fontSize=9, leading=12, textColor=MUTED)
     table_header = ParagraphStyle("AliTableHeader", parent=small, fontName="Helvetica-Bold", textColor=colors.white)
 
     document = SimpleDocTemplate(
@@ -271,11 +279,41 @@ def render_quote_pdf(
     items.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), NAVY), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8E4EC")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm), ("TOPPADDING", (0, 0), (-1, -1), 2.2 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2 * mm)]))
     story.extend([items, Spacer(1, 5 * mm)])
 
-    totals = Table([
-        [Paragraph(f"<b>{_safe(labels['rental_total'])}</b>", body), Paragraph(_safe(_money(pricing.get("rentalTotal"))), total_style)],
-        [Paragraph(f"<b>{_safe(labels['deposit'])}</b>", body), Paragraph(_safe(_money(pricing.get("refundableSecurityDeposit"))), ParagraphStyle("AliDeposit", parent=body, fontName="Helvetica-Bold", alignment=TA_RIGHT))],
-    ], colWidths=[108 * mm, 68 * mm])
-    totals.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 1, GOLD), ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#E6D5A8")), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF9E8")), ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)]))
+    deposit = pricing.get("refundableSecurityDeposit")
+    grand_total = total_quote_amount(pricing)
+    total_rows = [[
+        Paragraph(_safe(labels["grand_total"]), total_label_style),
+        Paragraph(_safe(_money(grand_total)), total_style),
+    ]]
+    if usd_cents(deposit):
+        total_rows.append([
+            Paragraph(
+                _safe(labels["deposit_included"].format(amount=_money(deposit))),
+                deposit_note_style,
+            ),
+            "",
+        ])
+    total_rows.append([
+        Paragraph(_safe(labels["rental_total"]), body),
+        Paragraph(
+            _safe(_money(pricing.get("rentalTotal"))),
+            ParagraphStyle("AliRentalSubtotal", parent=body, fontName="Helvetica-Bold", alignment=TA_RIGHT),
+        ),
+    ])
+    totals = Table(total_rows, colWidths=[108 * mm, 68 * mm])
+    total_styles = [
+        ("BOX", (0, 0), (-1, -1), 1, GOLD),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.8, colors.HexColor("#E6D5A8")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF9E8")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5 * mm),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    if usd_cents(deposit):
+        total_styles.append(("SPAN", (0, 1), (1, 1)))
+    totals.setStyle(TableStyle(total_styles))
     story.append(KeepTogether([totals, Spacer(1, 5 * mm), Paragraph(f"<b>{_safe(labels['issued'])}:</b> {_safe(format_curacao_datetime(pricing.get('createdAt', ''), locale))}<br/>{_safe(labels['validity'])}<br/><b>{_safe(labels['availability'])}</b><br/>{_safe(labels['reply'])}", small)]))
     document.build(story)
 

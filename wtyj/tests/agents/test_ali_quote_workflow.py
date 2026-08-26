@@ -19,6 +19,12 @@ from agents.social.ali_quote_brand_card import (
 )
 from agents.social.ali_quote_download import sign_download, verify_download
 from agents.social.ali_quote_pdf import render_quote_pdf
+from agents.social.ali_quote_presentation import (
+    format_usd_money,
+    total_quote_amount,
+    usd_cents,
+    usd_money,
+)
 
 
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
@@ -110,6 +116,18 @@ def pricing_with_child_seats():
     })
     value["rentalTotal"] = {"currency": "USD", "amount": "350.00"}
     value["reservationDeposit"] = {"currency": "USD", "amount": "87.50"}
+    return value
+
+
+def owner_example_pricing():
+    value = pricing()
+    value["items"][0]["unitPrice"] = {"currency": "USD", "amount": "1260.00"}
+    value["items"][0]["total"] = {"currency": "USD", "amount": "1260.00"}
+    value["items"][1]["unitPrice"] = {"currency": "USD", "amount": "200.00"}
+    value["items"][1]["total"] = {"currency": "USD", "amount": "200.00"}
+    value["rentalTotal"] = {"currency": "USD", "amount": "1260.00"}
+    value["refundableSecurityDeposit"] = {"currency": "USD", "amount": "200.00"}
+    value["reservationDeposit"] = {"currency": "USD", "amount": "315.00"}
     return value
 
 
@@ -469,9 +487,98 @@ def test_pdf_is_one_page_in_all_locales_and_displays_exact_snapshot_totals(tmp_p
         text = reader.pages[0].extract_text()
         assert "USD 280.00" in text
         assert "USD 150.00" in text
+        assert "USD 430.00" in text
         assert pricing()["quoteReference"] in text
         assert "2026-09-01" not in text
         assert "2026-09-08" not in text
+
+
+def test_quote_grand_total_uses_integer_cents_and_preserves_reservation_amount():
+    snapshot = owner_example_pricing()
+
+    assert usd_cents(snapshot["rentalTotal"]) == 126_000
+    assert usd_cents(snapshot["refundableSecurityDeposit"]) == 20_000
+    assert total_quote_amount(snapshot) == {
+        "currency": "USD", "amount": "1460.00",
+    }
+    assert format_usd_money(total_quote_amount(snapshot)) == "USD 1,460.00"
+    assert snapshot["reservationDeposit"] == {
+        "currency": "USD", "amount": "315.00",
+    }
+    assert usd_money(146_000) == total_quote_amount(snapshot)
+
+
+def test_pdf_grand_total_hierarchy_is_localized_in_all_languages(tmp_path):
+    expected = {
+        "en": (
+            "Total quote amount",
+            "Includes a refundable security deposit of USD 200.00.",
+            "Rental charges",
+        ),
+        "nl": (
+            "Totaalbedrag offerte",
+            "Inclusief een terugbetaalbare borg van USD 200.00.",
+            "Huurkosten",
+        ),
+        "pap": (
+            "Montante total di oferta",
+            "Ta inkluí un depósito reembolsabel di USD 200.00.",
+            "Gastunan di huur",
+        ),
+        "de": (
+            "Gesamtbetrag des Angebots",
+            "Enthält eine rückerstattbare Kaution von USD 200.00.",
+            "Mietkosten",
+        ),
+    }
+    for locale, labels in expected.items():
+        path, _digest = render_quote_pdf(
+            f"owner-example-{locale}", locale, customer(), rental(locale),
+            owner_example_pricing(), output_root=str(tmp_path),
+        )
+        reader = PdfReader(path)
+        assert len(reader.pages) == 1
+        text = reader.pages[0].extract_text()
+        for label in labels:
+            assert label in text
+        assert "USD 1,460.00" in text
+        assert "USD 1,260.00" in text
+        assert text.count("USD 200.00") == 2
+        assert "USD 315.00" not in text
+
+
+def test_zero_deposit_pdf_omits_refundable_explanation(tmp_path):
+    snapshot = pricing()
+    snapshot["refundableSecurityDeposit"] = {
+        "currency": "USD", "amount": "0.00",
+    }
+    snapshot["items"][1]["unitPrice"] = {"currency": "USD", "amount": "0.00"}
+    snapshot["items"][1]["total"] = {"currency": "USD", "amount": "0.00"}
+    path, _digest = render_quote_pdf(
+        "zero-deposit", "en", customer(), rental(), snapshot,
+        output_root=str(tmp_path),
+    )
+    text = PdfReader(path).pages[0].extract_text()
+    assert "Total quote amount" in text
+    assert "Rental charges" in text
+    assert "USD 280.00" in text
+    assert "Includes a refundable security deposit" not in text
+
+
+def test_supplements_are_included_in_grand_total_once(tmp_path):
+    snapshot = pricing_with_child_seats()
+    path, _digest = render_quote_pdf(
+        "supplement-grand-total", "en", customer(),
+        {**rental(), "supplements": [child_seat()]}, snapshot,
+        output_root=str(tmp_path),
+    )
+    text = PdfReader(path).pages[0].extract_text()
+    assert total_quote_amount(snapshot) == {
+        "currency": "USD", "amount": "500.00",
+    }
+    assert "USD 500.00" in text
+    assert "USD 350.00" in text
+    assert text.count("USD 70.00") == 1
 
 
 def test_pdf_itemizes_supplement_basis_unit_days_and_total_in_all_locales(tmp_path):
