@@ -53,10 +53,27 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         data = payload.get("message", {})
 
     text = data.get("text", "")
+    msg_obj = data.get("message", {})
     if not text:
         # Try nested message object
-        msg_obj = data.get("message", {})
         text = msg_obj.get("text", "") if isinstance(msg_obj, dict) else ""
+
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict) and isinstance(msg_obj, dict):
+        metadata = msg_obj.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    interactive_type = str(
+        metadata.get("interactiveType")
+        or metadata.get("interactive_type")
+        or ""
+    ).strip()
+    interactive_id = str(
+        metadata.get("interactiveId")
+        or metadata.get("interactive_id")
+        or ""
+    ).strip()
 
     conversation_id = data.get("conversationId", "") or data.get("conversation_id", "")
     message_id = data.get("id", "") or data.get("messageId", "")
@@ -99,6 +116,8 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         "text": text,
         "message_id": message_id,
         "account_id": account_id,
+        "interactive_type": interactive_type,
+        "interactive_id": interactive_id,
     }
 
 
@@ -481,6 +500,46 @@ def _post_recommendation_message(
     return "ambiguous", last_status
 
 
+def _send_recommendation_part(
+    request_url: str,
+    base_headers: dict,
+    account_id: str,
+    existing_messages: list[dict],
+    *,
+    body: dict,
+    idempotency_key: str,
+    visible_text: str,
+) -> tuple[str, int | None, bool]:
+    """Send or reconcile one idempotent visible part of a discovery bundle."""
+    if _recommendation_is_visible(existing_messages, visible_text):
+        return "sent", None, True
+    headers = dict(base_headers)
+    headers["Idempotency-Key"] = idempotency_key
+    outcome, status = _post_recommendation_message(
+        request_url,
+        headers,
+        body,
+    )
+    if outcome == "sent":
+        return outcome, status, False
+    try:
+        response = http_requests.get(
+            request_url,
+            headers=base_headers,
+            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+            timeout=15,
+        )
+    except http_requests.RequestException:
+        response = None
+    if response is not None and 200 <= response.status_code < 300:
+        if _recommendation_is_visible(
+            _payload_messages(_response_json(response)),
+            visible_text,
+        ):
+            return "sent", status, True
+    return outcome, status, False
+
+
 def send_dm_vehicle_recommendation(
     conversation_id: str,
     account_id: str,
@@ -506,11 +565,44 @@ def send_dm_vehicle_recommendation(
         or not isinstance(options, list)
     ):
         return {"success": False, "delivery": "invalid"}
-    if kind == "image" and len(options) != 1:
+    buttons = recommendation.get("buttons") or []
+    if (
+        kind == "image"
+        and (
+            len(options) != 1
+            or not isinstance(buttons, list)
+            or len(buttons) != 1
+            or not isinstance(buttons[0], dict)
+            or buttons[0].get("type") != "postback"
+            or buttons[0].get("payload") != options[0].get("selection_id")
+            or not str(buttons[0].get("title") or "")
+        )
+    ):
         return {"success": False, "delivery": "invalid"}
     cards = recommendation.get("cards") or []
-    if kind == "carousel" and (not isinstance(cards, list) or not 2 <= len(cards) <= 3):
-        return {"success": False, "delivery": "invalid"}
+    picker = recommendation.get("picker") or {}
+    if kind == "carousel":
+        sections = picker.get("sections") if isinstance(picker, dict) else None
+        rows = (
+            sections[0].get("rows")
+            if isinstance(sections, list)
+            and len(sections) == 1
+            and isinstance(sections[0], dict)
+            else None
+        )
+        if (
+            not isinstance(cards, list)
+            or not 2 <= len(cards) <= 5
+            or len(options) != len(cards)
+            or not isinstance(rows, list)
+            or len(rows) != len(cards)
+            or [row.get("id") for row in rows if isinstance(row, dict)]
+            != [option.get("selection_id") for option in options]
+            or not str(picker.get("text") or "")
+            or not str(picker.get("button") or "")
+            or not str(picker.get("fallback_text") or "")
+        ):
+            return {"success": False, "delivery": "invalid"}
 
     base_url = (
         "https://zernio.com/api/v1/inbox/conversations/"
@@ -533,20 +625,13 @@ def send_dm_vehicle_recommendation(
             recommendation_hash=state_hash[:12],
         )
         return {"success": False, "delivery": "window_closed"}
-    if _recommendation_is_visible(existing_messages, text):
-        bm_logger.log(
-            "ali_vehicle_recommendation_reconciled",
-            mode=kind,
-            recommendation_hash=state_hash[:12],
-        )
-        return {"success": True, "delivery": kind}
-
     if kind == "image":
         primary_body = {
             "accountId": account_id,
             "message": text,
             "attachmentUrl": options[0]["image_url"],
             "attachmentType": "image",
+            "buttons": buttons,
         }
     else:
         primary_body = {
@@ -557,74 +642,125 @@ def send_dm_vehicle_recommendation(
                 "action": {"cards": cards},
             },
         }
-    primary_headers = dict(base_headers)
-    primary_headers["Idempotency-Key"] = idempotency_key
-    outcome, status = _post_recommendation_message(
+    outcome, status, primary_reconciled = _send_recommendation_part(
         request_url,
-        primary_headers,
-        primary_body,
+        base_headers,
+        account_id,
+        existing_messages,
+        body=primary_body,
+        idempotency_key=f"{idempotency_key}-primary",
+        visible_text=text,
     )
     if outcome == "sent":
         bm_logger.log(
-            "ali_vehicle_recommendation_sent",
+            (
+                "ali_vehicle_recommendation_reconciled"
+                if primary_reconciled
+                else "ali_vehicle_recommendation_sent"
+            ),
             mode=kind,
             option_count=len(options),
             recommendation_hash=state_hash[:12],
         )
-        return {"success": True, "delivery": kind}
-
-    try:
-        reconcile_response = http_requests.get(
-            request_url,
-            headers=base_headers,
-            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
-            timeout=15,
-        )
-    except http_requests.RequestException:
-        reconcile_response = None
-    if reconcile_response is not None and 200 <= reconcile_response.status_code < 300:
-        if _recommendation_is_visible(
-            _payload_messages(_response_json(reconcile_response)),
-            text,
-        ):
+        if kind == "image":
+            return {"success": True, "delivery": "image"}
+    else:
+        if outcome == "ambiguous":
             bm_logger.log(
-                "ali_vehicle_recommendation_reconciled",
+                "ali_vehicle_recommendation_ambiguous",
                 mode=kind,
+                status=status,
                 recommendation_hash=state_hash[:12],
             )
-            return {"success": True, "delivery": kind}
-    elif outcome == "ambiguous":
+            return {"success": False, "delivery": "ambiguous"}
+
+        fallback_headers = dict(base_headers)
+        fallback_headers["Idempotency-Key"] = f"{idempotency_key}-fallback"
+        fallback_outcome, fallback_status = _post_recommendation_message(
+            request_url,
+            fallback_headers,
+            {"accountId": account_id, "message": text},
+        )
+        if fallback_outcome == "sent":
+            bm_logger.log(
+                "ali_vehicle_recommendation_fallback_sent",
+                mode=kind,
+                primary_status=status,
+                recommendation_hash=state_hash[:12],
+            )
+            return {"success": True, "delivery": "fallback"}
         bm_logger.log(
-            "ali_vehicle_recommendation_ambiguous",
+            "ali_vehicle_recommendation_failed",
             mode=kind,
-            status=status,
+            primary_status=status,
+            fallback_status=fallback_status,
             recommendation_hash=state_hash[:12],
         )
-        return {"success": False, "delivery": "ambiguous"}
+        return {"success": False, "delivery": "failed"}
 
-    fallback_headers = dict(base_headers)
-    fallback_headers["Idempotency-Key"] = f"{idempotency_key}-fallback"
-    fallback_outcome, fallback_status = _post_recommendation_message(
+    picker_text = str(picker["text"])
+    picker_body = {
+        "accountId": account_id,
+        "interactive": {
+            "type": "list",
+            "body": {"text": picker_text},
+            "action": {
+                "button": str(picker["button"]),
+                "sections": picker["sections"],
+            },
+        },
+    }
+    picker_outcome, picker_status, picker_reconciled = _send_recommendation_part(
         request_url,
-        fallback_headers,
-        {"accountId": account_id, "message": text},
+        base_headers,
+        account_id,
+        existing_messages,
+        body=picker_body,
+        idempotency_key=f"{idempotency_key}-picker",
+        visible_text=picker_text,
+    )
+    if picker_outcome == "sent":
+        bm_logger.log(
+            (
+                "ali_vehicle_picker_reconciled"
+                if picker_reconciled
+                else "ali_vehicle_picker_sent"
+            ),
+            option_count=len(options),
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": True, "delivery": "carousel_picker"}
+    if picker_outcome == "ambiguous":
+        bm_logger.log(
+            "ali_vehicle_picker_ambiguous",
+            status=picker_status,
+            recommendation_hash=state_hash[:12],
+        )
+
+    picker_fallback_text = str(picker["fallback_text"])
+    fallback_outcome, fallback_status, _ = _send_recommendation_part(
+        request_url,
+        base_headers,
+        account_id,
+        existing_messages,
+        body={"accountId": account_id, "message": picker_fallback_text},
+        idempotency_key=f"{idempotency_key}-picker-fallback",
+        visible_text=picker_fallback_text,
     )
     if fallback_outcome == "sent":
         bm_logger.log(
-            "ali_vehicle_recommendation_fallback_sent",
-            mode=kind,
-            primary_status=status,
+            "ali_vehicle_picker_fallback_sent",
+            picker_status=picker_status,
             recommendation_hash=state_hash[:12],
         )
-        return {"success": True, "delivery": "fallback"}
+        return {"success": True, "delivery": "carousel_picker_fallback"}
     bm_logger.log(
-        "ali_vehicle_recommendation_failed",
-        mode=kind,
-        primary_status=status,
+        "ali_vehicle_picker_failed",
+        picker_status=picker_status,
         fallback_status=fallback_status,
         recommendation_hash=state_hash[:12],
     )
-    return {"success": False, "delivery": "failed"}
+    return {"success": False, "delivery": "picker_failed"}
 
 
 def send_dm_reply(conversation_id: str, account_id: str, text: str,

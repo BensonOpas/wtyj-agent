@@ -8,6 +8,7 @@ renders factual presentation data for the WhatsApp transport.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -19,15 +20,89 @@ from shared import bm_logger
 SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
 _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CARD_LABELS = {
-    "en": {"seats": "seats"},
-    "nl": {"seats": "zitplaatsen"},
-    "pap": {"seats": "lugá"},
-    "de": {"seats": "Sitzplätze"},
+    "en": {
+        "seats": "seats",
+        "choose_one": "Choose this car",
+        "choose_many": "Choose a car",
+        "picker_body": "Tap below to choose the car you prefer.",
+        "picker_section": "Cars",
+        "picker_fallback": "Reply with the name of the car you prefer.",
+    },
+    "nl": {
+        "seats": "zitplaatsen",
+        "choose_one": "Kies deze auto",
+        "choose_many": "Kies een auto",
+        "picker_body": "Tik hieronder om je favoriete auto te kiezen.",
+        "picker_section": "Auto's",
+        "picker_fallback": "Antwoord met de naam van de auto die je kiest.",
+    },
+    "pap": {
+        "seats": "lugá",
+        "choose_one": "Skoge e outo aki",
+        "choose_many": "Skoge un outo",
+        "picker_body": "Primi abou pa skoge e outo ku bo ta preferá.",
+        "picker_section": "Outonan",
+        "picker_fallback": "Kontestá ku e nòmber di e outo ku bo ta preferá.",
+    },
+    "de": {
+        "seats": "Sitzplätze",
+        "choose_one": "Dieses Auto wählen",
+        "choose_many": "Auto auswählen",
+        "picker_body": "Tippen Sie unten, um Ihr gewünschtes Auto auszuwählen.",
+        "picker_section": "Autos",
+        "picker_fallback": "Antworten Sie mit dem Namen Ihres gewünschten Autos.",
+    },
 }
+_TRANSMISSIONS = {
+    "automatic": {
+        "en": "Automatic",
+        "nl": "Automaat",
+        "pap": "Outomátiko",
+        "de": "Automatik",
+    },
+    "manual": {
+        "en": "Manual",
+        "nl": "Handgeschakeld",
+        "pap": "Manual",
+        "de": "Schaltung",
+    },
+}
+_SELECTION_PREFIX = "ali_vehicle_select:v1:"
 
 
 class AliVehicleRecommendationError(ValueError):
     """Structured recommendation failed safe catalog validation."""
+
+
+def vehicle_selection_payload(vehicle_id: object) -> str:
+    """Return a bounded opaque picker payload for one server-owned vehicle ID."""
+    value = str(vehicle_id or "").strip()
+    if (
+        not value
+        or len(value) > 160
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", value)
+    ):
+        raise AliVehicleRecommendationError("invalid_vehicle_id")
+    payload = f"{_SELECTION_PREFIX}{value}"
+    if len(payload) > 200:
+        raise AliVehicleRecommendationError("vehicle_selection_payload_too_long")
+    return payload
+
+
+def parse_vehicle_selection_payload(payload: object) -> str | None:
+    """Extract an untrusted catalog ID candidate from a native picker payload.
+
+    Callers must still validate the returned ID against the active tenant catalog.
+    """
+    value = str(payload or "").strip()
+    if not value.startswith(_SELECTION_PREFIX):
+        return None
+    vehicle_id = value[len(_SELECTION_PREFIX):]
+    try:
+        expected = vehicle_selection_payload(vehicle_id)
+    except AliVehicleRecommendationError:
+        return None
+    return vehicle_id if hmac.compare_digest(value, expected) else None
 
 
 def _absolute_https_url(value: object, base_url: str) -> str:
@@ -87,16 +162,21 @@ def _catalog_vehicle(
     seats = vehicle.get("seats")
     if isinstance(seats, bool) or (seats is not None and not isinstance(seats, int)):
         raise AliVehicleRecommendationError("invalid_vehicle_capacity")
+    transmission = str(vehicle.get("transmission") or "").strip().lower()
+    if transmission and transmission not in _TRANSMISSIONS:
+        raise AliVehicleRecommendationError("invalid_vehicle_transmission")
     detail_url = _absolute_https_url(f"/{locale}/fleet/{slug}", base_url)
     return {
         "id": public_id,
         "name": name,
         "category": category,
         "seats": seats,
+        "transmission": transmission or None,
         "daily_usd": amount,
         "image_url": image_url,
         "image_alt": image_alt,
         "detail_url": detail_url,
+        "selection_id": vehicle_selection_payload(public_id),
     }
 
 
@@ -104,10 +184,42 @@ def _card_body(option: dict, locale: str) -> str:
     lines = [option["name"], option["category"]]
     if option.get("seats") is not None:
         lines.append(f"{option['seats']} {_CARD_LABELS[locale]['seats']}")
+    if option.get("transmission"):
+        lines.append(_TRANSMISSIONS[option["transmission"]][locale])
     amount = option["daily_usd"]
     displayed_amount = amount[:-3] if amount.endswith(".00") else amount
     lines.append(f"USD ${displayed_amount}/day")
     return "\n".join(lines)
+
+
+def _picker_description(option: dict, locale: str) -> str:
+    details = [option["category"]]
+    if option.get("transmission"):
+        details.append(_TRANSMISSIONS[option["transmission"]][locale])
+    displayed_amount = (
+        option["daily_usd"][:-3]
+        if option["daily_usd"].endswith(".00")
+        else option["daily_usd"]
+    )
+    details.append(f"USD ${displayed_amount}/day")
+    return " · ".join(details)[:72]
+
+
+def _picker_plan(options: list[dict], locale: str) -> dict:
+    labels = _CARD_LABELS[locale]
+    return {
+        "text": labels["picker_body"],
+        "button": labels["choose_many"],
+        "sections": [{
+            "title": labels["picker_section"],
+            "rows": [{
+                "id": option["selection_id"],
+                "title": option["name"][:24],
+                "description": _picker_description(option, locale),
+            } for option in options],
+        }],
+        "fallback_text": labels["picker_fallback"],
+    }
 
 
 def build_vehicle_recommendation(
@@ -134,7 +246,7 @@ def build_vehicle_recommendation(
     if (
         not isinstance(names, list)
         or (expected_count is not None and len(names) != expected_count)
-        or (mode == "curated" and not 2 <= len(names) <= 3)
+        or (mode == "curated" and not 2 <= len(names) <= 5)
         or any(not isinstance(name, str) or not name.strip() for name in names)
     ):
         raise AliVehicleRecommendationError("invalid_recommendation_count")
@@ -226,6 +338,11 @@ def build_vehicle_recommendation(
     if mode == "specific":
         option = options[0]
         plan["text"] = f"{conversational_text}\n\n{_card_body(option, locale)}\n\n{availability_note}"
+        plan["buttons"] = [{
+            "type": "postback",
+            "title": _CARD_LABELS[locale]["choose_one"],
+            "payload": option["selection_id"],
+        }]
     else:
         plan["cards"] = [{
             "card_index": index,
@@ -243,6 +360,7 @@ def build_vehicle_recommendation(
                 },
             },
         } for index, option in enumerate(options)]
+        plan["picker"] = _picker_plan(options, locale)
     bm_logger.log(
         "ali_vehicle_recommendation_planned",
         mode=mode,

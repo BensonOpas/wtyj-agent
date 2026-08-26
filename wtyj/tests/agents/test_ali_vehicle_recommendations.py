@@ -10,13 +10,23 @@ from agents.social import zernio_dm_client
 from shared import state_registry
 
 
-def _vehicle(index, name, category_id, seats, amount, *, image=True):
+def _vehicle(
+    index,
+    name,
+    category_id,
+    seats,
+    amount,
+    *,
+    image=True,
+    transmission="automatic",
+):
     return {
         "id": f"vehicle-{index}",
         "slug": f"vehicle-{index}",
         "name": name,
         "classId": category_id,
         "seats": seats,
+        "transmission": transmission,
         "dailyRate": {"currency": "USD", "amount": amount},
         "images": ([{
             "url": f"/brand/vehicles/vehicle-{index}.png",
@@ -94,7 +104,7 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
         ("de", "Sitzplätze", "Auto ansehen"),
     ],
 )
-def test_curated_carousel_is_two_or_three_suitable_localized_cards(
+def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     locale,
     capacity_label,
     cta,
@@ -122,6 +132,7 @@ def test_curated_carousel_is_two_or_three_suitable_localized_cards(
     assert capacity_label in plan["cards"][0]["body"]["text"]
     assert capacity_label not in plan["cards"][2]["body"]["text"]
     assert "USD $75.50/day" in plan["cards"][2]["body"]["text"]
+    assert "Automatic" in plan["cards"][0]["body"]["text"] if locale == "en" else True
     assert all(
         card["action"]["parameters"]["display_text"] == cta
         for card in plan["cards"]
@@ -150,7 +161,7 @@ def test_curated_recommendation_rejects_undersized_or_fleet_dump_options():
         match="invalid_recommendation_count",
     ):
         recommendations.build_vehicle_recommendation(
-            _action("curated", ["one", "two", "three", "four"]),
+            _action("curated", ["one", "two", "three", "four", "five", "six"]),
             _catalog(),
             {"conversation_language": "en", "passenger_count": 2},
             {},
@@ -181,6 +192,52 @@ def test_accepted_discovery_hash_suppresses_replay():
         flags,
         "Here it is again. What pickup date works for you?",
     ) is None
+
+
+def test_curated_four_carousel_options_have_matching_native_picker_rows():
+    catalog = _catalog()
+    catalog["vehicles"].append(
+        _vehicle(5, "Volkswagen Up or similar", "economy", 4, "30.00", transmission="manual")
+    )
+    plan = recommendations.build_vehicle_recommendation(
+        _action(
+            "curated",
+            [
+                "Kia Picanto or similar",
+                "Toyota Yaris or similar",
+                "Kia Seltos or similar",
+                "Volkswagen Up or similar",
+            ],
+        ),
+        catalog,
+        {"conversation_language": "en", "passenger_count": 4},
+        {},
+        "Here are a few options that may suit you.",
+    )
+
+    assert len(plan["cards"]) == 4
+    rows = plan["picker"]["sections"][0]["rows"]
+    assert len(rows) == 4
+    assert [row["id"] for row in rows] == [
+        option["selection_id"] for option in plan["options"]
+    ]
+    assert rows[-1]["description"].startswith("Economy · Manual")
+    assert plan["picker"]["button"] == "Choose a car"
+
+
+def test_vehicle_selection_payload_round_trip_is_bounded_and_fail_closed():
+    payload = recommendations.vehicle_selection_payload("vehicle-123")
+    assert payload == "ali_vehicle_select:v1:vehicle-123"
+    assert recommendations.parse_vehicle_selection_payload(payload) == "vehicle-123"
+    assert recommendations.parse_vehicle_selection_payload("vehicle-123") is None
+    assert recommendations.parse_vehicle_selection_payload(
+        "ali_vehicle_select:v1:../../vehicle-123"
+    ) is None
+    with pytest.raises(
+        recommendations.AliVehicleRecommendationError,
+        match="invalid_vehicle_id",
+    ):
+        recommendations.vehicle_selection_payload("bad/id")
 
 
 def test_marina_schema_exposes_structured_action_without_server_ids():
@@ -274,14 +331,26 @@ def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel"}
-    assert len(posts) == 1
-    assert posts[0]["headers"]["Idempotency-Key"] == plan["idempotency_key"]
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert len(posts) == 2
+    assert posts[0]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-primary"
+    )
     interactive = posts[0]["json"]["interactive"]
     assert interactive["type"] == "carousel"
     assert interactive["body"] == {"text": plan["text"]}
     assert interactive["action"] == {"cards": plan["cards"]}
     assert "message" not in posts[0]["json"]
+    assert posts[1]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-picker"
+    )
+    picker = posts[1]["json"]["interactive"]
+    assert picker["type"] == "list"
+    assert picker["body"] == {"text": plan["picker"]["text"]}
+    assert picker["action"] == {
+        "button": plan["picker"]["button"],
+        "sections": plan["picker"]["sections"],
+    }
 
 
 def test_closed_session_attempts_no_interactive_or_free_text(monkeypatch):
@@ -341,8 +410,11 @@ def test_specific_vehicle_posts_one_image_message(monkeypatch):
         "message": plan["text"],
         "attachmentUrl": plan["options"][0]["image_url"],
         "attachmentType": "image",
+        "buttons": plan["buttons"],
     }
-    assert posts[0]["headers"]["Idempotency-Key"] == plan["idempotency_key"]
+    assert posts[0]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-primary"
+    )
 
 
 def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatch):
@@ -395,18 +467,135 @@ def test_ambiguous_send_reconciles_visible_carousel_without_fallback(monkeypatch
         lambda *args, **kwargs: next(gets),
     )
 
-    def timeout(*args, **kwargs):
+    def timeout_then_picker_success(*args, **kwargs):
         post_attempts.append((args, kwargs))
-        raise zernio_dm_client.http_requests.Timeout("synthetic timeout")
+        if len(post_attempts) <= 2:
+            raise zernio_dm_client.http_requests.Timeout("synthetic timeout")
+        return _Response(201)
 
-    monkeypatch.setattr(zernio_dm_client.http_requests, "post", timeout)
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        timeout_then_picker_success,
+    )
 
     result = zernio_dm_client.send_dm_vehicle_recommendation(
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel"}
-    assert len(post_attempts) == 2
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert len(post_attempts) == 3
+
+
+def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            _incoming(),
+            {
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+            {
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["picker"]["text"]}},
+            },
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *args, **kwargs: posts.append((args, kwargs)) or _Response(201),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert posts == []
+
+
+def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            _incoming(),
+            {
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert len(posts) == 1
+    assert posts[0]["json"]["interactive"]["type"] == "list"
+    assert posts[0]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-picker"
+    )
+
+
+def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [_incoming()]}),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
+    )
+    posts = []
+
+    def fake_post(url, headers, json, timeout):
+        posts.append({"headers": headers, "json": json})
+        if len(posts) == 2:
+            return _Response(400)
+        return _Response(201)
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {
+        "success": True,
+        "delivery": "carousel_picker_fallback",
+    }
+    assert len(posts) == 3
+    assert posts[0]["json"]["interactive"]["type"] == "carousel"
+    assert posts[1]["json"]["interactive"]["type"] == "list"
+    assert posts[2]["json"] == {
+        "accountId": "account-1",
+        "message": plan["picker"]["fallback_text"],
+    }
+    assert posts[2]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-picker-fallback"
+    )
 
 
 def test_state_delivery_marker_is_atomic_and_bounded(monkeypatch, tmp_path):
