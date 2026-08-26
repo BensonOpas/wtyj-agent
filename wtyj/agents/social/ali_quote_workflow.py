@@ -42,7 +42,7 @@ AFFIRMATIVE = {
 NEGATION = {"no", "not", "nee", "niet", "no ta", "kein", "nicht", "aber", "but", "ma"}
 _CATALOG_CACHE = {"expires_at": 0.0, "value": None}
 _CATALOG_CACHE_SECONDS = 60.0
-QUOTE_PROCESSING_DELAY_SECONDS = 3 * 60
+CUSTOMER_QUOTE_DELAY_SECONDS = 3 * 60
 _FORBIDDEN_CONTACT_REDIRECT = re.compile(
     r"(?:https?://)?wa\.me/|mailto:|tel:|[\w.+-]+@[\w.-]+\.[a-z]{2,}",
     flags=re.IGNORECASE,
@@ -75,13 +75,13 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def seconds_until_quote_processing(
+def seconds_until_customer_quote_delivery(
     quote: dict,
     *,
     now: datetime | None = None,
-    delay_seconds: int = QUOTE_PROCESSING_DELAY_SECONDS,
+    delay_seconds: int = CUSTOMER_QUOTE_DELAY_SECONDS,
 ) -> float:
-    """Return the remaining durable delay from the stored confirmation time."""
+    """Return the remaining customer-only delay from persisted confirmation."""
     try:
         confirmed_at = datetime.fromisoformat(
             str(quote["confirmed_at"]).replace("Z", "+00:00")
@@ -526,7 +526,7 @@ def process_quote(
     switches: dict[str, bool] | None = None,
     output_root: str = "/app/data/ali-quotes",
     logo_path: str | None = None,
-    delay_seconds: int = QUOTE_PROCESSING_DELAY_SECONDS,
+    delay_seconds: int = CUSTOMER_QUOTE_DELAY_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], datetime] = _now,
 ) -> dict:
@@ -568,7 +568,7 @@ def process_quote(
             outcomes = adapters.send_operator_alerts(quote)
             quote = update_quote(public_id, notification_status_json=_json(outcomes))
         if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
-            remaining_delay = seconds_until_quote_processing(
+            remaining_delay = seconds_until_customer_quote_delivery(
                 quote, now=now(), delay_seconds=delay_seconds,
             )
             if remaining_delay:
