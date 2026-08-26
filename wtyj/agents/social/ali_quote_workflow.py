@@ -35,6 +35,25 @@ REQUIRED_RENTAL_FIELDS = {
     "driver_age", "conversation_language",
 }
 SELECTION_FIELDS = ("vehicle_id", "vehicle_class_id")
+QUOTE_LEAD_STATUSES = {
+    "active", "missing_information", "ready_to_quote",
+    "needs_an_answer", "in_progress",
+}
+QUOTE_LEAD_REQUIRED_FIELDS = (
+    "customer_name", "rental_start", "rental_end", "pickup_location",
+    "return_location", "driver_age", "conversation_language",
+    "vehicle_preference",
+)
+QUOTE_LEAD_FIELD_LABELS = {
+    "customer_name": "Full name",
+    "rental_start": "Pickup date",
+    "rental_end": "Return date",
+    "pickup_location": "Pickup location",
+    "return_location": "Return location",
+    "driver_age": "Driver's age",
+    "conversation_language": "Conversation language",
+    "vehicle_preference": "Preferred vehicle/category",
+}
 ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", "chargeSelections"}
 AFFIRMATIVE = {
     # English
@@ -410,6 +429,206 @@ def resumable_quotes() -> list[dict]:
     rows = conn.execute(f"SELECT * FROM ali_quotes WHERE status IN ({placeholders}) ORDER BY id", PENDING_STATUSES).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def _quote_lead_missing_fields(fields: dict) -> list[str]:
+    missing = [
+        key for key in QUOTE_LEAD_REQUIRED_FIELDS
+        if key != "vehicle_preference" and fields.get(key) in (None, "")
+    ]
+    if len([key for key in SELECTION_FIELDS if fields.get(key)]) != 1:
+        missing.append("vehicle_preference")
+    return missing
+
+
+def _masked_whatsapp_identifier(value: object) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if 9 <= len(digits) <= 15:
+        return f"WhatsApp ••••{digits[-4:]}"
+    return "WhatsApp conversation"
+
+
+def _quote_lead_status(
+    fields: dict,
+    flags: dict,
+    quote: dict | None,
+    has_active_escalation: bool,
+) -> str:
+    if has_active_escalation:
+        return "needs_an_answer"
+    if _quote_lead_missing_fields(fields):
+        return "missing_information"
+    if quote and quote.get("status") in PENDING_STATUSES:
+        return "in_progress"
+    if flags.get("ali_quote_public_id"):
+        if not quote or quote.get("whatsapp_status") != "accepted":
+            return "ready_to_quote"
+    return "active"
+
+
+def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
+    """Project Ali's open rental conversations into one read-only lead queue.
+
+    ``active`` is an umbrella filter over all non-closed leads. Other filters
+    select the row's canonical projected status. The tenant database itself is
+    the isolation boundary; no customer state is copied into another table.
+    """
+    if status is not None and status not in QUOTE_LEAD_STATUSES:
+        raise ValueError("Invalid quote lead status")
+    registry_connection = state_registry._get_conn()
+    registry_connection.close()
+    ensure_schema()
+    conn = _connection()
+    try:
+        state_rows = conn.execute(
+            "SELECT w.phone, w.fields_json, w.flags_json, w.last_activity, "
+            "w.created_at, COALESCE(cs.status, 'pending'), "
+            "COALESCE(cs.deleted, 0), COALESCE(cs.blocked, 0), "
+            "(SELECT sender_name FROM whatsapp_threads t "
+            " WHERE t.phone = w.phone AND t.role = 'user' AND t.sender_name != '' "
+            " ORDER BY t.created_at DESC LIMIT 1), "
+            "(SELECT channel FROM whatsapp_threads t WHERE t.phone = w.phone "
+            " ORDER BY t.created_at DESC LIMIT 1), "
+            "(SELECT COUNT(*) FROM whatsapp_threads incoming "
+            " WHERE incoming.phone = w.phone AND incoming.role = 'user' "
+            " AND incoming.created_at > COALESCE(("
+            "   SELECT MAX(outgoing.created_at) FROM whatsapp_threads outgoing "
+            "   WHERE outgoing.phone = w.phone "
+            "   AND outgoing.role IN ('assistant', 'operator')"
+            " ), '')) "
+            "FROM whatsapp_booking_state w "
+            "LEFT JOIN conversation_status cs ON cs.conversation_id = w.phone "
+            "WHERE COALESCE(cs.deleted, 0) = 0 "
+            "AND COALESCE(cs.blocked, 0) = 0 "
+            "AND COALESCE(cs.status, 'pending') NOT IN ('resolved', 'closed', 'archived') "
+            "ORDER BY w.last_activity DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+        quote_rows = conn.execute(
+            "SELECT q.* FROM ali_quotes q INNER JOIN ("
+            " SELECT conversation_id, MAX(id) AS latest_id FROM ali_quotes "
+            " GROUP BY conversation_id"
+            ") latest ON latest.latest_id = q.id"
+        ).fetchall()
+        latest_quotes = {
+            str(row["conversation_id"]): dict(row) for row in quote_rows
+        }
+        escalation_ids = {
+            str(row[0]) for row in conn.execute(
+                "SELECT DISTINCT customer_id FROM pending_notifications "
+                "WHERE notification_type = 'escalation' "
+                "AND status != 'resolved'"
+            ).fetchall() if row[0]
+        }
+    finally:
+        conn.close()
+
+    leads = []
+    for row in state_rows:
+        conversation_id = str(row[0])
+        try:
+            fields = json.loads(row[1] or "{}")
+            flags = json.loads(row[2] or "{}")
+        except (TypeError, ValueError):
+            fields, flags = {}, {}
+        quote = latest_quotes.get(conversation_id)
+        known_customer_name = str(
+            fields.get("customer_name")
+            or fields.get("name")
+            or " ".join(
+                str(fields.get(key) or "").strip()
+                for key in ("first_name", "surnames")
+            ).strip()
+            or row[8]
+            or ""
+        ).strip()
+        projected_fields = dict(fields)
+        if known_customer_name:
+            projected_fields["customer_name"] = known_customer_name
+        projected_status = _quote_lead_status(
+            projected_fields, flags, quote, conversation_id in escalation_ids,
+        )
+        if status not in (None, "active") and projected_status != status:
+            continue
+        customer_name = known_customer_name or "WhatsApp customer"
+        selection = str(
+            fields.get("vehicle_name") or fields.get("vehicle_class_name") or ""
+        ).strip()
+        locale = str(fields.get("conversation_language") or "en").lower()
+        if locale not in LOCALES:
+            locale = "en"
+        rental_start = str(fields.get("rental_start") or "").strip()
+        rental_end = str(fields.get("rental_end") or "").strip()
+        rental_period = ""
+        if rental_start and rental_end:
+            rental_period = format_rental_period(rental_start, rental_end, locale)
+        missing = _quote_lead_missing_fields(projected_fields)
+        next_action = {
+            "needs_an_answer": "Review and answer the customer conversation.",
+            "missing_information": (
+                f"Collect {QUOTE_LEAD_FIELD_LABELS[missing[0]].lower()}."
+                if missing else "Collect the remaining rental details."
+            ),
+            "in_progress": "Official quote creation or delivery is in progress.",
+            "ready_to_quote": "Resume official quote delivery.",
+            "active": (
+                "Waiting for customer confirmation of the rental summary."
+                if flags.get("awaiting_quote_confirmation")
+                else "Review the open rental conversation."
+            ),
+        }[projected_status]
+        whatsapp_status = str((quote or {}).get("whatsapp_status") or "")
+        delivery_state = (
+            "delivered" if whatsapp_status == "accepted"
+            else "failed" if whatsapp_status == "failed"
+            else "pending" if quote else "not_started"
+        )
+        leads.append({
+            "id": conversation_id,
+            "conversation_id": conversation_id,
+            "channel": str(row[9] or "whatsapp"),
+            "customer_name": customer_name,
+            "first_name": customer_name,
+            "surnames": "",
+            "phone_raw": _masked_whatsapp_identifier(conversation_id),
+            "phone_normalized": "",
+            "vehicle_preference": selection,
+            "rental_period": rental_period,
+            "pickup_datetime": rental_start,
+            "return_datetime": rental_end,
+            "pickup_location": str(fields.get("pickup_location") or ""),
+            "return_location": str(fields.get("return_location") or ""),
+            "driver_age": fields.get("driver_age"),
+            "passenger_count": fields.get("passenger_count"),
+            "flight_number": str(fields.get("flight_number") or ""),
+            "luggage": str(fields.get("luggage_count") or fields.get("luggage") or ""),
+            "child_seat": ", ".join(
+                f"{item.get('name')} × {item.get('quantity')}"
+                for item in fields.get("supplements") or []
+                if isinstance(item, dict) and item.get("name")
+            ),
+            "notes": str(fields.get("comments") or ""),
+            "workflow_type": WORKFLOW_TYPE,
+            "required_fields": list(QUOTE_LEAD_REQUIRED_FIELDS),
+            "missing_fields": missing,
+            "field_labels": dict(QUOTE_LEAD_FIELD_LABELS),
+            "complete": not missing,
+            "status": projected_status,
+            "next_action": next_action,
+            "last_activity": str(row[3] or ""),
+            "created_at": str(row[4] or row[3] or ""),
+            "updated_at": str(row[3] or ""),
+            "unread_count": int(row[10] or 0),
+            "quote_reference": (quote or {}).get("quote_reference"),
+            "quote_status": (quote or {}).get("status"),
+            "quote_delivery_state": delivery_state,
+            "whatsapp_status": whatsapp_status or None,
+            "staff_email_status": (quote or {}).get("staff_email_status"),
+            "visit_reason": "",
+            "handoff_reason": next_action,
+            "callback_preference": "",
+        })
+    return leads
 
 
 class AliQuoteClient:
