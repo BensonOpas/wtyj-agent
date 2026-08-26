@@ -520,6 +520,23 @@ def _recommendation_visible_message(messages: list[dict], text: str) -> dict | N
     )
 
 
+def _messages_after_visible_message(messages: list[dict], text: str) -> list[dict]:
+    """Return messages newer than the latest matching message.
+
+    Zernio is queried with ``sortOrder=desc``.  Carousel picker text is reused
+    across recommendations, so replay reconciliation must only consider a
+    picker delivered after the carousel it belongs to.  Otherwise any older
+    "Choose your car below" message can suppress the current picker.
+    """
+    for index, item in enumerate(messages):
+        if (
+            str(item.get("direction") or "").lower() == "outgoing"
+            and _recommendation_message_text(item) == text
+        ):
+            return messages[:index]
+    return []
+
+
 def _response_message_id(response) -> str:
     payload = _response_json(response)
     data = payload.get("data")
@@ -879,11 +896,16 @@ def send_dm_vehicle_recommendation(
             },
         },
     }
+    picker_existing_messages = (
+        _messages_after_visible_message(existing_messages, primary_visible_text)
+        if primary_reconciled
+        else []
+    )
     picker_outcome, picker_status, picker_reconciled, picker_provider_id = _send_recommendation_part(
         request_url,
         base_headers,
         account_id,
-        existing_messages,
+        picker_existing_messages,
         body=picker_body,
         idempotency_key=f"{idempotency_key}-picker",
         visible_text=picker_text,
