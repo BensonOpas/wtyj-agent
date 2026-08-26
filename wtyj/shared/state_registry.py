@@ -1873,6 +1873,53 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     conn.close()
 
 
+def wa_mark_vehicle_recommendation_delivered(
+    phone: str,
+    state_hash: str,
+    delivery: str,
+) -> bool:
+    """Atomically remember one accepted Ali discovery presentation.
+
+    Only the flags JSON is changed so a provider callback cannot overwrite
+    fields persisted by a newer customer turn.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", str(state_hash or "")):
+        return False
+    if delivery not in {"image", "carousel", "fallback"}:
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (phone,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        flags = json.loads(row[0] or "{}")
+        existing = flags.get("ali_vehicle_recommendation_deliveries") or []
+        normalized = [
+            item for item in existing
+            if isinstance(item, dict)
+            and re.fullmatch(r"[0-9a-f]{64}", str(item.get("hash") or ""))
+        ]
+        if not any(item["hash"] == state_hash for item in normalized):
+            normalized.append({"hash": state_hash, "delivery": delivery})
+        flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), phone),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _get_email_state_path() -> str:
     """Brief 171: resolve the email_thread_state.json path the email_poller uses."""
     # email_poller stores it at /app/config/email_thread_state.json inside the container.

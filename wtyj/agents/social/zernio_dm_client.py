@@ -5,6 +5,7 @@
 import hashlib
 import hmac
 import os
+import re
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -402,6 +403,225 @@ def _confirmed_text_reply(
         "Zernio aceptó el mensaje, pero WhatsApp no confirmó el envío. "
         "No se mostrará como enviado."
     )
+
+
+def _recommendation_message_text(item: dict) -> str:
+    direct = str(item.get("message") or item.get("text") or "")
+    interactive = item.get("interactive")
+    interactive = interactive if isinstance(interactive, dict) else {}
+    body = interactive.get("body")
+    body = body if isinstance(body, dict) else {}
+    return direct or str(body.get("text") or "")
+
+
+def _recommendation_session_open(
+    base_url: str,
+    headers: dict,
+    account_id: str,
+) -> tuple[bool, list[dict]]:
+    response = http_requests.get(
+        f"{base_url}/messages",
+        headers=headers,
+        params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
+        timeout=15,
+    )
+    if not 200 <= response.status_code < 300:
+        bm_logger.log(
+            "ali_vehicle_recommendation_window_check_failed",
+            status=response.status_code,
+        )
+        return False, []
+    messages = _payload_messages(_response_json(response))
+    incoming_times = [
+        _parse_provider_time(item.get("createdAt") or item.get("created_at"))
+        for item in messages
+        if str(item.get("direction") or "").lower() == "incoming"
+    ]
+    latest = max((item for item in incoming_times if item is not None), default=None)
+    return (
+        latest is not None
+        and datetime.now(timezone.utc) - latest <= timedelta(hours=24),
+        messages,
+    )
+
+
+def _recommendation_is_visible(messages: list[dict], text: str) -> bool:
+    return any(
+        str(item.get("direction") or "").lower() == "outgoing"
+        and _recommendation_message_text(item) == text
+        for item in messages
+    )
+
+
+def _post_recommendation_message(
+    url: str,
+    headers: dict,
+    body: dict,
+) -> tuple[str, int | None]:
+    """Return ``sent``, ``rejected``, or ``ambiguous`` with status."""
+    last_status = None
+    for _attempt in range(2):
+        try:
+            response = http_requests.post(
+                url,
+                headers=headers,
+                json=body,
+                timeout=15,
+            )
+        except http_requests.RequestException:
+            continue
+        last_status = response.status_code
+        if 200 <= response.status_code < 300:
+            return "sent", response.status_code
+        if response.status_code not in {408, 409, 429} and response.status_code < 500:
+            return "rejected", response.status_code
+    return "ambiguous", last_status
+
+
+def send_dm_vehicle_recommendation(
+    conversation_id: str,
+    account_id: str,
+    recommendation: dict,
+) -> dict:
+    """Send one replay-safe Ali image or native media carousel.
+
+    A failed interactive send falls back to the same Claude-generated text.
+    No free-form message is attempted when WhatsApp's service window is closed.
+    """
+    api_key = os.environ.get("LATE_API_KEY", "")
+    kind = str(recommendation.get("kind") or "")
+    state_hash = str(recommendation.get("state_hash") or "")
+    idempotency_key = str(recommendation.get("idempotency_key") or "")
+    text = str(recommendation.get("text") or "")
+    options = recommendation.get("options") or []
+    if (
+        not api_key
+        or kind not in {"image", "carousel"}
+        or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
+        or not idempotency_key
+        or not text
+        or not isinstance(options, list)
+    ):
+        return {"success": False, "delivery": "invalid"}
+    if kind == "image" and len(options) != 1:
+        return {"success": False, "delivery": "invalid"}
+    cards = recommendation.get("cards") or []
+    if kind == "carousel" and (not isinstance(cards, list) or not 2 <= len(cards) <= 3):
+        return {"success": False, "delivery": "invalid"}
+
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}"
+    )
+    request_url = f"{base_url}/messages"
+    base_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    window_open, existing_messages = _recommendation_session_open(
+        base_url,
+        base_headers,
+        account_id,
+    )
+    if not window_open:
+        bm_logger.log(
+            "ali_vehicle_recommendation_window_closed",
+            mode=kind,
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": False, "delivery": "window_closed"}
+    if _recommendation_is_visible(existing_messages, text):
+        bm_logger.log(
+            "ali_vehicle_recommendation_reconciled",
+            mode=kind,
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": True, "delivery": kind}
+
+    if kind == "image":
+        primary_body = {
+            "accountId": account_id,
+            "message": text,
+            "attachmentUrl": options[0]["image_url"],
+            "attachmentType": "image",
+        }
+    else:
+        primary_body = {
+            "accountId": account_id,
+            "interactive": {
+                "type": "carousel",
+                "body": {"text": text},
+                "action": {"cards": cards},
+            },
+        }
+    primary_headers = dict(base_headers)
+    primary_headers["Idempotency-Key"] = idempotency_key
+    outcome, status = _post_recommendation_message(
+        request_url,
+        primary_headers,
+        primary_body,
+    )
+    if outcome == "sent":
+        bm_logger.log(
+            "ali_vehicle_recommendation_sent",
+            mode=kind,
+            option_count=len(options),
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": True, "delivery": kind}
+
+    try:
+        reconcile_response = http_requests.get(
+            request_url,
+            headers=base_headers,
+            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+            timeout=15,
+        )
+    except http_requests.RequestException:
+        reconcile_response = None
+    if reconcile_response is not None and 200 <= reconcile_response.status_code < 300:
+        if _recommendation_is_visible(
+            _payload_messages(_response_json(reconcile_response)),
+            text,
+        ):
+            bm_logger.log(
+                "ali_vehicle_recommendation_reconciled",
+                mode=kind,
+                recommendation_hash=state_hash[:12],
+            )
+            return {"success": True, "delivery": kind}
+    elif outcome == "ambiguous":
+        bm_logger.log(
+            "ali_vehicle_recommendation_ambiguous",
+            mode=kind,
+            status=status,
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": False, "delivery": "ambiguous"}
+
+    fallback_headers = dict(base_headers)
+    fallback_headers["Idempotency-Key"] = f"{idempotency_key}-fallback"
+    fallback_outcome, fallback_status = _post_recommendation_message(
+        request_url,
+        fallback_headers,
+        {"accountId": account_id, "message": text},
+    )
+    if fallback_outcome == "sent":
+        bm_logger.log(
+            "ali_vehicle_recommendation_fallback_sent",
+            mode=kind,
+            primary_status=status,
+            recommendation_hash=state_hash[:12],
+        )
+        return {"success": True, "delivery": "fallback"}
+    bm_logger.log(
+        "ali_vehicle_recommendation_failed",
+        mode=kind,
+        primary_status=status,
+        fallback_status=fallback_status,
+        recommendation_hash=state_hash[:12],
+    )
+    return {"success": False, "delivery": "failed"}
 
 
 def send_dm_reply(conversation_id: str, account_id: str, text: str,

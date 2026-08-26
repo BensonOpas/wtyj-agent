@@ -23,6 +23,7 @@ _RESPONSE_DEFAULTS = {
     "requires_human": False,
     "flags": {},
     "internal_note": "",
+    "ali_vehicle_recommendation": None,
 }
 
 
@@ -219,6 +220,47 @@ MARINA_TOOL = {
                     "needs_escalation_email": {"type": "boolean"},
                     "large_group": {"type": "boolean"},
                 },
+            },
+            "ali_vehicle_recommendation": {
+                "type": "object",
+                "description": (
+                    "Ali only and optional: request one catalog-grounded visual recommendation. "
+                    "Use `specific` only when the customer requested or chose one exact current "
+                    "vehicle. Use `curated` only after an undecided customer supplied enough "
+                    "passenger/luggage context; choose only the best 2–3 exact current vehicle "
+                    "names. Omit this object when no visual should be sent."
+                ),
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["specific", "curated"],
+                    },
+                    "vehicle_names": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "uniqueItems": True,
+                        "items": {"type": "string"},
+                        "description": "Exact current vehicle names from the injected Ali catalog.",
+                    },
+                    "availability_note": {
+                        "type": "string",
+                        "description": (
+                            "One concise natural sentence in the customer's language saying "
+                            "that final vehicle availability still requires confirmation. "
+                            "Do not repeat this sentence in `reply`."
+                        ),
+                    },
+                    "cta_label": {
+                        "type": "string",
+                        "description": (
+                            "A natural label of at most 24 characters in the customer's language "
+                            "for opening a vehicle details page, such as View car."
+                        ),
+                    },
+                },
+                "required": ["mode", "vehicle_names", "availability_note", "cta_label"],
+                "additionalProperties": False,
             },
             "semi_escalation": {
                 "type": "boolean",
@@ -921,6 +963,21 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   German: "Der endgültige Preis steht im offiziellen Angebot, das ich vorbereite und Ihnen hier in wenigen Minuten sende."
 - Then continue the one-question-at-a-time intake normally, using facts already supplied and
   asking only the most important missing detail. Do not repeat a known question or detail.
+- PREMIUM VEHICLE VISUALS:
+  - When the customer requests or chooses one exact current vehicle, populate
+    `ali_vehicle_recommendation` with mode `specific` and exactly that catalog vehicle name.
+    In `reply`, introduce the visual naturally and ask one useful follow-up question. Python
+    adds the exact category, seats when known, daily rate, and image from the same catalog.
+  - When the customer is genuinely undecided and passenger_count plus relevant luggage needs
+    are understood, choose only the best 2–3 suitable current vehicles and populate mode
+    `curated`. Never choose more than 3 and never dump the whole fleet. In `reply`, introduce
+    those options naturally and ask which feels right for the trip.
+  - Put one concise localized request-only availability sentence in `availability_note`, not
+    in `reply` and not on each card. Use a short localized details-page label in `cta_label`.
+  - Do not restate card facts in `reply`; the catalog renderer adds them without invention.
+    Ordinary typed vehicle choices remain valid; never force the customer to use a button.
+  - Omit `ali_vehicle_recommendation` until these conditions are met and whenever Python's
+    exact summary or quote preparation response is expected to replace your reply.
 - Do not calculate rental totals, deposits, discounts, duration rates, dynamic prices,
   exceptions, or estimates. Do not claim availability or a confirmed booking. The word
   "available" and its translations are forbidden during discovery unless you are explicitly
