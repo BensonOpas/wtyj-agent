@@ -21,7 +21,7 @@ from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
-from agents.social import content_agent, social_publisher, graphics_engine
+from agents.social import content_agent, social_publisher, graphics_engine, ali_quote_workflow
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
 from agents.social.zernio_dm_client import ZernioReplyError, WhatsAppWindowClosedError
 from agents.marina import marina_agent
@@ -2462,6 +2462,11 @@ def _require_callback_followups() -> None:
         raise HTTPException(status_code=404, detail="Follow-ups are not enabled for this tenant")
 
 
+def _require_ali_quote_leads() -> None:
+    if not ali_quote_workflow.tenant_configured():
+        raise HTTPException(status_code=404, detail="Quote leads are not enabled for this tenant")
+
+
 def _looks_like_legacy_unboks_default_sot(blocks: list) -> bool:
     """Detect the old frontend seed so it cannot leak into new tenants."""
     if not isinstance(blocks, list) or len(blocks) != len(_LEGACY_UNBOKS_DEFAULT_SOT_IDS):
@@ -4461,6 +4466,31 @@ async def list_follow_ups_endpoint(response: Response, status: str = None):
     items = state_registry.list_follow_up_requests(status=status)
     items = await asyncio.to_thread(_hydrate_follow_up_contact_identities, items)
     return {"items": items, "followUps": items}
+
+
+@router.get("/quote-leads", dependencies=[Depends(_check_auth)])
+async def list_quote_leads_endpoint(response: Response, status: str = None):
+    """Read-only Ali rental lead projection from canonical conversation state."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    _require_ali_quote_leads()
+    try:
+        all_items = ali_quote_workflow.list_quote_leads()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if status is not None and status not in ali_quote_workflow.QUOTE_LEAD_STATUSES:
+        raise HTTPException(status_code=422, detail="Invalid quote lead status")
+    items = (
+        all_items if status in (None, "active")
+        else [item for item in all_items if item["status"] == status]
+    )
+    counts = {"active": len(all_items)}
+    counts.update({
+        key: sum(item["status"] == key for item in all_items)
+        for key in sorted(ali_quote_workflow.QUOTE_LEAD_STATUSES - {"active"})
+    })
+    return {"items": items, "quoteLeads": items, "counts": counts}
 
 
 @router.get("/follow-ups/{follow_up_id}", dependencies=[Depends(_check_auth)])
