@@ -17,7 +17,13 @@ WHITE = "#FFFFFF"
 MUTED = "#B8C7D6"
 PANEL_BOX = (48, 54, 832, 338)
 PANEL_RADIUS = 34
-ACCENT_BOX = (48, 365, 234, 373)
+ACCENT_WIDTH = 186
+ACCENT_BOX = (
+    (WIDTH - ACCENT_WIDTH) // 2,
+    365,
+    (WIDTH + ACCENT_WIDTH) // 2,
+    373,
+)
 LOGO_POSITION = (78, 71)
 LOGO_MAX_SIZE = (430, 250)
 CONTENT_LEFT = 64
@@ -84,6 +90,13 @@ def _fit_font(
     raise QuoteBrandCardRenderError("Quote-card text exceeds safe width")
 
 
+def _centered_text_x(text: str, font) -> int:
+    rendered_width = float(font.getlength(text))
+    if rendered_width <= 0 or rendered_width > WIDTH:
+        raise QuoteBrandCardRenderError("Quote-card text cannot be centered")
+    return round((WIDTH - rendered_width) / 2)
+
+
 def render_quote_brand_card(
     public_id: str,
     locale: str,
@@ -117,11 +130,18 @@ def render_quote_brand_card(
 
     title_font = _fit_font(TITLES[locale], 60, 48, bold=True)
     reference_font = _fit_font(reference, 37, 16, bold=True)
-    draw.text((CONTENT_LEFT, TITLE_Y), TITLES[locale], font=title_font, fill=WHITE)
-    draw.text((CONTENT_LEFT, REFERENCE_Y), reference, font=reference_font, fill=GOLD)
+    footer_font = _font(24)
     draw.text(
-        (CONTENT_LEFT, FOOTER_Y), FOOTER_TEXT,
-        font=_font(24), fill=MUTED,
+        (_centered_text_x(TITLES[locale], title_font), TITLE_Y),
+        TITLES[locale], font=title_font, fill=WHITE,
+    )
+    draw.text(
+        (_centered_text_x(reference, reference_font), REFERENCE_Y),
+        reference, font=reference_font, fill=GOLD,
+    )
+    draw.text(
+        (_centered_text_x(FOOTER_TEXT, footer_font), FOOTER_Y), FOOTER_TEXT,
+        font=footer_font, fill=MUTED,
     )
 
     target = Path(output_root) / public_id / "quote-card.png"
