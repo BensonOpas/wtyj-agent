@@ -395,9 +395,17 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
     reconciled = []
     monkeypatch.setattr(
         webhook_server.state_registry,
-        "wa_reconcile_vehicle_recommendation_failure",
+        "wa_claim_vehicle_recommendation_failure",
         lambda conversation_id, message_id: (
-            reconciled.append((conversation_id, message_id)) or True
+            reconciled.append((conversation_id, message_id)) or {
+                "matched": True,
+                "already_handled": False,
+                "failed_message_id": message_id,
+                "hash": "a" * 64,
+                "stage": "retry",
+                "snapshot": {"text": "Here is one suitable car."},
+                "account_id": "account-1",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -407,7 +415,7 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
             AssertionError("failed delivery must not enter inbound parsing")
         ),
     )
-    sent = []
+    recovered = []
     monkeypatch.setattr(
         webhook_server.config_loader,
         "get_raw",
@@ -415,10 +423,22 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
     )
     monkeypatch.setattr(
         webhook_server,
-        "send_reply",
-        lambda channel, conversation_id, account_id, text, **kwargs: (
-            sent.append((channel, conversation_id, account_id, text, kwargs)) or True
+        "get_intake_catalog",
+        lambda **_kwargs: {"catalogVersion": 13},
+    )
+    monkeypatch.setattr(
+        webhook_server,
+        "recover_dm_vehicle_recommendation",
+        lambda conversation_id, account_id, recovery, catalog: (
+            recovered.append((conversation_id, account_id, recovery, catalog))
+            or {"success": True, "delivery": "carousel_retry"}
         ),
+    )
+    completed = []
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "wa_complete_vehicle_recommendation_recovery",
+        lambda *args: completed.append(args) or True,
     )
 
     webhook_server._process_zernio_event({
@@ -426,28 +446,14 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
         "message": {
             "id": "provider-image-1",
             "conversationId": "conversation-1",
-            "accountId": "account-1",
-            "message": "Here is one suitable car.",
-            "attachments": [{"type": "image", "url": "https://assets.invalid/car.webp"}],
-            "deliveryError": {"message": "Media upload error"},
         },
     })
 
     assert reconciled == [("conversation-1", "provider-image-1")]
-    assert sent == [(
-        "whatsapp",
-        "conversation-1",
-        "account-1",
-        "Here is one suitable car.",
-        {
-            "confirm_delivery": True,
-            "idempotency_key": (
-                "ali-late-media-fallback-"
-                "9c37280072f66b8db4c460f0abeff143675688447fd6f3562f22"
-                "e3c1fb4f1389"
-            ),
-        },
-    )]
+    assert len(recovered) == 1
+    assert recovered[0][0:2] == ("conversation-1", "account-1")
+    assert recovered[0][3] == {"catalogVersion": 13}
+    assert len(completed) == 1
 
 
 def test_failed_plain_text_does_not_trigger_recursive_fallback(monkeypatch):
@@ -460,8 +466,8 @@ def test_failed_plain_text_does_not_trigger_recursive_fallback(monkeypatch):
     )
     monkeypatch.setattr(
         webhook_server.state_registry,
-        "wa_reconcile_vehicle_recommendation_failure",
-        lambda *_args: True,
+        "wa_claim_vehicle_recommendation_failure",
+        lambda *_args: {"matched": False},
     )
     sends = []
     monkeypatch.setattr(

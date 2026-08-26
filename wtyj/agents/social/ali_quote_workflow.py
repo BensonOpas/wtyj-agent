@@ -672,6 +672,9 @@ def commit_ali_turn_delivery(
     recommendation_delivery: str = "",
     recommendation_vehicle_ids: list[str] | None = None,
     recommendation_provider_message_ids: list[str] | None = None,
+    recommendation_provider_parts: dict[str, list[str]] | None = None,
+    recommendation_snapshot: dict | None = None,
+    recommendation_account_id: str = "",
     confirmation_delivery: str = "",
     confirmation_payload: str = "",
     confirmation_provider_message_ids: list[str] | None = None,
@@ -722,6 +725,35 @@ def commit_ali_turn_delivery(
         for value in (recommendation_provider_message_ids or [])
         if str(value or "").strip() and len(str(value or "").strip()) <= 240
     ))[:5]
+    provider_parts = {}
+    for part, values in (recommendation_provider_parts or {}).items():
+        normalized_part_ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in values or []
+            if str(value or "").strip() and len(str(value or "").strip()) <= 240
+        ))[:10]
+        if part in {
+            "image", "carousel", "picker", "picker_fallback",
+            "individual_images",
+        } and normalized_part_ids:
+            provider_parts[part] = normalized_part_ids
+    snapshot = None
+    if isinstance(recommendation_snapshot, dict):
+        snapshot_candidate = {
+            "kind": str(recommendation_snapshot.get("kind") or "")[:20],
+            "mode": str(recommendation_snapshot.get("mode") or "")[:20],
+            "locale": str(recommendation_snapshot.get("locale") or "en")[:5],
+            "state_hash": str(recommendation_snapshot.get("state_hash") or "")[:64],
+            "text": str(recommendation_snapshot.get("text") or "")[:1500],
+            "vehicle_ids": recommendation_ids,
+        }
+        if (
+            snapshot_candidate["kind"] in {"image", "carousel"}
+            and re.fullmatch(r"[0-9a-f]{64}", snapshot_candidate["state_hash"])
+            and snapshot_candidate["text"]
+        ):
+            snapshot = snapshot_candidate
+    recommendation_account_id = str(recommendation_account_id or "").strip()[:240]
     confirmation_provider_ids = list(dict.fromkeys(
         str(value or "").strip()
         for value in (confirmation_provider_message_ids or [])
@@ -854,6 +886,7 @@ def commit_ali_turn_delivery(
         ) and recommendation_delivery in {
             "image", "carousel", "fallback", "carousel_picker",
             "carousel_picker_fallback", "picker", "picker_fallback",
+            "individual_picker", "individual_picker_fallback",
         }:
             existing = flags.get("ali_vehicle_recommendation_deliveries") or []
             normalized = [
@@ -868,6 +901,10 @@ def commit_ali_turn_delivery(
                     "action_id": action_id,
                     "vehicle_ids": recommendation_ids,
                     "provider_message_ids": provider_message_ids,
+                    "provider_parts": provider_parts,
+                    "snapshot": snapshot,
+                    "account_id": recommendation_account_id,
+                    "recovery_attempts": 0,
                 })
             flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
             if recommendation_ids:

@@ -26,6 +26,7 @@ from agents.social.zernio_dm_client import (
     send_dm_reply,
     send_dm_quote_confirmation,
     send_dm_vehicle_recommendation,
+    recover_dm_vehicle_recommendation,
     send_typing_indicator,
 )
 from agents.social.dm_agent import handle_incoming_dm
@@ -36,6 +37,7 @@ from agents.social.ali_quote_workflow import (
     commit_ali_turn_delivery,
     mark_quote_confirmation_failure_recovered,
     reconcile_quote_confirmation_failure,
+    get_intake_catalog,
 )
 
 from contextlib import asynccontextmanager
@@ -581,6 +583,11 @@ def _flush_buffer(phone):
                             recommendation_provider_message_ids=list(
                                 (recommendation_delivery or {}).get("provider_message_ids") or []
                             ),
+                            recommendation_provider_parts=dict(
+                                (recommendation_delivery or {}).get("provider_parts") or {}
+                            ),
+                            recommendation_snapshot=reply_vehicle_recommendation,
+                            recommendation_account_id=_zernio_acct,
                             confirmation_delivery=str(
                                 (confirmation_delivery or {}).get("delivery") or ""
                             ),
@@ -838,9 +845,10 @@ def _process_zernio_event(payload: dict):
         if payload.get("event") == "message.failed":
             failed = parse_zernio_failed_webhook(payload)
             if failed:
-                reconciled = state_registry.wa_reconcile_vehicle_recommendation_failure(
+                recommendation_failure = state_registry.wa_claim_vehicle_recommendation_failure(
                     failed["conversation_id"], failed["message_id"],
                 )
+                reconciled = bool(recommendation_failure.get("matched"))
                 confirmation_failure = reconcile_quote_confirmation_failure(
                     failed["conversation_id"], failed["message_id"],
                 )
@@ -849,36 +857,76 @@ def _process_zernio_event(payload: dict):
                 workflow = (config_loader.get_raw() or {}).get("workflow") or {}
                 if (
                     workflow.get("type") == "ali_quote"
-                    and reconciled
-                    and failed.get("recoverable_media")
-                    and failed.get("account_id")
-                    and failed.get("text")
+                    and recommendation_failure.get("matched")
+                    and not recommendation_failure.get("already_handled")
                 ):
                     fallback_attempted = True
-                    fallback_key = hashlib.sha256(
-                        str(failed["message_id"]).encode("utf-8")
-                    ).hexdigest()
+                    recovery_result = {"success": False, "delivery": "recovery_error"}
+                    account_id = str(
+                        failed.get("account_id")
+                        or recommendation_failure.get("account_id")
+                        or ""
+                    )
                     try:
-                        fallback_sent = send_reply(
-                            "whatsapp",
+                        recovery_result = recover_dm_vehicle_recommendation(
                             failed["conversation_id"],
-                            failed["account_id"],
-                            failed["text"],
-                            confirm_delivery=True,
-                            idempotency_key=f"ali-late-media-fallback-{fallback_key}",
+                            account_id,
+                            recommendation_failure,
+                            get_intake_catalog(force_refresh=True),
                         )
                     except Exception as exc:
                         log(
-                            "zernio_failed_media_fallback_error",
+                            "ali_vehicle_media_recovery_error",
                             conversation_id=failed["conversation_id"][:20],
                             error=type(exc).__name__,
                         )
+                    fallback_sent = bool(recovery_result.get("success"))
+                    state_registry.wa_complete_vehicle_recommendation_recovery(
+                        failed["conversation_id"],
+                        recommendation_failure,
+                        recovery_result,
+                    )
+                    if not fallback_sent:
+                        recovery_text = str(
+                            (recommendation_failure.get("snapshot") or {}).get("text")
+                            or "I couldn't load the car photos. I can still help you choose here."
+                        ).strip()
+                        fallback_key = hashlib.sha256(
+                            str(failed["message_id"]).encode("utf-8")
+                        ).hexdigest()
+                        try:
+                            fallback_sent = bool(account_id) and send_reply(
+                                "whatsapp",
+                                failed["conversation_id"],
+                                account_id,
+                                recovery_text,
+                                confirm_delivery=True,
+                                idempotency_key=(
+                                    f"ali-late-media-text-fallback-{fallback_key}"
+                                ),
+                            )
+                        except Exception as exc:
+                            log(
+                                "ali_vehicle_media_text_fallback_error",
+                                conversation_id=failed["conversation_id"][:20],
+                                error=type(exc).__name__,
+                            )
+                        state_registry.create_pending_notification(
+                            "escalation",
+                            "whatsapp",
+                            failed["conversation_id"],
+                            "Ali rental customer",
+                            "[ALI VEHICLE IMAGES FAILED]",
+                            "The vehicle carousel and automatic image recovery failed. Open the conversation in Unboks.",
+                            mode="hard",
+                        )
                     log(
-                        "zernio_failed_media_fallback_sent"
+                        "ali_vehicle_media_recovery_sent"
                         if fallback_sent
-                        else "zernio_failed_media_fallback_failed",
+                        else "ali_vehicle_media_recovery_failed",
                         conversation_id=failed["conversation_id"][:20],
                         message_id=failed["message_id"][:30],
+                        recovery_delivery=str(recovery_result.get("delivery") or "")[:40],
                     )
                 confirmation_recovery_attempted = False
                 confirmation_recovery_sent = False

@@ -368,13 +368,28 @@ def test_ali_prompt_requires_one_image_or_two_to_five_curated_options(monkeypatc
 
 
 class _Response:
-    def __init__(self, status_code, payload=None):
+    def __init__(self, status_code, payload=None, *, headers=None, content=b""):
         self.status_code = status_code
         self._payload = payload or {}
         self.text = ""
+        self.headers = headers or {}
+        self.content = content
 
     def json(self):
         return self._payload
+
+    def iter_content(self, chunk_size=65536):
+        del chunk_size
+        yield self.content
+
+
+_REAL_PREFLIGHT = zernio_dm_client._preflight_vehicle_media
+
+
+@pytest.fixture(autouse=True)
+def _valid_vehicle_media_preflight(monkeypatch):
+    """Transport tests isolate Zernio; dedicated tests exercise real preflight."""
+    monkeypatch.setattr(zernio_dm_client, "_preflight_vehicle_media", lambda _url: True)
 
 
 def _incoming(hours_ago=1):
@@ -586,6 +601,7 @@ def test_specific_vehicle_returns_provider_message_id_for_late_failure_tracking(
         "success": True,
         "delivery": "image",
         "provider_message_ids": ["provider-image-1"],
+        "provider_parts": {"image": ["provider-image-1"]},
     }
 
 
@@ -623,6 +639,7 @@ def test_late_image_rejection_before_commit_uses_visible_text_fallback(monkeypat
         "success": True,
         "delivery": "fallback",
         "provider_message_ids": ["provider-fallback-1"],
+        "provider_parts": {"picker_fallback": ["provider-fallback-1"]},
     }
 
 
@@ -1072,3 +1089,236 @@ def test_explicit_visual_request_can_intentionally_resend_same_vehicle():
     )
 
     assert first["state_hash"] != second["state_hash"]
+
+
+def test_carousel_provider_parts_track_images_and_picker_separately(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "provider-carousel-1", "direction": "outgoing", "status": "sent",
+        }]}),
+        _Response(200, {"messages": [{
+            "id": "provider-picker-1", "direction": "outgoing", "status": "sent",
+        }]}),
+    ])
+    posts = iter([
+        _Response(201, {"data": {"id": "provider-carousel-1"}}),
+        _Response(201, {"data": {"id": "provider-picker-1"}}),
+    ])
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", lambda *a, **k: next(gets))
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", lambda *a, **k: next(posts))
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", _carousel_plan(),
+    )
+
+    assert result["delivery"] == "carousel_picker"
+    assert result["provider_parts"] == {
+        "carousel": ["provider-carousel-1"],
+        "picker": ["provider-picker-1"],
+    }
+    assert result["provider_message_ids"] == [
+        "provider-carousel-1", "provider-picker-1",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "response", "expected"),
+    [
+        (
+            "https://alicarrental.com/api/v1/vehicle-media/vehicle-1?v=13",
+            _Response(200, headers={"Content-Type": "image/jpeg"}, content=b"jpeg"),
+            True,
+        ),
+        (
+            "https://evil.invalid/api/v1/vehicle-media/vehicle-1?v=13",
+            None,
+            False,
+        ),
+        (
+            "https://alicarrental.com/api/v1/vehicle-media/vehicle-1?v=13",
+            _Response(302, headers={"Location": "https://evil.invalid/x"}),
+            False,
+        ),
+        (
+            "https://alicarrental.com/api/v1/vehicle-media/vehicle-1?v=13",
+            _Response(200, headers={"Content-Type": "image/png"}, content=b"png"),
+            False,
+        ),
+    ],
+)
+def test_vehicle_media_preflight_is_origin_mime_and_redirect_safe(
+    monkeypatch, url, response, expected,
+):
+    monkeypatch.setenv("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com")
+    calls = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or response,
+    )
+
+    assert _REAL_PREFLIGHT(url) is expected
+    if response is None:
+        assert calls == []
+
+
+def test_sparse_carousel_failure_claim_is_idempotent_and_retry_failure_advances(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    plan = _carousel_plan()
+    state_registry.wa_save_booking_state(
+        "conversation-1",
+        {"conversation_language": "en"},
+        {"ali_vehicle_recommendation_deliveries": [{
+            "hash": plan["state_hash"],
+            "delivery": "carousel_picker",
+            "vehicle_ids": [item["id"] for item in plan["options"]],
+            "provider_parts": {
+                "carousel": ["provider-carousel-1"],
+                "picker": ["provider-picker-1"],
+            },
+            "snapshot": {
+                "kind": "carousel",
+                "mode": "curated",
+                "locale": "en",
+                "state_hash": plan["state_hash"],
+                "text": plan["text"],
+                "vehicle_ids": [item["id"] for item in plan["options"]],
+            },
+            "account_id": "account-1",
+        }]},
+    )
+
+    first = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-1", "provider-carousel-1",
+    )
+    duplicate = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-1", "provider-carousel-1",
+    )
+    assert first["stage"] == "retry"
+    assert first["picker_present"] is True
+    assert duplicate["already_handled"] is True
+
+    assert state_registry.wa_complete_vehicle_recommendation_recovery(
+        "conversation-1",
+        first,
+        {
+            "success": True,
+            "delivery": "carousel_retry",
+            "provider_parts": {"carousel": ["provider-carousel-retry-1"]},
+        },
+    )
+    retry_failure = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-1", "provider-carousel-retry-1",
+    )
+    assert retry_failure["stage"] == "individual"
+    assert retry_failure["picker_present"] is True
+
+
+def test_failed_preflight_skips_carousel_and_sends_images_plus_one_picker(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    preflights = iter([False, True, True])
+    monkeypatch.setattr(
+        zernio_dm_client,
+        "_preflight_vehicle_media",
+        lambda _url: next(preflights),
+    )
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{"id": "image-1", "status": "sent"}]}),
+        _Response(200, {"messages": [{"id": "image-2", "status": "sent"}]}),
+        _Response(200, {"messages": [{"id": "picker-1", "status": "sent"}]}),
+    ])
+    posts = []
+    provider_ids = iter(["image-1", "image-2", "picker-1"])
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", lambda *a, **k: next(gets))
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append(json)
+            or _Response(201, {"data": {"id": next(provider_ids)}})
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result["delivery"] == "individual_picker"
+    assert result["provider_parts"] == {
+        "individual_images": ["image-1", "image-2"],
+        "picker": ["picker-1"],
+    }
+    assert ["interactive" in body for body in posts] == [False, False, True]
+    assert posts[-1]["interactive"]["type"] == "list"
+
+
+def test_late_retry_then_individual_fallback_never_resends_picker(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    snapshot = {
+        "kind": "carousel",
+        "mode": "curated",
+        "locale": "en",
+        "state_hash": plan["state_hash"],
+        "text": plan["text"],
+        "vehicle_ids": [item["id"] for item in plan["options"]],
+    }
+    retry_gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{"id": "carousel-retry-1", "status": "sent"}]}),
+    ])
+    retry_posts = []
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", lambda *a, **k: next(retry_gets))
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            retry_posts.append(json)
+            or _Response(201, {"data": {"id": "carousel-retry-1"}})
+        ),
+    )
+    retry = zernio_dm_client.recover_dm_vehicle_recommendation(
+        "conversation-1",
+        "account-1",
+        {"stage": "retry", "snapshot": snapshot},
+        _catalog(),
+    )
+    assert retry["provider_parts"] == {"carousel": ["carousel-retry-1"]}
+    assert len(retry_posts) == 1
+    assert retry_posts[0]["interactive"]["type"] == "carousel"
+
+    individual_gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{"id": "individual-1", "status": "sent"}]}),
+        _Response(200, {"messages": [{"id": "individual-2", "status": "sent"}]}),
+    ])
+    individual_posts = []
+    individual_ids = iter(["individual-1", "individual-2"])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "get", lambda *a, **k: next(individual_gets)
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            individual_posts.append(json)
+            or _Response(201, {"data": {"id": next(individual_ids)}})
+        ),
+    )
+    individual = zernio_dm_client.recover_dm_vehicle_recommendation(
+        "conversation-1",
+        "account-1",
+        {"stage": "individual", "snapshot": snapshot, "picker_present": True},
+        _catalog(),
+    )
+    assert individual["provider_parts"] == {
+        "individual_images": ["individual-1", "individual-2"],
+    }
+    assert len(individual_posts) == 2
+    assert all("interactive" not in body for body in individual_posts)

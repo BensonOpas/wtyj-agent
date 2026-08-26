@@ -2044,6 +2044,171 @@ def wa_reconcile_vehicle_recommendation_failure(
         conn.close()
 
 
+def wa_claim_vehicle_recommendation_failure(
+    phone: str,
+    provider_message_id: str,
+) -> dict:
+    """Claim one known recommendation-part failure exactly once."""
+    message_id = str(provider_message_id or "").strip()
+    if not phone or not message_id or len(message_id) > 240:
+        return {"matched": False}
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (phone,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return {"matched": False}
+        flags = json.loads(row[0] or "{}")
+        deliveries = [
+            item for item in flags.get("ali_vehicle_recommendation_deliveries") or []
+            if isinstance(item, dict)
+        ]
+        matched = None
+        matched_part = ""
+        for delivery in reversed(deliveries):
+            parts = delivery.get("provider_parts")
+            parts = parts if isinstance(parts, dict) else {}
+            for part, values in parts.items():
+                if message_id in {
+                    str(value or "").strip() for value in values or []
+                }:
+                    matched = delivery
+                    matched_part = str(part)
+                    break
+            if matched:
+                break
+        if not matched:
+            conn.commit()
+            return {"matched": False}
+        handled = [
+            str(value or "").strip()
+            for value in flags.get("ali_vehicle_recommendation_handled_failures") or []
+            if str(value or "").strip()
+        ]
+        in_progress = [
+            str(value or "").strip()
+            for value in flags.get("ali_vehicle_recommendation_recovery_in_progress") or []
+            if str(value or "").strip()
+        ]
+        if message_id in handled or message_id in in_progress:
+            conn.commit()
+            return {
+                "matched": True,
+                "already_handled": True,
+                "part": matched_part,
+            }
+        if matched_part not in {"carousel", "carousel_retry"}:
+            conn.commit()
+            return {
+                "matched": True,
+                "already_handled": True,
+                "part": matched_part,
+            }
+        in_progress.append(message_id)
+        flags["ali_vehicle_recommendation_recovery_in_progress"] = in_progress[-20:]
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), phone),
+        )
+        conn.commit()
+        parts = matched.get("provider_parts") or {}
+        return {
+            "matched": True,
+            "already_handled": False,
+            "failed_message_id": message_id,
+            "part": matched_part,
+            "stage": "individual" if matched_part == "carousel_retry" else "retry",
+            "hash": str(matched.get("hash") or ""),
+            "snapshot": matched.get("snapshot") or {},
+            "account_id": str(matched.get("account_id") or ""),
+            "picker_present": bool(parts.get("picker") or parts.get("picker_fallback")),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def wa_complete_vehicle_recommendation_recovery(
+    phone: str,
+    recovery: dict,
+    result: dict,
+) -> bool:
+    """Persist recovery part IDs and release the transactional claim."""
+    failed_id = str((recovery or {}).get("failed_message_id") or "").strip()
+    state_hash = str((recovery or {}).get("hash") or "").strip()
+    if not failed_id or not re.fullmatch(r"[0-9a-f]{64}", state_hash):
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (phone,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        flags = json.loads(row[0] or "{}")
+        deliveries = flags.get("ali_vehicle_recommendation_deliveries") or []
+        delivery = next((
+            item for item in reversed(deliveries)
+            if isinstance(item, dict) and item.get("hash") == state_hash
+        ), None)
+        if not delivery:
+            conn.rollback()
+            return False
+        parts = delivery.get("provider_parts")
+        parts = dict(parts) if isinstance(parts, dict) else {}
+        result_parts = (result or {}).get("provider_parts")
+        result_parts = result_parts if isinstance(result_parts, dict) else {}
+        if (result or {}).get("success"):
+            for part, values in result_parts.items():
+                target = "carousel_retry" if (
+                    part == "carousel"
+                    and (result or {}).get("delivery") == "carousel_retry"
+                ) else part
+                normalized = [
+                    str(value or "").strip()
+                    for value in values or []
+                    if str(value or "").strip()
+                ][:10]
+                if normalized:
+                    parts[target] = normalized
+            delivery["provider_parts"] = parts
+            delivery["recovery_attempts"] = int(delivery.get("recovery_attempts") or 0) + 1
+            delivery["recovery_delivery"] = str((result or {}).get("delivery") or "")[:40]
+        handled = [
+            str(value or "").strip()
+            for value in flags.get("ali_vehicle_recommendation_handled_failures") or []
+            if str(value or "").strip()
+        ]
+        if failed_id not in handled:
+            handled.append(failed_id)
+        flags["ali_vehicle_recommendation_handled_failures"] = handled[-20:]
+        flags["ali_vehicle_recommendation_recovery_in_progress"] = [
+            str(value or "").strip()
+            for value in flags.get("ali_vehicle_recommendation_recovery_in_progress") or []
+            if str(value or "").strip() and str(value or "").strip() != failed_id
+        ][-20:]
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), phone),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _get_email_state_path() -> str:
     """Brief 171: resolve the email_thread_state.json path the email_poller uses."""
     # email_poller stores it at /app/config/email_thread_state.json inside the container.

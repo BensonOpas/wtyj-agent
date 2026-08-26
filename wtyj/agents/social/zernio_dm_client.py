@@ -16,6 +16,10 @@ from late import Late
 from shared import bm_logger
 
 
+_VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
+_MAX_VEHICLE_MEDIA_BYTES = 10 * 1024 * 1024
+
+
 def _get_client():
     """Create a Late/Zernio API client. Returns None if no API key."""
     api_key = os.environ.get("LATE_API_KEY", "")
@@ -595,14 +599,84 @@ def _response_message_id(response) -> str:
     ).strip()
 
 
-def _delivery_result(success: bool, delivery: str, *provider_ids: str) -> dict:
+def _delivery_result(
+    success: bool,
+    delivery: str,
+    *provider_ids: str,
+    provider_parts: dict[str, list[str]] | None = None,
+) -> dict:
     result = {"success": success, "delivery": delivery}
     normalized = list(dict.fromkeys(
         str(value or "").strip() for value in provider_ids if str(value or "").strip()
     ))
     if normalized:
         result["provider_message_ids"] = normalized
+    normalized_parts = {}
+    for part, values in (provider_parts or {}).items():
+        ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in values or []
+            if str(value or "").strip()
+        ))[:10]
+        if part in {"image", "carousel", "picker", "picker_fallback", "individual_images"} and ids:
+            normalized_parts[part] = ids
+    if normalized_parts:
+        result["provider_parts"] = normalized_parts
     return result
+
+
+def _preflight_vehicle_media(url: str) -> bool:
+    """Validate one server-owned Ali JPEG without following redirects."""
+    configured = str(
+        os.environ.get("ALI_QUOTE_API_BASE_URL") or "https://alicarrental.com"
+    ).rstrip("/")
+    expected = urllib.parse.urlparse(configured)
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if (
+        expected.scheme != "https"
+        or parsed.scheme != "https"
+        or parsed.netloc != expected.netloc
+        or not _VEHICLE_MEDIA_PATH.fullmatch(parsed.path)
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        return False
+    try:
+        response = http_requests.get(
+            url,
+            timeout=15,
+            allow_redirects=False,
+            stream=True,
+        )
+    except http_requests.RequestException:
+        return False
+    if response.status_code != 200:
+        return False
+    headers = getattr(response, "headers", {}) or {}
+    media_type = str(headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if media_type != "image/jpeg" or headers.get("Location"):
+        return False
+    try:
+        declared = int(headers.get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        return False
+    if declared < 0 or declared > _MAX_VEHICLE_MEDIA_BYTES:
+        return False
+    total = 0
+    iterator = getattr(response, "iter_content", None)
+    if callable(iterator):
+        chunks = iterator(chunk_size=64 * 1024)
+    else:
+        chunks = [getattr(response, "content", b"")]
+    try:
+        for chunk in chunks:
+            total += len(chunk or b"")
+            if total > _MAX_VEHICLE_MEDIA_BYTES:
+                return False
+    except http_requests.RequestException:
+        return False
+    return total > 0
 
 
 def _post_recommendation_message(
@@ -821,6 +895,132 @@ def send_dm_quote_confirmation(
     return {"success": False, "delivery": "confirmation_failed"}
 
 
+def _send_individual_vehicle_images(
+    request_url: str,
+    base_headers: dict,
+    account_id: str,
+    existing_messages: list[dict],
+    recommendation: dict,
+    *,
+    idempotency_suffix: str,
+) -> tuple[bool, list[str]]:
+    """Deliver every validated option image independently, without a picker."""
+    provider_ids = []
+    for index, option in enumerate(recommendation.get("options") or []):
+        media_url = str(option.get("whatsapp_image_url") or "")
+        if not _preflight_vehicle_media(media_url):
+            return False, provider_ids
+        caption = "\n".join(filter(None, [
+            str(option.get("name") or "").strip(),
+            str(option.get("category") or "").strip(),
+            f"USD ${str(option.get('daily_usd') or '').removesuffix('.00')}/day",
+        ]))
+        outcome, _status, _reconciled, provider_id = _send_recommendation_part(
+            request_url,
+            base_headers,
+            account_id,
+            existing_messages,
+            body={
+                "accountId": account_id,
+                "message": caption,
+                "attachmentUrl": media_url,
+                "attachmentType": "image",
+            },
+            idempotency_key=(
+                f"{recommendation['idempotency_key']}-{idempotency_suffix}-{index}"
+            ),
+            visible_text=caption,
+        )
+        if outcome != "sent":
+            return False, provider_ids
+        if provider_id:
+            provider_ids.append(provider_id)
+    return len(provider_ids) == len(recommendation.get("options") or []), provider_ids
+
+
+def recover_dm_vehicle_recommendation(
+    conversation_id: str,
+    account_id: str,
+    recovery: dict,
+    catalog: dict,
+) -> dict:
+    """Retry one failed carousel, then fall back to individual car images."""
+    from agents.social.ali_vehicle_recommendations import (
+        rebuild_vehicle_recommendation,
+    )
+
+    api_key = os.environ.get("LATE_API_KEY", "")
+    plan = rebuild_vehicle_recommendation(
+        recovery.get("snapshot") or {}, catalog,
+    )
+    stage = str(recovery.get("stage") or "retry")
+    if not api_key or not plan or plan.get("kind") != "carousel":
+        return {"success": False, "delivery": "invalid_recovery"}
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}"
+    )
+    request_url = f"{base_url}/messages"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    window_open, existing_messages = _recommendation_session_open(
+        base_url, headers, account_id,
+    )
+    if not window_open:
+        return {"success": False, "delivery": "window_closed"}
+    media_valid = all(
+        _preflight_vehicle_media(str(option.get("whatsapp_image_url") or ""))
+        for option in plan.get("options") or []
+    )
+    if stage == "retry" and media_valid:
+        outcome, status, _reconciled, provider_id = _send_recommendation_part(
+            request_url,
+            headers,
+            account_id,
+            existing_messages,
+            body={
+                "accountId": account_id,
+                "interactive": {
+                    "type": "carousel",
+                    "body": {"text": plan["text"]},
+                    "action": {"cards": plan["cards"]},
+                },
+            },
+            idempotency_key=f"{plan['idempotency_key']}-late-carousel-retry",
+            visible_text=plan["text"],
+        )
+        if outcome == "sent":
+            return _delivery_result(
+                True,
+                "carousel_retry",
+                provider_id,
+                provider_parts={"carousel": [provider_id]},
+            )
+        bm_logger.log(
+            "ali_vehicle_carousel_retry_failed",
+            recommendation_hash=str(plan.get("state_hash") or "")[:12],
+            status=status,
+        )
+    images_sent, image_ids = _send_individual_vehicle_images(
+        request_url,
+        headers,
+        account_id,
+        existing_messages,
+        plan,
+        idempotency_suffix="late-individual",
+    )
+    if images_sent:
+        return _delivery_result(
+            True,
+            "individual_images",
+            *image_ids,
+            provider_parts={"individual_images": image_ids},
+        )
+    return {"success": False, "delivery": "media_recovery_failed"}
+
+
 def send_dm_vehicle_recommendation(
     conversation_id: str,
     account_id: str,
@@ -954,15 +1154,45 @@ def send_dm_vehicle_recommendation(
         if kind == "picker" and len(options) > 1
         else text
     )
-    outcome, status, primary_reconciled, primary_provider_id = _send_recommendation_part(
-        request_url,
-        base_headers,
-        account_id,
-        existing_messages,
-        body=primary_body,
-        idempotency_key=f"{idempotency_key}-primary",
-        visible_text=primary_visible_text,
+    individual_provider_ids = []
+    primary_part = "picker" if kind == "picker" else kind
+    carousel_media_valid = (
+        kind != "carousel"
+        or all(
+            _preflight_vehicle_media(str(option.get("whatsapp_image_url") or ""))
+            for option in options
+        )
     )
+    if kind == "carousel" and not carousel_media_valid:
+        individual_sent, individual_provider_ids = _send_individual_vehicle_images(
+            request_url,
+            base_headers,
+            account_id,
+            existing_messages,
+            recommendation,
+            idempotency_suffix="preflight-individual",
+        )
+        outcome = "sent" if individual_sent else "rejected"
+        status = None
+        primary_reconciled = False
+        primary_provider_id = ""
+        primary_part = "individual_images"
+        bm_logger.log(
+            "ali_vehicle_carousel_preflight_failed",
+            option_count=len(options),
+            individual_fallback=individual_sent,
+            recommendation_hash=state_hash[:12],
+        )
+    else:
+        outcome, status, primary_reconciled, primary_provider_id = _send_recommendation_part(
+            request_url,
+            base_headers,
+            account_id,
+            existing_messages,
+            body=primary_body,
+            idempotency_key=f"{idempotency_key}-primary",
+            visible_text=primary_visible_text,
+        )
     if outcome == "sent":
         bm_logger.log(
             (
@@ -979,6 +1209,7 @@ def send_dm_vehicle_recommendation(
                 True,
                 "picker" if kind == "picker" else "image",
                 primary_provider_id,
+                provider_parts={primary_part: [primary_provider_id]},
             )
     else:
         if outcome == "ambiguous":
@@ -1017,6 +1248,7 @@ def send_dm_vehicle_recommendation(
                 True,
                 "picker_fallback" if kind == "picker" else "fallback",
                 fallback_provider_id,
+                provider_parts={"picker_fallback": [fallback_provider_id]},
             )
         bm_logger.log(
             "ali_vehicle_recommendation_failed",
@@ -1063,8 +1295,20 @@ def send_dm_vehicle_recommendation(
             option_count=len(options),
             recommendation_hash=state_hash[:12],
         )
+        primary_ids = (
+            individual_provider_ids
+            if primary_part == "individual_images"
+            else [primary_provider_id]
+        )
         return _delivery_result(
-            True, "carousel_picker", primary_provider_id, picker_provider_id,
+            True,
+            "individual_picker" if primary_part == "individual_images" else "carousel_picker",
+            *primary_ids,
+            picker_provider_id,
+            provider_parts={
+                primary_part: primary_ids,
+                "picker": [picker_provider_id],
+            },
         )
     if picker_outcome == "ambiguous":
         bm_logger.log(
@@ -1091,9 +1335,15 @@ def send_dm_vehicle_recommendation(
         )
         return _delivery_result(
             True,
-            "carousel_picker_fallback",
-            primary_provider_id,
+            "individual_picker_fallback"
+            if primary_part == "individual_images"
+            else "carousel_picker_fallback",
+            *(individual_provider_ids or [primary_provider_id]),
             fallback_provider_id,
+            provider_parts={
+                primary_part: individual_provider_ids or [primary_provider_id],
+                "picker_fallback": [fallback_provider_id],
+            },
         )
     bm_logger.log(
         "ali_vehicle_picker_failed",
