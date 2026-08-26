@@ -137,6 +137,60 @@ def test_incomplete_conversation_appears_once_with_aggregated_unread(quote_leads
     assert rows[0]["phone_raw"] == "WhatsApp conversation"
 
 
+def test_internal_zernio_id_is_never_masked_as_customer_phone(quote_leads):
+    conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
+    assert 9 <= len("".join(filter(str.isdigit, conversation_id))) <= 15
+    _state(conversation_id, {"customer_name": "Synthetic Customer"})
+    _message(
+        conversation_id,
+        "user",
+        "2026-08-26T01:10:00+00:00",
+        "Synthetic Customer",
+    )
+
+    row = workflow.list_quote_leads()[0]
+
+    assert row["conversation_id"] == conversation_id
+    assert row["phone_raw"] == "WhatsApp conversation"
+    assert row["phone_normalized"] == ""
+
+
+def test_provider_confirmed_phone_hydrates_masked_quote_lead():
+    conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
+    rows = [{
+        "conversation_id": conversation_id,
+        "phone_raw": "WhatsApp conversation",
+        "phone_normalized": "",
+    }]
+
+    result = workflow.hydrate_quote_lead_contact_identities(rows, {
+        conversation_id: {
+            "phone": "whatsapp:+351963618003",
+            "name": "Synthetic Customer",
+        },
+    })
+
+    assert result[0]["phone_raw"] == "WhatsApp ••••8003"
+    assert result[0]["phone_normalized"] == ""
+
+
+@pytest.mark.parametrize("provider_phone", ["", "unknown", "+123"])
+def test_missing_or_invalid_provider_phone_fails_closed(provider_phone):
+    conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
+    rows = [{
+        "conversation_id": conversation_id,
+        "phone_raw": "WhatsApp conversation",
+        "phone_normalized": "",
+    }]
+
+    result = workflow.hydrate_quote_lead_contact_identities(rows, {
+        conversation_id: {"phone": provider_phone},
+    })
+
+    assert result[0]["phone_raw"] == "WhatsApp conversation"
+    assert result[0]["phone_normalized"] == ""
+
+
 def test_three_distinct_conversations_produce_three_active_rows(quote_leads):
     for suffix in range(3):
         conversation_id = f"19100000000000000000001{suffix}"
@@ -206,12 +260,23 @@ def test_archived_blocked_and_resolved_conversations_are_excluded(quote_leads):
     assert workflow.list_quote_leads() == []
 
 
-def test_authenticated_api_filters_and_counts_from_same_rows(quote_leads):
+def test_authenticated_api_filters_counts_and_provider_identity(
+    quote_leads, monkeypatch,
+):
     incomplete = "191000000000000000000050"
     processing = "191000000000000000000051"
     _state(incomplete, {})
     _state(processing, REQUIRED, {"ali_quote_public_id": "api191"})
     _quote(processing, "api191", status="pdf_ready")
+    captured = []
+    monkeypatch.setattr(
+        api,
+        "resolve_zernio_conversation_contacts",
+        lambda conversation_ids: (
+            captured.extend(conversation_ids)
+            or {processing: {"phone": "+351963618003"}}
+        ),
+    )
     client = _client()
 
     unauthenticated = client.get("/dashboard/api/quote-leads")
@@ -232,6 +297,8 @@ def test_authenticated_api_filters_and_counts_from_same_rows(quote_leads):
     assert active.json()["counts"]["in_progress"] == 1
     assert len(filtered.json()["items"]) == 1
     assert filtered.json()["items"][0]["conversation_id"] == processing
+    assert filtered.json()["items"][0]["phone_raw"] == "WhatsApp ••••8003"
+    assert processing in captured
 
 
 def test_tenant_database_isolation_and_callback_endpoint_regression(

@@ -4481,6 +4481,13 @@ async def list_quote_leads_endpoint(response: Response, status: str = None):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if status is not None and status not in ali_quote_workflow.QUOTE_LEAD_STATUSES:
         raise HTTPException(status_code=422, detail="Invalid quote lead status")
+    contacts = await asyncio.to_thread(
+        resolve_zernio_conversation_contacts,
+        [item.get("conversation_id", "") for item in all_items],
+    )
+    all_items = ali_quote_workflow.hydrate_quote_lead_contact_identities(
+        all_items, contacts,
+    )
     items = (
         all_items if status in (None, "active")
         else [item for item in all_items if item["status"] == status]
