@@ -9,6 +9,7 @@ from agents.social import ali_quote_workflow as workflow
 
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
 ECONOMY_VEHICLE_ID = "40000000-0000-4000-8000-000000000001"
+CHILD_SEAT_ID = "c5b7e180-5eaa-4f5d-8a41-180000000001"
 
 
 def raw_config(automation=True):
@@ -48,7 +49,18 @@ def catalog():
                 "weeklyRate": {"currency": "USD", "amount": "245.00"},
             },
         ],
-        "extras": [],
+        "extras": [{
+            "id": CHILD_SEAT_ID,
+            "name": "Child seat",
+            "names": {
+                "en": "Child seat", "nl": "Kinderzitje",
+                "pap": "Stul pa mucha", "de": "Kindersitz",
+            },
+            "pricingUnit": "daily",
+            "billingBasis": "per_day",
+            "displayOrder": 10,
+            "price": {"currency": "USD", "amount": "5.00"},
+        }],
         "charges": [],
     }
 
@@ -96,6 +108,15 @@ def test_prompt_context_contains_names_and_rates_but_no_server_ids():
             ],
         },
     ]
+    assert context["supplements"] == [{
+        "name": "Child seat",
+        "names": {
+            "en": "Child seat", "nl": "Kinderzitje",
+            "pap": "Stul pa mucha", "de": "Kindersitz",
+        },
+        "price_usd": "5.00",
+        "billing_basis": "per_day",
+    }]
     assert CLASS_ID not in serialized
     assert ECONOMY_VEHICLE_ID not in serialized
 
@@ -121,9 +142,64 @@ def test_selection_is_resolved_only_against_the_published_catalog():
     assert "vehicle_class_id" not in rejected
 
 
+def test_supplement_names_resolve_to_server_owned_id_and_current_price_in_all_locales():
+    names = {
+        "en": "Child seat", "nl": "Kinderzitje",
+        "pap": "Stul pa mucha", "de": "Kindersitz",
+    }
+    for locale, name in names.items():
+        resolved = workflow.resolve_catalog_supplements({
+            "conversation_language": locale,
+            "supplements": [{"name": name, "quantity": 2}],
+        }, catalog())
+        assert resolved["supplements"] == [{
+            "id": CHILD_SEAT_ID,
+            "name": name,
+            "quantity": 2,
+            "billing_basis": "per_day",
+            "unit_price_usd": "5.00",
+        }]
+
+
+def test_supplement_quantity_is_bounded_and_duplicate_selection_is_rejected():
+    for quantity in (0, 21, -1):
+        try:
+            workflow.resolve_catalog_supplements({
+                "conversation_language": "en",
+                "supplements": [{"name": "Child seat", "quantity": quantity}],
+            }, catalog())
+        except workflow.AliQuoteError as exc:
+            assert exc.code == "invalid_supplement_quantity"
+        else:
+            raise AssertionError("invalid quantity should be rejected")
+
+    try:
+        workflow.resolve_catalog_supplements({
+            "conversation_language": "en",
+            "supplements": [
+                {"name": "Child seat", "quantity": 1},
+                {"name": "Child seat", "quantity": 1},
+            ],
+        }, catalog())
+    except workflow.AliQuoteError as exc:
+        assert exc.code == "duplicate_supplement_selection"
+    else:
+        raise AssertionError("duplicate supplement should be rejected")
+
+
+def test_marina_tool_accepts_catalog_name_and_quantity_but_no_supplement_id_or_price():
+    schema = marina_agent.MARINA_TOOL["input_schema"]["properties"]["fields"]["properties"]["supplements"]
+    item = schema["items"]
+    assert item["required"] == ["name", "quantity"]
+    assert set(item["properties"]) == {"name", "quantity"}
+    assert item["properties"]["quantity"]["minimum"] == 1
+    assert item["properties"]["quantity"]["maximum"] == 20
+    assert item["additionalProperties"] is False
+
+
 def test_ali_prompt_uses_live_catalog_and_forbids_contact_redirects(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
-    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
 
     prompt = marina_agent._build_ali_quote_block()
 
@@ -133,11 +209,15 @@ def test_ali_prompt_uses_live_catalog_and_forbids_contact_redirects(monkeypatch)
     assert CLASS_ID not in prompt
     assert "Never tell them to contact or" in prompt
     assert "Never populate vehicle_id, vehicle_class_id, or extra_ids" in prompt
+    assert "quantity 1" in prompt
+    assert '"price_usd": "5.00"' in prompt
+    assert "If quantity is genuinely ambiguous" in prompt
+    assert "never put an ID or price there" in prompt
 
 
 def test_ali_prompt_answers_known_prices_immediately_and_continues_intake(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
-    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
 
     prompt = marina_agent._build_ali_quote_block()
     normalized = " ".join(prompt.split())
@@ -157,7 +237,7 @@ def test_ali_prompt_answers_known_prices_immediately_and_continues_intake(monkey
 
 def test_ali_prompt_sets_official_quote_expectation_in_all_supported_languages(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
-    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
 
     prompt = marina_agent._build_ali_quote_block()
 
@@ -173,7 +253,7 @@ def test_ali_prompt_sets_official_quote_expectation_in_all_supported_languages(m
 
 def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
-    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
 
     prompt = marina_agent._build_ali_quote_block()
     normalized = " ".join(prompt.split())
@@ -199,7 +279,7 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
 
 def test_ali_prompt_keeps_recommendations_catalog_grounded_and_request_only(monkeypatch):
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
-    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
 
     prompt = marina_agent._build_ali_quote_block()
     normalized = " ".join(prompt.split())
@@ -280,6 +360,45 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     assert "wa.me" not in reply
     assert "@" not in reply
     assert fields["vehicle_class_id"] == CLASS_ID
+    assert flags["awaiting_quote_confirmation"] is True
+
+
+def test_complete_intake_includes_child_seat_and_refreshes_catalog_price(monkeypatch):
+    current = catalog()
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: current)
+    fields = {
+        "customer_name": "Synthetic Calvin",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-08",
+        "pickup_location": "Curaçao International Airport",
+        "return_location": "Curaçao International Airport",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+        "supplements": [{"name": "Child seat", "quantity": 2}],
+    }
+    flags = {}
+
+    first = workflow.handle_ali_quote_turn(
+        "synthetic-child-seat", "synthetic-account", "+351000000000",
+        "Please add two child seats.", fields, flags,
+        from_name="Synthetic Calvin", raw_config=raw_config(),
+    )
+    first_hash = flags["ali_summary_hash"]
+    assert "Child seat: 2 × USD 5.00 per rental day × 7 days = USD 70.00" in first
+    assert fields["supplements"][0]["id"] == CHILD_SEAT_ID
+
+    current = json.loads(json.dumps(current))
+    current["extras"][0]["price"]["amount"] = "6.00"
+    changed = workflow.handle_ali_quote_turn(
+        "synthetic-child-seat", "synthetic-account", "+351000000000",
+        "I also need the quote.", fields, flags,
+        from_name="Synthetic Calvin", raw_config=raw_config(),
+    )
+
+    assert "USD 6.00" in changed
+    assert "USD 84.00" in changed
+    assert flags["ali_summary_hash"] != first_hash
     assert flags["awaiting_quote_confirmation"] is True
 
 

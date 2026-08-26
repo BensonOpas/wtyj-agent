@@ -14,6 +14,7 @@ from agents.social.ali_quote_pdf import render_quote_pdf
 
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
 DEPOSIT_ID = "90000000-0000-4000-8000-000000000001"
+CHILD_SEAT_ID = "c5b7e180-5eaa-4f5d-8a41-180000000001"
 
 
 def raw_config(automation=True):
@@ -73,6 +74,34 @@ def pricing():
         "createdAt": created.isoformat().replace("+00:00", "Z"),
         "expiresAt": (created + timedelta(hours=72)).isoformat().replace("+00:00", "Z"),
     }
+
+
+def child_seat(locale="en", quantity=2):
+    names = {
+        "en": "Child seat", "nl": "Kinderzitje",
+        "pap": "Stul pa mucha", "de": "Kindersitz",
+    }
+    return {
+        "id": CHILD_SEAT_ID,
+        "name": names[locale],
+        "quantity": quantity,
+        "billing_basis": "per_day",
+        "unit_price_usd": "5.00",
+    }
+
+
+def pricing_with_child_seats():
+    value = pricing()
+    value["items"].insert(1, {
+        "code": "extra.per_day", "category": "extra",
+        "description": "Child seat", "quantity": 2, "refundable": False,
+        "billingBasis": "per_day", "rentalDays": 7,
+        "unitPrice": {"currency": "USD", "amount": "5.00"},
+        "total": {"currency": "USD", "amount": "70.00"},
+    })
+    value["rentalTotal"] = {"currency": "USD", "amount": "350.00"}
+    value["reservationDeposit"] = {"currency": "USD", "amount": "87.50"}
+    return value
 
 
 def configure_db(monkeypatch, tmp_path):
@@ -176,6 +205,56 @@ def test_duplicate_confirmation_creates_one_quote_and_ali_request_has_no_pii(mon
     assert set(request) == workflow.ALI_REQUEST_KEYS
     serialized = json.dumps(request).lower()
     assert not any(term in serialized for term in ("synthetic customer", "whatsapp", "location", "conversation", "phone", "email"))
+
+
+def test_child_seat_summary_and_no_pii_request_are_catalog_grounded_in_all_locales():
+    for locale in ("en", "nl", "pap", "de"):
+        selected = rental(locale)
+        selected["supplements"] = [child_seat(locale)]
+        selected.pop("extra_ids", None)
+        summary, _digest = workflow.normalized_summary(customer(), selected)
+        text = workflow._summary_text(summary)
+        assert child_seat(locale)["name"] in text
+        assert "2 × USD 5.00" in text
+        assert "7" in text
+        assert "USD 70.00" in text
+
+        request = workflow.build_ali_request(selected, DEPOSIT_ID)
+        assert request["extraSelections"] == [{"id": CHILD_SEAT_ID, "quantity": 2}]
+        serialized = json.dumps(request).lower()
+        assert "child seat" not in serialized
+        assert "synthetic" not in serialized
+
+
+def test_supplement_change_creates_replacement_quote_without_mutating_original(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    first_rental = rental()
+    first_rental["supplements"] = [child_seat(quantity=1)]
+    first_rental.pop("extra_ids", None)
+    _, first_hash = workflow.normalized_summary(customer(), first_rental)
+    first, created = workflow.create_confirmed_quote(
+        "replacement-conversation", "account-synthetic", customer(),
+        first_rental, first_hash, "yes", DEPOSIT_ID, raw_config=raw_config(),
+    )
+    assert created
+
+    changed_rental = rental()
+    changed_rental["supplements"] = [child_seat(quantity=2)]
+    changed_rental.pop("extra_ids", None)
+    _, changed_hash = workflow.normalized_summary(customer(), changed_rental)
+    replacement, replacement_created = workflow.create_confirmed_quote(
+        "replacement-conversation", "account-synthetic", customer(),
+        changed_rental, changed_hash, "yes", DEPOSIT_ID, raw_config=raw_config(),
+    )
+
+    assert replacement_created
+    assert replacement["public_id"] != first["public_id"]
+    assert json.loads(workflow.get_quote(first["public_id"])["ali_request_json"])["extraSelections"] == [
+        {"id": CHILD_SEAT_ID, "quantity": 1},
+    ]
+    assert json.loads(replacement["ali_request_json"])["extraSelections"] == [
+        {"id": CHILD_SEAT_ID, "quantity": 2},
+    ]
 
 
 def test_customer_delivery_delay_uses_persisted_confirmation(monkeypatch, tmp_path):
@@ -349,6 +428,27 @@ def test_pdf_is_one_page_in_all_locales_and_displays_exact_snapshot_totals(tmp_p
         assert "2026-09-08" not in text
 
 
+def test_pdf_itemizes_supplement_basis_unit_days_and_total_in_all_locales(tmp_path):
+    expected_basis = {
+        "en": "per rental day", "nl": "per huurdag",
+        "pap": "pa dia di huur", "de": "pro Miettag",
+    }
+    for locale in ("en", "nl", "pap", "de"):
+        selected_rental = rental(locale)
+        selected_rental["supplements"] = [child_seat(locale)]
+        path, _digest = render_quote_pdf(
+            f"supplement-{locale}", locale, customer(), selected_rental,
+            pricing_with_child_seats(), output_root=str(tmp_path),
+        )
+        reader = PdfReader(path)
+        assert len(reader.pages) == 1
+        text = reader.pages[0].extract_text()
+        assert child_seat(locale)["name"] in text
+        assert "USD 5.00" in text
+        assert expected_basis[locale] in text
+        assert "USD 70.00" in text
+
+
 def test_signed_download_rejects_tampering_and_expiry():
     secret = "synthetic-signing-secret"
     now = 1_800_000_000
@@ -378,6 +478,29 @@ def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
     assert captured["args"][3].startswith("https://unboks.example/api/public/ali-quote/")
     assert "4 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
     assert "T" not in captured["args"][2].split("Valid until:", 1)[1].split("\n", 1)[0]
+
+
+def test_customer_delivery_itemizes_supplement_and_keeps_deposit_separate(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://unboks.example")
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
+    monkeypatch.setattr(
+        delivery, "send_dm_reply_with_attachment",
+        lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}) or True,
+    )
+    quote = {
+        "public_id": "quote-public-id", "conversation_id": "conversation-synthetic",
+        "zernio_account_id": "account-synthetic", "locale": "en",
+        "quote_reference": pricing()["quoteReference"],
+        "pricing_json": json.dumps(pricing_with_child_seats()),
+        "customer_json": json.dumps(customer()),
+        "rental_json": json.dumps({**rental(), "supplements": [child_seat()]}),
+    }
+    assert delivery.send_customer_whatsapp(quote, "/private/quote.pdf")
+    text = captured["args"][2]
+    assert "Supplements:\nChild seat: 2 × USD 5.00 per rental day × 7 days = USD 70.00" in text
+    assert "Rental total: USD 350.00" in text
+    assert "Refundable security deposit: USD 150.00" in text
 
 
 def test_staff_email_attaches_identical_pdf_bytes(monkeypatch):

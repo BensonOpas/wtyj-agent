@@ -46,6 +46,12 @@ LABELS = {
         "return": "Return",
         "days": "Rental days",
         "charges": "Itemized charges",
+        "description": "Description",
+        "quantity": "Qty",
+        "total": "Total",
+        "per_day": "per rental day",
+        "per_rental": "per rental",
+        "days_suffix": "days",
         "rental_total": "Rental total",
         "deposit": "Refundable security deposit",
         "issued": "Issued",
@@ -64,6 +70,12 @@ LABELS = {
         "return": "Terugbrengen",
         "days": "Huurdagen",
         "charges": "Kostenoverzicht",
+        "description": "Omschrijving",
+        "quantity": "Aantal",
+        "total": "Totaal",
+        "per_day": "per huurdag",
+        "per_rental": "per huur",
+        "days_suffix": "dagen",
         "rental_total": "Huurbedrag",
         "deposit": "Terugbetaalbare borg",
         "issued": "Uitgegeven",
@@ -82,6 +94,12 @@ LABELS = {
         "return": "Devolvé",
         "days": "Dianan di huur",
         "charges": "Detaye di gastunan",
+        "description": "Deskripshon",
+        "quantity": "Kantidat",
+        "total": "Total",
+        "per_day": "pa dia di huur",
+        "per_rental": "pa huur",
+        "days_suffix": "dia",
         "rental_total": "Total di huur",
         "deposit": "Depósito reembolsabel",
         "issued": "Emití",
@@ -100,6 +118,12 @@ LABELS = {
         "return": "Rückgabe",
         "days": "Miettage",
         "charges": "Kostenübersicht",
+        "description": "Beschreibung",
+        "quantity": "Menge",
+        "total": "Gesamt",
+        "per_day": "pro Miettag",
+        "per_rental": "pro Miete",
+        "days_suffix": "Tage",
         "rental_total": "Mietpreis",
         "deposit": "Rückerstattbare Kaution",
         "issued": "Ausgestellt",
@@ -130,6 +154,22 @@ def _money(value) -> str:
     if not re.fullmatch(r"(?:0|[1-9]\d*)\.\d{2}", amount):
         raise ValueError("PDF received an invalid money amount")
     return f"USD {amount}"
+
+
+def _item_description(item: dict, labels: dict, supplement_name: str = "") -> str:
+    description = _safe(supplement_name or item.get("description"), 110)
+    if item.get("category") != "extra":
+        return description
+    basis = item.get("billingBasis")
+    if basis not in {"per_day", "per_rental"}:
+        raise ValueError("PDF supplement requires a billing basis")
+    detail = f"{_money(item.get('unitPrice'))} {labels[basis]}"
+    if basis == "per_day":
+        days = item.get("rentalDays")
+        if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+            raise ValueError("PDF daily supplement requires rental days")
+        detail += f" × {days} {labels['days_suffix']}"
+    return f"{description}<br/><font color='#486581' size='8'>{_safe(detail, 90)}</font>"
 
 
 def render_quote_pdf(
@@ -205,14 +245,29 @@ def render_quote_pdf(
     details.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#C9D9E5")), ("BACKGROUND", (0, 0), (-1, -1), PALE), ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)]))
     story.extend([details, Spacer(1, 6 * mm), Paragraph(_safe(labels["charges"]), ParagraphStyle("AliSection", parent=body, fontName="Helvetica-Bold", fontSize=12, spaceAfter=2 * mm))])
 
-    item_rows = [[Paragraph("Description", table_header), Paragraph("Qty", table_header), Paragraph("Total", table_header)]]
+    item_rows = [[
+        Paragraph(_safe(labels["description"]), table_header),
+        Paragraph(_safe(labels["quantity"]), table_header),
+        Paragraph(_safe(labels["total"]), table_header),
+    ]]
+    supplement_names = [
+        str(item.get("name") or "")
+        for item in rental.get("supplements") or []
+        if isinstance(item, dict)
+    ]
+    supplement_index = 0
     for item in pricing.get("items") or []:
+        supplement_name = ""
+        if item.get("category") == "extra":
+            if supplement_index < len(supplement_names):
+                supplement_name = supplement_names[supplement_index]
+            supplement_index += 1
         item_rows.append([
-            Paragraph(_safe(item.get("description"), 110), body),
+            Paragraph(_item_description(item, labels, supplement_name), body),
             Paragraph(_safe(item.get("quantity"), 5), body),
             Paragraph(_safe(_money(item.get("total"))), ParagraphStyle("AliMoney", parent=body, alignment=TA_RIGHT)),
         ])
-    items = Table(item_rows, colWidths=[123 * mm, 15 * mm, 38 * mm], repeatRows=1)
+    items = Table(item_rows, colWidths=[118 * mm, 20 * mm, 38 * mm], repeatRows=1)
     items.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), NAVY), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8E4EC")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm), ("TOPPADDING", (0, 0), (-1, -1), 2.2 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2 * mm)]))
     story.extend([items, Spacer(1, 5 * mm)])
 

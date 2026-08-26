@@ -138,6 +138,22 @@ MARINA_TOOL = {
                     "passenger_count": {"type": "integer", "description": "Ali only and optional when the customer has not selected a vehicle."},
                     "luggage_count": {"type": "integer", "description": "Ali only and optional when the customer has not selected a vehicle."},
                     "extra_ids": {"type": "array", "items": {"type": "string"}, "description": "Ali only: Python-owned published extra UUIDs. Never invent values."},
+                    "supplements": {
+                        "type": "array",
+                        "description": (
+                            "Ali only: complete current supplement selections explicitly requested by the customer. "
+                            "Use only an exact published catalog name and a whole-number quantity; never include IDs or prices."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "quantity": {"type": "integer", "minimum": 1, "maximum": 20},
+                            },
+                            "required": ["name", "quantity"],
+                            "additionalProperties": False,
+                        },
+                    },
                     "conversation_language": {"type": "string", "enum": ["en", "nl", "pap", "de"], "description": "Ali only: current conversation language."},
                     "order_total": {"type": "number"},
                     "currency": {"type": "string"},
@@ -827,7 +843,7 @@ unavailable and the team will continue with them here.
 """
     try:
         catalog = ali_quote_workflow.catalog_prompt_context(
-            ali_quote_workflow.get_intake_catalog()
+            ali_quote_workflow.get_intake_catalog(force_refresh=True)
         )
     except ali_quote_workflow.AliQuoteError:
         return """
@@ -883,6 +899,13 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   vehicle_name to one exact vehicle name. If the choice is ambiguous, ask one question.
 - Never populate vehicle_id, vehicle_class_id, or extra_ids. Python resolves server-owned
   IDs against the same catalog after your one response.
+- Supplements are listed in the current catalog above. If the customer asks about one,
+  answer immediately with its exact current USD price and billing basis, then keep the
+  intake moving naturally. Put the complete current selection in `supplements` using only
+  the exact catalog name and quantity; never put an ID or price there. Singular wording
+  such as "a child seat" means quantity 1: say you will add one so the customer can correct
+  it. If quantity is genuinely ambiguous, ask one concise quantity question and do not add
+  it yet. Never invent an unlisted supplement, price, discount, or availability guarantee.
 - If the customer asks the price, answer that question immediately before asking for the
   next missing rental detail. Do not make them finish the intake to hear a published rate.
 - Use only the current catalog above. When their named vehicle or category has exactly one
@@ -898,8 +921,8 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   German: "Der endgültige Preis steht im offiziellen Angebot, das ich vorbereite und Ihnen hier in wenigen Minuten sende."
 - Then continue the one-question-at-a-time intake normally, using facts already supplied and
   asking only the most important missing detail. Do not repeat a known question or detail.
-- Do not calculate rental totals or add extras, deposits, discounts, duration rates, dynamic
-  prices, exceptions, or estimates. Do not claim availability or a confirmed booking. The word
+- Do not calculate rental totals, deposits, discounts, duration rates, dynamic prices,
+  exceptions, or estimates. Do not claim availability or a confirmed booking. The word
   "available" and its translations are forbidden during discovery unless you are explicitly
   saying that availability still requires staff confirmation. The
   deterministic official quote remains authoritative for totals, extras, deposits, rental
