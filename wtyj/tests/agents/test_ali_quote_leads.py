@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agents.social import ali_quote_workflow as workflow
+from agents.social import ali_reservation_workflow as reservation_workflow
 from dashboard import api
 from shared import state_registry
 
@@ -231,6 +232,38 @@ def test_escalation_and_processing_use_canonical_status_precedence(quote_leads):
 
     assert rows[escalated]["status"] == "needs_an_answer"
     assert rows[processing]["status"] == "in_progress"
+
+
+def test_quote_lead_exposes_latest_post_quote_reservation_state(quote_leads):
+    conversation_id = "191000000000000000000039"
+    _state(conversation_id, REQUIRED)
+    reservation_workflow.ensure_schema()
+    now = workflow._iso(datetime.now(timezone.utc))
+    conn = workflow._connection()
+    conn.execute(
+        "INSERT INTO ali_reservations ("
+        "public_id, tenant_slug, quote_public_id, quote_snapshot_id, quote_reference, "
+        "conversation_id, zernio_account_id, status, availability_status, "
+        "identity_status, agreement_status, payment_status, revision, created_at, updated_at"
+        ") VALUES (?, 'ali-car-rental', ?, ?, ?, ?, 'account', "
+        "'requirements_pending', 'approved', 'verified', 'sent_external', "
+        "'awaiting_manual_verification', 3, ?, ?)",
+        (
+            "reservation-191", "quote-191", "snapshot-191", "ALI-QUOTE-191",
+            conversation_id, now, now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    row = workflow.list_quote_leads()[0]
+
+    assert row["post_quote_status"] == "requirements_pending"
+    assert row["availability_status"] == "approved"
+    assert row["payment_status"] == "awaiting_manual_verification"
+    assert row["reservation_public_id"] == "reservation-191"
+    assert row["reservation_revision"] == 3
+    assert row["next_action"] == "Complete the required rental checks."
 
 
 def test_archived_blocked_and_resolved_conversations_are_excluded(quote_leads):

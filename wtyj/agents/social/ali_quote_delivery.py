@@ -15,17 +15,26 @@ from agents.social.ali_quote_presentation import (
     format_curacao_datetime,
     format_rental_period,
 )
-from agents.social.ali_quote_workflow import DeliveryAdapters
-from agents.social.zernio_dm_client import send_dm_reply, send_dm_reply_with_attachment
+from agents.social.ali_quote_workflow import DeliveryAdapters, get_quote, update_quote
+from agents.social.ali_reservation_workflow import (
+    AliReservationError,
+    build_post_quote_control,
+    record_confirmation_delivery,
+)
+from agents.social.zernio_dm_client import (
+    send_dm_post_quote_actions,
+    send_dm_reply,
+    send_dm_reply_with_attachment,
+)
 from shared import config_loader, state_registry
 
 CURACAO = ZoneInfo("America/Curacao")
 
 MESSAGES = {
-    "en": ("Your official Ali Car Rental quote is ready.", "Reply here to accept it or ask me a question."),
-    "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Reageer hier om te accepteren of iets te vragen."),
-    "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Kontestá aki pa aseptá of hasi un pregunta."),
-    "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Antworten Sie hier, um anzunehmen oder etwas zu fragen."),
+    "en": ("Your official Ali Car Rental quote is ready.", "Choose what you'd like to do below."),
+    "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Kies hieronder wat je wilt doen."),
+    "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Skoh abou kiko bo ke hasi."),
+    "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Wählen Sie unten aus, wie Sie fortfahren möchten."),
 }
 
 VALID_UNTIL = {
@@ -157,6 +166,7 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
     return send_dm_reply_with_attachment(
         quote["conversation_id"], quote["zernio_account_id"], text,
         url, attachment_type="file", attachment_name=filename,
+        idempotency_key=f"ali-quote-pdf-{quote['public_id']}",
     )
 
 
@@ -172,6 +182,96 @@ def send_customer_brand_image(quote: dict, _image_path: str) -> bool:
         quote["conversation_id"], quote["zernio_account_id"], "",
         url, attachment_type="image",
     )
+
+
+def send_customer_post_quote_actions(quote: dict) -> bool:
+    """Send and persist the signed choices only after confirmed PDF delivery."""
+    try:
+        control = build_post_quote_control(quote)
+    except AliReservationError:
+        return False
+    result = send_dm_post_quote_actions(
+        quote["conversation_id"],
+        quote["zernio_account_id"],
+        control,
+    )
+    provider_ids = [
+        str(item)
+        for item in result.get("provider_message_ids") or []
+        if str(item).strip()
+    ][:10]
+    if provider_ids:
+        update_quote(
+            quote["public_id"],
+            post_quote_control_provider_ids_json=json.dumps(provider_ids),
+        )
+    return bool(result.get("success"))
+
+
+def send_customer_reservation_confirmation(reservation: dict) -> dict:
+    """Deliver a confirmed informational PDF without rolling back confirmation."""
+    if (
+        not isinstance(reservation, dict)
+        or reservation.get("status") != "confirmed"
+        or not reservation.get("confirmation_pdf_path")
+    ):
+        raise AliReservationError("reservation_not_confirmed", 409)
+    if reservation.get("confirmation_delivery_status") in {"accepted", "confirmed"}:
+        return reservation
+    base_url = os.environ.get("UNBOKS_PUBLIC_BASE_URL", "")
+    secret = os.environ.get("ALI_QUOTE_DOWNLOAD_SECRET", "")
+    if not base_url.startswith("https://") or not secret:
+        ok = False
+    else:
+        url = build_signed_url(
+            base_url,
+            reservation["public_id"],
+            secret,
+            asset="confirmation",
+        )
+        reference = str(reservation.get("confirmation_reference") or "")
+        filename = f"Ali-Car-Rental-Reservation-{reference}.pdf"
+        text = (
+            "Your Ali Car Rental reservation is confirmed.\n\n"
+            f"Reservation: {reference}\n"
+            "Your confirmation document is attached."
+        )
+        ok = send_dm_reply_with_attachment(
+            reservation["conversation_id"],
+            reservation["zernio_account_id"],
+            text,
+            url,
+            attachment_type="file",
+            attachment_name=filename,
+            idempotency_key=(
+                f"ali-reservation-confirmation-{reservation['public_id']}"
+            ),
+        )
+    updated = record_confirmation_delivery(
+        reservation["public_id"],
+        "accepted" if ok else "failed",
+        actor="confirmation_delivery",
+        error_code=None if ok else "customer_confirmation_delivery_failed",
+    )
+    if not ok:
+        quote = get_quote(str(reservation.get("quote_public_id") or "")) or {}
+        try:
+            customer = json.loads(quote.get("customer_json") or "{}")
+        except (TypeError, ValueError):
+            customer = {}
+        state_registry.create_pending_notification(
+            "escalation",
+            "whatsapp",
+            reservation["conversation_id"],
+            customer.get("name") or "Ali reservation customer",
+            "[ALI CONFIRMATION DELIVERY FAILED]",
+            (
+                "The reservation is confirmed, but its customer confirmation "
+                "document was not delivered. Open the conversation in Unboks."
+            ),
+            mode="hard",
+        )
+    return updated
 
 
 def send_operator_alerts(quote: dict) -> dict:
@@ -216,4 +316,5 @@ def production_adapters() -> DeliveryAdapters:
         send_staff_email=send_staff_email,
         send_operator_alerts=send_operator_alerts,
         escalate=escalate,
+        send_post_quote_actions=send_customer_post_quote_actions,
     )

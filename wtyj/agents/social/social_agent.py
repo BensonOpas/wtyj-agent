@@ -60,6 +60,15 @@ from agents.social.ali_vehicle_selection import (
     resolve_typed_vehicle_selection,
     resolve_vehicle_selection,
 )
+from agents.social.ali_reservation_workflow import (
+    AliReservationError,
+    get_quote_context as get_ali_quote_context,
+    get_reservation_context as get_ali_reservation_context,
+    handle_exact_reserve as handle_ali_exact_reserve,
+    handle_post_quote_action as handle_ali_post_quote_action,
+    is_exact_reserve_fallback as is_ali_exact_reserve_fallback,
+    resolve_post_quote_interaction as resolve_ali_post_quote_interaction,
+)
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
@@ -1023,6 +1032,111 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
 
+    # Brief 290: post-quote controls are signed workflow commands. Resolve and
+    # apply them before Claude so a tap can never be mistaken for prose or a
+    # generic confirmation. The exact RESERVE token is the sole text fallback.
+    _ali_account_id = str(message.get("_zernio_account_id") or "").strip()
+    _ali_post_quote_result = None
+    if channel == "whatsapp" and ali_quote_tenant_enabled() and _ali_account_id:
+        try:
+            _ali_post_quote_interaction = resolve_ali_post_quote_interaction(
+                message.get("_zernio_interactive_type"),
+                message.get("_zernio_interactive_id"),
+                phone,
+                _ali_account_id,
+            )
+            if _ali_post_quote_interaction is not None:
+                _ali_post_quote_result = handle_ali_post_quote_action(
+                    _ali_post_quote_interaction,
+                    action_id=str(
+                        message.get("_ali_action_id")
+                        or message.get("message_id")
+                        or ""
+                    ),
+                )
+                if not _ali_post_quote_result.get("text"):
+                    _post_status = str(
+                        _ali_post_quote_result.get("status") or "invalid"
+                    )
+                    _post_action = str(
+                        _ali_post_quote_result.get("action") or ""
+                    )
+                    if _post_status == "question":
+                        _ali_post_quote_result["text"] = (
+                            "What would you like to know about your quote?"
+                        )
+                    elif _post_status == "stale":
+                        _ali_post_quote_result["text"] = (
+                            "That choice is no longer current. Please use the choices "
+                            "under your latest quote."
+                        )
+                    else:
+                        _ali_post_quote_result["text"] = (
+                            "I couldn't verify that choice. Please use the choices "
+                            "under your latest quote."
+                        )
+            elif is_ali_exact_reserve_fallback(text):
+                _ali_post_quote_result = handle_ali_exact_reserve(
+                    phone,
+                    _ali_account_id,
+                    action_id=str(
+                        message.get("_ali_action_id")
+                        or message.get("message_id")
+                        or ""
+                    ),
+                )
+        except AliReservationError as exc:
+            bm_logger.log(
+                "ali_post_quote_action_rejected",
+                code=exc.code,
+                conversation_id=phone[:20],
+            )
+            _ali_post_quote_result = {
+                "text": (
+                    "I couldn't find a current quote for that choice. "
+                    "I can help you prepare a new quote here."
+                ),
+                "status": "rejected",
+                "action": None,
+                "reservation": None,
+            }
+
+    if _ali_post_quote_result is not None:
+        _reservation = _ali_post_quote_result.get("reservation")
+        if (
+            _ali_post_quote_result.get("status") == "created"
+            and isinstance(_reservation, dict)
+        ):
+            state_registry.create_pending_notification(
+                "escalation",
+                "whatsapp",
+                phone,
+                fields.get("customer_name") or from_name or "Ali quote customer",
+                "[ALI AVAILABILITY CHECK]",
+                (
+                    "A customer requested a vehicle availability check. "
+                    f"Reservation: {_reservation.get('public_id') or ''}. "
+                    "Review it in the Ali reservation queue."
+                ),
+                mode="soft",
+            )
+        _reply_text = str(_ali_post_quote_result.get("text") or "")
+        if _reply_text:
+            _reply_times.append(int(time.time()))
+            flags["reply_times"] = _reply_times
+        state_registry.wa_save_booking_state(
+            phone, fields, flags, completed_bookings,
+        )
+        if include_media:
+            return {
+                "text": _reply_text,
+                "media": None,
+                "vehicle_recommendation": None,
+                "quote_confirmation": None,
+                "ali_turn_commit": None,
+            }
+        return _reply_text
+
     # Brief 285: quote confirmation postbacks are signed protocol events, not
     # prose. Resolve them before Claude and reload all quote facts from this
     # tenant's persisted state; the interaction payload carries no rental data.
@@ -1374,6 +1488,22 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     agent_flags = dict(flags)
     for _rk in ("awaiting_relay", "relay_token", "relay_question", "reply_times"):
         agent_flags.pop(_rk, None)
+    if channel == "whatsapp" and ali_quote_tenant_enabled() and _ali_account_id:
+        try:
+            _quote_context = get_ali_quote_context(phone, _ali_account_id)
+            _reservation_context = get_ali_reservation_context(
+                phone, _ali_account_id,
+            )
+            if _quote_context:
+                agent_flags["_ali_quote_context"] = _quote_context
+            if _reservation_context:
+                agent_flags["_ali_reservation_context"] = _reservation_context
+        except AliReservationError as exc:
+            bm_logger.log(
+                "ali_post_quote_context_unavailable",
+                code=exc.code,
+                conversation_id=phone[:20],
+            )
 
     # Returning customer — booking ref detection
     # Brief 161: require at least one digit so all-caps service words like

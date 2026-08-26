@@ -927,6 +927,169 @@ def send_dm_quote_confirmation(
     return {"success": False, "delivery": "confirmation_failed"}
 
 
+def send_dm_post_quote_actions(
+    conversation_id: str,
+    account_id: str,
+    actions: dict,
+) -> dict:
+    """Send one replay-safe, provider-confirmed Ali post-quote action control."""
+    actions = actions if isinstance(actions, dict) else {}
+    api_key = os.environ.get("LATE_API_KEY", "")
+    state_hash = str(actions.get("state_hash") or "")
+    idempotency_key = str(actions.get("idempotency_key") or "")
+    text = str(actions.get("text") or "")
+    buttons = actions.get("buttons")
+    allowed_title_sets = {
+        ("Reserve this car", "Change something", "Ask a question"),
+        ("Reserveer auto", "Iets wijzigen", "Stel een vraag"),
+        ("Reserva e outo aki", "Kambia algu", "Hasi pregunta"),
+        ("Auto reservieren", "Etwas ändern", "Frage stellen"),
+    }
+    button_titles = tuple(
+        str(button.get("title") or "")
+        for button in buttons or []
+        if isinstance(button, dict)
+    )
+    valid_buttons = (
+        isinstance(buttons, list)
+        and len(buttons) == 3
+        and button_titles in allowed_title_sets
+        and all(
+            isinstance(button, dict)
+            and button.get("type") == "postback"
+            and str(button.get("payload") or "").startswith(
+                "ali_post_quote:v1:"
+            )
+            for button in buttons
+        )
+        and len({str(button.get("payload") or "") for button in buttons}) == 3
+    )
+    if (
+        not api_key
+        or not str(conversation_id or "").strip()
+        or not str(account_id or "").strip()
+        or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
+        or not idempotency_key
+        or not text
+        or not valid_buttons
+    ):
+        return {"success": False, "delivery": "invalid"}
+
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}"
+    )
+    request_url = f"{base_url}/messages"
+    base_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    window_open, existing_messages = _recommendation_session_open(
+        base_url, base_headers, account_id,
+    )
+    if not window_open:
+        bm_logger.log(
+            "ali_post_quote_actions_window_closed",
+            actions_hash=state_hash[:12],
+        )
+        return {"success": False, "delivery": "window_closed"}
+
+    current_messages = _messages_after_latest_incoming(existing_messages)
+    visible = _recommendation_visible_message(current_messages, text)
+    if visible:
+        visible_status = str(
+            visible.get("status") or visible.get("deliveryStatus") or ""
+        ).lower()
+        visible_id = str(
+            visible.get("id") or visible.get("messageId") or ""
+        ).strip()
+        if visible_id and visible_status in {"sent", "delivered", "read"}:
+            bm_logger.log(
+                "ali_post_quote_actions_reconciled",
+                actions_hash=state_hash[:12],
+                status=visible_status,
+            )
+            return _delivery_result(True, "interactive", visible_id)
+        if visible_status in {"failed", "rejected", "undeliverable"}:
+            bm_logger.log(
+                "ali_post_quote_actions_failed",
+                actions_hash=state_hash[:12],
+                status=visible_status,
+            )
+            return {"success": False, "delivery": "failed"}
+
+    headers = dict(base_headers)
+    headers["Idempotency-Key"] = f"{idempotency_key}-interactive"
+    outcome, status, provider_message_id = _post_recommendation_message(
+        request_url,
+        headers,
+        {
+            "accountId": account_id,
+            "message": text,
+            "buttons": buttons,
+        },
+    )
+    if outcome == "sent" and provider_message_id:
+        outcome = _confirm_recommendation_status(
+            request_url,
+            base_headers,
+            account_id,
+            provider_message_id,
+        )
+    if outcome == "sent" and provider_message_id:
+        bm_logger.log(
+            "ali_post_quote_actions_sent",
+            actions_hash=state_hash[:12],
+        )
+        return _delivery_result(True, "interactive", provider_message_id)
+
+    # A successful HTTP response without a message id, or a transport timeout,
+    # is not proof of WhatsApp delivery. Reconcile once by the visible body and
+    # still require a terminal provider status before reporting success.
+    try:
+        reconcile_response = http_requests.get(
+            request_url,
+            headers=base_headers,
+            params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+            timeout=15,
+        )
+    except http_requests.RequestException:
+        reconcile_response = None
+    if (
+        reconcile_response is not None
+        and 200 <= reconcile_response.status_code < 300
+    ):
+        reconcile_messages = _messages_after_latest_incoming(
+            _payload_messages(_response_json(reconcile_response))
+        )
+        visible = _recommendation_visible_message(reconcile_messages, text)
+        if visible:
+            visible_status = str(
+                visible.get("status") or visible.get("deliveryStatus") or ""
+            ).lower()
+            visible_id = str(
+                visible.get("id") or visible.get("messageId") or ""
+            ).strip()
+            if visible_id and visible_status in {"sent", "delivered", "read"}:
+                bm_logger.log(
+                    "ali_post_quote_actions_reconciled",
+                    actions_hash=state_hash[:12],
+                    status=visible_status,
+                )
+                return _delivery_result(True, "interactive", visible_id)
+            if visible_status in {"failed", "rejected", "undeliverable"}:
+                outcome = "rejected"
+
+    delivery = "failed" if outcome == "rejected" else "ambiguous"
+    bm_logger.log(
+        "ali_post_quote_actions_failed",
+        actions_hash=state_hash[:12],
+        delivery=delivery,
+        status=status,
+    )
+    return {"success": False, "delivery": delivery}
+
+
 def _send_individual_vehicle_images(
     request_url: str,
     base_headers: dict,
@@ -1654,6 +1817,143 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
         }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+
+            base_url = url.removesuffix("/messages")
+            window_open, existing_messages = _recommendation_session_open(
+                base_url, headers, account_id,
+            )
+            if not window_open:
+                bm_logger.log(
+                    "zernio_dm_attachment_window_closed",
+                    conversation_id=conversation_id[:20],
+                    attachment_type=attachment_type,
+                )
+                return False
+
+            def matching_attachment(messages: list[dict]) -> dict | None:
+                for item in messages:
+                    if (
+                        str(item.get("direction") or "").lower() != "outgoing"
+                        or _recommendation_message_text(item) != body["message"]
+                    ):
+                        continue
+                    urls = {
+                        str(item.get("attachmentUrl") or "").strip(),
+                        str(item.get("attachment_url") or "").strip(),
+                    }
+                    attachments = item.get("attachments")
+                    if isinstance(attachments, list):
+                        for attachment in attachments:
+                            if not isinstance(attachment, dict):
+                                continue
+                            urls.add(str(
+                                attachment.get("url")
+                                or attachment.get("publicUrl")
+                                or attachment.get("attachmentUrl")
+                                or ""
+                            ).strip())
+                    if body["attachmentUrl"] in urls:
+                        return item
+                return None
+
+            def confirmed_attachment(item: dict | None) -> str:
+                if not item:
+                    return "missing"
+                provider_id = str(
+                    item.get("id") or item.get("messageId") or ""
+                ).strip()
+                status = str(
+                    item.get("status") or item.get("deliveryStatus") or ""
+                ).lower()
+                if provider_id and status in {"sent", "delivered", "read"}:
+                    return "sent"
+                if status in {"failed", "rejected", "undeliverable"}:
+                    return "rejected"
+                if provider_id:
+                    return _confirm_recommendation_status(
+                        url, headers, account_id, provider_id,
+                    )
+                return "ambiguous"
+
+            existing = matching_attachment(existing_messages)
+            if existing:
+                existing_outcome = confirmed_attachment(existing)
+                if existing_outcome == "sent":
+                    bm_logger.log(
+                        "zernio_dm_attachment_reconciled",
+                        conversation_id=conversation_id[:20],
+                        attachment_type=attachment_type,
+                    )
+                    return True
+                bm_logger.log(
+                    "zernio_dm_attachment_delivery_unconfirmed",
+                    conversation_id=conversation_id[:20],
+                    attachment_type=attachment_type,
+                    outcome=existing_outcome,
+                )
+                return False
+
+            outcome, status, provider_id = _post_recommendation_message(
+                url, headers, body,
+            )
+            if outcome == "sent" and provider_id:
+                outcome = _confirm_recommendation_status(
+                    url, headers, account_id, provider_id,
+                )
+            if outcome == "sent" and provider_id:
+                bm_logger.log(
+                    "zernio_dm_attachment_delivery_confirmed",
+                    conversation_id=conversation_id[:20],
+                    attachment_type=attachment_type,
+                )
+                return True
+            if outcome == "rejected":
+                bm_logger.log(
+                    "zernio_dm_attachment_delivery_failed",
+                    conversation_id=conversation_id[:20],
+                    attachment_type=attachment_type,
+                    status=status,
+                )
+                return False
+
+            try:
+                reconcile_response = http_requests.get(
+                    url,
+                    headers=headers,
+                    params={
+                        "accountId": account_id,
+                        "limit": 20,
+                        "sortOrder": "desc",
+                    },
+                    timeout=15,
+                )
+            except http_requests.RequestException:
+                reconcile_response = None
+            reconciled = None
+            if (
+                reconcile_response is not None
+                and 200 <= reconcile_response.status_code < 300
+            ):
+                reconciled = matching_attachment(
+                    _payload_messages(_response_json(reconcile_response))
+                )
+            reconcile_outcome = confirmed_attachment(reconciled)
+            if reconcile_outcome == "sent":
+                bm_logger.log(
+                    "zernio_dm_attachment_reconciled",
+                    conversation_id=conversation_id[:20],
+                    attachment_type=attachment_type,
+                )
+                return True
+            bm_logger.log(
+                "zernio_dm_attachment_delivery_unconfirmed",
+                conversation_id=conversation_id[:20],
+                attachment_type=attachment_type,
+                outcome=reconcile_outcome,
+                status=status,
+            )
+            return False
+
         resp = http_requests.post(
             url,
             headers=headers,

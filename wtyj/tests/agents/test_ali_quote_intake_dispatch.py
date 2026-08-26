@@ -1123,9 +1123,7 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                 else:
                     expected_kind = "summary"
                     expected_phase = "SUMMARY_PRESENTED"
-            elif intent == "confirm_summary" and phase in {
-                "QUOTE_PROCESSING", "QUOTED",
-            }:
+            elif intent == "confirm_summary" and phase == "QUOTE_PROCESSING":
                 expected_kind = "quote_preparing"
                 expected_phase = "QUOTE_PROCESSING"
             else:
