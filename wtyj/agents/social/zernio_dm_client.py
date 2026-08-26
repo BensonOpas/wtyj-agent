@@ -713,9 +713,13 @@ def _confirm_recommendation_status(
     headers: dict,
     account_id: str,
     provider_message_id: str,
+    require_delivered: bool = False,
 ) -> str:
     """Return sent, rejected, or ambiguous for an accepted provider message."""
-    terminal_success = {"sent", "delivered", "read"}
+    terminal_success = (
+        {"delivered", "read"}
+        if require_delivered else {"sent", "delivered", "read"}
+    )
     terminal_failure = {"failed", "rejected", "undeliverable"}
     for attempt in range(8):
         if attempt:
@@ -761,6 +765,7 @@ def _send_recommendation_part(
     idempotency_key: str,
     visible_text: str,
     reconcile_after_latest_incoming: bool = False,
+    require_delivered: bool = False,
 ) -> tuple[str, int | None, bool, str]:
     """Send or reconcile one idempotent visible part of a discovery bundle."""
     reconciliation_messages = (
@@ -771,7 +776,25 @@ def _send_recommendation_part(
         reconciliation_messages, visible_text,
     )
     if visible:
-        return "sent", None, True, str(visible.get("id") or visible.get("messageId") or "")
+        visible_id = str(visible.get("id") or visible.get("messageId") or "")
+        visible_status = str(
+            visible.get("status") or visible.get("deliveryStatus") or ""
+        ).lower()
+        if require_delivered and visible_status in {
+            "failed", "rejected", "undeliverable",
+        }:
+            return "rejected", None, True, visible_id
+        if require_delivered and visible_status == "sent" and visible_id:
+            confirmed = _confirm_recommendation_status(
+                request_url,
+                base_headers,
+                account_id,
+                visible_id,
+                require_delivered=True,
+            )
+            if confirmed != "sent":
+                return confirmed, None, True, visible_id
+        return "sent", None, True, visible_id
     headers = dict(base_headers)
     headers["Idempotency-Key"] = idempotency_key
     outcome, status, provider_message_id = _post_recommendation_message(
@@ -781,7 +804,11 @@ def _send_recommendation_part(
     )
     if outcome == "sent" and provider_message_id:
         outcome = _confirm_recommendation_status(
-            request_url, base_headers, account_id, provider_message_id,
+            request_url,
+            base_headers,
+            account_id,
+            provider_message_id,
+            require_delivered=require_delivered,
         )
     if outcome == "sent":
         return outcome, status, False, provider_message_id
@@ -939,6 +966,7 @@ def _send_individual_vehicle_images(
                 f"{recommendation['idempotency_key']}-{idempotency_suffix}-{index}"
             ),
             visible_text=caption,
+            require_delivered=True,
         )
         if outcome != "sent":
             return False, provider_ids
@@ -1201,6 +1229,7 @@ def send_dm_vehicle_recommendation(
             body=primary_body,
             idempotency_key=f"{idempotency_key}-primary",
             visible_text=primary_visible_text,
+            require_delivered=(kind == "carousel"),
         )
     if outcome == "sent":
         bm_logger.log(

@@ -455,6 +455,50 @@ def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch):
     }
 
 
+def test_picker_waits_for_provider_delivered_carousel(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(zernio_dm_client.time, "sleep", lambda _seconds: None)
+    plan = _carousel_plan()
+    events = []
+    carousel_statuses = iter(["sent", "sent", "delivered"])
+
+    def fake_get(*_args, **_kwargs):
+        if "session" not in events:
+            events.append("session")
+            return _Response(200, {"messages": [_incoming()]})
+        if "post:carousel" in events and "post:list" not in events:
+            status = next(carousel_statuses)
+            events.append(f"carousel:{status}")
+            return _Response(200, {"messages": [{
+                "id": "carousel-id",
+                "direction": "outgoing",
+                "deliveryStatus": status,
+            }]})
+        events.append("picker:sent")
+        return _Response(200, {"messages": [{
+            "id": "picker-id",
+            "direction": "outgoing",
+            "deliveryStatus": "sent",
+        }]})
+
+    def fake_post(url, headers, json, timeout):
+        del url, headers, timeout
+        kind = json["interactive"]["type"]
+        events.append(f"post:{kind}")
+        provider_id = "carousel-id" if kind == "carousel" else "picker-id"
+        return _Response(201, {"id": provider_id})
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", fake_get)
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result["success"] is True
+    assert events.index("carousel:delivered") < events.index("post:list")
+
+
 def test_closed_session_attempts_no_interactive_or_free_text(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     posts = []
@@ -1096,7 +1140,7 @@ def test_carousel_provider_parts_track_images_and_picker_separately(monkeypatch)
     gets = iter([
         _Response(200, {"messages": [_incoming()]}),
         _Response(200, {"messages": [{
-            "id": "provider-carousel-1", "direction": "outgoing", "status": "sent",
+            "id": "provider-carousel-1", "direction": "outgoing", "status": "delivered",
         }]}),
         _Response(200, {"messages": [{
             "id": "provider-picker-1", "direction": "outgoing", "status": "sent",
@@ -1240,8 +1284,8 @@ def test_failed_preflight_skips_carousel_and_sends_images_plus_one_picker(monkey
     )
     gets = iter([
         _Response(200, {"messages": [_incoming()]}),
-        _Response(200, {"messages": [{"id": "image-1", "status": "sent"}]}),
-        _Response(200, {"messages": [{"id": "image-2", "status": "sent"}]}),
+        _Response(200, {"messages": [{"id": "image-1", "status": "delivered"}]}),
+        _Response(200, {"messages": [{"id": "image-2", "status": "delivered"}]}),
         _Response(200, {"messages": [{"id": "picker-1", "status": "sent"}]}),
     ])
     posts = []
@@ -1306,8 +1350,8 @@ def test_late_retry_then_individual_fallback_never_resends_picker(monkeypatch):
 
     individual_gets = iter([
         _Response(200, {"messages": [_incoming()]}),
-        _Response(200, {"messages": [{"id": "individual-1", "status": "sent"}]}),
-        _Response(200, {"messages": [{"id": "individual-2", "status": "sent"}]}),
+        _Response(200, {"messages": [{"id": "individual-1", "status": "delivered"}]}),
+        _Response(200, {"messages": [{"id": "individual-2", "status": "delivered"}]}),
     ])
     individual_posts = []
     individual_ids = iter(["individual-1", "individual-2"])
