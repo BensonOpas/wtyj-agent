@@ -659,7 +659,11 @@ def test_generic_change_request_asks_clarification_without_old_summary(monkeypat
 
     assert reply == "What would you like me to change?"
     assert "Just checking" not in reply
-    assert saved["fields"] == fields
+    assert {
+        key: saved["fields"].get(key) for key in fields
+    } == fields
+    assert saved["fields"]["vehicle_catalog_class_name"] == "Economy"
+    assert saved["fields"]["vehicle_daily_rate_usd"] == "35.00"
     assert saved["flags"]["ali_summary_hash"] == "old-hash"
 
 
@@ -1021,6 +1025,49 @@ def test_malformed_picker_never_changes_vehicle_or_calls_model(
     delivered = state_registry.wa_get_booking_state(phone)
     assert "ali_summary_hash" not in delivered["flags"]
     assert "awaiting_quote_confirmation" not in delivered["flags"]
+
+
+def test_stale_picker_tap_returns_fresh_current_picker_without_model_call(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-206-stale-picker-recovery"
+    fields = _stored_fields()
+    calls = []
+    result = {
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "should not run", "requires_human": False, "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **kwargs: calls.append(kwargs) or result,
+    )
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_last_recommendation_ids": [YARIS_VEHICLE_ID, SUV_VEHICLE_ID],
+        "ali_summary_hash": "current-summary",
+        "awaiting_quote_confirmation": True,
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "",
+        "from_name": "Synthetic Customer",
+        "message_id": "stale-picker-action-1",
+        "_zernio_interactive_type": "list_reply",
+        "_zernio_interactive_id": vehicle_selection_payload("inactive-vehicle"),
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert calls == []
+    assert response["vehicle_recommendation"]["kind"] == "picker"
+    assert [
+        option["id"] for option in response["vehicle_recommendation"]["options"]
+    ] == [YARIS_VEHICLE_ID, SUV_VEHICLE_ID]
+    assert response["ali_turn_commit"]["phase"] == "DISCOVERY"
+    assert saved["fields"]["vehicle_id"] == ECONOMY_VEHICLE_ID
+    assert saved["flags"]["ali_summary_hash"] == "current-summary"
 
 
 def test_typed_exact_choice_matches_picker_and_later_price_does_not_repeat_image(

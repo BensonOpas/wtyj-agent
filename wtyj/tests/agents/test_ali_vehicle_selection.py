@@ -20,6 +20,7 @@ def _catalog():
             "id": "vehicle-1",
             "name": "Toyota Yaris or similar",
             "classId": "compact",
+            "dailyRate": {"currency": "USD", "amount": "45.00"},
         }],
     }
 
@@ -35,6 +36,10 @@ def test_native_picker_selection_resolves_canonical_catalog_fields(interactive_t
         "vehicle_name": "Toyota Yaris or similar",
         "vehicle_class_id": "compact",
         "vehicle_class_name": "Compact Car",
+        "vehicle_catalog_class_id": "compact",
+        "vehicle_catalog_class_name": "Compact Car",
+        "vehicle_daily_rate_usd": "45.00",
+        "vehicle_rate_currency": "USD",
     }
 
 
@@ -58,6 +63,7 @@ def test_unrelated_interactive_reply_is_ignored():
                 "name": "Toyota Yaris or similar",
                 "classId": "compact",
                 "active": False,
+                "dailyRate": {"currency": "USD", "amount": "45.00"},
             }],
         },
     ],

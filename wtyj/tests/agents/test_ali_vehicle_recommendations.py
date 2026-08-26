@@ -96,18 +96,20 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
 
 
 @pytest.mark.parametrize(
-    ("locale", "capacity_label", "cta"),
+    ("locale", "capacity_label", "cta", "picker_text", "picker_button"),
     [
-        ("en", "seats", "View car"),
-        ("nl", "zitplaatsen", "Bekijk auto"),
-        ("pap", "lugá", "Mira outo"),
-        ("de", "Sitzplätze", "Auto ansehen"),
+        ("en", "seats", "Car details", "Choose your car below.", "Choose a car"),
+        ("nl", "zitplaatsen", "Autodetails", "Kies hieronder je auto.", "Kies een auto"),
+        ("pap", "lugá", "Detayenan di outo", "Skoge bo outo aki bou.", "Skoge un outo"),
+        ("de", "Sitzplätze", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto auswählen"),
     ],
 )
 def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     locale,
     capacity_label,
     cta,
+    picker_text,
+    picker_button,
 ):
     plan = recommendations.build_vehicle_recommendation(
         _action(
@@ -138,6 +140,15 @@ def test_curated_carousel_is_two_to_five_suitable_localized_cards(
         for card in plan["cards"]
     )
     assert all(card["type"] == "cta_url" for card in plan["cards"])
+    assert plan["picker"]["text"] == picker_text
+    assert plan["picker"]["button"] == picker_button
+    assert all(
+        "choose" not in card["action"]["parameters"]["display_text"].casefold()
+        and "kies" not in card["action"]["parameters"]["display_text"].casefold()
+        and "skoge" not in card["action"]["parameters"]["display_text"].casefold()
+        and "wähl" not in card["action"]["parameters"]["display_text"].casefold()
+        for card in plan["cards"]
+    )
     assert plan["text"].count(_action("curated", ["x", "y"], locale)["availability_note"]) == 1
 
 
@@ -221,8 +232,76 @@ def test_curated_four_carousel_options_have_matching_native_picker_rows():
     assert [row["id"] for row in rows] == [
         option["selection_id"] for option in plan["options"]
     ]
-    assert rows[-1]["description"].startswith("Economy · Manual")
+    assert rows[-1]["description"] == "Economy · 4 seats · USD 30/day"
     assert plan["picker"]["button"] == "Choose a car"
+
+
+def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
+    catalog = _catalog()
+    catalog["vehicles"].extend([
+        _vehicle(5, "Volkswagen Up or similar", "economy", 4, "30.00"),
+        _vehicle(6, "Suzuki Swift or similar", "compact", 5, "50.00"),
+    ])
+    names = [
+        "Kia Picanto or similar",
+        "Toyota Yaris or similar",
+        "Kia Seltos or similar",
+        "Volkswagen Up or similar",
+        "Suzuki Swift or similar",
+    ]
+
+    plan = recommendations.build_vehicle_recommendation(
+        _action("curated", names),
+        catalog,
+        {"conversation_language": "en", "passenger_count": 4},
+        {},
+        "Here are the best matches for your trip.",
+    )
+
+    rows = plan["picker"]["sections"][0]["rows"]
+    assert [option["name"] for option in plan["options"]] == names
+    assert [row["id"] for row in rows] == [
+        option["selection_id"] for option in plan["options"]
+    ]
+    assert [row["title"] for row in rows] == names
+    assert all("seats" in row["description"] for row in rows)
+    assert all("USD " in row["description"] for row in rows)
+    assert plan["picker"]["fallback_text"].splitlines()[1:] == [
+        f"{index}. {name}" for index, name in enumerate(names, start=1)
+    ]
+
+
+def test_invalid_selection_recovery_revalidates_last_current_catalog_branch():
+    catalog = _catalog()
+    catalog["vehicles"][0]["active"] = False
+    plan = recommendations.build_vehicle_picker_recovery(
+        catalog,
+        {"conversation_language": "en"},
+        {
+            "ali_last_recommendation_ids": [
+                "vehicle-1", "unknown-vehicle", "vehicle-3", "vehicle-2",
+            ]
+        },
+        "That option is no longer valid. Choose from these current cars.",
+        turn_id="stale-action-1",
+    )
+
+    assert plan["kind"] == "picker"
+    assert [option["id"] for option in plan["options"]] == [
+        "vehicle-3", "vehicle-2",
+    ]
+    assert [row["id"] for row in plan["picker"]["sections"][0]["rows"]] == [
+        option["selection_id"] for option in plan["options"]
+    ]
+
+
+def test_invalid_selection_recovery_never_invents_an_unoffered_branch():
+    assert recommendations.build_vehicle_picker_recovery(
+        _catalog(),
+        {"conversation_language": "en"},
+        {"ali_last_recommendation_ids": ["cross-tenant-vehicle"]},
+        "Choose a current car.",
+    ) is None
 
 
 def test_vehicle_selection_payload_round_trip_is_bounded_and_fail_closed():
@@ -447,7 +526,10 @@ def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatc
     assert result == {"success": True, "delivery": "fallback"}
     assert len(posts) == 2
     assert "interactive" in posts[0]["json"]
-    assert posts[1]["json"] == {"accountId": "account-1", "message": plan["text"]}
+    assert posts[1]["json"] == {
+        "accountId": "account-1",
+        "message": plan["picker"]["fallback_text"],
+    }
     assert posts[1]["headers"]["Idempotency-Key"] == (
         f"{plan['idempotency_key']}-fallback"
     )
@@ -599,6 +681,80 @@ def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
     assert posts[2]["headers"]["Idempotency-Key"] == (
         f"{plan['idempotency_key']}-picker-fallback"
     )
+
+
+def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = recommendations.build_vehicle_picker_recovery(
+        _catalog(),
+        {"conversation_language": "en"},
+        {"ali_last_recommendation_ids": ["vehicle-2", "vehicle-3"]},
+        "That option is no longer valid. Choose from these current cars.",
+        turn_id="stale-action-2",
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [_incoming()]}),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json}) or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "picker"}
+    assert len(posts) == 1
+    assert posts[0]["json"]["interactive"]["type"] == "list"
+    assert posts[0]["json"]["interactive"]["action"]["sections"] == (
+        plan["picker"]["sections"]
+    )
+    assert posts[0]["headers"]["Idempotency-Key"] == (
+        f"{plan['idempotency_key']}-primary"
+    )
+
+
+def test_recovery_picker_provider_failure_uses_numbered_text_once(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = recommendations.build_vehicle_picker_recovery(
+        _catalog(),
+        {"conversation_language": "en"},
+        {"ali_last_recommendation_ids": ["vehicle-2", "vehicle-3"]},
+        "That option is no longer valid. Choose from these current cars.",
+        turn_id="stale-action-3",
+    )
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [_incoming()]}),
+    ])
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "get", lambda *args, **kwargs: next(gets)
+    )
+
+    def fake_post(url, headers, json, timeout):
+        posts.append({"headers": headers, "json": json})
+        return _Response(400 if len(posts) == 1 else 201)
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "picker_fallback"}
+    assert len(posts) == 2
+    assert posts[1]["json"] == {
+        "accountId": "account-1",
+        "message": plan["picker"]["fallback_text"],
+    }
 
 
 def test_state_delivery_marker_is_atomic_and_bounded(monkeypatch, tmp_path):

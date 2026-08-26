@@ -545,7 +545,7 @@ def send_dm_vehicle_recommendation(
     account_id: str,
     recommendation: dict,
 ) -> dict:
-    """Send one replay-safe Ali image or native media carousel.
+    """Send one replay-safe Ali image, carousel bundle, or recovery picker.
 
     A failed interactive send falls back to the same Claude-generated text.
     No free-form message is attempted when WhatsApp's service window is closed.
@@ -558,19 +558,21 @@ def send_dm_vehicle_recommendation(
     options = recommendation.get("options") or []
     if (
         not api_key
-        or kind not in {"image", "carousel"}
+        or kind not in {"image", "carousel", "picker"}
         or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
         or not idempotency_key
         or not text
         or not isinstance(options, list)
     ):
         return {"success": False, "delivery": "invalid"}
+    if kind == "picker" and not 1 <= len(options) <= 5:
+        return {"success": False, "delivery": "invalid"}
     buttons = recommendation.get("buttons") or []
     if (
-        kind == "image"
+        kind in {"image", "picker"}
+        and len(options) == 1
         and (
-            len(options) != 1
-            or not isinstance(buttons, list)
+            not isinstance(buttons, list)
             or len(buttons) != 1
             or not isinstance(buttons[0], dict)
             or buttons[0].get("type") != "postback"
@@ -581,7 +583,7 @@ def send_dm_vehicle_recommendation(
         return {"success": False, "delivery": "invalid"}
     cards = recommendation.get("cards") or []
     picker = recommendation.get("picker") or {}
-    if kind == "carousel":
+    if kind in {"carousel", "picker"} and len(options) > 1:
         sections = picker.get("sections") if isinstance(picker, dict) else None
         rows = (
             sections[0].get("rows")
@@ -591,11 +593,12 @@ def send_dm_vehicle_recommendation(
             else None
         )
         if (
-            not isinstance(cards, list)
-            or not 2 <= len(cards) <= 5
-            or len(options) != len(cards)
+            not 2 <= len(options) <= 5
+            or (kind == "carousel" and (
+                not isinstance(cards, list) or len(options) != len(cards)
+            ))
             or not isinstance(rows, list)
-            or len(rows) != len(cards)
+            or len(rows) != len(options)
             or [row.get("id") for row in rows if isinstance(row, dict)]
             != [option.get("selection_id") for option in options]
             or not str(picker.get("text") or "")
@@ -633,7 +636,7 @@ def send_dm_vehicle_recommendation(
             "attachmentType": "image",
             "buttons": buttons,
         }
-    else:
+    elif kind == "carousel":
         primary_body = {
             "accountId": account_id,
             "interactive": {
@@ -642,6 +645,29 @@ def send_dm_vehicle_recommendation(
                 "action": {"cards": cards},
             },
         }
+    elif len(options) == 1:
+        primary_body = {
+            "accountId": account_id,
+            "message": text,
+            "buttons": buttons,
+        }
+    else:
+        primary_body = {
+            "accountId": account_id,
+            "interactive": {
+                "type": "list",
+                "body": {"text": str(picker["text"])},
+                "action": {
+                    "button": str(picker["button"]),
+                    "sections": picker["sections"],
+                },
+            },
+        }
+    primary_visible_text = (
+        str(picker["text"])
+        if kind == "picker" and len(options) > 1
+        else text
+    )
     outcome, status, primary_reconciled = _send_recommendation_part(
         request_url,
         base_headers,
@@ -649,7 +675,7 @@ def send_dm_vehicle_recommendation(
         existing_messages,
         body=primary_body,
         idempotency_key=f"{idempotency_key}-primary",
-        visible_text=text,
+        visible_text=primary_visible_text,
     )
     if outcome == "sent":
         bm_logger.log(
@@ -662,8 +688,11 @@ def send_dm_vehicle_recommendation(
             option_count=len(options),
             recommendation_hash=state_hash[:12],
         )
-        if kind == "image":
-            return {"success": True, "delivery": "image"}
+        if kind in {"image", "picker"}:
+            return {
+                "success": True,
+                "delivery": "picker" if kind == "picker" else "image",
+            }
     else:
         if outcome == "ambiguous":
             bm_logger.log(
@@ -674,12 +703,21 @@ def send_dm_vehicle_recommendation(
             )
             return {"success": False, "delivery": "ambiguous"}
 
+        fallback_text = text
+        if kind == "carousel":
+            fallback_text = str(picker.get("fallback_text") or text)
+        elif kind == "picker":
+            fallback_text = str(
+                recommendation.get("fallback_text")
+                or picker.get("fallback_text")
+                or text
+            )
         fallback_headers = dict(base_headers)
         fallback_headers["Idempotency-Key"] = f"{idempotency_key}-fallback"
         fallback_outcome, fallback_status = _post_recommendation_message(
             request_url,
             fallback_headers,
-            {"accountId": account_id, "message": text},
+            {"accountId": account_id, "message": fallback_text},
         )
         if fallback_outcome == "sent":
             bm_logger.log(
@@ -688,7 +726,10 @@ def send_dm_vehicle_recommendation(
                 primary_status=status,
                 recommendation_hash=state_hash[:12],
             )
-            return {"success": True, "delivery": "fallback"}
+            return {
+                "success": True,
+                "delivery": "picker_fallback" if kind == "picker" else "fallback",
+            }
         bm_logger.log(
             "ali_vehicle_recommendation_failed",
             mode=kind,

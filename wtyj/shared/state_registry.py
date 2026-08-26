@@ -1888,7 +1888,7 @@ def wa_mark_vehicle_recommendation_delivered(
         return False
     if delivery not in {
         "image", "carousel", "fallback", "carousel_picker",
-        "carousel_picker_fallback",
+        "carousel_picker_fallback", "picker", "picker_fallback",
     }:
         return False
     normalized_vehicle_ids = []
