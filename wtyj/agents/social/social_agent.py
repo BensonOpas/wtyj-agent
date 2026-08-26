@@ -25,6 +25,7 @@ from agents.marina import payment_stub
 from agents.marina import sheets_writer
 from agents.social.ali_quote_workflow import (
     apply_latest_rental_change,
+    apply_recommendation_selection_context,
     fail_closed_turn_plan,
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
@@ -1375,6 +1376,30 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 fields[k] = v
             elif v == "" and k in fields:
                 del fields[k]
+        if (
+            _ali_change_configured
+            and isinstance(result.get("ali_vehicle_recommendation"), dict)
+        ):
+            try:
+                changed_state, _ali_change_outcome, _ali_change_fields = (
+                    apply_recommendation_selection_context(
+                        fields,
+                        result["ali_vehicle_recommendation"],
+                        get_ali_intake_catalog(),
+                    )
+                )
+            except Exception:
+                changed_state = dict(fields)
+                _ali_change_outcome = "clarify"
+                _ali_change_fields = ()
+            if _ali_change_outcome == "changed":
+                fields.clear()
+                fields.update(changed_state)
+                invalidate_active_quote_summary(flags)
+            log_rental_change_decision(
+                _ali_change_outcome,
+                _ali_change_fields,
+            )
 
     # Callback-follow-up tenants persist one evolving, tenant-local request.
     # The normal booking fields remain untouched so this capability is isolated
