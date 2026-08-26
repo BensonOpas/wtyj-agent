@@ -821,9 +821,10 @@ def test_delivered_question_preserves_summary_for_following_confirmation(monkeyp
     assert state["flags"]["ali_presented_summary_hash"] == initial.summary_hash
     assert state["flags"]["awaiting_quote_confirmation"] is True
     bare_yes = workflow.plan_ali_quote_turn(
-        phone, "synthetic-account", "+351000000000", "yes",
+        phone, "synthetic-account", "+351000000000", "Yes\nHow much",
         state["fields"], state["flags"], "Your quote is on its way.",
-        raw_config=raw_config(), primary_intent="confirm_summary",
+        # The deterministic fallback must outrank a wrong model intent label.
+        raw_config=raw_config(), primary_intent="ask_question",
         processor=lambda _public_id: None,
         supplied_action_id="3" * 64,
     )

@@ -2196,6 +2196,13 @@ def plan_ali_quote_turn(
     else:
         intent = structured_intent
 
+    # The deterministic contextual confirmation contract outranks a model
+    # intent label.  This is essential for the plain-text safety net: exact
+    # `SEND QUOTE`, batched `Yes\nHow much`, and the other approved phrases
+    # must reach the current-summary gate even if the single model call labels
+    # the turn as a question or general intake.
+    if confirmation_decision(message_text)[0]:
+        intent = "confirm_summary"
     if recommendation_requested:
         intent = "request_recommendation"
     if change_outcome in {"changed", "clarify", "unchanged"} and intent == "confirm_summary":
