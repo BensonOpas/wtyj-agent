@@ -584,6 +584,17 @@ def test_explicit_suv_picture_request_overrides_model_continue_intake(
         "requires_human": False,
         "flags": {},
         "ali_primary_intent": "continue_intake",
+        # The live model also returned an incompatible broad list. The exact
+        # customer class request must constrain media to the chosen class.
+        "ali_vehicle_recommendation": {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Picanto 2024 or similar",
+                "Kia Seltos or similar",
+            ],
+            "availability_note": "Final availability needs confirmation.",
+            "cta_label": "View car",
+        },
     }
     test_catalog = correction_catalog()
     test_catalog["vehicleClasses"][2]["name"] = "SUV"
