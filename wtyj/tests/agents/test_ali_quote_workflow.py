@@ -162,7 +162,8 @@ def test_workflow_is_strictly_ali_tenant_scoped_and_master_switched():
 
 def test_confirmation_variants_and_corrections_change_the_summary_hash():
     accepted = (
-        "yes", "yes it does", "yes, it does look right", "That’s correct.",
+        "yes", "yes it does", "yes, it does look right", "Yes, it looks good",
+        "That’s correct.",
         "Everything looks right.", "All good.", "Go ahead.",
         "ja dat klopt", "alles ziet er goed uit", "ga maar door",
         "si tur kos ta bon", "esaki ta korekto", "por sigui",

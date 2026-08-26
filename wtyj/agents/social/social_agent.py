@@ -26,6 +26,7 @@ from agents.marina import sheets_writer
 from agents.social.ali_quote_workflow import (
     apply_latest_rental_change,
     apply_recommendation_selection_context,
+    confirmation_decision,
     fail_closed_turn_plan,
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
@@ -1425,8 +1426,46 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     new_fields = result.get("fields", {}) or {}
     _ali_change_outcome = "not_applicable"
     _ali_change_fields = ()
-    _ali_change_action = result.get("ali_rental_change")
     _ali_change_configured = ali_quote_tenant_configured()
+    _ali_structured_primary_intent = str(
+        result.get("ali_primary_intent") or ""
+    ).strip().lower()
+    _ali_pure_confirmation = (
+        _ali_change_configured
+        and confirmation_decision(text)[0]
+    )
+    # A deterministic pure affirmative contains no correction details. Do not
+    # let opportunistic model extraction mutate the provider-delivered draft.
+    _ali_change_action = (
+        None if _ali_pure_confirmation else result.get("ali_rental_change")
+    )
+    _ali_summary_anchor_active = bool(
+        flags.get("ali_phase") == "SUMMARY_PRESENTED"
+        or (
+            flags.get("awaiting_quote_confirmation")
+            and (
+                flags.get("ali_presented_summary_hash")
+                or flags.get("ali_summary_hash")
+            )
+        )
+    )
+    _ali_quote_merge_keys = {
+        "customer_name", "first_name", "surnames", "rental_start", "rental_end", "pickup_location",
+        "return_location", "vehicle_id", "vehicle_name", "vehicle_class_id",
+        "vehicle_class_name", "driver_age", "passenger_count", "luggage_count",
+        "vehicle_catalog_class_id", "vehicle_catalog_class_name",
+        "vehicle_daily_rate_usd", "vehicle_rate_currency",
+        "supplements", "extra_ids", "comments", "special_requests",
+        "conversation_language",
+    }
+    _ali_protect_quote_fields = (
+        _ali_pure_confirmation
+        or (
+            _ali_summary_anchor_active
+            and _ali_structured_primary_intent == "ask_question"
+            and not isinstance(_ali_change_action, dict)
+        )
+    )
     _ali_explicit_class_this_turn = None
     if tenant_hard_rules.is_consulta_despertares():
         # A concise answer such as "15:30" may be unambiguous only because
@@ -1491,16 +1530,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             invalidate_active_quote_summary(flags)
         # Merge only non-quote fields. Quote fields are exclusively owned by
         # the validated newest-change action on correction turns.
-        _quote_merge_keys = {
-            "customer_name", "rental_start", "rental_end", "pickup_location",
-            "return_location", "vehicle_id", "vehicle_name", "vehicle_class_id",
-            "vehicle_class_name", "driver_age", "passenger_count", "luggage_count",
-            "vehicle_catalog_class_id", "vehicle_catalog_class_name",
-            "vehicle_daily_rate_usd", "vehicle_rate_currency",
-            "supplements", "extra_ids", "comments", "special_requests",
-        }
         for k, v in new_fields.items():
-            if k in _quote_merge_keys:
+            if k in _ali_quote_merge_keys:
                 continue
             if v is not None and v != "":
                 fields[k] = v
@@ -1509,12 +1540,15 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         log_rental_change_decision(_ali_change_outcome, _ali_change_fields)
     else:
         for k, v in new_fields.items():
+            if _ali_protect_quote_fields and k in _ali_quote_merge_keys:
+                continue
             if v is not None and v != "":
                 fields[k] = v
             elif v == "" and k in fields:
                 del fields[k]
         if (
             _ali_change_configured
+            and not _ali_pure_confirmation
             and isinstance(result.get("ali_vehicle_recommendation"), dict)
         ):
             try:
@@ -1672,7 +1706,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_turn_plan = None
     recommendation_action = (
         None
-        if _ali_selected_this_turn or _ali_explicit_class_this_turn
+        if (
+            _ali_selected_this_turn
+            or _ali_explicit_class_this_turn
+            or _ali_pure_confirmation
+        )
         else result.get("ali_vehicle_recommendation")
     )
     media_first_status = "not_evaluated"
@@ -1735,9 +1773,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 reason=media_first_reason[:80],
             )
     _ali_effective_primary_intent = (
-        "continue_intake"
-        if _ali_selected_this_turn
-        else media_first_intent or result.get("ali_primary_intent")
+        "confirm_summary"
+        if _ali_pure_confirmation and not _ali_selected_this_turn
+        else (
+            "continue_intake"
+            if _ali_selected_this_turn
+            else media_first_intent or result.get("ali_primary_intent")
+        )
     )
     recommendation_requested = (
         isinstance(recommendation_action, dict)
