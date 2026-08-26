@@ -632,6 +632,7 @@ def _preflight_vehicle_media(url: str) -> bool:
     ).rstrip("/")
     expected = urllib.parse.urlparse(configured)
     parsed = urllib.parse.urlparse(str(url or ""))
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     if (
         expected.scheme != "https"
         or parsed.scheme != "https"
@@ -640,6 +641,9 @@ def _preflight_vehicle_media(url: str) -> bool:
         or parsed.username
         or parsed.password
         or parsed.fragment
+        or set(query) != {"v"}
+        or len(query.get("v") or []) != 1
+        or not str(query["v"][0]).isdigit()
     ):
         return False
     try:
@@ -905,11 +909,16 @@ def _send_individual_vehicle_images(
     idempotency_suffix: str,
 ) -> tuple[bool, list[str]]:
     """Deliver every validated option image independently, without a picker."""
+    options = recommendation.get("options") or []
+    if not options or not all(
+        _preflight_vehicle_media(str(option.get("whatsapp_image_url") or ""))
+        for option in options
+        if isinstance(option, dict)
+    ):
+        return False, []
     provider_ids = []
-    for index, option in enumerate(recommendation.get("options") or []):
+    for index, option in enumerate(options):
         media_url = str(option.get("whatsapp_image_url") or "")
-        if not _preflight_vehicle_media(media_url):
-            return False, provider_ids
         caption = "\n".join(filter(None, [
             str(option.get("name") or "").strip(),
             str(option.get("category") or "").strip(),
@@ -935,7 +944,7 @@ def _send_individual_vehicle_images(
             return False, provider_ids
         if provider_id:
             provider_ids.append(provider_id)
-    return len(provider_ids) == len(recommendation.get("options") or []), provider_ids
+    return len(provider_ids) == len(options), provider_ids
 
 
 def recover_dm_vehicle_recommendation(

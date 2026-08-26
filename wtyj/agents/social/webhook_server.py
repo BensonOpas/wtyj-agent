@@ -849,8 +849,12 @@ def _process_zernio_event(payload: dict):
                     failed["conversation_id"], failed["message_id"],
                 )
                 reconciled = bool(recommendation_failure.get("matched"))
-                confirmation_failure = reconcile_quote_confirmation_failure(
-                    failed["conversation_id"], failed["message_id"],
+                confirmation_failure = (
+                    None
+                    if reconciled
+                    else reconcile_quote_confirmation_failure(
+                        failed["conversation_id"], failed["message_id"],
+                    )
                 )
                 fallback_attempted = False
                 fallback_sent = False

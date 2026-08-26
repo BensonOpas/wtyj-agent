@@ -415,6 +415,13 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
             AssertionError("failed delivery must not enter inbound parsing")
         ),
     )
+    monkeypatch.setattr(
+        webhook_server,
+        "reconcile_quote_confirmation_failure",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("a known carousel part is not a quote-control failure")
+        ),
+    )
     recovered = []
     monkeypatch.setattr(
         webhook_server.config_loader,
