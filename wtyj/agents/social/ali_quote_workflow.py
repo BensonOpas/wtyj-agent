@@ -435,12 +435,20 @@ def catalog_prompt_context(catalog: dict) -> dict:
                 if item.get("id") == class_id
             ), ""),
             "daily_usd": amount or None,
+            "seats": vehicle.get("seats"),
+            "transmission": str(vehicle.get("transmission") or "") or None,
+            "features": [
+                str(feature)
+                for feature in vehicle.get("features") or []
+                if str(feature).strip()
+            ],
         })
     categories = []
     for item in catalog.get("vehicleClasses") or []:
         rates = sorted(rates_by_class.get(str(item.get("id") or ""), set()))
         categories.append({
             "name": str(item.get("name") or ""),
+            "description": str(item.get("description") or "") or None,
             "daily_usd": rates[0] if len(rates) == 1 else None,
         })
     return {
@@ -590,10 +598,10 @@ def process_quote(
 
 
 SUMMARY_LABELS = {
-    "en": ("Just checking I’ve got everything right:", "Name", "Rental period", "Pickup", "Return", "Car", "Does that all look right?"),
-    "nl": ("Even controleren of ik alles goed heb:", "Naam", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt dit zo?"),
-    "pap": ("Laga mi wak si mi tin tur kos korekto:", "Nòmber", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon asina?"),
-    "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Name", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Passt das so?"),
+    "en": ("Just checking I’ve got everything right:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "Does that all look right?"),
+    "nl": ("Even controleren of ik alles goed heb:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt dit zo?"),
+    "pap": ("Laga mi wak si mi tin tur kos korekto:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon asina?"),
+    "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Passt das so?"),
 }
 
 PREPARING = {
@@ -622,9 +630,10 @@ def _summary_text(summary: dict) -> str:
     )
     return (
         f"{labels[0]}\n\n{labels[1]}: {customer.get('name', '')}\n"
-        f"{labels[2]}: {period}\n"
-        f"{labels[3]}: {rental['pickup_location']}\n{labels[4]}: {rental['return_location']}\n"
-        f"{labels[5]}: {vehicle}\n\n{labels[6]}"
+        f"{labels[2]}: {customer.get('whatsapp', '')}\n"
+        f"{labels[3]}: {period}\n"
+        f"{labels[4]}: {rental['pickup_location']}\n{labels[5]}: {rental['return_location']}\n"
+        f"{labels[6]}: {vehicle}\n\n{labels[7]}"
     )
 
 

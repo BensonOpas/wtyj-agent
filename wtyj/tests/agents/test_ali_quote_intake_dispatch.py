@@ -41,6 +41,9 @@ def catalog():
                 "id": ECONOMY_VEHICLE_ID,
                 "classId": CLASS_ID,
                 "name": "Kia Picanto 2024 or similar",
+                "seats": 4,
+                "transmission": "automatic",
+                "features": ["1 large suitcase", "1 small suitcase", "Air conditioning"],
                 "dailyRate": {"currency": "USD", "amount": "35.00"},
                 "weeklyRate": {"currency": "USD", "amount": "245.00"},
             },
@@ -74,12 +77,23 @@ def test_prompt_context_contains_names_and_rates_but_no_server_ids():
     serialized = json.dumps(context)
 
     assert context["catalog_version"] == 11
-    assert context["categories"] == [{"name": "Economy", "daily_usd": "35.00"}]
+    assert context["categories"] == [{
+        "name": "Economy",
+        "description": "Small automatic category",
+        "daily_usd": "35.00",
+    }]
     assert context["vehicles"] == [
         {
             "name": "Kia Picanto 2024 or similar",
             "category": "Economy",
             "daily_usd": "35.00",
+            "seats": 4,
+            "transmission": "automatic",
+            "features": [
+                "1 large suitcase",
+                "1 small suitcase",
+                "Air conditioning",
+            ],
         },
     ]
     assert CLASS_ID not in serialized
@@ -155,6 +169,45 @@ def test_ali_prompt_sets_official_quote_expectation_in_all_supported_languages(m
         assert wording in prompt
 
 
+def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch):
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+
+    prompt = marina_agent._build_ali_quote_block()
+    normalized = " ".join(prompt.split())
+
+    assert "DISCOVERY BEFORE PERSONAL DETAILS is mandatory" in normalized
+    assert "Hi, I’m Carlos from Ali Car Rental." in normalized
+    assert "ask what they prefer" in normalized
+    assert "If they are undecided, ask passenger_count next" in normalized
+    assert "ask about luggage only when it is useful" in normalized
+    assert "never ask the vehicle question again" in normalized
+    assert "Collect rental_start and rental_end during discovery" in normalized
+    assert "Only after a vehicle direction or recommendation is established" in normalized
+    assert "may you request customer_name" in normalized
+    assert "Do not ask for name, age, email, identity documents" in normalized
+    assert "Never ask the customer to type" in normalized
+    assert "Email is optional" in normalized
+    assert "never ask for any of those facts again" in normalized
+
+
+def test_ali_prompt_keeps_recommendations_catalog_grounded_and_request_only(monkeypatch):
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+
+    prompt = marina_agent._build_ali_quote_block()
+    normalized = " ".join(prompt.split())
+
+    assert '"seats": 4' in prompt
+    assert '"transmission": "automatic"' in prompt
+    assert '"features": ["1 large suitcase", "1 small suitcase", "Air conditioning"]' in prompt
+    assert "recommend only suitable current catalog options" in normalized
+    assert 'Say "this looks suitable" or "I can prepare a quote for this option"' in normalized
+    assert "never say or imply that a vehicle is available" in normalized
+    for language in ("English", "Dutch", "Papiamentu", "German"):
+        assert language in normalized
+
+
 def test_paused_master_switch_does_not_fetch_catalog_or_collect_details(monkeypatch):
     monkeypatch.setattr(
         marina_agent.config_loader,
@@ -216,6 +269,7 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     assert reply.startswith("Just checking I’ve got everything right:")
     assert reply.endswith("Does that all look right?")
     assert "Economy" in reply
+    assert "WhatsApp: +351000000000" in reply
     assert "wa.me" not in reply
     assert "@" not in reply
     assert fields["vehicle_class_id"] == CLASS_ID
