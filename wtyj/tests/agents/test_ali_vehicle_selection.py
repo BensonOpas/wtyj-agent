@@ -120,6 +120,65 @@ def test_clear_typed_exact_choice_resolves_like_native_tap(message_text):
     assert selection["vehicle_name"] == "Toyota Yaris or similar"
 
 
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "I choose the Toyota Yaris or similar.",
+        "Ik kies voor de Toyota Yaris or similar.",
+        "Mi ta skoge e Toyota Yaris or similar.",
+        "Ich wähle den Toyota Yaris or similar.",
+    ],
+)
+def test_localized_choose_in_chat_message_resolves_exact_active_vehicle(message_text):
+    selection = resolve_typed_vehicle_selection(message_text, _catalog())
+    assert selection["vehicle_id"] == "vehicle-1"
+    assert selection["vehicle_daily_rate_usd"] == "45.00"
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        {
+            "vehicleClasses": [{"id": "compact", "name": "Compact Car"}],
+            "vehicles": [],
+        },
+        {
+            "vehicleClasses": [{"id": "compact", "name": "Compact Car"}],
+            "vehicles": [
+                {
+                    "id": "vehicle-1",
+                    "name": "Toyota Yaris or similar",
+                    "classId": "compact",
+                    "dailyRate": {"currency": "USD", "amount": "45.00"},
+                },
+                {
+                    "id": "vehicle-2",
+                    "name": "Toyota Yaris or similar",
+                    "classId": "compact",
+                    "dailyRate": {"currency": "USD", "amount": "45.00"},
+                },
+            ],
+        },
+    ],
+)
+def test_stale_or_ambiguous_handoff_message_fails_closed(catalog):
+    with pytest.raises(
+        AliVehicleSelectionError,
+        match="vehicle_handoff_not_unique",
+    ):
+        resolve_typed_vehicle_selection(
+            "I choose the Toyota Yaris or similar.",
+            catalog,
+        )
+
+
+def test_non_handoff_unknown_typed_choice_remains_normal_conversation():
+    assert resolve_typed_vehicle_selection(
+        "I want an SUV",
+        _catalog(),
+    ) is None
+
+
 def test_question_that_mentions_exact_vehicle_is_not_treated_as_choice():
     assert resolve_typed_vehicle_selection(
         "Toyota Yaris?", _catalog()

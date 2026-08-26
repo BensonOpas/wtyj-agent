@@ -22,7 +22,9 @@ _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CARD_LABELS = {
     "en": {
         "seats": "seats",
-        "details": "Car details",
+        "choose_in_chat": "Choose in chat",
+        "carousel_intro": "Swipe through the cars, then choose one in the chat.",
+        "handoff_message": "I choose the {vehicle_name}.",
         "choose_one": "Choose this car",
         "choose_many": "Choose a car",
         "picker_body": "Choose your car below.",
@@ -31,7 +33,9 @@ _CARD_LABELS = {
     },
     "nl": {
         "seats": "zitplaatsen",
-        "details": "Autodetails",
+        "choose_in_chat": "Kies in de chat",
+        "carousel_intro": "Veeg door de auto's en kies er daarna één in de chat.",
+        "handoff_message": "Ik kies voor de {vehicle_name}.",
         "choose_one": "Kies deze auto",
         "choose_many": "Kies een auto",
         "picker_body": "Kies hieronder je auto.",
@@ -40,7 +44,9 @@ _CARD_LABELS = {
     },
     "pap": {
         "seats": "lugá",
-        "details": "Detayenan di outo",
+        "choose_in_chat": "Skoge den chat",
+        "carousel_intro": "Pasa dor di e outonan, despues skoge un den e chat.",
+        "handoff_message": "Mi ta skoge e {vehicle_name}.",
         "choose_one": "Skoge e outo aki",
         "choose_many": "Skoge un outo",
         "picker_body": "Skoge bo outo aki bou.",
@@ -49,7 +55,11 @@ _CARD_LABELS = {
     },
     "de": {
         "seats": "Sitzplätze",
-        "details": "Fahrzeugdetails",
+        "choose_in_chat": "Im Chat wählen",
+        "carousel_intro": (
+            "Wischen Sie durch die Autos und wählen Sie dann eines im Chat aus."
+        ),
+        "handoff_message": "Ich wähle den {vehicle_name}.",
         "choose_one": "Dieses Auto wählen",
         "choose_many": "Auto auswählen",
         "picker_body": "Wählen Sie unten Ihr Auto aus.",
@@ -118,6 +128,28 @@ def _absolute_https_url(value: object, base_url: str) -> str:
     if parsed.scheme != "https" or not parsed.netloc:
         raise AliVehicleRecommendationError("unsafe_vehicle_url")
     return url
+
+
+def _whatsapp_handoff_url(
+    destination: object,
+    vehicle_name: str,
+    locale: str,
+) -> str:
+    """Build a pure click-to-chat URL from tenant-owned configuration.
+
+    Opening this URL cannot mutate rental state. WhatsApp only submits the
+    human-readable choice after the customer explicitly taps Send, at which
+    point the normal inbound webhook validates it against the active catalog.
+    """
+    raw_destination = str(destination or "").strip()
+    digits = re.sub(r"\D", "", raw_destination)
+    if not 7 <= len(digits) <= 15:
+        raise AliVehicleRecommendationError("invalid_whatsapp_destination")
+    message = _CARD_LABELS[locale]["handoff_message"].format(
+        vehicle_name=vehicle_name,
+    )
+    encoded = urllib.parse.quote(message, safe="")
+    return f"https://wa.me/{digits}?text={encoded}"
 
 
 def _vehicle_image(vehicle: dict, base_url: str) -> tuple[str, str]:
@@ -331,6 +363,7 @@ def build_vehicle_recommendation(
     reply_text: str,
     *,
     public_base_url: str | None = None,
+    whatsapp_destination: str | None = None,
     turn_id: str | None = None,
 ) -> dict | None:
     """Return one validated image/carousel delivery plan or ``None``.
@@ -449,6 +482,10 @@ def build_vehicle_recommendation(
             "payload": option["selection_id"],
         }]
     else:
+        carousel_text = (
+            f"{_CARD_LABELS[locale]['carousel_intro']}\n\n{availability_note}"
+        )
+        plan["text"] = carousel_text
         plan["cards"] = [{
             "card_index": index,
             "type": "cta_url",
@@ -460,11 +497,15 @@ def build_vehicle_recommendation(
             "action": {
                 "name": "cta_url",
                 "parameters": {
-                    # Zernio media-carousel cards require a CTA URL button.
-                    # It is a details link, never a selection control; the
-                    # native picker sent immediately afterwards owns choice.
-                    "display_text": _CARD_LABELS[locale]["details"],
-                    "url": option["detail_url"],
+                    # Zernio cards expose URL CTAs, not per-card postbacks.
+                    # The link only opens the tenant's WhatsApp chat with a
+                    # draft. The customer must Send before selection occurs.
+                    "display_text": _CARD_LABELS[locale]["choose_in_chat"],
+                    "url": _whatsapp_handoff_url(
+                        whatsapp_destination,
+                        option["name"],
+                        locale,
+                    ),
                 },
             },
         } for index, option in enumerate(options)]

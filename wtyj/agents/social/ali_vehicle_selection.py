@@ -15,9 +15,15 @@ _SELECTION_NAMESPACE = "ali_vehicle_select:"
 _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CLEAR_TYPED_CHOICE = re.compile(
     r"^(?:(?:i\s+)?(?:choose|chose|want|prefer|take|select)|"
-    r"(?:ik\s+)?(?:kies|wil|neem)|"
-    r"(?:mi\s+)?(?:ke|skohe)|"
-    r"(?:ich\s+)?(?:w[aä]hle|m[oö]chte|nehme))\s+",
+    r"(?:ik\s+)?(?:kies|wil|neem)(?:\s+voor)?|"
+    r"(?:mi\s+)?(?:(?:ta\s+)?(?:ke|skohe|skoge))|"
+    r"(?:ich\s+)?(?:w[aä]hle|m[oö]chte|nehme))\s+"
+    r"(?:(?:the|a|an|de|het|een|e|un|der|die|das|den|ein|eine|einen)\s+)?",
+    re.IGNORECASE,
+)
+_HANDOFF_CHOICE = re.compile(
+    r"^(?:i\s+choose\s+the|ik\s+kies\s+voor\s+de|"
+    r"mi\s+ta\s+skoge\s+e|ich\s+w[aä]hle\s+den)\s+",
     re.IGNORECASE,
 )
 
@@ -122,6 +128,7 @@ def resolve_typed_vehicle_selection(message_text: object, catalog: dict) -> dict
     that exact label; ``or similar`` remains optional for convenience.
     """
     raw_message = str(message_text or "").strip()
+    is_handoff_choice = bool(_HANDOFF_CHOICE.match(raw_message))
     if raw_message.endswith("?") and not _CLEAR_TYPED_CHOICE.match(raw_message):
         return None
     raw = raw_message.rstrip(".!")
@@ -138,6 +145,8 @@ def resolve_typed_vehicle_selection(message_text: object, catalog: dict) -> dict
         if _catalog_label(vehicle.get("name")) == candidate_label
     ]
     if len(matches) != 1:
+        if is_handoff_choice:
+            raise AliVehicleSelectionError("vehicle_handoff_not_unique")
         return None
     return _canonical_vehicle(matches[0], classes)
 

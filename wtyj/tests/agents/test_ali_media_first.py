@@ -237,7 +237,9 @@ def test_text_vehicle_dump_is_converted_to_one_curated_visual_action():
         "Toyota Corolla or similar",
     ]
     assert "Kia Picanto" not in decision["reply_text"]
-    assert "Which one do you prefer?" in decision["reply_text"]
+    assert decision["reply_text"] == (
+        "Swipe through the cars, then choose one in the chat."
+    )
     assert decision["reason"] == "catalog_names_in_reply"
 
 

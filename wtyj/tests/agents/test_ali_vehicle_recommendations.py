@@ -1,6 +1,7 @@
 """Issue 178: premium catalog-grounded Ali vehicle discovery."""
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -8,6 +9,9 @@ from agents.marina import marina_agent
 from agents.social import ali_vehicle_recommendations as recommendations
 from agents.social import zernio_dm_client
 from shared import state_registry
+
+
+_WHATSAPP_DESTINATION = "+599 9 677 7145"
 
 
 def _vehicle(
@@ -96,18 +100,43 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
 
 
 @pytest.mark.parametrize(
-    ("locale", "capacity_label", "cta", "picker_text", "picker_button"),
+    (
+        "locale", "capacity_label", "cta", "choice_message",
+        "carousel_intro", "picker_text", "picker_button",
+    ),
     [
-        ("en", "seats", "Car details", "Choose your car below.", "Choose a car"),
-        ("nl", "zitplaatsen", "Autodetails", "Kies hieronder je auto.", "Kies een auto"),
-        ("pap", "lugá", "Detayenan di outo", "Skoge bo outo aki bou.", "Skoge un outo"),
-        ("de", "Sitzplätze", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto auswählen"),
+        (
+            "en", "seats", "Choose in chat",
+            "I choose the Toyota Yaris or similar.",
+            "Swipe through the cars, then choose one in the chat.",
+            "Choose your car below.", "Choose a car",
+        ),
+        (
+            "nl", "zitplaatsen", "Kies in de chat",
+            "Ik kies voor de Toyota Yaris or similar.",
+            "Veeg door de auto's en kies er daarna één in de chat.",
+            "Kies hieronder je auto.", "Kies een auto",
+        ),
+        (
+            "pap", "lugá", "Skoge den chat",
+            "Mi ta skoge e Toyota Yaris or similar.",
+            "Pasa dor di e outonan, despues skoge un den e chat.",
+            "Skoge bo outo aki bou.", "Skoge un outo",
+        ),
+        (
+            "de", "Sitzplätze", "Im Chat wählen",
+            "Ich wähle den Toyota Yaris or similar.",
+            "Wischen Sie durch die Autos und wählen Sie dann eines im Chat aus.",
+            "Wählen Sie unten Ihr Auto aus.", "Auto auswählen",
+        ),
     ],
 )
 def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     locale,
     capacity_label,
     cta,
+    choice_message,
+    carousel_intro,
     picker_text,
     picker_button,
 ):
@@ -126,6 +155,7 @@ def test_curated_carousel_is_two_to_five_suitable_localized_cards(
         {},
         "These are the options that best fit what you shared. Which one feels right?",
         public_base_url="https://alicarrental.com",
+        whatsapp_destination=_WHATSAPP_DESTINATION,
     )
 
     assert plan["kind"] == "carousel"
@@ -140,15 +170,14 @@ def test_curated_carousel_is_two_to_five_suitable_localized_cards(
         for card in plan["cards"]
     )
     assert all(card["type"] == "cta_url" for card in plan["cards"])
+    first_handoff = urlparse(plan["cards"][0]["action"]["parameters"]["url"])
+    assert first_handoff.scheme == "https"
+    assert first_handoff.netloc == "wa.me"
+    assert first_handoff.path == "/59996777145"
+    assert parse_qs(first_handoff.query) == {"text": [choice_message]}
     assert plan["picker"]["text"] == picker_text
     assert plan["picker"]["button"] == picker_button
-    assert all(
-        "choose" not in card["action"]["parameters"]["display_text"].casefold()
-        and "kies" not in card["action"]["parameters"]["display_text"].casefold()
-        and "skoge" not in card["action"]["parameters"]["display_text"].casefold()
-        and "wähl" not in card["action"]["parameters"]["display_text"].casefold()
-        for card in plan["cards"]
-    )
+    assert plan["text"].startswith(carousel_intro)
     assert plan["text"].count(_action("curated", ["x", "y"], locale)["availability_note"]) == 1
 
 
@@ -224,6 +253,7 @@ def test_curated_four_carousel_options_have_matching_native_picker_rows():
         {"conversation_language": "en", "passenger_count": 4},
         {},
         "Here are a few options that may suit you.",
+        whatsapp_destination=_WHATSAPP_DESTINATION,
     )
 
     assert len(plan["cards"]) == 4
@@ -234,6 +264,52 @@ def test_curated_four_carousel_options_have_matching_native_picker_rows():
     ]
     assert rows[-1]["description"] == "Economy · 4 seats · USD 30/day"
     assert plan["picker"]["button"] == "Choose a car"
+
+
+def test_opening_handoff_url_has_no_rental_state_side_effect():
+    fields = {
+        "conversation_language": "en",
+        "passenger_count": 4,
+        "luggage_count": 2,
+    }
+    flags = {"ali_last_recommendation_ids": ["vehicle-old"]}
+    fields_before = dict(fields)
+    flags_before = dict(flags)
+
+    plan = recommendations.build_vehicle_recommendation(
+        _action(
+            "curated",
+            ["Toyota Yaris or similar", "Kia Seltos or similar"],
+        ),
+        _catalog(),
+        fields,
+        flags,
+        "These two options suit your trip.",
+        whatsapp_destination=_WHATSAPP_DESTINATION,
+    )
+
+    assert plan["cards"][0]["action"]["parameters"]["url"].startswith(
+        "https://wa.me/59996777145?text="
+    )
+    assert fields == fields_before
+    assert flags == flags_before
+
+
+def test_curated_carousel_fails_closed_without_tenant_whatsapp_destination():
+    with pytest.raises(
+        recommendations.AliVehicleRecommendationError,
+        match="invalid_whatsapp_destination",
+    ):
+        recommendations.build_vehicle_recommendation(
+            _action(
+                "curated",
+                ["Toyota Yaris or similar", "Kia Seltos or similar"],
+            ),
+            _catalog(),
+            {"conversation_language": "en", "passenger_count": 4},
+            {},
+            "These two options suit your trip.",
+        )
 
 
 def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
@@ -256,6 +332,7 @@ def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
         {"conversation_language": "en", "passenger_count": 4},
         {},
         "Here are the best matches for your trip.",
+        whatsapp_destination=_WHATSAPP_DESTINATION,
     )
 
     rows = plan["picker"]["sections"][0]["rows"]
@@ -264,6 +341,16 @@ def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
         option["selection_id"] for option in plan["options"]
     ]
     assert [row["title"] for row in rows] == names
+    assert [
+        parse_qs(
+            urlparse(card["action"]["parameters"]["url"]).query
+        )["text"][0]
+        for card in plan["cards"]
+    ] == [f"I choose the {name}." for name in names]
+    assert all(
+        card["action"]["parameters"]["display_text"] == "Choose in chat"
+        for card in plan["cards"]
+    )
     assert all("seats" in row["description"] for row in rows)
     assert all("USD " in row["description"] for row in rows)
     assert plan["picker"]["fallback_text"].splitlines()[1:] == [
@@ -360,6 +447,8 @@ def test_ali_prompt_requires_one_image_or_two_to_five_curated_options(monkeypatc
     assert "Ordinary typed vehicle choices remain valid" in prompt
     assert "Do not repeat the unchanged summary" in prompt
     assert "chooses one option from a visual recommendation" in prompt
+    assert "Choose in chat" in prompt
+    assert "customer must still tap Send" in prompt
 
 
 class _Response:
@@ -388,6 +477,7 @@ def _carousel_plan():
         {"conversation_language": "en", "passenger_count": 4},
         {},
         "These two options suit your trip. Which one feels right?",
+        whatsapp_destination=_WHATSAPP_DESTINATION,
     )
 
 

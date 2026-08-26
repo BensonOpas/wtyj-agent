@@ -1030,20 +1030,18 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _interactive_type = message.get("_zernio_interactive_type")
             _interactive_id = message.get("_zernio_interactive_id")
             if str(_interactive_id or "").strip():
+                _ali_selection_source = "native_picker"
                 _ali_selected_this_turn = resolve_vehicle_selection(
                     _interactive_type,
                     _interactive_id,
                     _selection_catalog,
                 )
-                if _ali_selected_this_turn:
-                    _ali_selection_source = "native_picker"
             else:
+                _ali_selection_source = "typed_exact"
                 _ali_selected_this_turn = resolve_typed_vehicle_selection(
                     text,
                     _selection_catalog,
                 )
-                if _ali_selected_this_turn:
-                    _ali_selection_source = "typed_exact"
         except AliVehicleSelectionError as exc:
             clarification = invalid_vehicle_selection_reply(
                 fields.get("conversation_language")
@@ -1091,7 +1089,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             )
             bm_logger.log(
                 "ali_vehicle_selection_invalid",
-                source="native_picker",
+                source=_ali_selection_source,
                 reason=str(exc)[:80],
             )
             if include_media:
@@ -1824,12 +1822,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _ali_turn_plan = None
         else:
             try:
+                _ali_business = config_loader.get_business() or {}
                 vehicle_recommendation = build_vehicle_recommendation(
                     recommendation_action,
                     _ali_catalog_for_media or get_ali_intake_catalog(),
                     fields,
                     flags,
                     reply_text,
+                    whatsapp_destination=(
+                        _ali_business.get("whatsapp")
+                        or _ali_business.get("phone")
+                    ),
                     turn_id=str(message.get("message_id") or ""),
                 )
             except AliVehicleRecommendationError as exc:

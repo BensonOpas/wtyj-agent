@@ -141,6 +141,12 @@ def _stored_fields(locale="en"):
 def _configure(monkeypatch, tmp_path, model_result):
     monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
     monkeypatch.setattr(social_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(
+        social_agent.config_loader,
+        "get_business",
+        # Ali production currently uses the documented business.phone fallback.
+        lambda: {"phone": "+599 9 677 7145"},
+    )
     monkeypatch.setattr(social_agent, "get_ali_intake_catalog", correction_catalog)
     monkeypatch.setattr(workflow, "get_intake_catalog", correction_catalog)
     monkeypatch.setattr(
@@ -967,6 +973,12 @@ def test_rejected_car_text_dump_becomes_carousel_picker_without_summary(
     assert [row["id"] for row in plan["picker"]["sections"][0]["rows"]] == [
         option["selection_id"] for option in plan["options"]
     ]
+    assert all(
+        card["action"]["parameters"]["url"].startswith(
+            "https://wa.me/59996777145?text="
+        )
+        for card in plan["cards"]
+    )
     assert "Kia Picanto" not in response["text"]
     assert "Just checking" not in response["text"]
     assert saved["flags"]["ali_rejected_vehicle_ids"] == [SUV_VEHICLE_ID]
@@ -1162,7 +1174,7 @@ def test_typed_exact_choice_matches_picker_and_later_price_does_not_repeat_image
 
     chosen = social_agent.handle_incoming_whatsapp_message({
         "from": phone,
-        "text": "I choose Toyota Yaris",
+        "text": "I choose the Toyota Yaris or similar.",
         "from_name": "",
     }, include_media=True)
     selected = state_registry.wa_get_booking_state(phone)
@@ -1189,6 +1201,85 @@ def test_typed_exact_choice_matches_picker_and_later_price_does_not_repeat_image
 
     assert priced["text"] == price_result["reply"]
     assert priced["vehicle_recommendation"] is None
+
+
+def test_sent_handoff_choice_with_complete_intake_creates_one_fresh_summary(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-210-complete-handoff"
+    result = {
+        "intents": ["inquiry"],
+        "fields": {"vehicle_name": "Kia Picanto 2024 or similar"},
+        "confidence": "high",
+        "reply": "Good choice.",
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    fields = _stored_fields()
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_summary_hash": "stale-summary",
+        "awaiting_quote_confirmation": True,
+        "ali_last_recommendation_ids": [YARIS_VEHICLE_ID, SUV_VEHICLE_ID],
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "I choose the Toyota Yaris or similar.",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-210-complete-handoff-1",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["vehicle_recommendation"] is None
+    assert response["text"].count("Just checking I’ve got everything right:") == 1
+    assert "Car: Toyota Yaris or similar" in response["text"]
+    assert saved["fields"]["vehicle_id"] == YARIS_VEHICLE_ID
+    _commit_result(phone, response, "issue-210-complete-handoff")
+    committed = state_registry.wa_get_booking_state(phone)
+    assert committed["flags"]["awaiting_quote_confirmation"] is True
+    assert committed["flags"]["ali_summary_hash"] != "stale-summary"
+
+
+def test_stale_sent_handoff_fails_closed_to_current_picker_without_model_call(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-210-stale-handoff"
+    calls = []
+    result = {
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "should not run", "requires_human": False, "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **kwargs: calls.append(kwargs) or result,
+    )
+    fields = _stored_fields()
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_summary_hash": "current-summary",
+        "awaiting_quote_confirmation": True,
+        "ali_last_recommendation_ids": [YARIS_VEHICLE_ID, SUV_VEHICLE_ID],
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "I choose the Honda Civic or similar.",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-210-stale-handoff-1",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert calls == []
+    assert response["vehicle_recommendation"]["kind"] == "picker"
+    assert [
+        option["id"] for option in response["vehicle_recommendation"]["options"]
+    ] == [YARIS_VEHICLE_ID, SUV_VEHICLE_ID]
+    assert saved["fields"]["vehicle_id"] == ECONOMY_VEHICLE_ID
+    assert saved["flags"]["ali_summary_hash"] == "current-summary"
 
 
 def test_explicit_picture_request_after_exact_choice_resends_one_image(
