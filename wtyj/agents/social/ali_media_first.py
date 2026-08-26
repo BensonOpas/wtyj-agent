@@ -33,6 +33,7 @@ _RECOMMENDATION_REQUEST = re.compile(
 )
 _LOWEST_PRICE_REQUEST = re.compile(
     r"\b(?:cheapest|lowest[- ]price(?:d)?|least expensive|most affordable|"
+    r"most economic(?:al)?|"
     r"goedkoopste|laagste prijs|voordeligste|"
     r"mas barata|mas barato|preis mas abou|mas ekonomiko|"
     r"g[uü]nstig(?:ste|sten|ster|stes)|billigste|niedrigste[nr]? preis|"
