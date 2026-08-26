@@ -291,6 +291,13 @@ def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch,
     }
     flags = {}
     started = []
+    decision_events = []
+
+    monkeypatch.setattr(
+        workflow.bm_logger,
+        "log",
+        lambda event, **fields: decision_events.append({"event": event, **fields}),
+    )
 
     class RecordingThread:
         def __init__(self, target, args, daemon):
@@ -314,7 +321,7 @@ def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch,
 
     reply = workflow.handle_ali_quote_turn(
         "synthetic-8003", "synthetic-account", "+351000000000",
-        "yes", fields, flags, from_name="Synthetic Calvin",
+        "yes, it does look right", fields, flags, from_name="Synthetic Calvin",
         raw_config=raw_config(), processor=lambda _public_id: None,
     )
 
@@ -322,3 +329,66 @@ def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch,
     assert flags["awaiting_quote_confirmation"] is False
     assert len(started) == 1
     assert started[0]["daemon"] is True
+
+    replay = workflow.handle_ali_quote_turn(
+        "synthetic-8003", "synthetic-account", "+351000000000",
+        "yes it does", fields, flags, from_name="Synthetic Calvin",
+        raw_config=raw_config(), processor=lambda _public_id: None,
+    )
+
+    assert replay == workflow.PREPARING["en"]
+    assert flags["awaiting_quote_confirmation"] is False
+    assert len(started) == 1
+    assert [event["reason_code"] for event in decision_events] == [
+        "affirmative_allowlist",
+        "already_confirmed",
+    ]
+    assert all(event["event"] == "ali_quote_confirmation_decision" for event in decision_events)
+    assert all(set(event) == {
+        "event", "tenant_slug", "outcome", "reason_code",
+        "summary_version", "summary_hash_prefix",
+    } for event in decision_events)
+    serialized_events = json.dumps(decision_events).lower()
+    assert "yes" not in serialized_events
+    assert "synthetic calvin" not in serialized_events
+    assert "+351" not in serialized_events
+    assert "2026-09" not in serialized_events
+    assert "curaçao" not in serialized_events
+
+
+def test_correction_replaces_summary_without_starting_quote(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    fields = {
+        "customer_name": "Synthetic Calvin",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Curaçao International Airport",
+        "return_location": "Curaçao International Airport",
+        "vehicle_class_name": "Economy car",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {}
+    started = []
+
+    workflow.handle_ali_quote_turn(
+        "synthetic-correction", "synthetic-account", "+351000000000",
+        "These are my details.", fields, flags, from_name="Synthetic Calvin",
+        raw_config=raw_config(),
+    )
+    previous_hash = flags["ali_summary_hash"]
+    fields["return_location"] = "Synthetic hotel return"
+
+    corrected = workflow.handle_ali_quote_turn(
+        "synthetic-correction", "synthetic-account", "+351000000000",
+        "Yes, but return it to my hotel.", fields, flags,
+        from_name="Synthetic Calvin", raw_config=raw_config(),
+        processor=lambda public_id: started.append(public_id),
+    )
+
+    assert corrected.startswith("Just checking I’ve got everything right:")
+    assert "Return: Synthetic hotel return" in corrected
+    assert flags["ali_summary_hash"] != previous_hash
+    assert flags["awaiting_quote_confirmation"] is True
+    assert started == []

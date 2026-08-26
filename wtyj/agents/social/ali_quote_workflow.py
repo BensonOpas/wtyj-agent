@@ -23,7 +23,7 @@ import httpx
 
 from agents.social.ali_quote_pdf import render_quote_pdf
 from agents.social.ali_quote_presentation import format_rental_period
-from shared import config_loader, state_registry
+from shared import bm_logger, config_loader, state_registry
 
 TENANT_SLUG = "ali-car-rental"
 WORKFLOW_TYPE = "ali_quote"
@@ -36,10 +36,43 @@ REQUIRED_RENTAL_FIELDS = {
 SELECTION_FIELDS = ("vehicle_id", "vehicle_class_id")
 ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", "chargeSelections"}
 AFFIRMATIVE = {
-    "yes", "correct", "looks good", "go ahead", "ja", "klopt", "akkoord",
-    "ta bon", "correcto", "si", "stimmt", "passt", "ja stimmt",
+    # English
+    "yes", "yes it does", "yes it looks right", "yes it does look right",
+    "that is right", "that s right", "that is correct", "that s correct",
+    "everything looks right", "all good", "correct", "looks good", "go ahead",
+    # Dutch
+    "ja", "ja dat klopt", "dat klopt", "klopt", "dat is juist", "dat is correct",
+    "alles klopt", "alles ziet er goed uit", "ziet er goed uit", "helemaal goed",
+    "alles goed", "akkoord", "ga verder", "ga maar door",
+    # Papiamentu
+    "si", "si e ta bon", "si ta bon", "si tur kos ta bon", "ta bon",
+    "tur kos ta bon", "tur kos korekto", "esaki ta bon", "esaki ta korekto",
+    "ta korekto", "korekto", "correcto", "por sigui", "sigui", "bai dilanti",
+    # German
+    "ja das stimmt", "das stimmt", "stimmt", "ja das passt", "das passt", "passt",
+    "alles stimmt", "alles sieht richtig aus", "alles sieht gut aus", "das ist richtig",
+    "das ist korrekt", "alles korrekt", "alles gut", "korrekt", "machen sie weiter",
+    "mach weiter", "weiter", "ja bitte",
 }
-NEGATION = {"no", "not", "nee", "niet", "no ta", "kein", "nicht", "aber", "but", "ma"}
+NEGATION_OR_QUALIFICATION = {
+    "no", "not", "but", "except", "almost", "maybe", "think", "probably",
+    "nee", "niet", "maar", "behalve", "bijna", "misschien", "denk",
+    "pero", "ma", "kasi", "kisas",
+    "nein", "kein", "nicht", "aber", "außer", "fast", "vielleicht", "glaube",
+    "denke", "wahrscheinlich",
+}
+CORRECTION_OR_DETAIL = {
+    "change", "correct", "add", "remove", "date", "dates", "pickup", "return",
+    "child", "seat", "luggage", "driver", "age", "name", "location", "airport",
+    "hotel", "extra",
+    "wijzig", "verander", "corrigeer", "voeg", "toevoegen", "verwijder", "datum",
+    "data", "ophalen", "terugbrengen", "kinderzitje", "bagage", "leeftijd", "naam",
+    "locatie",
+    "cambia", "kambia", "korekshon", "agrega", "kita", "fecha", "stul", "mucha",
+    "maleta", "edat", "nòmber", "lokashon",
+    "ändern", "korrigieren", "hinzufügen", "entfernen", "datum", "daten", "abholung",
+    "rückgabe", "kindersitz", "gepäck", "alter", "name", "ort", "flughafen", "hotel",
+}
 _CATALOG_CACHE = {"expires_at": 0.0, "value": None}
 _CATALOG_CACHE_SECONDS = 60.0
 CUSTOMER_QUOTE_DELAY_SECONDS = 3 * 60
@@ -157,14 +190,42 @@ def normalized_summary(customer: dict, rental: dict, version: int = 1) -> tuple[
     return summary, hashlib.sha256(_json(summary).encode("utf-8")).hexdigest()
 
 
-def is_unambiguous_confirmation(text: str) -> bool:
+def confirmation_decision(text: str) -> tuple[bool, str]:
+    """Classify a displayed-summary response without retaining its content."""
     normalized = " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower(), flags=re.UNICODE).split())
-    if not normalized or "?" in str(text or ""):
-        return False
+    if not normalized:
+        return False, "empty"
+    if "?" in str(text or ""):
+        return False, "question"
     words = set(normalized.split())
-    if words & NEGATION:
-        return False
-    return normalized in AFFIRMATIVE
+    if normalized in AFFIRMATIVE:
+        return True, "affirmative_allowlist"
+    if words & NEGATION_OR_QUALIFICATION:
+        return False, "negation_or_qualification"
+    if words & CORRECTION_OR_DETAIL:
+        return False, "correction_or_new_detail"
+    return False, "not_allowlisted"
+
+
+def is_unambiguous_confirmation(text: str) -> bool:
+    return confirmation_decision(text)[0]
+
+
+def _log_confirmation_decision(
+    accepted: bool,
+    reason_code: str,
+    summary_hash: str,
+    summary_version: int,
+) -> None:
+    """Log tenant-safe decision metadata only; never message content or PII."""
+    bm_logger.log(
+        "ali_quote_confirmation_decision",
+        tenant_slug=TENANT_SLUG,
+        outcome="accepted" if accepted else "rejected",
+        reason_code=reason_code,
+        summary_version=int(summary_version),
+        summary_hash_prefix=str(summary_hash or "")[:12],
+    )
 
 
 def build_ali_request(rental: dict, required_deposit_id: str) -> dict:
@@ -700,7 +761,22 @@ def handle_ali_quote_turn(
         return None
     previous = flags.get("ali_summary_hash")
     awaiting = bool(flags.get("awaiting_quote_confirmation"))
-    if awaiting and previous == digest and is_unambiguous_confirmation(message_text):
+    accepted = False
+    reason_code = "not_awaiting"
+    if awaiting and previous != digest:
+        reason_code = "summary_changed"
+        _log_confirmation_decision(False, reason_code, digest, 1)
+    elif previous == digest and (awaiting or flags.get("ali_quote_public_id")):
+        accepted, reason_code = confirmation_decision(message_text)
+        if accepted and flags.get("ali_quote_public_id") and not awaiting:
+            reason_code = "already_confirmed"
+        _log_confirmation_decision(accepted, reason_code, digest, 1)
+
+    if accepted and flags.get("ali_quote_public_id") and not awaiting:
+        flags["awaiting_quote_confirmation"] = False
+        return PREPARING[rental["conversation_language"]]
+
+    if awaiting and previous == digest and accepted:
         workflow = raw.get("workflow") or {}
         deposit_id = workflow.get("required_deposit_charge_id") or (raw.get("ali_quote") or {}).get("required_deposit_charge_id")
         try:
