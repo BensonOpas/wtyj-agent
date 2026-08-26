@@ -22,10 +22,10 @@ from shared import config_loader, state_registry
 CURACAO = ZoneInfo("America/Curacao")
 
 MESSAGES = {
-    "en": ("Your official Ali Car Rental quote is ready.", "Reply here to accept it or ask me a question.", "Subject to final vehicle availability confirmation."),
-    "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Reageer hier om te accepteren of iets te vragen.", "Onder voorbehoud van definitieve beschikbaarheid."),
-    "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Kontestá aki pa aseptá of hasi un pregunta.", "Suhéto na konfirmashon final di disponibilidat."),
-    "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Antworten Sie hier, um anzunehmen oder etwas zu fragen.", "Vorbehaltlich der endgültigen Fahrzeugverfügbarkeit."),
+    "en": ("Your official Ali Car Rental quote is ready.", "Reply here to accept it or ask me a question."),
+    "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Reageer hier om te accepteren of iets te vragen."),
+    "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Kontestá aki pa aseptá of hasi un pregunta."),
+    "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Antworten Sie hier, um anzunehmen oder etwas zu fragen."),
 }
 
 VALID_UNTIL = {
@@ -139,7 +139,7 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
     customer = json.loads(quote["customer_json"])
     rental = json.loads(quote.get("rental_json") or "{}")
     locale = quote.get("locale") if quote.get("locale") in MESSAGES else "en"
-    ready, reply, availability = MESSAGES[locale]
+    ready, reply = MESSAGES[locale]
     supplement_summary = _supplement_summary(pricing, rental, locale)
     text = (
         f"{ready}\n\nQuote: {quote['quote_reference']}\n"
@@ -147,7 +147,7 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         f"{supplement_summary}"
         f"Refundable security deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
         f"{VALID_UNTIL[locale]}: {format_curacao_datetime(pricing['expiresAt'], locale)}\n\n"
-        f"{reply}\n{availability}"
+        f"{reply}"
     )
     url = build_signed_url(base_url, quote["public_id"], secret)
     filename = build_quote_filename(
@@ -157,6 +157,20 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
     return send_dm_reply_with_attachment(
         quote["conversation_id"], quote["zernio_account_id"], text,
         url, attachment_type="file", attachment_name=filename,
+    )
+
+
+def send_customer_brand_image(quote: dict, _image_path: str) -> bool:
+    base_url = os.environ.get("UNBOKS_PUBLIC_BASE_URL", "")
+    secret = os.environ.get("ALI_QUOTE_DOWNLOAD_SECRET", "")
+    if not base_url.startswith("https://") or not secret:
+        return False
+    url = build_signed_url(
+        base_url, quote["public_id"], secret, asset="image",
+    )
+    return send_dm_reply_with_attachment(
+        quote["conversation_id"], quote["zernio_account_id"], "",
+        url, attachment_type="image",
     )
 
 
@@ -197,6 +211,7 @@ def escalate(quote: dict, code: str) -> None:
 
 def production_adapters() -> DeliveryAdapters:
     return DeliveryAdapters(
+        send_brand_image=send_customer_brand_image,
         send_whatsapp=send_customer_whatsapp,
         send_staff_email=send_staff_email,
         send_operator_alerts=send_operator_alerts,

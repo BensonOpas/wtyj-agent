@@ -1,4 +1,4 @@
-"""Short-lived signed download URLs for Ali quote PDFs."""
+"""Short-lived signed download URLs for Ali quote customer assets."""
 
 from __future__ import annotations
 
@@ -23,11 +23,21 @@ def sign_download(public_id: str, expires: int, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), payload, sha256).hexdigest()
 
 
-def build_signed_url(base_url: str, public_id: str, secret: str, now: int | None = None) -> str:
+def build_signed_url(
+    base_url: str,
+    public_id: str,
+    secret: str,
+    now: int | None = None,
+    *,
+    asset: str = "pdf",
+) -> str:
+    if asset not in {"pdf", "image"}:
+        raise ValueError("Unsupported quote asset")
     now = int(time.time()) if now is None else int(now)
     expires = now + 3600
-    signature = sign_download(public_id, expires, secret)
-    return f"{base_url.rstrip('/')}/api/public/ali-quote/{public_id}?{urlencode({'expires': expires, 'signature': signature})}"
+    signed_id = f"{public_id}--image" if asset == "image" else public_id
+    signature = sign_download(signed_id, expires, secret)
+    return f"{base_url.rstrip('/')}/api/public/ali-quote/{signed_id}?{urlencode({'expires': expires, 'signature': signature})}"
 
 
 def verify_download(public_id: str, expires: int, signature: str, secret: str, now: int | None = None) -> bool:
@@ -42,15 +52,27 @@ def quote_download_response(public_id: str, expires: int, signature: str):
     secret = os.environ.get("ALI_QUOTE_DOWNLOAD_SECRET", "")
     if not verify_download(public_id, expires, signature, secret):
         return Response(status_code=404)
-    quote = get_quote(public_id)
-    path = Path(str((quote or {}).get("pdf_path") or "")).resolve()
+    image_asset = public_id.endswith("--image")
+    quote_id = public_id[:-7] if image_asset else public_id
+    quote = get_quote(quote_id)
+    path_key = "brand_image_path" if image_asset else "pdf_path"
+    digest_key = "brand_image_sha256" if image_asset else "pdf_sha256"
+    path = Path(str((quote or {}).get(path_key) or "")).resolve()
     root = Path(os.environ.get("ALI_QUOTE_DATA_ROOT", "/app/data/ali-quotes")).resolve()
     try:
         path.relative_to(root)
     except (ValueError, OSError):
         return Response(status_code=404)
-    if not path.is_file() or not (quote or {}).get("pdf_sha256"):
+    if not path.is_file() or not (quote or {}).get(digest_key):
         return Response(status_code=404)
+    if image_asset:
+        return FileResponse(
+            str(path), media_type="image/png",
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
     try:
         customer = json.loads(quote.get("customer_json") or "{}")
         pricing = json.loads(quote.get("pricing_json") or "{}")
