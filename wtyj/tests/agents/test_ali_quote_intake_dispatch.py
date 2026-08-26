@@ -1,4 +1,5 @@
 import json
+import threading
 
 import httpx
 
@@ -181,3 +182,50 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     assert "@" not in reply
     assert fields["vehicle_class_id"] == CLASS_ID
     assert flags["awaiting_quote_confirmation"] is True
+
+
+def test_confirmation_reply_stays_immediate_while_quote_worker_runs(monkeypatch):
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    fields = {
+        "customer_name": "Synthetic Calvin",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Curaçao International Airport",
+        "return_location": "Curaçao International Airport",
+        "vehicle_class_name": "Economy car",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {}
+    started = []
+
+    class RecordingThread:
+        def __init__(self, target, args, daemon):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append({
+                "target": self.target,
+                "args": self.args,
+                "daemon": self.daemon,
+            })
+
+    workflow.handle_ali_quote_turn(
+        "synthetic-8003", "synthetic-account", "+351000000000",
+        "These are my complete rental details.", fields, flags,
+        from_name="Synthetic Calvin", raw_config=raw_config(),
+    )
+    monkeypatch.setattr(threading, "Thread", RecordingThread)
+
+    reply = workflow.handle_ali_quote_turn(
+        "synthetic-8003", "synthetic-account", "+351000000000",
+        "yes", fields, flags, from_name="Synthetic Calvin",
+        raw_config=raw_config(), processor=lambda _public_id: None,
+    )
+
+    assert reply == workflow.PREPARING["en"]
+    assert flags["awaiting_quote_confirmation"] is False
+    assert len(started) == 1
+    assert started[0]["daemon"] is True

@@ -159,22 +159,62 @@ def test_duplicate_confirmation_creates_one_quote_and_ali_request_has_no_pii(mon
     assert not any(term in serialized for term in ("synthetic customer", "whatsapp", "location", "conversation", "phone", "email"))
 
 
-def test_quote_processing_waits_only_the_remaining_three_minutes(monkeypatch, tmp_path):
+def test_customer_delivery_delay_uses_persisted_confirmation(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
     confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
 
-    assert workflow.seconds_until_quote_processing(
+    assert workflow.seconds_until_customer_quote_delivery(
         quote, now=confirmed_at + timedelta(seconds=60),
     ) == 120
-    assert workflow.seconds_until_quote_processing(
+    assert workflow.seconds_until_customer_quote_delivery(
         quote, now=confirmed_at + timedelta(seconds=180),
     ) == 0
-    assert workflow.seconds_until_quote_processing(
+    assert workflow.seconds_until_customer_quote_delivery(
         quote, now=confirmed_at + timedelta(minutes=10),
     ) == 0
 
 
-def test_quote_processing_delays_pricing_and_delivery(monkeypatch, tmp_path):
+def test_fresh_confirmation_delays_only_customer_whatsapp(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
+    events = []
+
+    def render_pdf(*_args, **_kwargs):
+        events.append("pdf")
+        path = tmp_path / "quote.pdf"
+        data = b"%PDF-1.4\nsynthetic quote"
+        path.write_bytes(data)
+        return str(path), hashlib.sha256(data).hexdigest()
+
+    monkeypatch.setattr(workflow, "render_quote_pdf", render_pdf)
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            events.append("pricing")
+            return pricing()
+
+    adapters = workflow.DeliveryAdapters(
+        send_whatsapp=lambda *_: events.append("whatsapp") or True,
+        send_staff_email=lambda *_: events.append("email") or True,
+        send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
+        escalate=lambda *_: events.append("escalate"),
+    )
+    result = workflow.process_quote(
+        quote["public_id"], Client(), adapters,
+        {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": True},
+        output_root=str(tmp_path),
+        sleep=lambda seconds: events.append(("sleep", seconds)),
+        now=lambda: confirmed_at,
+    )
+
+    assert result["status"] == "complete"
+    assert events == [
+        "pricing", "pdf", "email", "alerts", ("sleep", 180.0),
+        "whatsapp",
+    ]
+
+
+def test_resume_at_plus_60_waits_only_remaining_120_seconds(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
     confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
     events = []
@@ -187,19 +227,71 @@ def test_quote_processing_delays_pricing_and_delivery(monkeypatch, tmp_path):
     adapters = workflow.DeliveryAdapters(
         send_whatsapp=lambda *_: events.append("whatsapp") or True,
         send_staff_email=lambda *_: events.append("email") or True,
-        send_operator_alerts=lambda *_: {},
+        send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
         escalate=lambda *_: events.append("escalate"),
     )
+    immediate_only = {
+        "automation": True,
+        "customer_delivery": False,
+        "staff_email": True,
+        "operator_alerts": True,
+    }
+    workflow.process_quote(
+        quote["public_id"], Client(), adapters, immediate_only,
+        output_root=str(tmp_path), now=lambda: confirmed_at,
+    )
+    assert events == ["pricing", "email", "alerts"]
+
+    events.clear()
     result = workflow.process_quote(
         quote["public_id"], Client(), adapters,
-        {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": False},
+        {**immediate_only, "customer_delivery": True},
         output_root=str(tmp_path),
         sleep=lambda seconds: events.append(("sleep", seconds)),
         now=lambda: confirmed_at + timedelta(seconds=60),
     )
 
     assert result["status"] == "complete"
-    assert events == [("sleep", 120.0), "pricing", "whatsapp", "email"]
+    assert events == [("sleep", 120.0), "whatsapp"]
+
+
+def test_resume_at_three_minute_boundary_sends_without_wait(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
+    events = []
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            return pricing()
+
+    adapters = workflow.DeliveryAdapters(
+        send_whatsapp=lambda *_: events.append("whatsapp") or True,
+        send_staff_email=lambda *_: events.append("email") or True,
+        send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
+        escalate=lambda *_: events.append("escalate"),
+    )
+    immediate_only = {
+        "automation": True,
+        "customer_delivery": False,
+        "staff_email": True,
+        "operator_alerts": True,
+    }
+    workflow.process_quote(
+        quote["public_id"], Client(), adapters, immediate_only,
+        output_root=str(tmp_path), now=lambda: confirmed_at,
+    )
+    events.clear()
+
+    result = workflow.process_quote(
+        quote["public_id"], Client(), adapters,
+        {**immediate_only, "customer_delivery": True},
+        output_root=str(tmp_path),
+        sleep=lambda seconds: events.append(("sleep", seconds)),
+        now=lambda: confirmed_at + timedelta(seconds=180),
+    )
+
+    assert result["status"] == "complete"
+    assert events == ["whatsapp"]
 
 
 def test_ali_client_retries_one_transient_failure_and_validates_72_hours():
@@ -318,6 +410,13 @@ def test_signed_download_uses_same_official_customer_filename(monkeypatch, tmp_p
 
 def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
+    _, digest = workflow.normalized_summary(customer(), rental())
+    duplicate, created = workflow.create_confirmed_quote(
+        "conversation-synthetic", "account-synthetic", customer(), rental(),
+        digest, "yes", DEPOSIT_ID, raw_config=raw_config(),
+    )
+    assert created is False
+    assert duplicate["public_id"] == quote["public_id"]
     counts = {"whatsapp": 0, "email": 0, "alerts": 0, "escalate": 0}
 
     class Client:
@@ -331,8 +430,16 @@ def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
         escalate=lambda *_: counts.__setitem__("escalate", counts["escalate"] + 1),
     )
     switches = {"automation": True, "customer_delivery": True, "staff_email": True, "operator_alerts": True}
-    first = workflow.process_quote(quote["public_id"], Client(), adapters, switches, output_root=str(tmp_path), delay_seconds=0)
-    second = workflow.process_quote(quote["public_id"], Client(), adapters, switches, output_root=str(tmp_path), delay_seconds=0)
+    confirmed_at = datetime.fromisoformat(quote["confirmed_at"].replace("Z", "+00:00"))
+    after_boundary = lambda: confirmed_at + timedelta(seconds=180)
+    first = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), now=after_boundary,
+    )
+    second = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), now=after_boundary,
+    )
     assert first["status"] == second["status"] == "complete"
     assert counts == {"whatsapp": 1, "email": 1, "alerts": 1, "escalate": 0}
 
