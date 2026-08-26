@@ -7,6 +7,8 @@ from shared import state_registry
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
 ECONOMY_VEHICLE_ID = "40000000-0000-4000-8000-000000000001"
 VAN_CLASS_ID = "30000000-0000-4000-8000-000000000002"
+SUV_CLASS_ID = "30000000-0000-4000-8000-000000000003"
+SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000003"
 
 
 def raw_config():
@@ -34,17 +36,44 @@ def correction_catalog():
         "vehicleClasses": [
             {"id": CLASS_ID, "name": "Economy", "description": "Economy"},
             {"id": VAN_CLASS_ID, "name": "Van", "description": "Van"},
+            {
+                "id": SUV_CLASS_ID,
+                "name": "Compact SUV",
+                "description": "Compact SUV",
+            },
         ],
-        "vehicles": [{
-            "id": ECONOMY_VEHICLE_ID,
-            "classId": CLASS_ID,
-            "name": "Kia Picanto 2024 or similar",
-            "seats": 4,
-            "transmission": "automatic",
-            "features": ["Air conditioning"],
-            "dailyRate": {"currency": "USD", "amount": "35.00"},
-            "weeklyRate": {"currency": "USD", "amount": "245.00"},
-        }],
+        "vehicles": [
+            {
+                "id": ECONOMY_VEHICLE_ID,
+                "slug": "kia-picanto",
+                "classId": CLASS_ID,
+                "name": "Kia Picanto 2024 or similar",
+                "seats": 4,
+                "transmission": "automatic",
+                "features": ["Air conditioning"],
+                "dailyRate": {"currency": "USD", "amount": "35.00"},
+                "weeklyRate": {"currency": "USD", "amount": "245.00"},
+                "images": [{
+                    "url": "/brand/vehicles/kia-picanto.png",
+                    "alt": "Ali Kia Picanto",
+                }],
+            },
+            {
+                "id": SUV_VEHICLE_ID,
+                "slug": "kia-seltos",
+                "classId": SUV_CLASS_ID,
+                "name": "Kia Seltos or similar",
+                "seats": 5,
+                "transmission": "automatic",
+                "features": ["Air conditioning"],
+                "dailyRate": {"currency": "USD", "amount": "65.00"},
+                "weeklyRate": {"currency": "USD", "amount": "455.00"},
+                "images": [{
+                    "url": "/brand/vehicles/kia-seltos.png",
+                    "alt": "Ali Kia Seltos",
+                }],
+            },
+        ],
         "extras": [],
         "charges": [],
     }
@@ -164,6 +193,176 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
     assert second == "Of course. I’ll update the vehicle."
 
 
+def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-195"
+    fields = _stored_fields()
+    fields.pop("vehicle_id")
+    fields.pop("vehicle_name")
+    fields["vehicle_class_id"] = VAN_CLASS_ID
+    fields["vehicle_class_name"] = "Van"
+    customer = {"name": fields["customer_name"], "whatsapp": "+351000000000"}
+    rental = {
+        key: fields.get(key) for key in (
+            "rental_start", "rental_end", "pickup_location", "return_location",
+            "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+            "driver_age", "passenger_count", "luggage_count", "supplements",
+            "comments", "conversation_language",
+        )
+    }
+    _, old_hash = workflow.normalized_summary(customer, rental)
+    flags = {
+        "ali_summary_hash": old_hash,
+        "ali_summary_version": 1,
+        "awaiting_quote_confirmation": True,
+        "ali_quote_public_id": "immutable-old-quote",
+    }
+    result = {
+        "intents": ["inquiry"],
+        "fields": {"vehicle_class_name": "Compact SUV"},
+        "confidence": "high",
+        "reply": "I can show you an SUV option. Does this size suit your trip?",
+        "requires_human": False,
+        "flags": {},
+        "ali_rental_change": {
+            "mode": "apply",
+            "changed_fields": ["vehicle_selection"],
+            "vehicle_selection_kind": "category",
+        },
+        "ali_vehicle_recommendation": {
+            "mode": "specific",
+            "vehicle_names": ["Kia Seltos or similar"],
+            "availability_note": "Final vehicle availability still needs confirmation.",
+            "cta_label": "View car",
+        },
+    }
+    _configure(monkeypatch, tmp_path, result)
+    monkeypatch.setattr(workflow, "_process_production", lambda _public_id: None)
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    visual = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "I want an SUV, can you show image?",
+            "from_name": "Synthetic Customer",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    after_visual = state_registry.wa_get_booking_state(phone)
+
+    assert visual["vehicle_recommendation"]["kind"] == "image"
+    assert visual["vehicle_recommendation"]["options"][0]["id"] == SUV_VEHICLE_ID
+    assert "Just checking" not in visual["text"]
+    assert after_visual["fields"]["vehicle_class_id"] == SUV_CLASS_ID
+    assert "vehicle_id" not in after_visual["fields"]
+    assert after_visual["flags"]["ali_summary_deferred_for_recommendation"] is True
+    assert "ali_summary_hash" not in after_visual["flags"]
+    assert "awaiting_quote_confirmation" not in after_visual["flags"]
+    assert "ali_quote_public_id" not in after_visual["flags"]
+
+    rejection_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "No problem. Would you prefer something roomier or more compact?",
+        "requires_human": False,
+        "flags": {},
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: rejection_result,
+    )
+    rejection = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "No, it doesn’t.",
+            "from_name": "Synthetic Customer",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    assert rejection["text"] == rejection_result["reply"]
+    assert rejection["vehicle_recommendation"] is None
+    assert "Just checking" not in rejection["text"]
+
+    choice_result = {
+        "intents": ["inquiry"],
+        "fields": {"vehicle_name": "Kia Seltos or similar"},
+        "confidence": "high",
+        "reply": "I’ll use the Kia Seltos option.",
+        "requires_human": False,
+        "flags": {},
+        "ali_rental_change": {
+            "mode": "apply",
+            "changed_fields": ["vehicle_selection"],
+            "vehicle_selection_kind": "vehicle",
+        },
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: choice_result,
+    )
+    corrected = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "The Kia Seltos works for me.",
+            "from_name": "Synthetic Customer",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    after_choice = state_registry.wa_get_booking_state(phone)
+
+    assert corrected["text"].count("Just checking I’ve got everything right:") == 1
+    assert "Car: Kia Seltos or similar" in corrected["text"]
+    assert after_choice["fields"]["vehicle_id"] == SUV_VEHICLE_ID
+    assert after_choice["flags"]["awaiting_quote_confirmation"] is True
+    assert "ali_summary_deferred_for_recommendation" not in after_choice["flags"]
+
+    confirmation_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Thank you.",
+        "requires_human": False,
+        "flags": {},
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: confirmation_result,
+    )
+    for _ in range(2):
+        prepared = social_agent.handle_incoming_whatsapp_message(
+            {
+                "from": phone,
+                "text": "Yes, it does look right.",
+                "from_name": "Synthetic Customer",
+                "_zernio_sender_id": "+351000000000",
+                "_zernio_account_id": "synthetic-account",
+            },
+            include_media=True,
+        )
+        assert prepared["text"] == workflow.PREPARING["en"]
+    conn = workflow._connection()
+    try:
+        quote_count = conn.execute(
+            "SELECT COUNT(*) FROM ali_quotes WHERE conversation_id = ?",
+            (phone,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert quote_count == 1
+
+
 def test_generic_change_request_asks_clarification_without_old_summary(monkeypatch, tmp_path):
     phone = "synthetic-issue-190-clarify"
     fields = _stored_fields()
@@ -193,6 +392,81 @@ def test_generic_change_request_asks_clarification_without_old_summary(monkeypat
     assert "Just checking" not in reply
     assert saved["fields"] == fields
     assert saved["flags"]["ali_summary_hash"] == "old-hash"
+
+
+def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-195-price"
+    fields = _stored_fields()
+    customer = {"name": fields["customer_name"], "whatsapp": "+351000000000"}
+    rental = {
+        key: fields.get(key) for key in (
+            "rental_start", "rental_end", "pickup_location", "return_location",
+            "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+            "driver_age", "passenger_count", "luggage_count", "supplements",
+            "comments", "conversation_language",
+        )
+    }
+    _, summary_hash = workflow.normalized_summary(customer, rental)
+    flags = {
+        "ali_summary_hash": summary_hash,
+        "ali_summary_version": 1,
+        "awaiting_quote_confirmation": True,
+    }
+    price_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": (
+            "The published rate is USD 35.00 per day. Your final price will be "
+            "shown in the official quote I’ll prepare and send here in a few minutes."
+        ),
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, price_result)
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    answer = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "What is the price?",
+        "from_name": "Synthetic Customer",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    })
+    after_answer = state_registry.wa_get_booking_state(phone)
+
+    assert answer == price_result["reply"]
+    assert "Just checking" not in answer
+    assert after_answer["flags"]["ali_summary_hash"] == summary_hash
+    assert after_answer["flags"]["awaiting_quote_confirmation"] is True
+
+    repeat_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Here it is.",
+        "requires_human": False,
+        "flags": {},
+        "ali_summary_action": {"mode": "repeat"},
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: repeat_result,
+    )
+    repeated = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Show me the summary again.",
+        "from_name": "Synthetic Customer",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    })
+
+    assert repeated.count("Just checking I’ve got everything right:") == 1
+    assert "Car: Kia Picanto 2024 or similar" in repeated
 
 
 def test_four_language_vehicle_change_actions_use_same_canonical_state():

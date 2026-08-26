@@ -1261,6 +1261,7 @@ def handle_ali_quote_turn(
     from_name: str = "",
     raw_config: dict | None = None,
     processor: Callable[[str], None] | None = None,
+    summary_action: object = None,
 ) -> str | None:
     """Prepare or confirm exactly one deterministic Ali summary.
 
@@ -1315,6 +1316,14 @@ def handle_ali_quote_turn(
     if accepted and flags.get("ali_quote_public_id") and not awaiting:
         flags["awaiting_quote_confirmation"] = False
         return PREPARING[rental["conversation_language"]]
+
+    if previous == digest and (awaiting or flags.get("ali_quote_public_id")) and not accepted:
+        if (
+            isinstance(summary_action, dict)
+            and summary_action.get("mode") == "repeat"
+        ):
+            return _summary_text(summary)
+        return None
 
     if awaiting and previous == digest and accepted:
         workflow = raw.get("workflow") or {}

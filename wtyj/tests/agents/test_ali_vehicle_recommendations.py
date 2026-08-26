@@ -193,6 +193,9 @@ def test_marina_schema_exposes_structured_action_without_server_ids():
     assert set(action["properties"]) == {
         "mode", "vehicle_names", "availability_note", "cta_label",
     }
+    summary_action = schema["ali_summary_action"]
+    assert summary_action["required"] == ["mode"]
+    assert summary_action["properties"]["mode"]["enum"] == ["repeat"]
 
 
 def test_ali_prompt_requests_one_image_or_two_to_three_curated_options(monkeypatch):
@@ -216,6 +219,8 @@ def test_ali_prompt_requests_one_image_or_two_to_three_curated_options(monkeypat
     assert "never dump the whole fleet" in prompt
     assert "not in `reply` and not on each card" in prompt
     assert "Ordinary typed vehicle choices remain valid" in prompt
+    assert "Do not repeat the unchanged summary" in prompt
+    assert "chooses one option from a visual recommendation" in prompt
 
 
 class _Response:

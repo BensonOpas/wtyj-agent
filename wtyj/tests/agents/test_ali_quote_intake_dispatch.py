@@ -385,6 +385,58 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     assert flags["awaiting_quote_confirmation"] is True
 
 
+def test_unchanged_summary_questions_and_explicit_repeat_are_locale_safe(monkeypatch):
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
+    for locale in ("en", "nl", "pap", "de"):
+        fields = {
+            "customer_name": "Synthetic Customer",
+            "rental_start": "2026-09-01",
+            "rental_end": "2026-09-04",
+            "pickup_location": "Synthetic airport",
+            "return_location": "Synthetic hotel",
+            "vehicle_class_name": "Economy",
+            "driver_age": 30,
+            "conversation_language": locale,
+        }
+        flags = {}
+        first = workflow.handle_ali_quote_turn(
+            f"synthetic-{locale}",
+            "synthetic-account",
+            "+351000000000",
+            "complete details",
+            fields,
+            flags,
+            from_name="Synthetic Customer",
+            raw_config=raw_config(),
+        )
+
+        ordinary_question = workflow.handle_ali_quote_turn(
+            f"synthetic-{locale}",
+            "synthetic-account",
+            "+351000000000",
+            "ordinary question",
+            fields,
+            flags,
+            from_name="Synthetic Customer",
+            raw_config=raw_config(),
+        )
+        repeated = workflow.handle_ali_quote_turn(
+            f"synthetic-{locale}",
+            "synthetic-account",
+            "+351000000000",
+            "repeat request",
+            fields,
+            flags,
+            from_name="Synthetic Customer",
+            raw_config=raw_config(),
+            summary_action={"mode": "repeat"},
+        )
+
+        assert ordinary_question is None
+        assert repeated == first
+        assert flags["awaiting_quote_confirmation"] is True
+
+
 def test_complete_intake_includes_child_seat_and_refreshes_catalog_price(monkeypatch):
     current = catalog()
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda: current)
