@@ -502,6 +502,7 @@ def test_curated_recommendation_recovers_omitted_independent_vehicle_patch(
             "text": "I want an SUV, can you show me an image?",
             "from_name": "Synthetic Customer",
             "message_id": "synthetic-recommendation-fallback",
+            "_ali_action_id": "1" * 64,
             "_zernio_sender_id": "+351000000000",
             "_zernio_account_id": "synthetic-account",
         },
@@ -516,6 +517,46 @@ def test_curated_recommendation_recovers_omitted_independent_vehicle_patch(
     assert "vehicle_name" not in saved["fields"]
     assert "awaiting_quote_confirmation" not in saved["flags"]
     assert response["ali_turn_commit"]["phase"] == "DISCOVERY"
+    first_idempotency_key = response["vehicle_recommendation"]["idempotency_key"]
+    assert first_idempotency_key.startswith("ali-vehicle-")
+    _commit_result(phone, response, "recommendation-fallback")
+
+    replay = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "I want an SUV, can you show me an image?",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-recommendation-fallback",
+            "_ali_action_id": "1" * 64,
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    assert replay["text"] == ""
+    assert replay["vehicle_recommendation"] is None
+    assert replay["ali_turn_commit"] is None
+
+    explicit_resend = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "Please show those SUV pictures again.",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-recommendation-resend",
+            "_ali_action_id": "2" * 64,
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    assert explicit_resend["vehicle_recommendation"]["kind"] == "carousel"
+    assert explicit_resend["vehicle_recommendation"]["idempotency_key"].startswith(
+        "ali-vehicle-"
+    )
+    assert (
+        explicit_resend["vehicle_recommendation"]["idempotency_key"]
+        != first_idempotency_key
+    )
 
 
 def test_generic_change_request_asks_clarification_without_old_summary(monkeypatch, tmp_path):
