@@ -1837,6 +1837,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     fields,
                     flags,
                     _ali_catalog_for_media,
+                    message_text=text,
                 )
                 media_first_status = str(media_first.get("status") or "")
                 media_first_reason = str(media_first.get("reason") or "")

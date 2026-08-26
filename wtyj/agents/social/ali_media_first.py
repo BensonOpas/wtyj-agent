@@ -31,6 +31,14 @@ _RECOMMENDATION_REQUEST = re.compile(
     r"empfehlen|empfehlung|geeignet)\b",
     re.IGNORECASE,
 )
+_LOWEST_PRICE_REQUEST = re.compile(
+    r"\b(?:cheapest|lowest[- ]price(?:d)?|least expensive|most affordable|"
+    r"goedkoopste|laagste prijs|voordeligste|"
+    r"mas barata|mas barato|preis mas abou|mas ekonomiko|"
+    r"g[uü]nstig(?:ste|sten|ster|stes)|billigste|niedrigste[nr]? preis|"
+    r"preiswerteste)\b",
+    re.IGNORECASE,
+)
 _REJECTION = re.compile(
     r"\b(?:don['’]?t like|do not like|doesn['’]?t work|does not work|"
     r"not right|nope|nee|niet goed|no ta bon|mi no ke|gef[aä]llt nicht|"
@@ -69,6 +77,8 @@ _COPY = {
         "repair_vehicle": "Sorry, I wasn't clear. I have {vehicle} as your selected car. What rental dates do you need?",
         "resume_vehicle": "Hi! I have {vehicle} as your selected car. What rental dates do you need?",
         "repair_general": "Sorry, I wasn't clear. What would you like me to explain?",
+        "lowest_price_many": "{vehicle} is the lowest-priced suitable option at USD {price} per day. I’ve included the closest alternatives so you can compare.",
+        "lowest_price_one": "{vehicle} is the lowest-priced suitable option at USD {price} per day.",
     },
     "nl": {
         "intro_one": "Hier is een auto die past bij wat je zoekt. Past deze bij je reis?",
@@ -83,6 +93,8 @@ _COPY = {
         "repair_vehicle": "Sorry, ik was niet duidelijk. Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
         "resume_vehicle": "Hallo! Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
         "repair_general": "Sorry, ik was niet duidelijk. Wat wil je dat ik uitleg?",
+        "lowest_price_many": "{vehicle} is de voordeligste passende optie voor USD {price} per dag. Ik heb de dichtstbijzijnde alternatieven toegevoegd zodat je kunt vergelijken.",
+        "lowest_price_one": "{vehicle} is de voordeligste passende optie voor USD {price} per dag.",
     },
     "pap": {
         "intro_one": "Aki tin un outo ku ta pas ku loke bo ta buska. E ta pas ku bo biahe?",
@@ -97,6 +109,8 @@ _COPY = {
         "repair_vehicle": "Pordon, mi no tabata kla. Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
         "resume_vehicle": "Bon dia! Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
         "repair_general": "Pordon, mi no tabata kla. Kiko bo ke pa mi splika?",
+        "lowest_price_many": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia. Mi a agregá e alternativanan mas serka pa bo por kompará.",
+        "lowest_price_one": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia.",
     },
     "de": {
         "intro_one": "Hier ist ein Auto, das zu Ihrer Anfrage passt. Passt es zu Ihrer Reise?",
@@ -111,6 +125,8 @@ _COPY = {
         "repair_vehicle": "Entschuldigung, ich war nicht klar. Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
         "resume_vehicle": "Hallo! Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
         "repair_general": "Entschuldigung, ich war nicht klar. Was soll ich erklären?",
+        "lowest_price_many": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option. Ich habe die nächstgelegenen Alternativen zum Vergleichen hinzugefügt.",
+        "lowest_price_one": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option.",
     },
 }
 
@@ -202,6 +218,10 @@ def _catalog_order(vehicle: dict) -> tuple:
     if isinstance(order, bool) or not isinstance(order, int):
         order = 999999
     return order, _amount(vehicle), str(vehicle.get("name") or "").casefold()
+
+
+def _lowest_price_order(vehicle: dict) -> tuple:
+    return _amount(vehicle), _catalog_order(vehicle)
 
 
 def _mentioned_vehicles(reply_text: str, vehicles: list[dict]) -> list[dict]:
@@ -393,6 +413,7 @@ def derive_media_first_action(
     fields: dict,
     flags: dict,
     catalog: dict,
+    message_text: str = "",
 ) -> dict:
     """Return one deterministic media-first action decision.
 
@@ -412,12 +433,20 @@ def derive_media_first_action(
         str(vehicle["name"]).strip().casefold(): vehicle
         for vehicle in vehicles
     }
+    lowest_price_requested = bool(
+        _LOWEST_PRICE_REQUEST.search(str(message_text or ""))
+    )
 
     candidates = [
         vehicles_by_name[name.casefold()]
         for name in explicit_names
         if name.casefold() in vehicles_by_name
     ]
+    if lowest_price_requested:
+        # The model may suggest valid vehicles but it does not own price
+        # ranking. For an explicit cheapest request, Python recomputes the
+        # candidate set from the current server catalog.
+        candidates = []
     reason = "structured_action" if candidates else ""
     if not candidates and intent in _DISCOVERY_INTENTS:
         mentioned = _mentioned_vehicles(reply_text, vehicles)
@@ -472,6 +501,8 @@ def derive_media_first_action(
 
     passenger_count = fields.get("passenger_count")
     luggage_count = fields.get("luggage_count")
+    if lowest_price_requested:
+        candidates = []
     if not candidates:
         if (
             isinstance(passenger_count, bool)
@@ -505,14 +536,20 @@ def derive_media_first_action(
                 and vehicle["seats"] >= passenger_count
             )
         ]
-        reason = "capacity_curated"
+        reason = (
+            "lowest_price_catalog"
+            if lowest_price_requested else "capacity_curated"
+        )
 
     unique = {}
     for vehicle in candidates:
         vehicle_id = str(vehicle.get("id") or "").strip()
         if vehicle_id and vehicle_id not in excluded_ids:
             unique.setdefault(vehicle_id, vehicle)
-    candidates = sorted(unique.values(), key=_catalog_order)
+    candidates = sorted(
+        unique.values(),
+        key=_lowest_price_order if lowest_price_requested else _catalog_order,
+    )
 
     if not explicit_names and intent == "reject_or_hesitate":
         unshown = [
@@ -557,6 +594,16 @@ def derive_media_first_action(
 
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
+    if lowest_price_requested:
+        cheapest = candidates[0]
+        amount = _amount(cheapest)
+        price = f"{amount:.2f}"
+        intro = copy[
+            "lowest_price_one" if mode == "specific" else "lowest_price_many"
+        ].format(
+            vehicle=str(cheapest.get("name") or "").strip(),
+            price=price,
+        )
     return {
         "status": "planned",
         "action": {
@@ -567,7 +614,7 @@ def derive_media_first_action(
         },
         "reply_text": (
             intro
-            if not explicit_names
+            if lowest_price_requested or not explicit_names
             or (
                 isinstance(structured_action, dict)
                 and structured_action.get("selection_context") == "category"
