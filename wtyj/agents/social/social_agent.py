@@ -23,10 +23,15 @@ from agents.marina import gws_calendar
 from agents.marina import payment_stub
 from agents.marina import sheets_writer
 from agents.social.ali_quote_workflow import (
+    get_intake_catalog as get_ali_intake_catalog,
     handle_ali_quote_turn,
     sanitize_intake_reply as sanitize_ali_intake_reply,
     tenant_configured as ali_quote_tenant_configured,
     tenant_enabled as ali_quote_tenant_enabled,
+)
+from agents.social.ali_vehicle_recommendations import (
+    AliVehicleRecommendationError,
+    build_vehicle_recommendation,
 )
 
 
@@ -897,7 +902,8 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
     for fk in _BOOKING_FLAGS_TO_RESET:
         flags.pop(fk, None)
     for fk in ("fully_escalated", "awaiting_relay", "relay_token",
-               "relay_question", "reply_times", "returning_booking"):
+               "relay_question", "reply_times", "returning_booking",
+               "ali_vehicle_recommendation_deliveries"):
         flags.pop(fk, None)
 
     return True
@@ -1414,6 +1420,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _skip_booking = False
     _ali_workflow_configured = ali_quote_tenant_configured()
     _ali_workflow_on = ali_quote_tenant_enabled()
+    _ali_reply = None
     if _ali_workflow_on:
         _ali_reply = handle_ali_quote_turn(
             conversation_id=phone,
@@ -1431,6 +1438,32 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 reply_text,
                 fields.get("conversation_language"),
             )
+    recommendation_action = result.get("ali_vehicle_recommendation")
+    vehicle_recommendation = None
+    if (
+        include_media
+        and channel == "whatsapp"
+        and _ali_workflow_on
+        and not _ali_reply
+        and isinstance(recommendation_action, dict)
+        and not result.get("requires_human")
+    ):
+        try:
+            vehicle_recommendation = build_vehicle_recommendation(
+                recommendation_action,
+                get_ali_intake_catalog(),
+                fields,
+                flags,
+                reply_text,
+            )
+        except AliVehicleRecommendationError as exc:
+            bm_logger.log(
+                "ali_vehicle_recommendation_rejected",
+                reason=str(exc)[:80],
+                mode=str(recommendation_action.get("mode") or "")[:20],
+            )
+        if vehicle_recommendation:
+            reply_text = vehicle_recommendation["text"]
     if _ali_workflow_configured:
         # The generic booking engine must never create holds or contact redirects
         # for Ali, including while its master automation switch is off.
@@ -1959,7 +1992,12 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         )
 
     selected_media = None
-    if include_media and channel == "whatsapp" and not result.get("requires_human"):
+    if (
+        include_media
+        and channel == "whatsapp"
+        and not result.get("requires_human")
+        and not isinstance(recommendation_action, dict)
+    ):
         selected_media = _select_customer_media(text, reply_text, fields, flags, history)
         if selected_media:
             flags["last_media_id_sent"] = selected_media["id"]
@@ -1988,5 +2026,6 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         return {
             "text": reply_text,
             "media": selected_media,
+            "vehicle_recommendation": vehicle_recommendation,
         }
     return reply_text

@@ -22,6 +22,7 @@ from agents.social.zernio_dm_client import (
     parse_zernio_sent_webhook,
     verify_webhook_signature,
     send_dm_reply,
+    send_dm_vehicle_recommendation,
     send_typing_indicator,
 )
 from agents.social.dm_agent import handle_incoming_dm
@@ -421,6 +422,7 @@ def _flush_buffer(phone):
                 # agent even though they intentionally disable booking_flow.
                 _orchestrator_on = _use_whatsapp_orchestrator(_zernio_channel)
                 reply_media = None
+                reply_vehicle_recommendation = None
                 if _orchestrator_on:
                     state_registry.dm_store_message(
                         conversation_id=_zernio_conv,
@@ -437,6 +439,11 @@ def _flush_buffer(phone):
                     if isinstance(reply_result, dict):
                         reply_text = str(reply_result.get("text") or "")
                         reply_media = reply_result.get("media") if isinstance(reply_result.get("media"), dict) else None
+                        reply_vehicle_recommendation = (
+                            reply_result.get("vehicle_recommendation")
+                            if isinstance(reply_result.get("vehicle_recommendation"), dict)
+                            else None
+                        )
                     else:
                         reply_text = reply_result
                 else:
@@ -463,19 +470,36 @@ def _flush_buffer(phone):
                     reply_text, _zernio_channel)
                 if reply_text:
                     attachment_url = str((reply_media or {}).get("url") or "")
-                    ok = send_reply(
-                        _zernio_channel,
-                        _zernio_conv,
-                        _zernio_acct,
-                        reply_text,
-                        attachment_url=attachment_url,
-                        attachment_type="image" if attachment_url else "image",
-                    )
+                    recommendation_delivery = None
+                    if (
+                        _zernio_channel == "whatsapp"
+                        and reply_vehicle_recommendation
+                    ):
+                        reply_vehicle_recommendation = dict(
+                            reply_vehicle_recommendation
+                        )
+                        reply_vehicle_recommendation["text"] = reply_text
+                        recommendation_delivery = send_dm_vehicle_recommendation(
+                            _zernio_conv,
+                            _zernio_acct,
+                            reply_vehicle_recommendation,
+                        )
+                        ok = bool(recommendation_delivery.get("success"))
+                    else:
+                        ok = send_reply(
+                            _zernio_channel,
+                            _zernio_conv,
+                            _zernio_acct,
+                            reply_text,
+                            attachment_url=attachment_url,
+                            attachment_type="image" if attachment_url else "image",
+                        )
                     if not ok:
                         log("zernio_reply_send_failed",
                             channel=_zernio_channel,
                             conversation_id=_zernio_conv[:20],
-                            media_attached=bool(attachment_url))
+                            media_attached=bool(attachment_url),
+                            vehicle_recommendation=bool(reply_vehicle_recommendation))
                         _mark_delivery_failed(
                             _zernio_channel, _zernio_conv, _zernio_sender,
                             ids, "provider returned false")
@@ -486,6 +510,27 @@ def _flush_buffer(phone):
                         role="assistant",
                         text=reply_text,
                     )
+                    if recommendation_delivery:
+                        delivery = str(
+                            recommendation_delivery.get("delivery") or ""
+                        )
+                        state_hash = str(
+                            reply_vehicle_recommendation.get("state_hash") or ""
+                        )
+                        state_registry.wa_mark_vehicle_recommendation_delivered(
+                            _zernio_conv,
+                            state_hash,
+                            delivery,
+                        )
+                        state_registry.dm_store_message(
+                            conversation_id=_zernio_conv,
+                            channel=_zernio_channel,
+                            role="system",
+                            text=(
+                                "Ali vehicle recommendation sent: "
+                                f"{delivery}; {len(reply_vehicle_recommendation.get('options') or [])} option(s)"
+                            ),
+                        )
                     if attachment_url:
                         state_registry.increment_photo_used_count(int(reply_media["id"]))
                         state_registry.dm_store_message(
