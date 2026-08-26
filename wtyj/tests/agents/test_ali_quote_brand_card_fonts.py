@@ -86,11 +86,26 @@ def test_narrow_layout_preserves_logo_proportions_and_safe_bounds():
     assert fitted.height <= card.LOGO_MAX_SIZE[1]
     assert abs(fitted_ratio - source_ratio) < 0.005
 
-    logo_left = card.LOGO_POSITION[0]
-    logo_top = card.LOGO_POSITION[1] + (248 - fitted.height) // 2
+    logo_left, logo_top = card._centered_logo_position(fitted)
     panel_left, panel_top, panel_right, panel_bottom = card.PANEL_BOX
     assert panel_left <= logo_left < logo_left + fitted.width <= panel_right
     assert panel_top <= logo_top < logo_top + fitted.height <= panel_bottom
+
+
+def test_complete_logo_lockup_is_centered_inside_white_panel():
+    logo_path = Path(card.__file__).resolve().parents[2] / (
+        "assets/ali-logo-full-premium.png"
+    )
+    with Image.open(logo_path) as source:
+        fitted = card._fit_logo(source, *card.LOGO_MAX_SIZE)
+
+    logo_left, _ = card._centered_logo_position(fitted)
+    logo_midpoint = logo_left + (fitted.width / 2)
+    panel_left, _, panel_right, _ = card.PANEL_BOX
+    panel_midpoint = (panel_left + panel_right) / 2
+
+    assert abs(logo_midpoint - panel_midpoint) <= 0.5
+    assert abs(logo_midpoint - (card.WIDTH / 2)) <= 0.5
 
 
 def test_localized_titles_reference_and_footer_fit_safe_content_width():

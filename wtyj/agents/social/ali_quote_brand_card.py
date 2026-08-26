@@ -24,7 +24,8 @@ ACCENT_BOX = (
     (WIDTH + ACCENT_WIDTH) // 2,
     373,
 )
-LOGO_POSITION = (78, 71)
+LOGO_TOP = 71
+LOGO_VERTICAL_AREA_HEIGHT = 248
 LOGO_MAX_SIZE = (430, 250)
 CONTENT_LEFT = 64
 CONTENT_RIGHT = 48
@@ -73,6 +74,18 @@ def _fit_logo(source: Image.Image, max_width: int, max_height: int) -> Image.Ima
     logo = source.convert("RGBA")
     logo.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
     return logo
+
+
+def _centered_logo_position(logo: Image.Image) -> tuple[int, int]:
+    logo_x = round((WIDTH - logo.width) / 2)
+    logo_y = LOGO_TOP + (LOGO_VERTICAL_AREA_HEIGHT - logo.height) // 2
+    panel_left, panel_top, panel_right, panel_bottom = PANEL_BOX
+    if not (
+        panel_left <= logo_x < logo_x + logo.width <= panel_right
+        and panel_top <= logo_y < logo_y + logo.height <= panel_bottom
+    ):
+        raise QuoteBrandCardRenderError("Quote-card logo exceeds safe panel bounds")
+    return logo_x, logo_y
 
 
 def _fit_font(
@@ -124,8 +137,7 @@ def render_quote_brand_card(
 
     with Image.open(resolved_logo) as source:
         logo = _fit_logo(source, *LOGO_MAX_SIZE)
-    logo_x = LOGO_POSITION[0]
-    logo_y = LOGO_POSITION[1] + (248 - logo.height) // 2
+    logo_x, logo_y = _centered_logo_position(logo)
     image.paste(logo, (logo_x, logo_y), logo)
 
     title_font = _fit_font(TITLES[locale], 60, 48, bold=True)
