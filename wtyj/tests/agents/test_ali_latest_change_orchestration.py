@@ -559,6 +559,67 @@ def test_curated_recommendation_recovers_omitted_independent_vehicle_patch(
     )
 
 
+def test_explicit_suv_picture_request_overrides_model_continue_intake(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-195-explicit-discovery"
+    fields = _stored_fields()
+    fields.pop("luggage_count")
+    flags = {
+        "ali_phase": "SUMMARY_PRESENTED",
+        "ali_presented_summary_hash": "a" * 64,
+        "ali_summary_hash": "a" * 64,
+        "ali_summary_version": 1,
+        "ali_last_delivered_kind": "summary",
+        "awaiting_quote_confirmation": True,
+    }
+    model_result = {
+        "intents": ["inquiry"],
+        # Reproduce the live omission: SUV was put in the wrong display field,
+        # with no independent change or recommendation action.
+        "fields": {"vehicle_name": "SUV"},
+        "confidence": "high",
+        "reply": "How much luggage will you be bringing?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "continue_intake",
+    }
+    test_catalog = correction_catalog()
+    test_catalog["vehicleClasses"][2]["name"] = "SUV"
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: test_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: test_catalog)
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    response = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "I still want an SUV. Please show me the SUV pictures again.",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-explicit-suv-discovery",
+            "_ali_action_id": "3" * 64,
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["vehicle_recommendation"]["kind"] == "image"
+    assert response["vehicle_recommendation"]["options"][0]["id"] == SUV_VEHICLE_ID
+    assert response["text"] != model_result["reply"]
+    assert saved["fields"]["vehicle_class_id"] == SUV_CLASS_ID
+    assert saved["fields"]["vehicle_class_name"] == "SUV"
+    assert "vehicle_id" not in saved["fields"]
+    assert "vehicle_name" not in saved["fields"]
+    assert response["ali_turn_commit"]["phase"] == "DISCOVERY"
+    _commit_result(phone, response, "explicit-suv-discovery")
+    committed = state_registry.wa_get_booking_state(phone)
+    assert committed["flags"]["ali_last_delivered_kind"] == "vehicle_recommendation"
+    assert "awaiting_quote_confirmation" not in committed["flags"]
+
+
 def test_generic_change_request_asks_clarification_without_old_summary(monkeypatch, tmp_path):
     phone = "synthetic-issue-190-clarify"
     fields = _stored_fields()

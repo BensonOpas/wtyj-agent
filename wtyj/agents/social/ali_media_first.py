@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 
 
 _DISCOVERY_INTENTS = {"request_recommendation", "reject_or_hesitate"}
@@ -35,6 +36,18 @@ _REJECTION = re.compile(
     r"not right|nope|nee|niet goed|no ta bon|mi no ke|gef[aä]llt nicht|"
     r"passt nicht|changed? my mind|reconsider|bedacht|van gedachten|"
     r"kambia di idea|cambié de idea|anders entschieden)\b",
+    re.IGNORECASE,
+)
+_NEGATIVE_CLASS_PREFIX = re.compile(
+    r"(?:don t|do not|not|no|niet|geen|no ke|nicht|kein|keinen|keine)\s+"
+    r"(?:want|prefer|need|wil|ke|möchte|will|bevorzuge|suche)?\s*"
+    r"(?:(?:a|an|the|een|un|e|ein|eine|einen)\s+)?$",
+    re.IGNORECASE,
+)
+_POSITIVE_CLASS_PREFIX = re.compile(
+    r"(?:want|prefer|need|choose|select|wil|wilt|kies|zoek|ke|skohe|"
+    r"möchte|will|wähle|suche|bevorzuge)\s+"
+    r"(?:(?:a|an|the|een|un|e|ein|eine|einen)\s+)?$",
     re.IGNORECASE,
 )
 _COPY = {
@@ -194,6 +207,62 @@ def infer_media_first_intent(
     if has_vehicle_context and reopens_comparison:
         return "request_recommendation"
     return ""
+
+
+def infer_explicit_catalog_class_selection(
+    message_text: object,
+    catalog: dict,
+) -> dict | None:
+    """Resolve one explicit positive catalog-class discovery request.
+
+    This is a narrow fallback for turns where the model omits its independent
+    vehicle-change action. It accepts only an active server-owned class label
+    that the customer mentions in a positive choice/discovery context. It
+    never maps a display label to a vehicle and never guesses a category.
+    """
+    normalized = unicodedata.normalize(
+        "NFKC", str(message_text or ""),
+    ).casefold()
+    normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE).strip()
+    if not normalized:
+        return None
+
+    has_discovery_request = bool(
+        _VISUAL_REQUEST.search(str(message_text or ""))
+        or _RECOMMENDATION_REQUEST.search(str(message_text or ""))
+        or _ALTERNATIVE_REQUEST.search(str(message_text or ""))
+    )
+    candidates = []
+    for vehicle_class in catalog.get("vehicleClasses") or []:
+        if not isinstance(vehicle_class, dict):
+            continue
+        class_id = str(vehicle_class.get("id") or "").strip()
+        class_name = str(vehicle_class.get("name") or "").strip()
+        if not class_id or not class_name or vehicle_class.get("active", True) is False:
+            continue
+        label = unicodedata.normalize("NFKC", class_name).casefold()
+        label = re.sub(r"[^\w]+", " ", label, flags=re.UNICODE).strip()
+        if not label:
+            continue
+        for match in re.finditer(rf"(?<!\w){re.escape(label)}(?!\w)", normalized):
+            prefix = normalized[max(0, match.start() - 80):match.start()]
+            if _NEGATIVE_CLASS_PREFIX.search(prefix):
+                continue
+            if has_discovery_request or _POSITIVE_CLASS_PREFIX.search(prefix):
+                candidates.append((len(label.split()), class_id, class_name))
+                break
+
+    if not candidates:
+        return None
+    longest = max(item[0] for item in candidates)
+    matches = {(item[1], item[2]) for item in candidates if item[0] == longest}
+    if len(matches) != 1:
+        return None
+    class_id, class_name = next(iter(matches))
+    return {
+        "vehicle_class_id": class_id,
+        "vehicle_class_name": class_name,
+    }
 
 
 def _ids(flags: dict, key: str) -> set[str]:

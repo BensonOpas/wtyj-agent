@@ -4,6 +4,7 @@ import pytest
 
 from agents.social.ali_media_first import (
     derive_media_first_action,
+    infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
 )
@@ -144,6 +145,51 @@ def test_fallback_intent_understands_supported_discovery_languages(
         {},
         _catalog(),
     ) == expected
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "I still want an SUV. Show me the pictures.",
+        "Ik wil een SUV. Toon me de foto's.",
+        "Mi ke un SUV. Mustra mi e potrètnan.",
+        "Ich möchte einen SUV. Zeigen Sie mir die Bilder.",
+    ],
+)
+def test_explicit_catalog_class_discovery_is_resolved_in_all_locales(
+    message_text,
+):
+    assert infer_explicit_catalog_class_selection(
+        message_text, _catalog(),
+    ) == {
+        "vehicle_class_id": "suv",
+        "vehicle_class_name": "SUV",
+    }
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "I don't want an SUV.",
+        "Ik wil geen SUV.",
+        "Mi no ke SUV.",
+        "Ich will keinen SUV.",
+    ],
+)
+def test_negative_catalog_class_mentions_never_become_a_selection(message_text):
+    assert infer_explicit_catalog_class_selection(message_text, _catalog()) is None
+
+
+def test_longest_explicit_catalog_class_label_wins():
+    catalog = _catalog()
+    catalog["vehicleClasses"].append({"id": "compact-suv", "name": "Compact SUV"})
+
+    assert infer_explicit_catalog_class_selection(
+        "Please show me the Compact SUV pictures.", catalog,
+    ) == {
+        "vehicle_class_id": "compact-suv",
+        "vehicle_class_name": "Compact SUV",
+    }
 
 
 def test_text_vehicle_dump_is_converted_to_one_curated_visual_action():

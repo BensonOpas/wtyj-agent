@@ -41,6 +41,7 @@ from agents.social.ali_vehicle_recommendations import (
 )
 from agents.social.ali_media_first import (
     derive_media_first_action,
+    infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
 )
@@ -1516,6 +1517,50 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 _ali_change_fields,
             )
 
+    # P0 #195: an explicit catalog-class discovery request is independently
+    # actionable even when the model omits or misclassifies its structured
+    # rental-change action. Resolve only an exact active catalog class and
+    # apply it after model-field merging so a stale exact vehicle cannot win.
+    if (
+        _ali_change_configured
+        and not _ali_selected_this_turn
+        and _ali_change_outcome != "changed"
+    ):
+        try:
+            _explicit_class = infer_explicit_catalog_class_selection(
+                text,
+                get_ali_intake_catalog(),
+            )
+        except Exception:
+            _explicit_class = None
+        if _explicit_class:
+            _before_selection = {
+                key: fields.get(key)
+                for key in (
+                    "vehicle_id", "vehicle_name", "vehicle_class_id",
+                    "vehicle_class_name",
+                )
+                if fields.get(key) not in (None, "")
+            }
+            for key in (
+                "vehicle_id", "vehicle_name", "vehicle_class_id",
+                "vehicle_class_name",
+            ):
+                fields.pop(key, None)
+            fields.update(_explicit_class)
+            _after_selection = {
+                key: fields.get(key)
+                for key in ("vehicle_class_id", "vehicle_class_name")
+            }
+            if _after_selection != _before_selection:
+                _ali_change_outcome = "changed"
+                _ali_change_fields = ("vehicle_selection",)
+                invalidate_active_quote_summary(flags)
+                log_rental_change_decision(
+                    _ali_change_outcome,
+                    _ali_change_fields,
+                )
+
     # Callback-follow-up tenants persist one evolving, tenant-local request.
     # The normal booking fields remain untouched so this capability is isolated
     # from every existing tenant workflow.
@@ -1626,15 +1671,16 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             media_first_intent = str(
                 result.get("ali_primary_intent") or ""
             ).strip().lower()
-            if not media_first_intent:
-                media_first_intent = infer_media_first_intent(
-                    text,
-                    reply_text,
-                    recommendation_action,
-                    fields,
-                    flags,
-                    _ali_catalog_for_media,
-                )
+            _deterministic_media_intent = infer_media_first_intent(
+                text,
+                reply_text,
+                recommendation_action,
+                fields,
+                flags,
+                _ali_catalog_for_media,
+            )
+            if _deterministic_media_intent:
+                media_first_intent = _deterministic_media_intent
             media_first = derive_media_first_action(
                 media_first_intent,
                 recommendation_action,
