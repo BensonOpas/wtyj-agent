@@ -440,8 +440,7 @@ def _confirmed_text_reply(
     terminal_success = {"sent", "delivered", "read"}
     terminal_failure = {"failed", "rejected", "undeliverable"}
 
-    attempts = 20 if require_delivered else 8
-    for attempt in range(attempts):
+    for attempt in range(8):
         if attempt:
             time.sleep(0.5)
         status_response = http_requests.get(
@@ -722,7 +721,8 @@ def _confirm_recommendation_status(
         if require_delivered else {"sent", "delivered", "read"}
     )
     terminal_failure = {"failed", "rejected", "undeliverable"}
-    for attempt in range(8):
+    attempts = 20 if require_delivered else 8
+    for attempt in range(attempts):
         if attempt:
             time.sleep(0.5)
         try:
