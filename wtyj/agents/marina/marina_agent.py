@@ -227,11 +227,12 @@ MARINA_TOOL = {
             "ali_vehicle_recommendation": {
                 "type": "object",
                 "description": (
-                    "Ali only and optional: request one catalog-grounded visual recommendation. "
+                    "Ali only: request one catalog-grounded visual recommendation whenever "
+                    "the customer is comparing/discovering cars and catalog media exists. "
                     "Use `specific` only when the customer requested or chose one exact current "
                     "vehicle. Use `curated` only after an undecided customer supplied enough "
-                    "passenger/luggage context; choose only the best 2–3 exact current vehicle "
-                    "names. Omit this object when no visual should be sent."
+                    "passenger/luggage context; choose only the best 2–5 exact current vehicle "
+                    "names. Omit this object only when no visual should be sent."
                 ),
                 "properties": {
                     "mode": {
@@ -241,7 +242,7 @@ MARINA_TOOL = {
                     "vehicle_names": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 3,
+                        "maxItems": 5,
                         "uniqueItems": True,
                         "items": {"type": "string"},
                         "description": "Exact current vehicle names from the injected Ali catalog.",
@@ -1063,13 +1064,17 @@ Current published catalog, supplied digitally by Ali and containing no customer 
     store that exact choice but do not send the same visual again; allow Python to present
     the corrected confirmation summary.
   - When the customer is genuinely undecided and passenger_count plus relevant luggage needs
-    are understood, choose only the best 2–3 suitable current vehicles and populate mode
-    `curated`. Never choose more than 3 and never dump the whole fleet. In `reply`, introduce
+    are understood, choose only the best 2–5 suitable current vehicles and populate mode
+    `curated`. Never choose more than 5 and never dump the whole fleet. In `reply`, introduce
     those options naturally and ask which feels right for the trip.
   - Put one concise localized request-only availability sentence in `availability_note`, not
     in `reply` and not on each card. Use a short localized details-page label in `cta_label`.
   - Do not restate card facts in `reply`; the catalog renderer adds them without invention.
     Ordinary typed vehicle choices remain valid; never force the customer to use a button.
+  - MEDIA-FIRST IS MANDATORY during vehicle discovery. If your reply would name or offer
+    two or more current cars, you MUST populate `ali_vehicle_recommendation`; never print a
+    text-only enumerated vehicle list. If trip context is insufficient, ask one useful
+    passenger/luggage question instead of listing cars or asking for personal details.
   - Omit `ali_vehicle_recommendation` until these conditions are met and whenever Python's
     exact summary or quote preparation response is expected to replace your reply.
 - Do not calculate rental totals, deposits, discounts, duration rates, dynamic prices,

@@ -2,7 +2,11 @@
 
 import pytest
 
-from agents.social.ali_media_first import derive_media_first_action
+from agents.social.ali_media_first import (
+    derive_media_first_action,
+    infer_media_first_intent,
+    media_first_clarification,
+)
 
 
 def _vehicle(index, name, class_id, seats, amount):
@@ -46,6 +50,100 @@ def test_non_discovery_after_exact_choice_does_not_repeat_visuals():
     )
 
     assert decision == {"status": "not_discovery", "action": None}
+
+
+def test_fallback_intent_detects_text_dump_and_explicit_picture_request():
+    catalog = _catalog()
+    assert infer_media_first_intent(
+        "What else do you have?",
+        "Kia Picanto 2024 or similar and Toyota Yaris or similar",
+        None,
+        {"vehicle_class_id": "compact"},
+        {},
+        catalog,
+    ) == "reject_or_hesitate"
+    assert infer_media_first_intent(
+        "Can you show me pictures of the car?",
+        "Of course.",
+        None,
+        {"vehicle_id": "vehicle-4"},
+        {},
+        catalog,
+    ) == "request_recommendation"
+
+
+def test_fallback_intent_does_not_repeat_visual_for_ordinary_price_answer():
+    assert infer_media_first_intent(
+        "What is the price?",
+        "The Toyota Yaris or similar is USD 45 per day.",
+        None,
+        {"vehicle_id": "vehicle-4"},
+        {"ali_last_recommendation_ids": ["vehicle-4"]},
+        _catalog(),
+    ) == ""
+
+
+def test_fallback_intent_enforces_single_offer_when_no_exact_car_selected():
+    assert infer_media_first_intent(
+        "What do you recommend?",
+        "I recommend Toyota Yaris or similar.",
+        None,
+        {"passenger_count": 4, "luggage_count": 1},
+        {},
+        _catalog(),
+    ) == "request_recommendation"
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "What car do you recommend?",
+        "Ik wil graag advies over een auto",
+        "Kua outo bo ta rekomendá?",
+        "Welches Auto können Sie empfehlen?",
+    ],
+)
+def test_recommendation_request_reopens_discovery(message_text):
+    assert infer_media_first_intent(
+        message_text,
+        "Natural reply",
+        None,
+        {"vehicle_id": "vehicle-4"},
+        {},
+        _catalog(),
+    ) == "reject_or_hesitate"
+
+
+def test_changed_mind_reopens_discovery_after_exact_choice():
+    assert infer_media_first_intent(
+        "I changed my mind",
+        "No problem.",
+        None,
+        {"vehicle_id": "vehicle-4"},
+        {"ali_last_recommendation_ids": ["vehicle-4"]},
+        _catalog(),
+    ) == "reject_or_hesitate"
+
+
+@pytest.mark.parametrize(
+    ("message_text", "expected"),
+    [
+        ("Ik wil een andere auto", "reject_or_hesitate"),
+        ("Mi ke mira potrèt di e outo", "request_recommendation"),
+        ("Zeigen Sie mir bitte Bilder vom Auto", "request_recommendation"),
+    ],
+)
+def test_fallback_intent_understands_supported_discovery_languages(
+    message_text, expected,
+):
+    assert infer_media_first_intent(
+        message_text,
+        "Natural reply",
+        None,
+        {"vehicle_class_id": "compact"},
+        {},
+        _catalog(),
+    ) == expected
 
 
 def test_text_vehicle_dump_is_converted_to_one_curated_visual_action():
@@ -167,3 +265,14 @@ def test_media_first_copy_is_localized(locale):
     assert decision["action"]["availability_note"]
     assert len(decision["action"]["cta_label"]) <= 24
     assert decision["reply_text"] == "Natural introduction"
+
+
+@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])
+def test_safe_invalid_plan_clarification_never_lists_cars(locale):
+    reply = media_first_clarification({
+        "conversation_language": locale,
+        "passenger_count": 4,
+        "luggage_count": 2,
+    })
+    assert reply.count("?") == 1
+    assert "Toyota" not in reply

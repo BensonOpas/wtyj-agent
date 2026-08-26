@@ -2,6 +2,7 @@ import json
 
 from agents.social import ali_quote_workflow as workflow
 from agents.social import social_agent
+from agents.social.ali_vehicle_recommendations import vehicle_selection_payload
 from shared import state_registry
 
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
@@ -10,6 +11,8 @@ VAN_CLASS_ID = "30000000-0000-4000-8000-000000000002"
 SUV_CLASS_ID = "30000000-0000-4000-8000-000000000003"
 SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000003"
 SECOND_SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000004"
+YARIS_VEHICLE_ID = "40000000-0000-4000-8000-000000000005"
+COROLLA_VEHICLE_ID = "40000000-0000-4000-8000-000000000006"
 
 
 def raw_config():
@@ -80,6 +83,43 @@ def correction_catalog():
     }
 
 
+def media_catalog():
+    catalog = correction_catalog()
+    catalog["vehicles"].extend([
+        {
+            "id": YARIS_VEHICLE_ID,
+            "slug": "toyota-yaris",
+            "classId": CLASS_ID,
+            "name": "Toyota Yaris or similar",
+            "seats": 5,
+            "transmission": "automatic",
+            "features": ["Air conditioning"],
+            "dailyRate": {"currency": "USD", "amount": "45.00"},
+            "weeklyRate": {"currency": "USD", "amount": "315.00"},
+            "images": [{
+                "url": "/brand/vehicles/toyota-yaris.png",
+                "alt": "Ali Toyota Yaris",
+            }],
+        },
+        {
+            "id": COROLLA_VEHICLE_ID,
+            "slug": "toyota-corolla",
+            "classId": CLASS_ID,
+            "name": "Toyota Corolla or similar",
+            "seats": 5,
+            "transmission": "automatic",
+            "features": ["Air conditioning"],
+            "dailyRate": {"currency": "USD", "amount": "55.00"},
+            "weeklyRate": {"currency": "USD", "amount": "385.00"},
+            "images": [{
+                "url": "/brand/vehicles/toyota-corolla.png",
+                "alt": "Ali Toyota Corolla",
+            }],
+        },
+    ])
+    return catalog
+
+
 def _stored_fields(locale="en"):
     return {
         "customer_name": "Synthetic Customer",
@@ -144,6 +184,11 @@ def _commit_result(phone, result, action_suffix):
             str(recommendation.get("kind") or "")
             if recommendation else ""
         ),
+        recommendation_vehicle_ids=[
+            str(option.get("id") or "")
+            for option in recommendation.get("options") or []
+            if isinstance(option, dict)
+        ],
     )
 
 
@@ -312,7 +357,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         },
         include_media=True,
     )
-    assert rejection["text"] == rejection_result["reply"]
+    assert rejection["text"] == "Would you prefer a smaller car, an SUV, or a van?"
     assert rejection["vehicle_recommendation"] is None
     assert "Just checking" not in rejection["text"]
     _commit_result(phone, rejection, "rejection")
@@ -666,3 +711,279 @@ def test_orchestration_source_does_not_log_customer_change_values():
     assert "log_rental_change_decision(_ali_change_outcome, _ali_change_fields)" in source
     assert "ali_rental_change_decision" not in source
     assert json.dumps({"message_text": "not logged"})
+
+
+def _use_media_catalog(monkeypatch):
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", media_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", media_catalog)
+
+
+def _select_vehicle(fields, vehicle_id, vehicle_name, class_id, class_name):
+    for key in (
+        "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+    ):
+        fields.pop(key, None)
+    fields.update({
+        "vehicle_id": vehicle_id,
+        "vehicle_name": vehicle_name,
+        "vehicle_class_id": class_id,
+        "vehicle_class_name": class_name,
+    })
+
+
+def test_rejected_car_text_dump_becomes_carousel_picker_without_summary(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-rejection"
+    fields = _stored_fields()
+    _select_vehicle(
+        fields, SUV_VEHICLE_ID, "Kia Seltos or similar",
+        SUV_CLASS_ID, "Compact SUV",
+    )
+    result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": (
+            "Kia Picanto 2024 or similar, Toyota Yaris or similar, "
+            "Toyota Corolla or similar"
+        ),
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_summary_hash": "old-summary",
+        "awaiting_quote_confirmation": True,
+        "ali_quote_public_id": "old-quote",
+        "ali_last_recommendation_ids": [SUV_VEHICLE_ID],
+        "ali_shown_vehicle_ids": [SUV_VEHICLE_ID],
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "I don't like that car, what else do you have?",
+        "from_name": "Synthetic Customer",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    plan = response["vehicle_recommendation"]
+    assert plan["kind"] == "carousel"
+    assert [option["id"] for option in plan["options"]] == [
+        ECONOMY_VEHICLE_ID, YARIS_VEHICLE_ID, COROLLA_VEHICLE_ID,
+    ]
+    assert [row["id"] for row in plan["picker"]["sections"][0]["rows"]] == [
+        option["selection_id"] for option in plan["options"]
+    ]
+    assert "Kia Picanto" not in response["text"]
+    assert "Just checking" not in response["text"]
+    assert saved["flags"]["ali_rejected_vehicle_ids"] == [SUV_VEHICLE_ID]
+    _commit_result(phone, response, "issue-198-rejection")
+    saved = state_registry.wa_get_booking_state(phone)
+    assert "ali_summary_hash" not in saved["flags"]
+    assert "awaiting_quote_confirmation" not in saved["flags"]
+
+
+def test_text_dump_without_trip_context_asks_one_discovery_question(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-context"
+    result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Kia Picanto 2024 or similar, Toyota Yaris or similar",
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(
+        phone, {"conversation_language": "en"}, {}
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "What smaller cars do you have?",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+
+    assert response["vehicle_recommendation"] is None
+    assert response["text"] == "How many people will be travelling in the car?"
+    assert "Kia Picanto" not in response["text"]
+
+
+def test_native_picker_tap_selects_exact_vehicle_without_repeating_media(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-picker"
+    fields = _stored_fields()
+    result = {
+        "intents": ["inquiry"],
+        # A stale model label cannot overwrite the provider-validated tap.
+        "fields": {"vehicle_name": "Kia Picanto 2024 or similar"},
+        "confidence": "high",
+        "reply": "Great choice.",
+        "requires_human": False,
+        "flags": {},
+        "ali_vehicle_recommendation": {
+            "mode": "specific",
+            "vehicle_names": ["Toyota Yaris or similar"],
+            "availability_note": "Final availability needs confirmation.",
+            "cta_label": "View car",
+        },
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_summary_hash": "old-summary",
+        "awaiting_quote_confirmation": True,
+        "ali_quote_public_id": "old-quote",
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "",
+        "from_name": "Synthetic Customer",
+        "_zernio_interactive_type": "list_reply",
+        "_zernio_interactive_id": vehicle_selection_payload(YARIS_VEHICLE_ID),
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["vehicle_recommendation"] is None
+    assert response["text"].count("Just checking I’ve got everything right:") == 1
+    assert "Car: Toyota Yaris or similar" in response["text"]
+    assert saved["fields"]["vehicle_id"] == YARIS_VEHICLE_ID
+    assert saved["fields"]["vehicle_name"] == "Toyota Yaris or similar"
+    _commit_result(phone, response, "issue-198-picker")
+    saved = state_registry.wa_get_booking_state(phone)
+    assert saved["flags"]["awaiting_quote_confirmation"] is True
+    assert saved["flags"]["ali_summary_hash"] != "old-summary"
+    assert "ali_quote_public_id" not in saved["flags"]
+
+
+def test_malformed_picker_never_changes_vehicle_or_calls_model(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-invalid-picker"
+    fields = _stored_fields()
+    calls = []
+    result = {
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "should not run", "requires_human": False, "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **kwargs: calls.append(kwargs) or result,
+    )
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_summary_hash": "current-summary",
+        "awaiting_quote_confirmation": True,
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "",
+        "from_name": "Synthetic Customer",
+        "_zernio_interactive_type": "list_reply",
+        "_zernio_interactive_id": "ali_vehicle_select:v1:../../bad",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert calls == []
+    assert response["vehicle_recommendation"] is None
+    assert "no longer valid" in response["text"]
+    assert saved["fields"]["vehicle_id"] == ECONOMY_VEHICLE_ID
+    assert saved["flags"]["ali_summary_hash"] == "current-summary"
+    assert saved["flags"]["awaiting_quote_confirmation"] is True
+    _commit_result(phone, response, "issue-198-invalid-picker")
+    delivered = state_registry.wa_get_booking_state(phone)
+    assert "ali_summary_hash" not in delivered["flags"]
+    assert "awaiting_quote_confirmation" not in delivered["flags"]
+
+
+def test_typed_exact_choice_matches_picker_and_later_price_does_not_repeat_image(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-typed"
+    fields = _stored_fields()
+    fields.pop("customer_name")
+    choice_result = {
+        "intents": ["inquiry"],
+        "fields": {"vehicle_name": "Kia Picanto 2024 or similar"},
+        "confidence": "high",
+        "reply": "Good choice. What name should I put on the quote?",
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, choice_result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    chosen = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "I choose Toyota Yaris",
+        "from_name": "",
+    }, include_media=True)
+    selected = state_registry.wa_get_booking_state(phone)
+
+    assert chosen["vehicle_recommendation"] is None
+    assert selected["fields"]["vehicle_id"] == YARIS_VEHICLE_ID
+
+    price_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "The Toyota Yaris or similar is USD 45.00 per day.",
+        "requires_human": False,
+        "flags": {},
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent, "process_message", lambda **_kwargs: price_result
+    )
+    priced = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "What is the price?",
+        "from_name": "",
+    }, include_media=True)
+
+    assert priced["text"] == price_result["reply"]
+    assert priced["vehicle_recommendation"] is None
+
+
+def test_explicit_picture_request_after_exact_choice_resends_one_image(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-198-show-again"
+    fields = _stored_fields()
+    _select_vehicle(
+        fields, YARIS_VEHICLE_ID, "Toyota Yaris or similar", CLASS_ID, "Economy",
+    )
+    result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Here is the car again.",
+        "requires_human": False,
+        "flags": {},
+    }
+    _configure(monkeypatch, tmp_path, result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Can you show me that car again?",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+
+    assert response["vehicle_recommendation"]["kind"] == "image"
+    assert response["vehicle_recommendation"]["options"][0]["id"] == YARIS_VEHICLE_ID

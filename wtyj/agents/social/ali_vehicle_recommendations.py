@@ -230,6 +230,7 @@ def build_vehicle_recommendation(
     reply_text: str,
     *,
     public_base_url: str | None = None,
+    turn_id: str | None = None,
 ) -> dict | None:
     """Return one validated image/carousel delivery plan or ``None``.
 
@@ -309,6 +310,9 @@ def build_vehicle_recommendation(
         "passenger_count": passenger_count,
         "luggage_count": fields.get("luggage_count"),
     }
+    normalized_turn_id = str(turn_id or "").strip()
+    if normalized_turn_id:
+        fingerprint["turn_id"] = normalized_turn_id[:200]
     state_hash = hashlib.sha256(
         json.dumps(
             fingerprint,

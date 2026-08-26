@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import re
 
 
 _DISCOVERY_INTENTS = {"request_recommendation", "reject_or_hesitate"}
+_VISUAL_REQUEST = re.compile(
+    r"\b(?:photo|photos|picture|pictures|image|images|foto|foto['’]?s|"
+    r"afbeelding|afbeeldingen|bild|bilder|potr[eè]t|potr[eè]tnan|"
+    r"show|see|view|toon|mira|mustra|zeigen|ansehen)\b",
+    re.IGNORECASE,
+)
+_VEHICLE_CONTEXT = re.compile(
+    r"\b(?:car|cars|vehicle|vehicles|auto|auto['’]?s|outo|outonan|wagen|"
+    r"suv|van|economy|compact)\b",
+    re.IGNORECASE,
+)
+_ALTERNATIVE_REQUEST = re.compile(
+    r"\b(?:what else|anything else|other|another|alternative|alternatives|"
+    r"option|options|smaller|larger|kleiner|groter|andere|alternatief|"
+    r"opshon|otro|mas chik[ií]|m[aá]s grandi|anders|kleiner|gr[oö][sß]er)\b",
+    re.IGNORECASE,
+)
+_RECOMMENDATION_REQUEST = re.compile(
+    r"\b(?:recommend|recommendation|suggest|suggestion|suitable|best car|"
+    r"aanraden|advies|geschikt|rekomend[aá]|sugerensia|"
+    r"empfehlen|empfehlung|geeignet)\b",
+    re.IGNORECASE,
+)
+_REJECTION = re.compile(
+    r"\b(?:don['’]?t like|do not like|doesn['’]?t work|does not work|"
+    r"not right|nope|nee|niet goed|no ta bon|mi no ke|gef[aä]llt nicht|"
+    r"passt nicht|changed? my mind|reconsider|bedacht|van gedachten|"
+    r"kambia di idea|cambié de idea|anders entschieden)\b",
+    re.IGNORECASE,
+)
 _COPY = {
     "en": {
         "intro_one": "Here is the car we discussed. Does this one feel right for your trip?",
@@ -14,6 +45,7 @@ _COPY = {
         "cta": "View car",
         "needs_passengers": "How many people will be travelling in the car?",
         "needs_luggage": "How much luggage will you be bringing?",
+        "clarify_preference": "Would you prefer a smaller car, an SUV, or a van?",
     },
     "nl": {
         "intro_one": "Hier is de auto die we bespraken. Past deze bij je reis?",
@@ -22,6 +54,7 @@ _COPY = {
         "cta": "Bekijk auto",
         "needs_passengers": "Met hoeveel personen reizen jullie in de auto?",
         "needs_luggage": "Hoeveel bagage nemen jullie mee?",
+        "clarify_preference": "Heb je liever een kleinere auto, een SUV of een busje?",
     },
     "pap": {
         "intro_one": "Aki ta e outo ku nos a papia di dje. E ta pas ku bo biahe?",
@@ -30,6 +63,7 @@ _COPY = {
         "cta": "Mira outo",
         "needs_passengers": "Kuantu persona lo biaha den e outo?",
         "needs_luggage": "Kuantu ekipahe boso lo hiba?",
+        "clarify_preference": "Bo ta preferá un outo mas chikí, un SUV òf un van?",
     },
     "de": {
         "intro_one": "Hier ist das besprochene Auto. Passt es zu Ihrer Reise?",
@@ -38,6 +72,7 @@ _COPY = {
         "cta": "Auto ansehen",
         "needs_passengers": "Wie viele Personen fahren im Auto mit?",
         "needs_luggage": "Wie viel Gepäck bringen Sie mit?",
+        "clarify_preference": "Bevorzugen Sie einen kleineren Wagen, einen SUV oder einen Van?",
     },
 }
 
@@ -45,6 +80,26 @@ _COPY = {
 def _locale(fields: dict) -> str:
     value = str(fields.get("conversation_language") or "en").strip().lower()
     return value if value in _COPY else "en"
+
+
+def media_first_clarification(fields: dict) -> str:
+    """Return one safe question when a discovery plan cannot be rendered."""
+    copy = _COPY[_locale(fields)]
+    passenger_count = fields.get("passenger_count")
+    if (
+        isinstance(passenger_count, bool)
+        or not isinstance(passenger_count, int)
+        or passenger_count < 1
+    ):
+        return copy["needs_passengers"]
+    luggage_count = fields.get("luggage_count")
+    if (
+        isinstance(luggage_count, bool)
+        or not isinstance(luggage_count, int)
+        or luggage_count < 0
+    ):
+        return copy["needs_luggage"]
+    return copy["clarify_preference"]
 
 
 def _active_visual_vehicles(catalog: dict) -> list[dict]:
@@ -83,6 +138,62 @@ def _mentioned_vehicles(reply_text: str, vehicles: list[dict]) -> list[dict]:
         for vehicle in vehicles
         if str(vehicle.get("name") or "").strip().casefold() in haystack
     ]
+
+
+def infer_media_first_intent(
+    message_text: str,
+    reply_text: str,
+    structured_action: object,
+    fields: dict,
+    flags: dict,
+    catalog: dict,
+) -> str:
+    """Provide a deterministic fallback until #195 supplies primary intent."""
+    customer_text = str(message_text or "")
+    has_vehicle_context = bool(
+        _VEHICLE_CONTEXT.search(customer_text)
+        or fields.get("vehicle_id")
+        or fields.get("vehicle_class_id")
+        or fields.get("vehicle_class_name")
+        or _ids(flags, "ali_last_recommendation_ids")
+    )
+    reopens_comparison = bool(
+        _ALTERNATIVE_REQUEST.search(customer_text)
+        or _RECOMMENDATION_REQUEST.search(customer_text)
+    )
+    if (
+        _REJECTION.search(customer_text)
+        and (
+            _ids(flags, "ali_last_recommendation_ids")
+            or fields.get("vehicle_id")
+            or fields.get("vehicle_class_id")
+        )
+    ):
+        return "reject_or_hesitate"
+    if (
+        has_vehicle_context
+        and reopens_comparison
+        and (
+            fields.get("vehicle_id")
+            or fields.get("vehicle_class_id")
+            or _ids(flags, "ali_last_recommendation_ids")
+        )
+    ):
+        return "reject_or_hesitate"
+    if _structured_names(structured_action):
+        return "request_recommendation"
+    vehicles = _active_visual_vehicles(catalog)
+    mentioned = _mentioned_vehicles(reply_text, vehicles)
+    if len(mentioned) >= 2:
+        return "request_recommendation"
+    if mentioned and not fields.get("vehicle_id"):
+        return "request_recommendation"
+
+    if has_vehicle_context and _VISUAL_REQUEST.search(customer_text):
+        return "request_recommendation"
+    if has_vehicle_context and reopens_comparison:
+        return "request_recommendation"
+    return ""
 
 
 def _ids(flags: dict, key: str) -> set[str]:
@@ -239,9 +350,33 @@ def derive_media_first_action(
         return {
             "status": "needs_context",
             "action": None,
-            "reply_text": copy["needs_luggage"],
+            "reply_text": media_first_clarification(fields),
             "reason": "no_unseen_suitable_options",
         }
+
+    if len(candidates) >= 2:
+        if (
+            isinstance(passenger_count, bool)
+            or not isinstance(passenger_count, int)
+            or passenger_count < 1
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_passengers"],
+                "reason": "missing_passenger_count",
+            }
+        if (
+            isinstance(luggage_count, bool)
+            or not isinstance(luggage_count, int)
+            or luggage_count < 0
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_luggage"],
+                "reason": "missing_luggage_count",
+            }
 
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]

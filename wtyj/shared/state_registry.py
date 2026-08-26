@@ -1877,6 +1877,7 @@ def wa_mark_vehicle_recommendation_delivered(
     phone: str,
     state_hash: str,
     delivery: str,
+    vehicle_ids: list[str] | None = None,
 ) -> bool:
     """Atomically remember one accepted Ali discovery presentation.
 
@@ -1885,8 +1886,22 @@ def wa_mark_vehicle_recommendation_delivered(
     """
     if not re.fullmatch(r"[0-9a-f]{64}", str(state_hash or "")):
         return False
-    if delivery not in {"image", "carousel", "fallback"}:
+    if delivery not in {
+        "image", "carousel", "fallback", "carousel_picker",
+        "carousel_picker_fallback",
+    }:
         return False
+    normalized_vehicle_ids = []
+    for value in vehicle_ids or []:
+        vehicle_id = str(value or "").strip()
+        if (
+            vehicle_id
+            and len(vehicle_id) <= 160
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", vehicle_id)
+            and vehicle_id not in normalized_vehicle_ids
+        ):
+            normalized_vehicle_ids.append(vehicle_id)
+    normalized_vehicle_ids = normalized_vehicle_ids[:5]
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1907,6 +1922,17 @@ def wa_mark_vehicle_recommendation_delivered(
         if not any(item["hash"] == state_hash for item in normalized):
             normalized.append({"hash": state_hash, "delivery": delivery})
         flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
+        if normalized_vehicle_ids:
+            flags["ali_last_recommendation_ids"] = normalized_vehicle_ids
+            shown = [
+                str(value).strip()
+                for value in flags.get("ali_shown_vehicle_ids") or []
+                if isinstance(value, str) and str(value).strip()
+            ]
+            for vehicle_id in normalized_vehicle_ids:
+                if vehicle_id not in shown:
+                    shown.append(vehicle_id)
+            flags["ali_shown_vehicle_ids"] = shown[-40:]
         conn.execute(
             "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
             (json.dumps(flags, ensure_ascii=False), phone),

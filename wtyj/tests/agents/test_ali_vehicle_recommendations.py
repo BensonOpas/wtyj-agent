@@ -255,7 +255,7 @@ def test_marina_schema_exposes_structured_action_without_server_ids():
     assert summary_action["properties"]["mode"]["enum"] == ["repeat"]
 
 
-def test_ali_prompt_requests_one_image_or_two_to_three_curated_options(monkeypatch):
+def test_ali_prompt_requires_one_image_or_two_to_five_curated_options(monkeypatch):
     monkeypatch.setattr(
         marina_agent.config_loader,
         "get_raw",
@@ -272,7 +272,10 @@ def test_ali_prompt_requests_one_image_or_two_to_three_curated_options(monkeypat
 
     assert "PREMIUM VEHICLE VISUALS" in prompt
     assert "mode `specific` and exactly that catalog vehicle name" in prompt
-    assert "best 2–3 suitable current vehicles" in prompt
+    assert "best 2–5 suitable current vehicles" in prompt
+    assert "MEDIA-FIRST IS MANDATORY" in prompt
+    schema = marina_agent.MARINA_TOOL["input_schema"]["properties"]
+    assert schema["ali_vehicle_recommendation"]["properties"]["vehicle_names"]["maxItems"] == 5
     assert "never dump the whole fleet" in prompt
     assert "not in `reply` and not on each card" in prompt
     assert "Ordinary typed vehicle choices remain valid" in prompt
@@ -615,3 +618,59 @@ def test_state_delivery_marker_is_atomic_and_bounded(monkeypatch, tmp_path):
     assert len(deliveries) == 20
     assert deliveries[-1] == {"hash": hashes[-1], "delivery": "carousel"}
     assert state["fields"] == {"passenger_count": 2}
+
+
+def test_state_delivery_marker_records_picker_vehicle_branch(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    state_registry.wa_save_booking_state(
+        "conversation-1",
+        {"passenger_count": 2},
+        {"ali_shown_vehicle_ids": ["vehicle-old"]},
+    )
+    assert state_registry.wa_mark_vehicle_recommendation_delivered(
+        "conversation-1",
+        "a" * 64,
+        "carousel_picker",
+        ["vehicle-1", "vehicle-2", "vehicle-1"],
+    )
+
+    flags = state_registry.wa_get_booking_state("conversation-1")["flags"]
+    assert flags["ali_last_recommendation_ids"] == ["vehicle-1", "vehicle-2"]
+    assert flags["ali_shown_vehicle_ids"] == [
+        "vehicle-old", "vehicle-1", "vehicle-2",
+    ]
+    assert flags["ali_vehicle_recommendation_deliveries"] == [{
+        "hash": "a" * 64,
+        "delivery": "carousel_picker",
+    }]
+
+
+def test_new_inbound_turn_can_intentionally_resend_same_vehicle():
+    fields = {
+        "conversation_language": "en",
+        "vehicle_id": "vehicle-1",
+        "passenger_count": 2,
+        "luggage_count": 1,
+    }
+    action = {
+        "mode": "specific",
+        "vehicle_names": ["Toyota Yaris or similar"],
+        "availability_note": "Final availability needs confirmation.",
+        "cta_label": "View car",
+    }
+    first = recommendations.build_vehicle_recommendation(
+        action, _catalog(), fields, {}, "Here it is.",
+        public_base_url="https://alicarrental.com",
+        turn_id="inbound-1",
+    )
+    second = recommendations.build_vehicle_recommendation(
+        action, _catalog(), fields, {
+            "ali_vehicle_recommendation_deliveries": [{
+                "hash": first["state_hash"], "delivery": "image",
+            }],
+        }, "Here it is again.",
+        public_base_url="https://alicarrental.com",
+        turn_id="inbound-2",
+    )
+
+    assert first["state_hash"] != second["state_hash"]
