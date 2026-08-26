@@ -338,6 +338,103 @@ def build_vehicle_picker_recovery(
     return plan
 
 
+def rebuild_vehicle_recommendation(
+    snapshot: dict,
+    catalog: dict,
+    *,
+    public_base_url: str | None = None,
+) -> dict | None:
+    """Rebuild a persisted recommendation from the current public catalog.
+
+    Only server-owned vehicle IDs and presentation text are reused. Vehicle
+    facts, proxy URLs, picker rows, and cards are regenerated from the current
+    catalog so a late provider retry cannot resurrect unpublished inventory.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    kind = str(snapshot.get("kind") or "")
+    if kind not in {"image", "carousel"}:
+        return None
+    locale = str(snapshot.get("locale") or "en").lower()
+    if locale not in SUPPORTED_LOCALES:
+        return None
+    vehicle_ids = [
+        str(value or "").strip()
+        for value in snapshot.get("vehicle_ids") or []
+        if str(value or "").strip()
+    ][:5]
+    if not vehicle_ids or (kind == "image" and len(vehicle_ids) != 1):
+        return None
+    base_url = str(
+        public_base_url
+        or os.environ.get("ALI_QUOTE_API_BASE_URL")
+        or "https://alicarrental.com"
+    ).strip()
+    classes = {
+        str(item.get("id")): item
+        for item in catalog.get("vehicleClasses") or []
+        if isinstance(item, dict)
+        and item.get("id")
+        and item.get("active", True) is not False
+    }
+    vehicles = {
+        str(item.get("id") or "").strip(): item
+        for item in catalog.get("vehicles") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        and item.get("active", True) is not False
+    }
+    options = []
+    try:
+        for vehicle_id in vehicle_ids:
+            vehicle = vehicles.get(vehicle_id)
+            if vehicle is None:
+                return None
+            options.append(_catalog_vehicle(
+                vehicle, classes, locale, base_url, catalog.get("catalogVersion"),
+            ))
+    except AliVehicleRecommendationError:
+        return None
+    text = str(snapshot.get("text") or "").strip()
+    state_hash = str(snapshot.get("state_hash") or "")
+    if not text or not re.fullmatch(r"[0-9a-f]{64}", state_hash):
+        return None
+    plan = {
+        "kind": kind,
+        "mode": str(snapshot.get("mode") or ""),
+        "locale": locale,
+        "state_hash": state_hash,
+        "idempotency_key": f"ali-vehicle-{state_hash}",
+        "text": text,
+        "options": options,
+    }
+    if kind == "image":
+        plan["buttons"] = [{
+            "type": "postback",
+            "title": _CARD_LABELS[locale]["choose_one"],
+            "payload": options[0]["selection_id"],
+        }]
+    else:
+        plan["cards"] = [{
+            "card_index": index,
+            "type": "cta_url",
+            "header": {
+                "type": "image",
+                "image": {"link": option["whatsapp_image_url"]},
+            },
+            "body": {"text": _card_body(option, locale)},
+            "action": {
+                "name": "cta_url",
+                "parameters": {
+                    "display_text": _CARD_LABELS[locale]["details"],
+                    "url": option["detail_url"],
+                },
+            },
+        } for index, option in enumerate(options)]
+        plan["picker"] = _picker_plan(options, locale)
+    return plan
+
+
 def build_vehicle_recommendation(
     action: object,
     catalog: dict,
@@ -453,6 +550,7 @@ def build_vehicle_recommendation(
     plan = {
         "kind": "image" if mode == "specific" else "carousel",
         "mode": mode,
+        "locale": locale,
         "state_hash": state_hash,
         "idempotency_key": f"ali-vehicle-{state_hash}",
         "text": text,

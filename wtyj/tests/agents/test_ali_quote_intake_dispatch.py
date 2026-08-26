@@ -1280,9 +1280,22 @@ def test_late_failed_recommendation_is_removed_from_delivered_and_shown_state(
         recommendation_delivery="image",
         recommendation_vehicle_ids=[ECONOMY_VEHICLE_ID],
         recommendation_provider_message_ids=["provider-image-1"],
+        recommendation_provider_parts={"image": ["provider-image-1"]},
+        recommendation_snapshot={
+            "kind": "image",
+            "mode": "specific",
+            "locale": "en",
+            "state_hash": "e" * 64,
+            "text": "Here is one suitable car.",
+        },
+        recommendation_account_id="account-1",
     )
     committed = workflow.state_registry.wa_get_booking_state(phone)["flags"]
     assert committed["ali_shown_vehicle_ids"] == [ECONOMY_VEHICLE_ID]
+    delivery = committed["ali_vehicle_recommendation_deliveries"][0]
+    assert delivery["provider_parts"] == {"image": ["provider-image-1"]}
+    assert delivery["account_id"] == "account-1"
+    assert delivery["snapshot"]["vehicle_ids"] == [ECONOMY_VEHICLE_ID]
 
     assert workflow.state_registry.wa_reconcile_vehicle_recommendation_failure(
         phone, "provider-image-1",
