@@ -1575,10 +1575,10 @@ def process_quote(
 
 
 SUMMARY_LABELS = {
-    "en": ("Just checking I’ve got everything right:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "Does that all look right?"),
-    "nl": ("Even controleren of ik alles goed heb:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt dit zo?"),
-    "pap": ("Laga mi wak si mi tin tur kos korekto:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon asina?"),
-    "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Passt das so?"),
+    "en": ("I have these details from you:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "Are these details correct?"),
+    "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Kloppen deze gegevens?"),
+    "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "E detayanan aki ta korekto?"),
+    "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Sind diese Angaben korrekt?"),
 }
 
 SUPPLEMENT_LABELS = {
@@ -1596,10 +1596,10 @@ SUMMARY_DETAIL_LABELS = {
 }
 
 PREPARING = {
-    "en": "Great, I have everything I need. I’ll prepare your official quote and send it here on WhatsApp within 30 minutes.",
-    "nl": "Prima, ik heb alles wat ik nodig heb. Ik maak je officiële offerte en stuur die binnen 30 minuten hier via WhatsApp.",
-    "pap": "Bon, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial i lo manda esaki aki via WhatsApp denter di 30 minüt.",
-    "de": "Alles klar, ich habe alle Angaben. Ich erstelle jetzt Ihr offizielles Angebot und sende es innerhalb von 30 Minuten hier per WhatsApp.",
+    "en": "Thanks, I have everything I need. I’m preparing your official quote now and will send it here in a few minutes.",
+    "nl": "Bedankt, ik heb alles wat ik nodig heb. Ik maak je officiële offerte nu klaar en stuur die hier over een paar minuten.",
+    "pap": "Danki, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial awor i lo manda e aki den un par di minüt.",
+    "de": "Danke, ich habe alle Angaben. Ich bereite Ihr offizielles Angebot jetzt vor und sende es Ihnen hier in wenigen Minuten.",
 }
 
 FALLBACK = {

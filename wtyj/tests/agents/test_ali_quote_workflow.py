@@ -192,16 +192,16 @@ def test_confirmation_variants_and_corrections_change_the_summary_hash():
     assert first != second
 
 
-def test_carlos_confirmation_copy_is_human_in_all_locales():
+def test_nick_confirmation_copy_is_first_person_and_human_in_all_locales():
     expected = {
-        "en": ("Just checking I’ve got everything right:", "Does that all look right?"),
-        "nl": ("Even controleren of ik alles goed heb:", "Klopt dit zo?"),
-        "pap": ("Laga mi wak si mi tin tur kos korekto:", "Tur kos ta bon asina?"),
-        "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Passt das so?"),
+        "en": ("I have these details from you:", "Are these details correct?"),
+        "nl": ("Ik heb deze gegevens van je:", "Kloppen deze gegevens?"),
+        "pap": ("Mi tin e detayanan aki di bo:", "E detayanan aki ta korekto?"),
+        "de": ("Ich habe diese Angaben von Ihnen:", "Sind diese Angaben korrekt?"),
     }
     banned = (
         "reply yes", "please confirm", "antwoord ja", "konfirmá e det",
-        "antworten sie mit ja",
+        "antworten sie mit ja", "just checking", "does that all look right",
     )
     for locale, (opening, closing) in expected.items():
         summary, _ = workflow.normalized_summary(customer(), rental(locale))
@@ -213,12 +213,16 @@ def test_carlos_confirmation_copy_is_human_in_all_locales():
         assert not any(phrase in text.lower() for phrase in banned)
 
 
-def test_carlos_progress_copy_is_direct_and_natural_in_all_locales():
-    for locale in ("en", "nl", "pap", "de"):
-        text = workflow.PREPARING[locale]
-        assert "WhatsApp" in text
-        assert "30" in text
-        assert "reply yes" not in text.lower()
+def test_nick_progress_copy_is_direct_and_quote_led_in_all_locales():
+    expected = {
+        "en": "Thanks, I have everything I need. I’m preparing your official quote now and will send it here in a few minutes.",
+        "nl": "Bedankt, ik heb alles wat ik nodig heb. Ik maak je officiële offerte nu klaar en stuur die hier over een paar minuten.",
+        "pap": "Danki, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial awor i lo manda e aki den un par di minüt.",
+        "de": "Danke, ich habe alle Angaben. Ich bereite Ihr offizielles Angebot jetzt vor und sende es Ihnen hier in wenigen Minuten.",
+    }
+    assert workflow.PREPARING == expected
+    assert all("30" not in text for text in workflow.PREPARING.values())
+    assert all("reply yes" not in text.lower() for text in workflow.PREPARING.values())
 
 
 def test_duplicate_confirmation_creates_one_quote_and_ali_request_has_no_pii(monkeypatch, tmp_path):
