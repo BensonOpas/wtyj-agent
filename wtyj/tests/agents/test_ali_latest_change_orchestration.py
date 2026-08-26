@@ -140,6 +140,10 @@ def _stored_fields(locale="en"):
 
 def _configure(monkeypatch, tmp_path, model_result):
     monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setenv(
+        "ALI_QUOTE_CONFIRMATION_SECRET",
+        "synthetic-confirmation-secret-32-bytes",
+    )
     monkeypatch.setattr(social_agent.config_loader, "get_raw", lambda: raw_config())
     monkeypatch.setattr(social_agent, "get_ali_intake_catalog", correction_catalog)
     monkeypatch.setattr(workflow, "get_intake_catalog", correction_catalog)

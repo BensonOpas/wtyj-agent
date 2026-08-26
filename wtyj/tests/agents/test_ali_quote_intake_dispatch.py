@@ -392,7 +392,9 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     )
 
     assert reply.startswith("I have these details from you:")
-    assert reply.endswith("Are these details correct?")
+    assert reply.endswith(
+        "If everything is correct, tap below and I’ll prepare your official quote."
+    )
     assert "Economy" in reply
     assert "WhatsApp: +351000000000" in reply
     assert "wa.me" not in reply
@@ -1084,6 +1086,12 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                     flags["ali_summary_hash"] = seed.summary_hash
                     flags["ali_summary_version"] = seed.summary_version
                     flags["awaiting_quote_confirmation"] = True
+                    flags["ali_summary_anchor"] = {
+                        "summary_hash": seed.summary_hash,
+                        "summary_version": seed.summary_version,
+                        "delivery": "plain_text",
+                        "interaction_payload": "",
+                    }
                 if phase in terminal_phases:
                     flags["ali_active_quote_public_id"] = f"historical-{case_number}"
 
@@ -1114,6 +1122,11 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                 else:
                     expected_kind = "summary"
                     expected_phase = "SUMMARY_PRESENTED"
+            elif intent == "confirm_summary" and phase in {
+                "QUOTE_PROCESSING", "QUOTED",
+            }:
+                expected_kind = "quote_preparing"
+                expected_phase = "QUOTE_PROCESSING"
             else:
                 expected_kind = "agent_reply"
                 if phase in terminal_phases and intent in {
