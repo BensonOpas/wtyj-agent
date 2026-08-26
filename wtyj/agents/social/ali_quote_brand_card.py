@@ -8,13 +8,24 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-WIDTH = 1200
+WIDTH = 880
 HEIGHT = 675
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 NAVY = "#081F36"
 GOLD = "#FFB91D"
 WHITE = "#FFFFFF"
 MUTED = "#B8C7D6"
+PANEL_BOX = (48, 54, 832, 338)
+PANEL_RADIUS = 34
+ACCENT_BOX = (48, 365, 234, 373)
+LOGO_POSITION = (78, 71)
+LOGO_MAX_SIZE = (430, 250)
+CONTENT_LEFT = 64
+CONTENT_RIGHT = 48
+CONTENT_WIDTH = WIDTH - CONTENT_LEFT - CONTENT_RIGHT
+TITLE_Y = 414
+REFERENCE_Y = 515
+FOOTER_Y = 591
 
 TITLES = {
     "en": "OFFICIAL QUOTE",
@@ -58,6 +69,21 @@ def _fit_logo(source: Image.Image, max_width: int, max_height: int) -> Image.Ima
     return logo
 
 
+def _fit_font(
+    text: str,
+    preferred_size: int,
+    minimum_size: int,
+    *,
+    max_width: int = CONTENT_WIDTH,
+    bold: bool = False,
+):
+    for size in range(preferred_size, minimum_size - 1, -1):
+        font = _font(size, bold=bold)
+        if font.getlength(text) <= max_width:
+            return font
+    raise QuoteBrandCardRenderError("Quote-card text exceeds safe width")
+
+
 def render_quote_brand_card(
     public_id: str,
     locale: str,
@@ -80,19 +106,21 @@ def render_quote_brand_card(
 
     image = Image.new("RGB", (WIDTH, HEIGHT), NAVY)
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((64, 54, 1136, 338), radius=34, fill=WHITE)
-    draw.rectangle((64, 365, 250, 373), fill=GOLD)
+    draw.rounded_rectangle(PANEL_BOX, radius=PANEL_RADIUS, fill=WHITE)
+    draw.rectangle(ACCENT_BOX, fill=GOLD)
 
     with Image.open(resolved_logo) as source:
-        logo = _fit_logo(source, 430, 250)
-    logo_x = 94
-    logo_y = 71 + (248 - logo.height) // 2
+        logo = _fit_logo(source, *LOGO_MAX_SIZE)
+    logo_x = LOGO_POSITION[0]
+    logo_y = LOGO_POSITION[1] + (248 - logo.height) // 2
     image.paste(logo, (logo_x, logo_y), logo)
 
-    draw.text((86, 414), TITLES[locale], font=_font(60, bold=True), fill=WHITE)
-    draw.text((88, 515), reference, font=_font(37, bold=True), fill=GOLD)
+    title_font = _fit_font(TITLES[locale], 60, 48, bold=True)
+    reference_font = _fit_font(reference, 37, 16, bold=True)
+    draw.text((CONTENT_LEFT, TITLE_Y), TITLES[locale], font=title_font, fill=WHITE)
+    draw.text((CONTENT_LEFT, REFERENCE_Y), reference, font=reference_font, fill=GOLD)
     draw.text(
-        (88, 591), FOOTER_TEXT,
+        (CONTENT_LEFT, FOOTER_Y), FOOTER_TEXT,
         font=_font(24), fill=MUTED,
     )
 

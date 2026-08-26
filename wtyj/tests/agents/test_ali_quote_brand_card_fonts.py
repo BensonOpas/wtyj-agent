@@ -56,7 +56,7 @@ def test_all_required_localized_glyphs_have_real_font_masks():
             assert bytes(mask) != replacement
 
 
-def test_four_locale_cards_keep_existing_geometry_and_byte_limit(tmp_path):
+def test_four_locale_cards_use_pdf_width_geometry_and_byte_limit(tmp_path):
     outputs = []
     for locale in ("en", "nl", "pap", "de"):
         path, digest = card.render_quote_brand_card(
@@ -67,15 +67,61 @@ def test_four_locale_cards_keep_existing_geometry_and_byte_limit(tmp_path):
         assert digest
         assert len(data) < card.MAX_IMAGE_BYTES
         with Image.open(path) as image:
-            assert image.size == (card.WIDTH, card.HEIGHT)
+            assert image.size == (880, 675)
             assert image.format == "PNG"
         outputs.append(path)
     assert len(outputs) == 4
 
 
-def test_customer_copy_and_layout_constants_are_unchanged():
-    assert card.WIDTH == 1200
+def test_narrow_layout_preserves_logo_proportions_and_safe_bounds():
+    logo_path = Path(card.__file__).resolve().parents[2] / (
+        "assets/ali-logo-full-premium.png"
+    )
+    with Image.open(logo_path) as source:
+        source_ratio = source.width / source.height
+        fitted = card._fit_logo(source, *card.LOGO_MAX_SIZE)
+
+    fitted_ratio = fitted.width / fitted.height
+    assert fitted.width <= card.LOGO_MAX_SIZE[0]
+    assert fitted.height <= card.LOGO_MAX_SIZE[1]
+    assert abs(fitted_ratio - source_ratio) < 0.005
+
+    logo_left = card.LOGO_POSITION[0]
+    logo_top = card.LOGO_POSITION[1] + (248 - fitted.height) // 2
+    panel_left, panel_top, panel_right, panel_bottom = card.PANEL_BOX
+    assert panel_left <= logo_left < logo_left + fitted.width <= panel_right
+    assert panel_top <= logo_top < logo_top + fitted.height <= panel_bottom
+
+
+def test_localized_titles_reference_and_footer_fit_safe_content_width():
+    for title in card.TITLES.values():
+        font = card._fit_font(title, 60, 48, bold=True)
+        assert font.getlength(title) <= card.CONTENT_WIDTH
+
+    maximum_reference = "ALI-" + ("W" * 40)
+    reference_font = card._fit_font(maximum_reference, 37, 16, bold=True)
+    assert reference_font.getlength(maximum_reference) <= card.CONTENT_WIDTH
+    assert card._font(24).getlength(card.FOOTER_TEXT) <= card.CONTENT_WIDTH
+
+
+def test_same_card_content_remains_deterministic_after_reflow(tmp_path):
+    first_path, first_digest = card.render_quote_brand_card(
+        "deterministic-one", "en", "ALI-20260826-DETERMINISTIC",
+        output_root=str(tmp_path),
+    )
+    second_path, second_digest = card.render_quote_brand_card(
+        "deterministic-two", "en", "ALI-20260826-DETERMINISTIC",
+        output_root=str(tmp_path),
+    )
+
+    assert first_digest == second_digest
+    assert Path(first_path).read_bytes() == Path(second_path).read_bytes()
+
+
+def test_customer_copy_and_narrow_layout_constants_are_preserved():
+    assert card.WIDTH == 880
     assert card.HEIGHT == 675
+    assert card.CONTENT_LEFT + card.CONTENT_WIDTH + card.CONTENT_RIGHT == card.WIDTH
     assert card.FOOTER_TEXT == "ALI CAR RENTAL | CURAÇAO"
     assert card.TITLES == {
         "en": "OFFICIAL QUOTE",
