@@ -360,6 +360,8 @@ def test_ali_prompt_requires_one_image_or_two_to_five_curated_options(monkeypatc
     assert "Ordinary typed vehicle choices remain valid" in prompt
     assert "Do not repeat the unchanged summary" in prompt
     assert "chooses one option from a visual recommendation" in prompt
+    assert "is a category preference, not an exact-car selection" in prompt
+    assert "punctuation-only confusion" in prompt
 
 
 class _Response:
@@ -497,6 +499,100 @@ def test_specific_vehicle_posts_one_image_message(monkeypatch):
     assert posts[0]["headers"]["Idempotency-Key"] == (
         f"{plan['idempotency_key']}-primary"
     )
+
+
+def test_specific_vehicle_returns_provider_message_id_for_late_failure_tracking(
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "provider-image-1",
+            "direction": "outgoing",
+            "status": "sent",
+        }]}),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *args, **kwargs: _Response(201, {"data": {"id": "provider-image-1"}}),
+    )
+    plan = recommendations.build_vehicle_recommendation(
+        _action("specific", ["Kia Picanto or similar"]),
+        _catalog(),
+        {"conversation_language": "en", "passenger_count": 2},
+        {},
+        "Here is the Picanto. What pickup date works for you?",
+    )
+
+    assert zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    ) == {
+        "success": True,
+        "delivery": "image",
+        "provider_message_ids": ["provider-image-1"],
+    }
+
+
+def test_late_image_rejection_before_commit_uses_visible_text_fallback(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "provider-image-1",
+            "direction": "outgoing",
+            "status": "failed",
+        }]}),
+    ])
+    posts = iter([
+        _Response(201, {"data": {"id": "provider-image-1"}}),
+        _Response(201, {"data": {"id": "provider-fallback-1"}}),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "get", lambda *args, **kwargs: next(gets)
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "post", lambda *args, **kwargs: next(posts)
+    )
+    plan = recommendations.build_vehicle_recommendation(
+        _action("specific", ["Kia Picanto or similar"]),
+        _catalog(),
+        {"conversation_language": "en", "passenger_count": 2},
+        {},
+        "Here is the Picanto. What pickup date works for you?",
+    )
+
+    assert zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    ) == {
+        "success": True,
+        "delivery": "fallback",
+        "provider_message_ids": ["provider-fallback-1"],
+    }
+
+
+def test_parses_late_zernio_message_failure():
+    parsed = zernio_dm_client.parse_zernio_failed_webhook({
+        "event": "message.failed",
+        "message": {
+            "id": "provider-image-1",
+            "conversationId": "conversation-1",
+            "failureReason": "synthetic media rejection",
+        },
+    })
+
+    assert parsed == {
+        "event": "message.failed",
+        "conversation_id": "conversation-1",
+        "message_id": "provider-image-1",
+        "failure_reason": "synthetic media rejection",
+    }
 
 
 def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatch):
@@ -801,7 +897,7 @@ def test_state_delivery_marker_records_picker_vehicle_branch(monkeypatch, tmp_pa
     }]
 
 
-def test_new_inbound_turn_can_intentionally_resend_same_vehicle():
+def test_new_inbound_turn_does_not_repeat_same_vehicle_without_visual_request():
     fields = {
         "conversation_language": "en",
         "vehicle_id": "vehicle-1",
@@ -827,6 +923,39 @@ def test_new_inbound_turn_can_intentionally_resend_same_vehicle():
         }, "Here it is again.",
         public_base_url="https://alicarrental.com",
         turn_id="inbound-2",
+    )
+
+    assert second is None
+
+
+def test_explicit_visual_request_can_intentionally_resend_same_vehicle():
+    fields = {
+        "conversation_language": "en",
+        "vehicle_id": "vehicle-1",
+        "passenger_count": 2,
+        "luggage_count": 1,
+    }
+    action = {
+        "mode": "specific",
+        "vehicle_names": ["Toyota Yaris or similar"],
+        "availability_note": "Final availability needs confirmation.",
+        "cta_label": "View car",
+    }
+    first = recommendations.build_vehicle_recommendation(
+        action, _catalog(), fields, {}, "Here it is.",
+        public_base_url="https://alicarrental.com",
+        turn_id="inbound-1",
+        allow_repeat=True,
+    )
+    second = recommendations.build_vehicle_recommendation(
+        action, _catalog(), fields, {
+            "ali_vehicle_recommendation_deliveries": [{
+                "hash": first["state_hash"], "delivery": "image",
+            }],
+        }, "Here it is again.",
+        public_base_url="https://alicarrental.com",
+        turn_id="inbound-2",
+        allow_repeat=True,
     )
 
     assert first["state_hash"] != second["state_hash"]

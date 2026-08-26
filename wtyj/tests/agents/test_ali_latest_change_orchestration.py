@@ -709,6 +709,89 @@ def test_explicit_suv_picture_request_overrides_model_continue_intake(
     assert "awaiting_quote_confirmation" not in committed["flags"]
 
 
+def test_bare_small_car_proposes_car_but_never_assumes_it_or_repeats_on_repair(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-small-car-repair"
+    test_catalog = correction_catalog()
+    test_catalog["vehicleClasses"][0]["name"] = "Small Car"
+    test_catalog["vehicles"][0]["name"] = "Toyota Agya"
+    model_result = {
+        "intents": ["inquiry"],
+        # Reproduce the live model error: it promotes a category reply into
+        # the category's only exact vehicle and repeats that assumption.
+        "fields": {"vehicle_name": "Toyota Agya", "conversation_language": "en"},
+        "confidence": "high",
+        "reply": "Here is the Toyota Agya. What dates do you need?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+        "ali_rental_change": {
+            "mode": "apply",
+            "changed_fields": ["vehicle_selection"],
+            "vehicle_selection_kind": "vehicle",
+        },
+        "ali_vehicle_recommendation": {
+            "mode": "specific",
+            "vehicle_names": ["Toyota Agya"],
+            "availability_note": "Final availability needs confirmation.",
+            "cta_label": "Car details",
+        },
+    }
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: test_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: test_catalog)
+    state_registry.wa_save_booking_state(
+        phone, {"conversation_language": "en", "supplements": []}, {},
+    )
+
+    proposed = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "Small Car",
+            "from_name": "Synthetic Customer",
+            "message_id": "synthetic-small-car",
+            "_ali_action_id": "4" * 64,
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    proposed_state = state_registry.wa_get_booking_state(phone)
+
+    assert proposed["vehicle_recommendation"]["kind"] == "image"
+    assert proposed["vehicle_recommendation"]["options"][0]["name"] == "Toyota Agya"
+    assert proposed["text"].startswith(
+        "Here is a car that matches what you asked for."
+    )
+    assert "What dates" not in proposed["text"]
+    assert proposed_state["fields"]["vehicle_class_name"] == "Small Car"
+    assert "vehicle_id" not in proposed_state["fields"]
+    assert "vehicle_name" not in proposed_state["fields"]
+
+    for text, action_id in (("Hello", "5" * 64), ("???", "6" * 64)):
+        repaired = social_agent.handle_incoming_whatsapp_message(
+            {
+                "from": phone,
+                "text": text,
+                "from_name": "Synthetic Customer",
+                "message_id": f"synthetic-repair-{action_id[0]}",
+                "_ali_action_id": action_id,
+                "_zernio_sender_id": "+351000000000",
+                "_zernio_account_id": "synthetic-account",
+            },
+            include_media=True,
+        )
+        repaired_state = state_registry.wa_get_booking_state(phone)
+        assert not repaired.get("vehicle_recommendation")
+        assert "Small Car" in repaired["text"]
+        assert "Toyota Agya" not in repaired["text"]
+        assert repaired_state["fields"]["vehicle_class_name"] == "Small Car"
+        assert "vehicle_id" not in repaired_state["fields"]
+        assert "vehicle_name" not in repaired_state["fields"]
+
+
 def test_generic_change_request_asks_clarification_without_old_summary(monkeypatch, tmp_path):
     phone = "synthetic-issue-190-clarify"
     fields = _stored_fields()

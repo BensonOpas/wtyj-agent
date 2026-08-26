@@ -1946,6 +1946,104 @@ def wa_mark_vehicle_recommendation_delivered(
         conn.close()
 
 
+def wa_reconcile_vehicle_recommendation_failure(
+    phone: str,
+    provider_message_id: str,
+) -> bool:
+    """Undo a recommendation marker when WhatsApp later reports failure.
+
+    Zernio may accept an interactive message and emit ``message.failed`` only
+    afterwards. Removing the matching delivery prevents Nick from believing a
+    car was shown and allows a safe retry or text fallback on a later turn.
+    """
+    message_id = str(provider_message_id or "").strip()
+    if not phone or not message_id or len(message_id) > 240:
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (phone,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        flags = json.loads(row[0] or "{}")
+        deliveries = [
+            item for item in flags.get("ali_vehicle_recommendation_deliveries") or []
+            if isinstance(item, dict)
+        ]
+        failed = [
+            item for item in deliveries
+            if message_id in {
+                str(value or "").strip()
+                for value in item.get("provider_message_ids") or []
+            }
+        ]
+        if not failed:
+            pending = [
+                str(value or "").strip()
+                for value in flags.get("ali_failed_provider_message_ids") or []
+                if str(value or "").strip()
+            ]
+            if message_id not in pending:
+                pending.append(message_id)
+            flags["ali_failed_provider_message_ids"] = pending[-20:]
+            conn.execute(
+                "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+                (json.dumps(flags, ensure_ascii=False), phone),
+            )
+            conn.commit()
+            return True
+        remaining = [item for item in deliveries if item not in failed]
+        flags["ali_vehicle_recommendation_deliveries"] = remaining[-20:]
+
+        failed_vehicle_ids = {
+            str(value or "").strip()
+            for item in failed
+            for value in item.get("vehicle_ids") or []
+            if str(value or "").strip()
+        }
+        remaining_vehicle_ids = {
+            str(value or "").strip()
+            for item in remaining
+            for value in item.get("vehicle_ids") or []
+            if str(value or "").strip()
+        }
+        not_shown = failed_vehicle_ids - remaining_vehicle_ids
+        if not_shown:
+            flags["ali_shown_vehicle_ids"] = [
+                str(value).strip()
+                for value in flags.get("ali_shown_vehicle_ids") or []
+                if str(value).strip() and str(value).strip() not in not_shown
+            ]
+        failed_action_ids = {
+            str(item.get("action_id") or "").strip()
+            for item in failed
+            if str(item.get("action_id") or "").strip()
+        }
+        if str(flags.get("ali_last_delivery_action_id") or "") in failed_action_ids:
+            flags.pop("ali_last_delivery_action_id", None)
+            flags.pop("ali_last_delivered_kind", None)
+            flags["ali_last_recommendation_ids"] = [
+                str(value).strip()
+                for value in flags.get("ali_last_recommendation_ids") or []
+                if str(value).strip() and str(value).strip() not in not_shown
+            ]
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), phone),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _get_email_state_path() -> str:
     """Brief 171: resolve the email_thread_state.json path the email_poller uses."""
     # email_poller stores it at /app/config/email_thread_state.json inside the container.

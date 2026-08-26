@@ -44,7 +44,9 @@ from agents.social.ali_vehicle_recommendations import (
 )
 from agents.social.ali_media_first import (
     catalog_class_recommendation_action,
+    conversation_repair_reply,
     derive_media_first_action,
+    explicit_visual_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
@@ -1427,6 +1429,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_change_outcome = "not_applicable"
     _ali_change_fields = ()
     _ali_change_configured = ali_quote_tenant_configured()
+    _ali_repair_reply = (
+        conversation_repair_reply(text, fields, flags)
+        if _ali_change_configured else ""
+    )
     _ali_structured_primary_intent = str(
         result.get("ali_primary_intent") or ""
     ).strip().lower()
@@ -1437,7 +1443,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # A deterministic pure affirmative contains no correction details. Do not
     # let opportunistic model extraction mutate the provider-delivered draft.
     _ali_change_action = (
-        None if _ali_pure_confirmation else result.get("ali_rental_change")
+        None
+        if _ali_pure_confirmation or _ali_repair_reply
+        else result.get("ali_rental_change")
     )
     _ali_summary_anchor_active = bool(
         flags.get("ali_phase") == "SUMMARY_PRESENTED"
@@ -1460,6 +1468,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     }
     _ali_protect_quote_fields = (
         _ali_pure_confirmation
+        or bool(_ali_repair_reply)
         or (
             _ali_summary_anchor_active
             and _ali_structured_primary_intent == "ask_question"
@@ -1549,6 +1558,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         if (
             _ali_change_configured
             and not _ali_pure_confirmation
+            and not _ali_repair_reply
             and isinstance(result.get("ali_vehicle_recommendation"), dict)
         ):
             try:
@@ -1579,11 +1589,6 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if (
         _ali_change_configured
         and not _ali_selected_this_turn
-        and not (
-            isinstance(_ali_change_action, dict)
-            and _ali_change_outcome == "changed"
-            and "vehicle_selection" in _ali_change_fields
-        )
     ):
         try:
             _explicit_class = infer_explicit_catalog_class_selection(
@@ -1733,35 +1738,42 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 )
                 if _class_action:
                     recommendation_action = _class_action
-            media_first_intent = str(
-                result.get("ali_primary_intent") or ""
-            ).strip().lower()
-            _deterministic_media_intent = infer_media_first_intent(
-                text,
-                reply_text,
-                recommendation_action,
-                fields,
-                flags,
-                _ali_catalog_for_media,
-            )
-            if _deterministic_media_intent:
-                media_first_intent = _deterministic_media_intent
-            media_first = derive_media_first_action(
-                media_first_intent,
-                recommendation_action,
-                reply_text,
-                fields,
-                flags,
-                _ali_catalog_for_media,
-            )
-            media_first_status = str(media_first.get("status") or "")
-            media_first_reason = str(media_first.get("reason") or "")
-            if media_first_status == "planned":
-                recommendation_action = media_first["action"]
-                reply_text = str(media_first.get("reply_text") or reply_text)
-            elif media_first_status == "needs_context":
+            if _ali_repair_reply:
+                media_first_intent = "continue_intake"
                 recommendation_action = None
-                reply_text = str(media_first.get("reply_text") or reply_text)
+                reply_text = _ali_repair_reply
+                media_first_status = "repair"
+                media_first_reason = "customer_confusion_or_reengagement"
+            else:
+                media_first_intent = str(
+                    result.get("ali_primary_intent") or ""
+                ).strip().lower()
+                _deterministic_media_intent = infer_media_first_intent(
+                    text,
+                    reply_text,
+                    recommendation_action,
+                    fields,
+                    flags,
+                    _ali_catalog_for_media,
+                )
+                if _deterministic_media_intent:
+                    media_first_intent = _deterministic_media_intent
+                media_first = derive_media_first_action(
+                    media_first_intent,
+                    recommendation_action,
+                    reply_text,
+                    fields,
+                    flags,
+                    _ali_catalog_for_media,
+                )
+                media_first_status = str(media_first.get("status") or "")
+                media_first_reason = str(media_first.get("reason") or "")
+                if media_first_status == "planned":
+                    recommendation_action = media_first["action"]
+                    reply_text = str(media_first.get("reply_text") or reply_text)
+                elif media_first_status == "needs_context":
+                    recommendation_action = None
+                    reply_text = str(media_first.get("reply_text") or reply_text)
         except Exception as exc:
             media_first_status = "invalid"
             media_first_reason = type(exc).__name__
@@ -1873,6 +1885,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     flags,
                     reply_text,
                     turn_id=str(message.get("message_id") or ""),
+                    allow_repeat=explicit_visual_request(text),
                 )
             except AliVehicleRecommendationError as exc:
                 media_first_status = "invalid"

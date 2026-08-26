@@ -387,3 +387,34 @@ def test_ali_quote_legacy_meta_outbound_boundary_sanitizes(
     assert "wa.me" not in sent_text
     assert "@" not in sent_text
     _cleanup(phone)
+
+
+def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch):
+    from agents.social import webhook_server
+
+    reconciled = []
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "wa_reconcile_vehicle_recommendation_failure",
+        lambda conversation_id, message_id: (
+            reconciled.append((conversation_id, message_id)) or True
+        ),
+    )
+    monkeypatch.setattr(
+        webhook_server,
+        "parse_zernio_webhook",
+        lambda _payload: (_ for _ in ()).throw(
+            AssertionError("failed delivery must not enter inbound parsing")
+        ),
+    )
+
+    webhook_server._process_zernio_event({
+        "event": "message.failed",
+        "message": {
+            "id": "provider-image-1",
+            "conversationId": "conversation-1",
+            "failureReason": "synthetic media rejection",
+        },
+    })
+
+    assert reconciled == [("conversation-1", "provider-image-1")]

@@ -1237,6 +1237,93 @@ def test_turn_delivery_commit_is_idempotent_and_logs_no_customer_content(monkeyp
     assert "private model reply" not in serialized
 
 
+def test_late_failed_recommendation_is_removed_from_delivered_and_shown_state(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    phone = "synthetic-late-recommendation-failure"
+    workflow.state_registry.wa_save_booking_state(
+        phone,
+        {"conversation_language": "en", "vehicle_class_name": "Economy"},
+        {},
+    )
+    plan = workflow.AliTurnPlan(
+        "vehicle_recommendation",
+        "Here is one suitable car.",
+        "DISCOVERY",
+        "request_recommendation",
+        "recommendation_requested_before_quote_complete",
+        "d" * 64,
+    )
+
+    assert workflow.commit_ali_turn_delivery(
+        phone,
+        plan.delivery_commit(),
+        plan.text,
+        ["synthetic-inbound"],
+        recommendation_state_hash="e" * 64,
+        recommendation_delivery="image",
+        recommendation_vehicle_ids=[ECONOMY_VEHICLE_ID],
+        recommendation_provider_message_ids=["provider-image-1"],
+    )
+    committed = workflow.state_registry.wa_get_booking_state(phone)["flags"]
+    assert committed["ali_shown_vehicle_ids"] == [ECONOMY_VEHICLE_ID]
+
+    assert workflow.state_registry.wa_reconcile_vehicle_recommendation_failure(
+        phone, "provider-image-1",
+    )
+    reconciled = workflow.state_registry.wa_get_booking_state(phone)["flags"]
+    assert reconciled["ali_vehicle_recommendation_deliveries"] == []
+    assert reconciled["ali_shown_vehicle_ids"] == []
+    assert reconciled["ali_last_recommendation_ids"] == []
+
+
+def test_failure_webhook_racing_before_commit_blocks_false_delivery_state(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    phone = "synthetic-racing-recommendation-failure"
+    workflow.state_registry.wa_save_booking_state(
+        phone, {"conversation_language": "en", "vehicle_class_name": "Economy"}, {},
+    )
+    assert workflow.state_registry.wa_reconcile_vehicle_recommendation_failure(
+        phone, "provider-image-race",
+    )
+    plan = workflow.AliTurnPlan(
+        "vehicle_recommendation",
+        "Here is one suitable car.",
+        "DISCOVERY",
+        "request_recommendation",
+        "recommendation_requested_before_quote_complete",
+        "c" * 64,
+    )
+
+    assert workflow.commit_ali_turn_delivery(
+        phone,
+        plan.delivery_commit(),
+        plan.text,
+        ["synthetic-inbound-race"],
+        recommendation_state_hash="b" * 64,
+        recommendation_delivery="image",
+        recommendation_vehicle_ids=[ECONOMY_VEHICLE_ID],
+        recommendation_provider_message_ids=["provider-image-race"],
+    ) is False
+    state = workflow.state_registry.wa_get_booking_state(phone)
+    assert state["flags"].get("ali_vehicle_recommendation_deliveries") in (None, [])
+    assert "ali_last_delivered_kind" not in state["flags"]
+    connection = workflow.state_registry._get_conn()
+    try:
+        assistant_count = connection.execute(
+            "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ? AND role = 'assistant'",
+            (phone,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert assistant_count == 0
+
+
 def test_change_action_contract_and_prompt_cover_universal_corrections(monkeypatch):
     action = marina_agent.MARINA_TOOL["input_schema"]["properties"]["ali_rental_change"]
     assert action["required"] == ["mode", "changed_fields"]
@@ -1251,6 +1338,29 @@ def test_change_action_contract_and_prompt_cover_universal_corrections(monkeypat
     assert "`vehicle_selection_kind`" in prompt
     assert "mode `clarify`" in prompt
     assert "EN, NL, PAP, and DE" in prompt
+
+
+def test_specific_recommendation_never_promotes_category_to_exact_vehicle():
+    current = {
+        "conversation_language": "en",
+        "vehicle_class_id": CLASS_ID,
+        "vehicle_class_name": "Economy",
+    }
+
+    changed, outcome, names = workflow.apply_recommendation_selection_context(
+        current,
+        {
+            "mode": "specific",
+            "vehicle_names": ["Kia Picanto 2024 or similar"],
+        },
+        correction_catalog(),
+    )
+
+    assert changed == current
+    assert outcome == "unchanged"
+    assert names == ()
+    assert "vehicle_id" not in changed
+    assert "vehicle_name" not in changed
 
 
 def test_corrected_summary_shows_all_visible_details_in_all_locales(monkeypatch):
