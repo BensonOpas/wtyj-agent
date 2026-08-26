@@ -143,7 +143,6 @@ def parse_zernio_sent_webhook(payload: dict) -> dict | None:
     if not isinstance(conversation, dict):
         nested = raw_data.get("conversation")
         conversation = nested if isinstance(nested, dict) else {}
-
     account = payload.get("account")
     if not isinstance(account, dict):
         nested = raw_data.get("account")
@@ -238,6 +237,10 @@ def parse_zernio_failed_webhook(payload: dict) -> dict | None:
     if not isinstance(conversation, dict):
         nested = raw_data.get("conversation")
         conversation = nested if isinstance(nested, dict) else {}
+    account = payload.get("account")
+    if not isinstance(account, dict):
+        nested = raw_data.get("account")
+        account = nested if isinstance(nested, dict) else {}
     conversation_id = str(
         message.get("conversationId")
         or message.get("conversation_id")
@@ -253,14 +256,40 @@ def parse_zernio_failed_webhook(payload: dict) -> dict | None:
             message_keys=list(message.keys()),
         )
         return None
+    metadata = message.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    attachments = message.get("attachments")
+    attachments = attachments if isinstance(attachments, list) else []
+    interactive = message.get("interactive")
+    delivery_error = message.get("deliveryError")
+    delivery_error = delivery_error if isinstance(delivery_error, dict) else {}
     return {
         "event": "message.failed",
         "conversation_id": conversation_id,
         "message_id": message_id,
+        "account_id": str(
+            message.get("accountId")
+            or message.get("account_id")
+            or conversation.get("accountId")
+            or account.get("id")
+            or account.get("accountId")
+            or raw_data.get("accountId")
+            or ""
+        ),
+        "text": str(message.get("message") or message.get("text") or "").strip(),
+        "recoverable_media": bool(
+            attachments
+            or message.get("attachmentUrl")
+            or message.get("attachmentType")
+            or isinstance(interactive, dict)
+            or isinstance(metadata.get("waInteractive"), dict)
+        ),
         "failure_reason": str(
             message.get("failureReason")
             or message.get("errorMessage")
             or raw_data.get("failureReason")
+            or delivery_error.get("message")
+            or delivery_error.get("title")
             or ""
         ),
     }
@@ -772,10 +801,15 @@ def send_dm_vehicle_recommendation(
         )
         return {"success": False, "delivery": "window_closed"}
     if kind == "image":
+        media_url = str(
+            options[0].get("whatsapp_image_url")
+            or options[0].get("image_url")
+            or ""
+        )
         primary_body = {
             "accountId": account_id,
             "message": text,
-            "attachmentUrl": options[0]["image_url"],
+            "attachmentUrl": media_url,
             "attachmentType": "image",
             "buttons": buttons,
         }

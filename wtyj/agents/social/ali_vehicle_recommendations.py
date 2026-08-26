@@ -145,6 +145,7 @@ def _catalog_vehicle(
     classes: dict[str, dict],
     locale: str,
     base_url: str,
+    catalog_version: object,
 ) -> dict:
     public_id = str(vehicle.get("id") or "").strip()
     name = str(vehicle.get("name") or "").strip()
@@ -163,6 +164,17 @@ def _catalog_vehicle(
     ):
         raise AliVehicleRecommendationError("invalid_catalog_vehicle")
     image_url, image_alt = _vehicle_image(vehicle, base_url)
+    if (
+        isinstance(catalog_version, bool)
+        or not isinstance(catalog_version, int)
+        or catalog_version < 1
+    ):
+        raise AliVehicleRecommendationError("invalid_catalog_version")
+    whatsapp_image_url = _absolute_https_url(
+        "/api/v1/vehicle-media/"
+        f"{urllib.parse.quote(public_id, safe='')}?v={catalog_version}",
+        base_url,
+    )
     seats = vehicle.get("seats")
     if isinstance(seats, bool) or (seats is not None and not isinstance(seats, int)):
         raise AliVehicleRecommendationError("invalid_vehicle_capacity")
@@ -178,6 +190,7 @@ def _catalog_vehicle(
         "transmission": transmission or None,
         "daily_usd": amount,
         "image_url": image_url,
+        "whatsapp_image_url": whatsapp_image_url,
         "image_alt": image_alt,
         "detail_url": detail_url,
         "selection_id": vehicle_selection_payload(public_id),
@@ -279,7 +292,9 @@ def build_vehicle_picker_recovery(
         if vehicle is None:
             continue
         try:
-            options.append(_catalog_vehicle(vehicle, classes, locale, base_url))
+            options.append(_catalog_vehicle(
+                vehicle, classes, locale, base_url, catalog.get("catalogVersion"),
+            ))
         except AliVehicleRecommendationError:
             continue
     if not options:
@@ -389,7 +404,9 @@ def build_vehicle_recommendation(
         vehicle = vehicles_by_name.get(requested_name.strip().casefold())
         if vehicle is None:
             raise AliVehicleRecommendationError("vehicle_not_in_catalog")
-        options.append(_catalog_vehicle(vehicle, classes, locale, base_url))
+        options.append(_catalog_vehicle(
+            vehicle, classes, locale, base_url, catalog.get("catalogVersion"),
+        ))
 
     passenger_count = fields.get("passenger_count")
     if mode == "curated":
@@ -455,7 +472,7 @@ def build_vehicle_recommendation(
             "type": "cta_url",
             "header": {
                 "type": "image",
-                "image": {"link": option["image_url"]},
+                "image": {"link": option["whatsapp_image_url"]},
             },
             "body": {"text": _card_body(option, locale)},
             "action": {
