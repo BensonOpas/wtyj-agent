@@ -78,6 +78,39 @@ def format_curacao_datetime(value: str, locale: str = "en") -> str:
     return f"{rendered_date} at {parsed:%H:%M} (Curaçao time)"
 
 
+def usd_cents(value: dict) -> int:
+    """Parse one authoritative USD money object without floating point."""
+    if not isinstance(value, dict) or value.get("currency") != "USD":
+        raise ValueError("Expected an authoritative USD money object")
+    amount = str(value.get("amount") or "")
+    if not re.fullmatch(r"(?:0|[1-9]\d*)\.\d{2}", amount):
+        raise ValueError("Invalid USD money amount")
+    dollars, fractional = amount.split(".", 1)
+    return int(dollars) * 100 + int(fractional)
+
+
+def usd_money(cents: int) -> dict[str, str]:
+    """Build one canonical USD money object from non-negative integer cents."""
+    if not isinstance(cents, int) or isinstance(cents, bool) or cents < 0:
+        raise ValueError("USD cents must be a non-negative integer")
+    dollars, fractional = divmod(cents, 100)
+    return {"currency": "USD", "amount": f"{dollars}.{fractional:02d}"}
+
+
+def format_usd_money(value: dict) -> str:
+    """Format one validated USD money object for customer presentation."""
+    cents = usd_cents(value)
+    dollars, fractional = divmod(cents, 100)
+    return f"USD {dollars:,}.{fractional:02d}"
+
+
+def total_quote_amount(pricing: dict) -> dict[str, str]:
+    """Return rental charges plus refundable deposit from one quote snapshot."""
+    rental_cents = usd_cents(pricing.get("rentalTotal"))
+    deposit_cents = usd_cents(pricing.get("refundableSecurityDeposit"))
+    return usd_money(rental_cents + deposit_cents)
+
+
 def _filename_component(value: str, fallback: str, limit: int) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or ""))
     ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
