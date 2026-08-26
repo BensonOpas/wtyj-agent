@@ -25,6 +25,7 @@ _RESPONSE_DEFAULTS = {
     "internal_note": "",
     "ali_vehicle_recommendation": None,
     "ali_rental_change": None,
+    "ali_summary_action": None,
 }
 
 
@@ -298,6 +299,20 @@ MARINA_TOOL = {
                     },
                 },
                 "required": ["mode", "changed_fields"],
+                "additionalProperties": False,
+            },
+            "ali_summary_action": {
+                "type": "object",
+                "description": (
+                    "Ali only and optional: set mode `repeat` only when the newest "
+                    "customer message explicitly asks to see the current rental summary "
+                    "again. Omit for confirmations, questions, hesitation, rejection, "
+                    "corrections, and vehicle exploration."
+                ),
+                "properties": {
+                    "mode": {"type": "string", "enum": ["repeat"]},
+                },
+                "required": ["mode"],
                 "additionalProperties": False,
             },
             "semi_escalation": {
@@ -942,6 +957,10 @@ Current published catalog, supplied digitally by Ali and containing no customer 
 - This block overrides generic booking, email-collection, contact-info, payment, service,
   trip, and confirmation instructions elsewhere in this prompt.
 - Re-read the complete history and extract every rental fact explicitly supplied.
+- While a rental summary is awaiting confirmation, answer the newest customer intent
+  naturally. Do not repeat the unchanged summary for a question, rejection, hesitation,
+  or vehicle exploration. Set `ali_summary_action.mode` to `repeat` only when the customer
+  explicitly asks to see the current summary again, in any supported language.
 - When the newest message corrects a displayed summary or an already quoted rental, populate
   `ali_rental_change`. Use mode `apply` and list only the facts explicitly replaced in that
   newest message. Map a vehicle or category correction to `vehicle_selection`, set
@@ -1016,6 +1035,9 @@ Current published catalog, supplied digitally by Ali and containing no customer 
     `ali_vehicle_recommendation` with mode `specific` and exactly that catalog vehicle name.
     In `reply`, introduce the visual naturally and ask one useful follow-up question. Python
     adds the exact category, seats when known, daily rate, and image from the same catalog.
+  - When the customer chooses one option from a visual recommendation that was just sent,
+    store that exact choice but do not send the same visual again; allow Python to present
+    the corrected confirmation summary.
   - When the customer is genuinely undecided and passenger_count plus relevant luggage needs
     are understood, choose only the best 2–3 suitable current vehicles and populate mode
     `curated`. Never choose more than 3 and never dump the whole fleet. In `reply`, introduce

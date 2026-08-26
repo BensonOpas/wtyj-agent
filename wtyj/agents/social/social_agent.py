@@ -1305,6 +1305,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_change_fields = ()
     _ali_change_action = result.get("ali_rental_change")
     _ali_change_configured = ali_quote_tenant_configured()
+    _ali_had_summary_context = bool(
+        flags.get("awaiting_quote_confirmation")
+        or flags.get("ali_summary_hash")
+        or flags.get("ali_quote_public_id")
+    )
     if tenant_hard_rules.is_consulta_despertares():
         # A concise answer such as "15:30" may be unambiguous only because
         # the prior Alia turn asked when the team may call. Preserve it even
@@ -1463,32 +1468,33 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_workflow_configured = ali_quote_tenant_configured()
     _ali_workflow_on = ali_quote_tenant_enabled()
     _ali_reply = None
-    if _ali_workflow_on and _ali_change_outcome not in {"clarify", "unchanged"}:
-        _ali_reply = handle_ali_quote_turn(
-            conversation_id=phone,
-            zernio_account_id=str(message.get("_zernio_account_id") or ""),
-            whatsapp_number=str(message.get("_zernio_sender_id") or phone),
-            message_text=text,
-            fields=fields,
-            flags=flags,
-            from_name=from_name,
-        )
-        if _ali_reply:
-            reply_text = _ali_reply
-        else:
-            reply_text = sanitize_ali_intake_reply(
-                reply_text,
-                fields.get("conversation_language"),
-            )
     recommendation_action = result.get("ali_vehicle_recommendation")
+    recommendation_requested = (
+        isinstance(recommendation_action, dict)
+        and not result.get("requires_human")
+    )
+    repeat_summary_requested = (
+        isinstance(result.get("ali_summary_action"), dict)
+        and result["ali_summary_action"].get("mode") == "repeat"
+    )
+    if recommendation_requested and _ali_had_summary_context:
+        flags["ali_summary_deferred_for_recommendation"] = True
+    elif _ali_change_outcome == "changed":
+        flags.pop("ali_summary_deferred_for_recommendation", None)
+    summary_deferred = bool(
+        flags.get("ali_summary_deferred_for_recommendation")
+    )
     vehicle_recommendation = None
+    if _ali_workflow_on:
+        reply_text = sanitize_ali_intake_reply(
+            reply_text,
+            fields.get("conversation_language"),
+        )
     if (
         include_media
         and channel == "whatsapp"
         and _ali_workflow_on
-        and not _ali_reply
-        and isinstance(recommendation_action, dict)
-        and not result.get("requires_human")
+        and recommendation_requested
     ):
         try:
             vehicle_recommendation = build_vehicle_recommendation(
@@ -1506,6 +1512,37 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             )
         if vehicle_recommendation:
             reply_text = vehicle_recommendation["text"]
+    if (
+        _ali_workflow_on
+        and not recommendation_requested
+        and (not summary_deferred or repeat_summary_requested)
+        and _ali_change_outcome not in {"clarify", "unchanged"}
+    ):
+        _ali_reply = handle_ali_quote_turn(
+            conversation_id=phone,
+            zernio_account_id=str(message.get("_zernio_account_id") or ""),
+            whatsapp_number=str(message.get("_zernio_sender_id") or phone),
+            message_text=text,
+            fields=fields,
+            flags=flags,
+            from_name=from_name,
+            summary_action=result.get("ali_summary_action"),
+        )
+        if _ali_reply:
+            reply_text = _ali_reply
+            if flags.get("awaiting_quote_confirmation"):
+                flags.pop("ali_summary_deferred_for_recommendation", None)
+    if _ali_workflow_on:
+        bm_logger.log(
+            "ali_summary_route_decision",
+            route=(
+                "recommendation" if recommendation_requested
+                else "summary" if _ali_reply
+                else "model_reply"
+            ),
+            summary_deferred=summary_deferred,
+            change_outcome=_ali_change_outcome,
+        )
     if _ali_workflow_configured:
         # The generic booking engine must never create holds or contact redirects
         # for Ali, including while its master automation switch is off.
