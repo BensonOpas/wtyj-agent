@@ -265,6 +265,44 @@ def infer_explicit_catalog_class_selection(
     }
 
 
+def catalog_class_recommendation_action(
+    selection: object,
+    catalog: dict,
+) -> dict | None:
+    """Build a recommendation action from one validated active class."""
+    if not isinstance(selection, dict):
+        return None
+    class_id = str(selection.get("vehicle_class_id") or "").strip()
+    class_name = str(selection.get("vehicle_class_name") or "").strip()
+    active_class = next(
+        (
+            item
+            for item in catalog.get("vehicleClasses") or []
+            if isinstance(item, dict)
+            and str(item.get("id") or "").strip() == class_id
+            and str(item.get("name") or "").strip() == class_name
+            and item.get("active", True) is not False
+        ),
+        None,
+    )
+    if active_class is None:
+        return None
+    vehicles = sorted(
+        (
+            vehicle
+            for vehicle in _active_visual_vehicles(catalog)
+            if str(vehicle.get("classId") or "").strip() == class_id
+        ),
+        key=_catalog_order,
+    )[:5]
+    if not vehicles:
+        return None
+    return {
+        "mode": "specific" if len(vehicles) == 1 else "curated",
+        "vehicle_names": [str(vehicle["name"]).strip() for vehicle in vehicles],
+    }
+
+
 def _ids(flags: dict, key: str) -> set[str]:
     values = flags.get(key) or []
     return {

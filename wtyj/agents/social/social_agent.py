@@ -40,6 +40,7 @@ from agents.social.ali_vehicle_recommendations import (
     build_vehicle_recommendation,
 )
 from agents.social.ali_media_first import (
+    catalog_class_recommendation_action,
     derive_media_first_action,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -1674,6 +1675,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     ):
         try:
             _ali_catalog_for_media = get_ali_intake_catalog()
+            if _ali_explicit_class_this_turn:
+                _class_action = catalog_class_recommendation_action(
+                    _ali_explicit_class_this_turn,
+                    _ali_catalog_for_media,
+                )
+                if _class_action:
+                    recommendation_action = _class_action
             media_first_intent = str(
                 result.get("ali_primary_intent") or ""
             ).strip().lower()

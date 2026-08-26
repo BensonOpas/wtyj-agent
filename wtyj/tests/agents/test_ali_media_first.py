@@ -3,6 +3,7 @@
 import pytest
 
 from agents.social.ali_media_first import (
+    catalog_class_recommendation_action,
     derive_media_first_action,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -190,6 +191,23 @@ def test_longest_explicit_catalog_class_label_wins():
         "vehicle_class_id": "compact-suv",
         "vehicle_class_name": "Compact SUV",
     }
+
+
+def test_validated_class_builds_server_owned_recommendation_action():
+    assert catalog_class_recommendation_action(
+        {"vehicle_class_id": "suv", "vehicle_class_name": "SUV"},
+        _catalog(),
+    ) == {
+        "mode": "specific",
+        "vehicle_names": ["Kia Seltos or similar"],
+    }
+
+
+def test_stale_or_cross_catalog_class_cannot_build_recommendation_action():
+    assert catalog_class_recommendation_action(
+        {"vehicle_class_id": "other-tenant", "vehicle_class_name": "SUV"},
+        _catalog(),
+    ) is None
 
 
 def test_text_vehicle_dump_is_converted_to_one_curated_visual_action():
