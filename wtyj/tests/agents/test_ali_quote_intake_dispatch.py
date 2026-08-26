@@ -10,6 +10,8 @@ from agents.social import ali_quote_workflow as workflow
 CLASS_ID = "30000000-0000-4000-8000-000000000001"
 ECONOMY_VEHICLE_ID = "40000000-0000-4000-8000-000000000001"
 CHILD_SEAT_ID = "c5b7e180-5eaa-4f5d-8a41-180000000001"
+VAN_CLASS_ID = "30000000-0000-4000-8000-000000000002"
+SELTOS_VEHICLE_ID = "40000000-0000-4000-8000-000000000002"
 
 
 def raw_config(automation=True):
@@ -63,6 +65,26 @@ def catalog():
         }],
         "charges": [],
     }
+
+
+def correction_catalog():
+    current = json.loads(json.dumps(catalog()))
+    current["vehicleClasses"].append({
+        "id": VAN_CLASS_ID,
+        "name": "Van",
+        "description": "Passenger van category",
+    })
+    current["vehicles"].append({
+        "id": SELTOS_VEHICLE_ID,
+        "classId": CLASS_ID,
+        "name": "Kia Seltos or similar",
+        "seats": 5,
+        "transmission": "automatic",
+        "features": ["Air conditioning"],
+        "dailyRate": {"currency": "USD", "amount": "65.00"},
+        "weeklyRate": {"currency": "USD", "amount": "455.00"},
+    })
+    return current
 
 
 def test_authenticated_catalog_read_is_validated():
@@ -518,3 +540,231 @@ def test_correction_replaces_summary_without_starting_quote(monkeypatch, tmp_pat
     assert flags["ali_summary_hash"] != previous_hash
     assert flags["awaiting_quote_confirmation"] is True
     assert started == []
+
+
+def test_latest_category_name_beats_stale_resolved_vehicle():
+    stored_plus_latest = {
+        "vehicle_id": ECONOMY_VEHICLE_ID,
+        "vehicle_name": "Kia Picanto 2024 or similar",
+        "vehicle_class_name": "Van",
+    }
+
+    resolved = workflow.resolve_catalog_selection(
+        stored_plus_latest, correction_catalog()
+    )
+
+    assert resolved["vehicle_class_id"] == VAN_CLASS_ID
+    assert resolved["vehicle_class_name"] == "Van"
+    assert "vehicle_id" not in resolved
+    assert "vehicle_name" not in resolved
+
+
+def test_structured_vehicle_correction_replaces_only_stale_selection():
+    stored = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Airport",
+        "return_location": "Hotel",
+        "vehicle_id": ECONOMY_VEHICLE_ID,
+        "vehicle_name": "Kia Picanto 2024 or similar",
+        "driver_age": 30,
+        "passenger_count": 4,
+        "luggage_count": 2,
+        "comments": "Synthetic note",
+        "conversation_language": "en",
+    }
+    changed, outcome, names = workflow.apply_latest_rental_change(
+        stored,
+        {"vehicle_class_name": "Van"},
+        {"mode": "apply", "changed_fields": ["vehicle_selection"], "vehicle_selection_kind": "category"},
+        correction_catalog(),
+    )
+
+    assert outcome == "changed"
+    assert names == ("vehicle_selection",)
+    assert changed["vehicle_class_id"] == VAN_CLASS_ID
+    assert changed["vehicle_class_name"] == "Van"
+    assert "vehicle_id" not in changed
+    assert "vehicle_name" not in changed
+    assert {key: changed[key] for key in stored if not key.startswith("vehicle_")} == {
+        key: value for key, value in stored.items() if not key.startswith("vehicle_")
+    }
+
+    exact, outcome, _ = workflow.apply_latest_rental_change(
+        changed,
+        {"vehicle_name": "Kia Seltos or similar"},
+        {"mode": "apply", "changed_fields": ["vehicle_selection"], "vehicle_selection_kind": "vehicle"},
+        correction_catalog(),
+    )
+    assert outcome == "changed"
+    assert exact["vehicle_id"] == SELTOS_VEHICLE_ID
+    assert "vehicle_class_id" not in exact
+
+
+def test_every_quote_relevant_change_is_scoped_and_catalog_validated():
+    stored = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Airport",
+        "return_location": "Airport",
+        "vehicle_class_id": CLASS_ID,
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "passenger_count": 2,
+        "luggage_count": 1,
+        "comments": "Meet at arrivals",
+        "conversation_language": "en",
+        "supplements": [{
+            "id": CHILD_SEAT_ID,
+            "name": "Child seat",
+            "quantity": 1,
+            "billing_basis": "per_day",
+            "unit_price_usd": "5.00",
+        }],
+    }
+    cases = (
+        ("customer_name", {"customer_name": "Corrected Synthetic"}, "Corrected Synthetic"),
+        ("rental_start", {"rental_start": "2026-09-02"}, "2026-09-02"),
+        ("rental_end", {"rental_end": "2026-09-05"}, "2026-09-05"),
+        ("pickup_location", {"pickup_location": "Synthetic hotel"}, "Synthetic hotel"),
+        ("return_location", {"return_location": "Synthetic hotel"}, "Synthetic hotel"),
+        ("driver_age", {"driver_age": 31}, 31),
+        ("passenger_count", {"passenger_count": 3}, 3),
+        ("luggage_count", {"luggage_count": 2}, 2),
+        ("comments", {"comments": "Late synthetic flight"}, "Late synthetic flight"),
+    )
+    for key, extracted, expected in cases:
+        changed, outcome, names = workflow.apply_latest_rental_change(
+            stored, extracted,
+            {"mode": "apply", "changed_fields": [key]},
+            correction_catalog(),
+        )
+        assert outcome == "changed"
+        assert names == (key,)
+        assert changed[key] == expected
+        for preserved_key, value in stored.items():
+            if preserved_key != key:
+                assert changed[preserved_key] == value
+
+    changed, outcome, _ = workflow.apply_latest_rental_change(
+        stored,
+        {"supplements": [{"name": "Child seat", "quantity": 2}]},
+        {"mode": "apply", "changed_fields": ["supplements"]},
+        correction_catalog(),
+    )
+    assert outcome == "changed"
+    assert changed["supplements"][0]["quantity"] == 2
+
+    removed, outcome, _ = workflow.apply_latest_rental_change(
+        changed, {"supplements": []},
+        {"mode": "apply", "changed_fields": ["supplements"]},
+        correction_catalog(),
+    )
+    assert outcome == "changed"
+    assert removed["supplements"] == []
+
+
+def test_unknown_or_unspecified_change_preserves_state_for_one_clarification():
+    stored = {
+        "vehicle_id": ECONOMY_VEHICLE_ID,
+        "vehicle_name": "Kia Picanto 2024 or similar",
+        "rental_start": "2026-09-01",
+    }
+    for extracted, action in (
+        ({"vehicle_class_name": "Imaginary van"}, {
+            "mode": "apply", "changed_fields": ["vehicle_selection"],
+            "vehicle_selection_kind": "category",
+        }),
+        ({}, {"mode": "clarify", "changed_fields": []}),
+    ):
+        result, outcome, names = workflow.apply_latest_rental_change(
+            stored, extracted, action, correction_catalog()
+        )
+        assert result == stored
+        assert outcome == "clarify"
+        assert names == ()
+
+
+def test_real_change_invalidates_only_active_summary_pointer():
+    flags = {
+        "ali_summary_hash": "old-hash",
+        "ali_summary_version": 1,
+        "awaiting_quote_confirmation": True,
+        "ali_quote_public_id": "historical-quote-id",
+        "reply_times": [1, 2],
+    }
+    workflow.invalidate_active_quote_summary(flags)
+
+    assert flags == {"reply_times": [1, 2]}
+
+
+def test_change_action_contract_and_prompt_cover_universal_corrections(monkeypatch):
+    action = marina_agent.MARINA_TOOL["input_schema"]["properties"]["ali_rental_change"]
+    assert action["required"] == ["mode", "changed_fields"]
+    assert action["properties"]["vehicle_selection_kind"]["enum"] == ["vehicle", "category"]
+    assert set(action["properties"]["changed_fields"]["items"]["enum"]) == workflow.QUOTE_CHANGE_FIELDS
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: correction_catalog())
+
+    prompt = " ".join(marina_agent._build_ali_quote_block().split())
+    assert "only the facts explicitly replaced in that newest message" in prompt
+    assert "special-request correction to `comments`" in prompt
+    assert "`vehicle_selection_kind`" in prompt
+    assert "mode `clarify`" in prompt
+    assert "EN, NL, PAP, and DE" in prompt
+
+
+def test_corrected_summary_shows_all_visible_details_in_all_locales(monkeypatch):
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: correction_catalog())
+    labels = {
+        "en": ("Driver age: 31", "Passengers: 3", "Luggage: 2", "Special requests: Synthetic request"),
+        "nl": ("Leeftijd bestuurder: 31", "Passagiers: 3", "Bagage: 2", "Speciale verzoeken: Synthetic request"),
+        "pap": ("Edat di chauffeur: 31", "Pasaheronan: 3", "Maleta: 2", "Petishonnan spesial: Synthetic request"),
+        "de": ("Alter des Fahrers: 31", "Passagiere: 3", "Gepäck: 2", "Besondere Wünsche: Synthetic request"),
+    }
+    for locale, expected_lines in labels.items():
+        fields = {
+            "customer_name": "Synthetic Customer",
+            "rental_start": "2026-09-01",
+            "rental_end": "2026-09-04",
+            "pickup_location": "Airport",
+            "return_location": "Hotel",
+            "vehicle_class_name": "Van",
+            "driver_age": 31,
+            "passenger_count": 3,
+            "luggage_count": 2,
+            "comments": "Synthetic request",
+            "conversation_language": locale,
+        }
+        flags = {}
+        summary = workflow.handle_ali_quote_turn(
+            f"synthetic-{locale}", "synthetic-account", "+351000000000",
+            "Synthetic complete details", fields, flags,
+            raw_config=raw_config(),
+        )
+        assert all(line in summary for line in expected_lines)
+        assert flags["awaiting_quote_confirmation"] is True
+
+
+def test_rental_change_log_contains_metadata_only(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        workflow.bm_logger, "log",
+        lambda event, **fields: events.append({"event": event, **fields}),
+    )
+    workflow.log_rental_change_decision(
+        "changed", ("pickup_location", "vehicle_selection")
+    )
+
+    assert events == [{
+        "event": "ali_rental_change_decision",
+        "tenant_slug": "ali-car-rental",
+        "outcome": "changed",
+        "changed_fields": ["pickup_location", "vehicle_selection"],
+    }]
+    serialized = json.dumps(events).lower()
+    assert "synthetic" not in serialized
+    assert "whatsapp" not in serialized
+    assert "+351" not in serialized

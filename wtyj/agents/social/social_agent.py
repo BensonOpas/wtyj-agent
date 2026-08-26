@@ -23,8 +23,11 @@ from agents.marina import gws_calendar
 from agents.marina import payment_stub
 from agents.marina import sheets_writer
 from agents.social.ali_quote_workflow import (
+    apply_latest_rental_change,
     get_intake_catalog as get_ali_intake_catalog,
     handle_ali_quote_turn,
+    invalidate_active_quote_summary,
+    log_rental_change_decision,
     sanitize_intake_reply as sanitize_ali_intake_reply,
     tenant_configured as ali_quote_tenant_configured,
     tenant_enabled as ali_quote_tenant_enabled,
@@ -1298,6 +1301,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
 
     # Step 3: Merge fields — overwrite when Claude returns non-empty values
     new_fields = result.get("fields", {}) or {}
+    _ali_change_outcome = "not_applicable"
+    _ali_change_fields = ()
+    _ali_change_action = result.get("ali_rental_change")
+    _ali_change_configured = ali_quote_tenant_configured()
     if tenant_hard_rules.is_consulta_despertares():
         # A concise answer such as "15:30" may be unambiguous only because
         # the prior Alia turn asked when the team may call. Preserve it even
@@ -1326,11 +1333,46 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         ).strip():
             new_fields = dict(new_fields)
             new_fields["preferred_clinic"] = _clinic_answer
-    for k, v in new_fields.items():
-        if v is not None and v != "":
-            fields[k] = v
-        elif v == "" and k in fields:
-            del fields[k]
+    if _ali_change_configured and isinstance(_ali_change_action, dict):
+        try:
+            changed_state, _ali_change_outcome, _ali_change_fields = (
+                apply_latest_rental_change(
+                    fields,
+                    new_fields,
+                    _ali_change_action,
+                    get_ali_intake_catalog(),
+                )
+            )
+        except Exception:
+            changed_state = dict(fields)
+            _ali_change_outcome = "clarify"
+            _ali_change_fields = ()
+        if _ali_change_outcome == "changed":
+            fields.clear()
+            fields.update(changed_state)
+            invalidate_active_quote_summary(flags)
+        # Merge only non-quote fields. Quote fields are exclusively owned by
+        # the validated newest-change action on correction turns.
+        _quote_merge_keys = {
+            "customer_name", "rental_start", "rental_end", "pickup_location",
+            "return_location", "vehicle_id", "vehicle_name", "vehicle_class_id",
+            "vehicle_class_name", "driver_age", "passenger_count", "luggage_count",
+            "supplements", "extra_ids", "comments", "special_requests",
+        }
+        for k, v in new_fields.items():
+            if k in _quote_merge_keys:
+                continue
+            if v is not None and v != "":
+                fields[k] = v
+            elif v == "" and k in fields:
+                del fields[k]
+        log_rental_change_decision(_ali_change_outcome, _ali_change_fields)
+    else:
+        for k, v in new_fields.items():
+            if v is not None and v != "":
+                fields[k] = v
+            elif v == "" and k in fields:
+                del fields[k]
 
     # Callback-follow-up tenants persist one evolving, tenant-local request.
     # The normal booking fields remain untouched so this capability is isolated
@@ -1421,7 +1463,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_workflow_configured = ali_quote_tenant_configured()
     _ali_workflow_on = ali_quote_tenant_enabled()
     _ali_reply = None
-    if _ali_workflow_on:
+    if _ali_workflow_on and _ali_change_outcome not in {"clarify", "unchanged"}:
         _ali_reply = handle_ali_quote_turn(
             conversation_id=phone,
             zernio_account_id=str(message.get("_zernio_account_id") or ""),

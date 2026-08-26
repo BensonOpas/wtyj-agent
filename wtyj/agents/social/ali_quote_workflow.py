@@ -596,10 +596,20 @@ def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
         matches = [item for item in items if _normalize_catalog_label(item.get("name")) == target]
         return matches[0] if len(matches) == 1 else None
 
-    vehicle = vehicle_by_id.get(str(resolved.get("vehicle_id") or ""))
+    vehicle_from_id = vehicle_by_id.get(str(resolved.get("vehicle_id") or ""))
+    class_from_id = class_by_id.get(str(resolved.get("vehicle_class_id") or ""))
+    vehicle = vehicle_from_id
     vehicle = vehicle or unique_name_match(vehicles, resolved.get("vehicle_name"))
-    vehicle_class = class_by_id.get(str(resolved.get("vehicle_class_id") or ""))
+    vehicle_class = class_from_id
     vehicle_class = vehicle_class or unique_name_match(classes, resolved.get("vehicle_class_name"))
+
+    # A persisted selection carries its server-owned ID. The one-call intake
+    # contract never lets Claude emit IDs, so a matching name of the opposing
+    # kind is necessarily newer than that persisted selection.
+    if vehicle_from_id and vehicle_class and not class_from_id:
+        vehicle = None
+    elif class_from_id and vehicle and not vehicle_from_id:
+        vehicle_class = None
 
     for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
         resolved.pop(key, None)
@@ -610,6 +620,113 @@ def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
         resolved["vehicle_class_id"] = str(vehicle_class["id"])
         resolved["vehicle_class_name"] = str(vehicle_class["name"])
     return resolved
+
+
+QUOTE_CHANGE_FIELDS = frozenset({
+    "customer_name", "rental_start", "rental_end", "pickup_location",
+    "return_location", "vehicle_selection", "driver_age", "passenger_count",
+    "luggage_count", "supplements", "comments",
+})
+
+
+def apply_latest_rental_change(
+    stored_fields: dict,
+    extracted_fields: dict,
+    action: object,
+    catalog: dict,
+) -> tuple[dict, str, tuple[str, ...]]:
+    """Apply only newest explicit quote changes using catalog-owned truth.
+
+    The outcome is one of ``changed``, ``unchanged``, ``clarify`` or
+    ``not_applicable``. No customer values are returned for logging.
+    """
+    current = dict(stored_fields or {})
+    if not isinstance(action, dict):
+        return current, "not_applicable", ()
+    mode = action.get("mode")
+    requested = action.get("changed_fields")
+    if mode == "clarify":
+        return current, "clarify", ()
+    if mode != "apply" or not isinstance(requested, list):
+        return current, "clarify", ()
+    changed_fields = tuple(dict.fromkeys(str(item) for item in requested))
+    if not changed_fields or any(item not in QUOTE_CHANGE_FIELDS for item in changed_fields):
+        return current, "clarify", ()
+    extracted = extracted_fields if isinstance(extracted_fields, dict) else {}
+    candidate = dict(current)
+
+    for key in changed_fields:
+        if key == "vehicle_selection":
+            kind = action.get("vehicle_selection_kind")
+            selected_key = {
+                "vehicle": "vehicle_name",
+                "category": "vehicle_class_name",
+            }.get(kind)
+            if not selected_key or not str(extracted.get(selected_key) or "").strip():
+                return current, "clarify", ()
+            selection = {selected_key: extracted[selected_key]}
+            resolved = resolve_catalog_selection(selection, catalog)
+            resolved_selection = {
+                name: resolved[name]
+                for name in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name")
+                if name in resolved
+            }
+            if len(resolved_selection) != 2:
+                return current, "clarify", ()
+            for name in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+                candidate.pop(name, None)
+            candidate.update(resolved_selection)
+            continue
+        if key == "supplements":
+            if "supplements" not in extracted or not isinstance(extracted["supplements"], list):
+                return current, "clarify", ()
+            try:
+                resolved = resolve_catalog_supplements(
+                    {**candidate, "supplements": extracted["supplements"]}, catalog
+                )
+            except AliQuoteError:
+                return current, "clarify", ()
+            candidate["supplements"] = resolved.get("supplements") or []
+            candidate.pop("extra_ids", None)
+            continue
+        if key == "comments":
+            if "comments" in extracted:
+                value = extracted.get("comments")
+            elif "special_requests" in extracted:
+                value = extracted.get("special_requests")
+            else:
+                return current, "clarify", ()
+            if str(value or "").strip():
+                candidate["comments"] = str(value).strip()
+            else:
+                candidate.pop("comments", None)
+            candidate.pop("special_requests", None)
+            continue
+        if key not in extracted or extracted.get(key) in (None, ""):
+            return current, "clarify", ()
+        candidate[key] = extracted[key]
+
+    outcome = "changed" if candidate != current else "unchanged"
+    return candidate, outcome, tuple(sorted(changed_fields))
+
+
+def log_rental_change_decision(outcome: str, changed_fields: tuple[str, ...]) -> None:
+    """Record only fixed metadata; never message text, values, or PII."""
+    bm_logger.log(
+        "ali_rental_change_decision",
+        tenant_slug=TENANT_SLUG,
+        outcome=str(outcome),
+        changed_fields=list(changed_fields),
+    )
+
+
+def invalidate_active_quote_summary(flags: dict) -> None:
+    """Require confirmation of a corrected summary without touching quote rows."""
+    for key in (
+        "ali_summary_hash", "ali_summary_version",
+        "awaiting_quote_confirmation", "ali_quote_public_id",
+    ):
+        flags.pop(key, None)
 
 
 def _money_cents(amount: object) -> int:
@@ -829,6 +946,13 @@ SUPPLEMENT_LABELS = {
     "de": {"heading": "Extras", "per_day": "pro Miettag", "per_rental": "pro Miete", "days": "Tage"},
 }
 
+SUMMARY_DETAIL_LABELS = {
+    "en": {"driver_age": "Driver age", "passengers": "Passengers", "luggage": "Luggage", "comments": "Special requests"},
+    "nl": {"driver_age": "Leeftijd bestuurder", "passengers": "Passagiers", "luggage": "Bagage", "comments": "Speciale verzoeken"},
+    "pap": {"driver_age": "Edat di chauffeur", "passengers": "Pasaheronan", "luggage": "Maleta", "comments": "Petishonnan spesial"},
+    "de": {"driver_age": "Alter des Fahrers", "passengers": "Passagiere", "luggage": "Gepäck", "comments": "Besondere Wünsche"},
+}
+
 PREPARING = {
     "en": "Great, I have everything I need. I’ll prepare your official quote and send it here on WhatsApp within 30 minutes.",
     "nl": "Prima, ik heb alles wat ik nodig heb. Ik maak je officiële offerte en stuur die binnen 30 minuten hier via WhatsApp.",
@@ -873,12 +997,21 @@ def _summary_text(summary: dict) -> str:
     supplement_text = ""
     if supplement_lines:
         supplement_text = f"\n{supplement_labels['heading']}:\n" + "\n".join(supplement_lines)
+    detail_labels = SUMMARY_DETAIL_LABELS[rental["conversation_language"]]
+    detail_lines = [f"{detail_labels['driver_age']}: {rental['driver_age']}"]
+    if rental.get("passenger_count") not in (None, ""):
+        detail_lines.append(f"{detail_labels['passengers']}: {rental['passenger_count']}")
+    if rental.get("luggage_count") not in (None, ""):
+        detail_lines.append(f"{detail_labels['luggage']}: {rental['luggage_count']}")
+    if str(rental.get("comments") or "").strip():
+        detail_lines.append(f"{detail_labels['comments']}: {str(rental['comments']).strip()}")
+    detail_text = "\n" + "\n".join(detail_lines)
     return (
         f"{labels[0]}\n\n{labels[1]}: {customer.get('name', '')}\n"
         f"{labels[2]}: {customer.get('whatsapp', '')}\n"
         f"{labels[3]}: {period}\n"
         f"{labels[4]}: {rental['pickup_location']}\n{labels[5]}: {rental['return_location']}\n"
-        f"{labels[6]}: {vehicle}{supplement_text}\n\n{labels[7]}"
+        f"{labels[6]}: {vehicle}{detail_text}{supplement_text}\n\n{labels[7]}"
     )
 
 
