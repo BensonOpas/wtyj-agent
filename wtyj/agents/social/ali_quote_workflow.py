@@ -47,6 +47,11 @@ REQUIRED_RENTAL_FIELDS = {
     "driver_age", "conversation_language",
 }
 SELECTION_FIELDS = ("vehicle_id", "vehicle_class_id")
+VEHICLE_STATE_FIELDS = (
+    "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+    "vehicle_catalog_class_id", "vehicle_catalog_class_name",
+    "vehicle_daily_rate_usd", "vehicle_rate_currency",
+)
 QUOTE_LEAD_STATUSES = {
     "active", "missing_information", "ready_to_quote",
     "needs_an_answer", "in_progress",
@@ -622,7 +627,7 @@ def commit_ali_turn_delivery(
             r"[0-9a-f]{64}", recommendation_state_hash
         ) and recommendation_delivery in {
             "image", "carousel", "fallback", "carousel_picker",
-            "carousel_picker_fallback",
+            "carousel_picker_fallback", "picker", "picker_fallback",
         }:
             existing = flags.get("ali_vehicle_recommendation_deliveries") or []
             normalized = [
@@ -1084,8 +1089,14 @@ def _normalize_catalog_label(value: object) -> str:
 def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
     """Map a customer-facing selection to one current server-owned ID."""
     resolved = dict(fields or {})
-    classes = [item for item in catalog.get("vehicleClasses") or [] if isinstance(item, dict)]
-    vehicles = [item for item in catalog.get("vehicles") or [] if isinstance(item, dict)]
+    classes = [
+        item for item in catalog.get("vehicleClasses") or []
+        if isinstance(item, dict) and item.get("active", True) is not False
+    ]
+    vehicles = [
+        item for item in catalog.get("vehicles") or []
+        if isinstance(item, dict) and item.get("active", True) is not False
+    ]
     class_by_id = {str(item.get("id")): item for item in classes if item.get("id")}
     vehicle_by_id = {str(item.get("id")): item for item in vehicles if item.get("id")}
 
@@ -1111,11 +1122,21 @@ def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
     elif class_from_id and vehicle and not vehicle_from_id:
         vehicle_class = None
 
-    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+    for key in VEHICLE_STATE_FIELDS:
         resolved.pop(key, None)
     if vehicle:
         resolved["vehicle_id"] = str(vehicle["id"])
         resolved["vehicle_name"] = str(vehicle["name"])
+        catalog_class = class_by_id.get(str(vehicle.get("classId") or ""))
+        rate = vehicle.get("dailyRate") or {}
+        rate_amount = str(rate.get("amount") or "")
+        rate_currency = str(rate.get("currency") or "").upper()
+        if catalog_class:
+            resolved["vehicle_catalog_class_id"] = str(catalog_class["id"])
+            resolved["vehicle_catalog_class_name"] = str(catalog_class["name"])
+        if re.fullmatch(r"(?:0|[1-9]\d*)\.\d{2}", rate_amount) and rate_currency == "USD":
+            resolved["vehicle_daily_rate_usd"] = rate_amount
+            resolved["vehicle_rate_currency"] = rate_currency
     elif vehicle_class:
         resolved["vehicle_class_id"] = str(vehicle_class["id"])
         resolved["vehicle_class_name"] = str(vehicle_class["name"])
@@ -1168,12 +1189,15 @@ def apply_latest_rental_change(
             resolved = resolve_catalog_selection(selection, catalog)
             resolved_selection = {
                 name: resolved[name]
-                for name in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name")
+                for name in VEHICLE_STATE_FIELDS
                 if name in resolved
             }
-            if len(resolved_selection) != 2:
+            if not (
+                {"vehicle_id", "vehicle_name"} <= resolved_selection.keys()
+                or {"vehicle_class_id", "vehicle_class_name"} <= resolved_selection.keys()
+            ):
                 return current, "clarify", ()
-            for name in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+            for name in VEHICLE_STATE_FIELDS:
                 candidate.pop(name, None)
             candidate.update(resolved_selection)
             continue
@@ -1281,9 +1305,7 @@ def apply_recommendation_selection_context(
             )
 
     candidate = dict(current)
-    for key in (
-        "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
-    ):
+    for key in VEHICLE_STATE_FIELDS:
         candidate.pop(key, None)
     return (
         candidate,
@@ -1745,7 +1767,7 @@ def plan_ali_quote_turn(
         )
         _log_turn_plan(plan, changed_fields)
         return plan
-    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+    for key in VEHICLE_STATE_FIELDS:
         if key in resolved_fields:
             fields[key] = resolved_fields[key]
         else:
@@ -2026,7 +2048,7 @@ def handle_ali_quote_turn(
         resolved_fields = resolve_catalog_supplements(resolved_fields, catalog)
     except AliQuoteError:
         return None
-    for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
+    for key in VEHICLE_STATE_FIELDS:
         if key in resolved_fields:
             fields[key] = resolved_fields[key]
         else:

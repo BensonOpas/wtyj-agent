@@ -22,35 +22,39 @@ _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CARD_LABELS = {
     "en": {
         "seats": "seats",
+        "details": "Car details",
         "choose_one": "Choose this car",
         "choose_many": "Choose a car",
-        "picker_body": "Tap below to choose the car you prefer.",
+        "picker_body": "Choose your car below.",
         "picker_section": "Cars",
-        "picker_fallback": "Reply with the name of the car you prefer.",
+        "picker_fallback": "Reply with the number of the car you prefer:",
     },
     "nl": {
         "seats": "zitplaatsen",
+        "details": "Autodetails",
         "choose_one": "Kies deze auto",
         "choose_many": "Kies een auto",
-        "picker_body": "Tik hieronder om je favoriete auto te kiezen.",
+        "picker_body": "Kies hieronder je auto.",
         "picker_section": "Auto's",
-        "picker_fallback": "Antwoord met de naam van de auto die je kiest.",
+        "picker_fallback": "Antwoord met het nummer van je gekozen auto:",
     },
     "pap": {
         "seats": "lugá",
+        "details": "Detayenan di outo",
         "choose_one": "Skoge e outo aki",
         "choose_many": "Skoge un outo",
-        "picker_body": "Primi abou pa skoge e outo ku bo ta preferá.",
+        "picker_body": "Skoge bo outo aki bou.",
         "picker_section": "Outonan",
-        "picker_fallback": "Kontestá ku e nòmber di e outo ku bo ta preferá.",
+        "picker_fallback": "Kontestá ku e number di e outo ku bo ta preferá:",
     },
     "de": {
         "seats": "Sitzplätze",
+        "details": "Fahrzeugdetails",
         "choose_one": "Dieses Auto wählen",
         "choose_many": "Auto auswählen",
-        "picker_body": "Tippen Sie unten, um Ihr gewünschtes Auto auszuwählen.",
+        "picker_body": "Wählen Sie unten Ihr Auto aus.",
         "picker_section": "Autos",
-        "picker_fallback": "Antworten Sie mit dem Namen Ihres gewünschten Autos.",
+        "picker_fallback": "Antworten Sie mit der Nummer Ihres gewünschten Autos:",
     },
 }
 _TRANSMISSIONS = {
@@ -194,19 +198,23 @@ def _card_body(option: dict, locale: str) -> str:
 
 def _picker_description(option: dict, locale: str) -> str:
     details = [option["category"]]
-    if option.get("transmission"):
-        details.append(_TRANSMISSIONS[option["transmission"]][locale])
+    if option.get("seats") is not None:
+        details.append(f"{option['seats']} {_CARD_LABELS[locale]['seats']}")
     displayed_amount = (
         option["daily_usd"][:-3]
         if option["daily_usd"].endswith(".00")
         else option["daily_usd"]
     )
-    details.append(f"USD ${displayed_amount}/day")
+    details.append(f"USD {displayed_amount}/day")
     return " · ".join(details)[:72]
 
 
 def _picker_plan(options: list[dict], locale: str) -> dict:
     labels = _CARD_LABELS[locale]
+    numbered_options = "\n".join(
+        f"{index}. {option['name']}"
+        for index, option in enumerate(options, start=1)
+    )
     return {
         "text": labels["picker_body"],
         "button": labels["choose_many"],
@@ -218,8 +226,101 @@ def _picker_plan(options: list[dict], locale: str) -> dict:
                 "description": _picker_description(option, locale),
             } for option in options],
         }],
-        "fallback_text": labels["picker_fallback"],
+        "fallback_text": f"{labels['picker_fallback']}\n{numbered_options}",
     }
+
+
+def build_vehicle_picker_recovery(
+    catalog: dict,
+    fields: dict,
+    flags: dict,
+    reply_text: str,
+    *,
+    public_base_url: str | None = None,
+    turn_id: str | None = None,
+) -> dict | None:
+    """Rebuild only the last safe native picker from the current catalog.
+
+    Invalid, stale, or cross-tenant action payloads never select by label. The
+    recovery branch revalidates the exact previously offered server IDs against
+    the active catalog and preserves their order. If no safe branch remains,
+    the caller sends only its clarification instead of inventing options.
+    """
+    locale = str(fields.get("conversation_language") or "en").lower()
+    if locale not in SUPPORTED_LOCALES:
+        locale = "en"
+    base_url = str(
+        public_base_url
+        or os.environ.get("ALI_QUOTE_API_BASE_URL")
+        or "https://alicarrental.com"
+    ).strip()
+    classes = {
+        str(item.get("id")): item
+        for item in catalog.get("vehicleClasses") or []
+        if isinstance(item, dict)
+        and item.get("id")
+        and item.get("active", True) is not False
+    }
+    vehicles = {
+        str(item.get("id") or "").strip(): item
+        for item in catalog.get("vehicles") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        and item.get("active", True) is not False
+    }
+    ordered_ids = []
+    for value in flags.get("ali_last_recommendation_ids") or []:
+        vehicle_id = str(value or "").strip()
+        if vehicle_id and vehicle_id not in ordered_ids:
+            ordered_ids.append(vehicle_id)
+    options = []
+    for vehicle_id in ordered_ids[:5]:
+        vehicle = vehicles.get(vehicle_id)
+        if vehicle is None:
+            continue
+        try:
+            options.append(_catalog_vehicle(vehicle, classes, locale, base_url))
+        except AliVehicleRecommendationError:
+            continue
+    if not options:
+        return None
+
+    fingerprint = {
+        "catalog_version": catalog.get("catalogVersion"),
+        "mode": "picker_recovery",
+        "vehicle_ids": [option["id"] for option in options],
+        "turn_id": str(turn_id or "")[:200],
+    }
+    state_hash = hashlib.sha256(
+        json.dumps(
+            fingerprint,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    plan = {
+        "kind": "picker",
+        "mode": "recovery",
+        "state_hash": state_hash,
+        "idempotency_key": f"ali-vehicle-{state_hash}",
+        "text": str(reply_text or "").strip(),
+        "options": options,
+    }
+    if len(options) == 1:
+        plan["buttons"] = [{
+            "type": "postback",
+            "title": _CARD_LABELS[locale]["choose_one"],
+            "payload": options[0]["selection_id"],
+        }]
+        plan["fallback_text"] = (
+            f"{_CARD_LABELS[locale]['picker_fallback']}\n1. {options[0]['name']}"
+        )
+    else:
+        picker = _picker_plan(options, locale)
+        picker["text"] = str(reply_text or "").strip()
+        plan["picker"] = picker
+    return plan
 
 
 def build_vehicle_recommendation(
@@ -359,7 +460,10 @@ def build_vehicle_recommendation(
             "action": {
                 "name": "cta_url",
                 "parameters": {
-                    "display_text": cta_label,
+                    # Zernio media-carousel cards require a CTA URL button.
+                    # It is a details link, never a selection control; the
+                    # native picker sent immediately afterwards owns choice.
+                    "display_text": _CARD_LABELS[locale]["details"],
                     "url": option["detail_url"],
                 },
             },

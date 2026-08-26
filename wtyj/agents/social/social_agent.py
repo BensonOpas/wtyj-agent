@@ -34,9 +34,11 @@ from agents.social.ali_quote_workflow import (
     sanitize_intake_reply as sanitize_ali_intake_reply,
     tenant_configured as ali_quote_tenant_configured,
     tenant_enabled as ali_quote_tenant_enabled,
+    VEHICLE_STATE_FIELDS,
 )
 from agents.social.ali_vehicle_recommendations import (
     AliVehicleRecommendationError,
+    build_vehicle_picker_recovery,
     build_vehicle_recommendation,
 )
 from agents.social.ali_media_first import (
@@ -1046,6 +1048,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             clarification = invalid_vehicle_selection_reply(
                 fields.get("conversation_language")
             )
+            recovery_recommendation = build_vehicle_picker_recovery(
+                _selection_catalog,
+                fields,
+                flags,
+                clarification,
+                turn_id=str(
+                    message.get("_ali_action_id")
+                    or message.get("message_id")
+                    or ""
+                ),
+            )
             invalid_plan = fail_closed_turn_plan(
                 phone,
                 text,
@@ -1061,6 +1074,16 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 text=clarification,
                 primary_intent="ask_question",
                 reason_code=str(exc)[:60],
+                outbound_kind=(
+                    "vehicle_recommendation"
+                    if recovery_recommendation
+                    else invalid_plan.outbound_kind
+                ),
+                phase=(
+                    "DISCOVERY"
+                    if recovery_recommendation
+                    else invalid_plan.phase
+                ),
             )
             flags["reply_times"] = [*_reply_times, int(time.time())]
             state_registry.wa_save_booking_state(
@@ -1075,16 +1098,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 return {
                     "text": clarification,
                     "media": None,
-                    "vehicle_recommendation": None,
+                    "vehicle_recommendation": recovery_recommendation,
                     "ali_turn_commit": invalid_plan.delivery_commit(),
                 }
             return clarification
 
     if _ali_selected_this_turn:
-        for key in (
-            "vehicle_id", "vehicle_name", "vehicle_class_id",
-            "vehicle_class_name",
-        ):
+        for key in VEHICLE_STATE_FIELDS:
             fields.pop(key, None)
         fields.update(_ali_selected_this_turn)
         invalidate_active_quote_summary(flags)
@@ -1439,10 +1459,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if _ali_selected_this_turn:
         _ali_change_outcome = "changed"
         _ali_change_fields = ("vehicle_selection",)
-        _quote_vehicle_keys = {
-            "vehicle_id", "vehicle_name", "vehicle_class_id",
-            "vehicle_class_name",
-        }
+        _quote_vehicle_keys = set(VEHICLE_STATE_FIELDS)
         for k, v in new_fields.items():
             if k in _quote_vehicle_keys:
                 continue
@@ -1478,6 +1495,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             "customer_name", "rental_start", "rental_end", "pickup_location",
             "return_location", "vehicle_id", "vehicle_name", "vehicle_class_id",
             "vehicle_class_name", "driver_age", "passenger_count", "luggage_count",
+            "vehicle_catalog_class_id", "vehicle_catalog_class_name",
+            "vehicle_daily_rate_usd", "vehicle_rate_currency",
             "supplements", "extra_ids", "comments", "special_requests",
         }
         for k, v in new_fields.items():
@@ -1543,16 +1562,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _ali_explicit_class_this_turn = _explicit_class
             _before_selection = {
                 key: fields.get(key)
-                for key in (
-                    "vehicle_id", "vehicle_name", "vehicle_class_id",
-                    "vehicle_class_name",
-                )
+                for key in VEHICLE_STATE_FIELDS
                 if fields.get(key) not in (None, "")
             }
-            for key in (
-                "vehicle_id", "vehicle_name", "vehicle_class_id",
-                "vehicle_class_name",
-            ):
+            for key in VEHICLE_STATE_FIELDS:
                 fields.pop(key, None)
             fields.update(_explicit_class)
             _after_selection = {

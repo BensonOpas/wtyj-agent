@@ -12,6 +12,7 @@ from agents.social.ali_vehicle_recommendations import (
 
 _SUPPORTED_INTERACTIVE_TYPES = {"buttonreply", "listreply"}
 _SELECTION_NAMESPACE = "ali_vehicle_select:"
+_MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CLEAR_TYPED_CHOICE = re.compile(
     r"^(?:(?:i\s+)?(?:choose|chose|want|prefer|take|select)|"
     r"(?:ik\s+)?(?:kies|wil|neem)|"
@@ -42,13 +43,27 @@ def _canonical_vehicle(vehicle: dict, classes: dict[str, dict]) -> dict:
     class_id = str(vehicle.get("classId") or "").strip()
     vehicle_class = classes.get(class_id)
     class_name = str((vehicle_class or {}).get("name") or "").strip()
-    if not vehicle_id or not vehicle_name or not class_id or not class_name:
+    rate = vehicle.get("dailyRate") or {}
+    rate_amount = str(rate.get("amount") or "").strip()
+    rate_currency = str(rate.get("currency") or "").strip().upper()
+    if (
+        not vehicle_id
+        or not vehicle_name
+        or not class_id
+        or not class_name
+        or rate_currency != "USD"
+        or not _MONEY.fullmatch(rate_amount)
+    ):
         raise AliVehicleSelectionError("vehicle_selection_catalog_invalid")
     return {
         "vehicle_id": vehicle_id,
         "vehicle_name": vehicle_name,
         "vehicle_class_id": class_id,
         "vehicle_class_name": class_name,
+        "vehicle_catalog_class_id": class_id,
+        "vehicle_catalog_class_name": class_name,
+        "vehicle_daily_rate_usd": rate_amount,
+        "vehicle_rate_currency": rate_currency,
     }
 
 
@@ -63,7 +78,9 @@ def _active_catalog(catalog: dict) -> tuple[dict[str, dict], dict[str, dict]]:
     classes = {
         str(item.get("id") or "").strip(): item
         for item in catalog.get("vehicleClasses") or []
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        and item.get("active", True) is not False
     }
     return vehicles, classes
 
