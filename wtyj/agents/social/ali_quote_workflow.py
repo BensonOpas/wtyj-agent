@@ -229,6 +229,7 @@ def feature_switches(raw: dict | None = None) -> dict[str, bool]:
         "customer_delivery": bool(features.get("ali_quote_customer_delivery", False)),
         "staff_email": bool(features.get("ali_quote_staff_email", False)),
         "operator_alerts": bool(features.get("ali_quote_operator_alerts", False)),
+        "post_quote_actions": bool(features.get("ali_post_quote_actions", False)),
     }
 
 
@@ -493,6 +494,8 @@ def ensure_schema() -> None:
         "confirmed_at TEXT NOT NULL, sla_due_at TEXT NOT NULL, "
         "quote_reference TEXT, quote_snapshot_id TEXT, pricing_json TEXT, expires_at TEXT, "
         "pdf_path TEXT, pdf_sha256 TEXT, whatsapp_status TEXT NOT NULL DEFAULT 'pending', "
+        "post_quote_control_status TEXT NOT NULL DEFAULT 'pending', "
+        "post_quote_control_provider_ids_json TEXT NOT NULL DEFAULT '[]', "
         "brand_image_path TEXT, brand_image_sha256 TEXT, "
         "brand_image_status TEXT NOT NULL DEFAULT 'pending', "
         "customer_delivery_superseded_at TEXT, "
@@ -513,6 +516,8 @@ def ensure_schema() -> None:
         "brand_image_status": "TEXT NOT NULL DEFAULT 'pending'",
         "customer_delivery_superseded_at": "TEXT",
         "customer_delivery_superseded_by_hash": "TEXT",
+        "post_quote_control_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "post_quote_control_provider_ids_json": "TEXT NOT NULL DEFAULT '[]'",
     }
     for name, definition in additions.items():
         if name not in columns:
@@ -595,6 +600,7 @@ def update_quote(public_id: str, **changes) -> dict:
     allowed = {
         "status", "quote_reference", "quote_snapshot_id", "pricing_json", "expires_at",
         "pdf_path", "pdf_sha256", "whatsapp_status", "staff_email_status",
+        "post_quote_control_status", "post_quote_control_provider_ids_json",
         "brand_image_path", "brand_image_sha256", "brand_image_status",
         "customer_delivery_superseded_at", "customer_delivery_superseded_by_hash",
         "notification_status_json", "attempt_count", "last_error_code",
@@ -617,7 +623,12 @@ def resumable_quotes() -> list[dict]:
     ensure_schema()
     conn = _connection()
     placeholders = ",".join("?" for _ in PENDING_STATUSES)
-    rows = conn.execute(f"SELECT * FROM ali_quotes WHERE status IN ({placeholders}) ORDER BY id", PENDING_STATUSES).fetchall()
+    rows = conn.execute(
+        f"SELECT * FROM ali_quotes WHERE status IN ({placeholders}) "
+        "OR (status = 'complete' AND whatsapp_status = 'accepted' "
+        "AND post_quote_control_status IN ('pending', 'failed')) ORDER BY id",
+        PENDING_STATUSES,
+    ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -1197,6 +1208,23 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
         latest_quotes = {
             str(row["conversation_id"]): dict(row) for row in quote_rows
         }
+        reservation_rows = []
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'ali_reservations'"
+        ).fetchone():
+            reservation_rows = conn.execute(
+                "SELECT r.* FROM ali_reservations r INNER JOIN ("
+                " SELECT conversation_id, MAX(id) AS latest_id "
+                " FROM ali_reservations WHERE tenant_slug = ? "
+                " GROUP BY conversation_id"
+                ") latest ON latest.latest_id = r.id",
+                (TENANT_SLUG,),
+            ).fetchall()
+        latest_reservations = {
+            str(row["conversation_id"]): dict(row)
+            for row in reservation_rows
+        }
         escalation_ids = {
             str(row[0]) for row in conn.execute(
                 "SELECT DISTINCT customer_id FROM pending_notifications "
@@ -1216,6 +1244,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
         except (TypeError, ValueError):
             fields, flags = {}, {}
         quote = latest_quotes.get(conversation_id)
+        reservation = latest_reservations.get(conversation_id)
         known_customer_name = str(
             fields.get("customer_name")
             or fields.get("name")
@@ -1264,6 +1293,18 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
                 else "Review the open rental conversation."
             ),
         }[projected_status]
+        reservation_next_action = {
+            "availability_pending": "Review vehicle availability.",
+            "requirements_pending": "Complete the required rental checks.",
+            "alternative_required": "Contact the customer about the alternative vehicle.",
+            "ready_to_confirm": "Confirm the reservation.",
+            "confirmed": "Reservation confirmed.",
+            "declined": "Availability declined.",
+            "cancelled": "Reservation cancelled.",
+            "superseded": "Reservation superseded.",
+        }.get(str((reservation or {}).get("status") or ""))
+        if reservation_next_action:
+            next_action = reservation_next_action
         whatsapp_status = str((quote or {}).get("whatsapp_status") or "")
         delivery_state = (
             "delivered" if whatsapp_status == "accepted"
@@ -1311,6 +1352,14 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             "quote_delivery_state": delivery_state,
             "whatsapp_status": whatsapp_status or None,
             "staff_email_status": (quote or {}).get("staff_email_status"),
+            "post_quote_status": (reservation or {}).get("status"),
+            "availability_status": (reservation or {}).get("availability_status"),
+            "identity_status": (reservation or {}).get("identity_status"),
+            "agreement_status": (reservation or {}).get("agreement_status"),
+            "payment_status": (reservation or {}).get("payment_status"),
+            "reservation_public_id": (reservation or {}).get("public_id"),
+            "reservation_reference": (reservation or {}).get("confirmation_reference"),
+            "reservation_revision": (reservation or {}).get("revision"),
             "visit_reason": "",
             "handoff_reason": next_action,
             "callback_preference": "",
@@ -1802,6 +1851,7 @@ class DeliveryAdapters:
     send_staff_email: Callable[[dict, bytes], bool]
     send_operator_alerts: Callable[[dict], dict]
     escalate: Callable[[dict, str], None]
+    send_post_quote_actions: Callable[[dict], bool] | None = None
 
 
 def _attempt_twice(operation: Callable, *args) -> bool:
@@ -1828,6 +1878,8 @@ def _finish_superseded_customer_delivery(public_id: str) -> dict:
         changes["brand_image_status"] = "superseded"
     if quote.get("whatsapp_status") != "accepted":
         changes["whatsapp_status"] = "superseded"
+    if quote.get("post_quote_control_status") != "accepted":
+        changes["post_quote_control_status"] = "superseded"
     return update_quote(public_id, **changes)
 
 
@@ -1942,6 +1994,20 @@ def process_quote(
             quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
             if not ok:
                 delivery_errors.append("whatsapp_delivery_failed")
+        if (
+            switches.get("customer_delivery")
+            and switches.get("post_quote_actions", False)
+            and quote.get("whatsapp_status") == "accepted"
+            and quote.get("post_quote_control_status") != "accepted"
+            and adapters.send_post_quote_actions is not None
+        ):
+            ok = _attempt_twice(adapters.send_post_quote_actions, quote)
+            quote = update_quote(
+                public_id,
+                post_quote_control_status="accepted" if ok else "failed",
+            )
+            if not ok:
+                adapters.escalate(quote, "post_quote_control_delivery_failed")
         if delivery_errors:
             raise AliQuoteError(delivery_errors[0])
         complete = (
@@ -2358,40 +2424,22 @@ def plan_ali_quote_turn(
             flags.pop("ali_quote_public_id", None)
             active_quote_id = ""
 
+    # A repeated confirmation while the immutable quote is already processing
+    # is only a status replay. After delivery, acceptance is owned exclusively
+    # by Brief 290's signed Reserve action (never by a generic affirmative).
     if (
         intent == "confirm_summary"
         and confirmation_decision(message_text)[0]
         and change_outcome == "not_applicable"
         and active_quote_id
-        and phase in {"QUOTE_PROCESSING", "QUOTED"}
+        and phase == "QUOTE_PROCESSING"
     ):
-        persisted_quote = get_quote(active_quote_id)
         locale = rental["conversation_language"]
-        if (
-            phase == "QUOTED"
-            and persisted_quote
-            and persisted_quote.get("whatsapp_status") == "accepted"
-        ):
-            if flags.get("ali_quote_acceptance_notified_public_id") != active_quote_id:
-                notification_id = state_registry.create_pending_notification(
-                    "escalation", "whatsapp", conversation_id, customer["name"],
-                    "[ALI QUOTE ACCEPTED]",
-                    "The customer accepted the delivered official quote. Continue the rental follow-up in Unboks.",
-                    mode="soft",
-                )
-                flags["ali_quote_acceptance_notified_public_id"] = active_quote_id
-                flags["ali_quote_acceptance_notification_id"] = notification_id
-            plan = AliTurnPlan(
-                "agent_reply", QUOTE_ACCEPTED[locale], "QUOTED", intent,
-                "delivered_quote_accepted", action_id, state_hash,
-                quote_public_id=active_quote_id,
-            )
-        else:
-            plan = AliTurnPlan(
-                "quote_preparing", QUOTE_ALREADY_PROCESSING[locale],
-                "QUOTE_PROCESSING", intent, "quote_already_processing",
-                action_id, state_hash, quote_public_id=active_quote_id,
-            )
+        plan = AliTurnPlan(
+            "quote_preparing", QUOTE_ALREADY_PROCESSING[locale],
+            "QUOTE_PROCESSING", intent, "quote_already_processing",
+            action_id, state_hash, quote_public_id=active_quote_id,
+        )
         _log_turn_plan(plan, changed_fields)
         return plan
 

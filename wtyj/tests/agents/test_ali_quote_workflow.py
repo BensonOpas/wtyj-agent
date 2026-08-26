@@ -1108,3 +1108,74 @@ def test_pdf_failure_after_image_success_retries_only_pdf(monkeypatch, tmp_path)
     assert second["brand_image_status"] == "accepted"
     assert second["whatsapp_status"] == "accepted"
     assert counts == {"image": 1, "whatsapp": 3, "email": 1, "escalate": 1}
+
+
+def test_post_quote_actions_send_once_after_confirmed_pdf(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    events = []
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            return pricing()
+
+    adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: events.append("image") or True,
+        send_whatsapp=lambda *_: events.append("pdf") or True,
+        send_staff_email=lambda *_: events.append("email") or True,
+        send_operator_alerts=lambda *_: {},
+        escalate=lambda *_: events.append("escalate"),
+        send_post_quote_actions=lambda *_: events.append("actions") or True,
+    )
+    switches = {
+        "automation": True,
+        "customer_delivery": True,
+        "staff_email": True,
+        "operator_alerts": False,
+        "post_quote_actions": True,
+    }
+    first = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+    second = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+
+    assert first["status"] == second["status"] == "complete"
+    assert first["post_quote_control_status"] == "accepted"
+    assert events == ["email", "image", "pdf", "actions"]
+
+
+def test_post_quote_action_failure_never_relabels_delivered_quote(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    events = []
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            return pricing()
+
+    adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: True,
+        send_whatsapp=lambda *_: True,
+        send_staff_email=lambda *_: True,
+        send_operator_alerts=lambda *_: {},
+        escalate=lambda _quote, code: events.append(code),
+        send_post_quote_actions=lambda *_: False,
+    )
+    result = workflow.process_quote(
+        quote["public_id"], Client(), adapters,
+        {
+            "automation": True,
+            "customer_delivery": True,
+            "staff_email": True,
+            "operator_alerts": False,
+            "post_quote_actions": True,
+        },
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+
+    assert result["status"] == "complete"
+    assert result["whatsapp_status"] == "accepted"
+    assert result["post_quote_control_status"] == "failed"
+    assert events == ["post_quote_control_delivery_failed"]

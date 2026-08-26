@@ -14,6 +14,7 @@ import urllib.parse
 import anthropic
 import requests as http_requests
 from datetime import datetime, timezone
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
@@ -21,7 +22,14 @@ from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
-from agents.social import content_agent, social_publisher, graphics_engine, ali_quote_workflow
+from agents.social import (
+    content_agent,
+    social_publisher,
+    graphics_engine,
+    ali_quote_delivery,
+    ali_quote_workflow,
+    ali_reservation_workflow,
+)
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
 from agents.social.zernio_dm_client import ZernioReplyError, WhatsAppWindowClosedError
 from agents.marina import marina_agent
@@ -4466,6 +4474,256 @@ async def list_follow_ups_endpoint(response: Response, status: str = None):
     items = state_registry.list_follow_up_requests(status=status)
     items = await asyncio.to_thread(_hydrate_follow_up_contact_identities, items)
     return {"items": items, "followUps": items}
+
+
+_ALI_RESERVATION_STATUSES = frozenset({
+    "availability_pending",
+    "requirements_pending",
+    "alternative_required",
+    "declined",
+    "ready_to_confirm",
+    "confirmed",
+    "cancelled",
+    "superseded",
+})
+
+
+class AliAlternativeVehicleRequest(BaseModel):
+    """Allowlisted alternative vehicle snapshot supplied by Ali staff."""
+
+    model_config = {"extra": "forbid"}
+
+    vehicleId: str | None = Field(default=None, max_length=120)
+    vehicleName: str | None = Field(default=None, max_length=160)
+    vehicleClassId: str | None = Field(default=None, max_length=120)
+    vehicleClassName: str | None = Field(default=None, max_length=160)
+    dailyRateUsd: str | None = Field(
+        default=None,
+        max_length=20,
+        pattern=r"^\d+(?:\.\d{1,2})?$",
+    )
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+    @field_validator(
+        "vehicleId",
+        "vehicleName",
+        "vehicleClassId",
+        "vehicleClassName",
+        "dailyRateUsd",
+        "currency",
+        mode="before",
+    )
+    @classmethod
+    def _clean_optional_text(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    def to_workflow_dict(self) -> dict:
+        mapping = {
+            "vehicleId": "vehicle_id",
+            "vehicleName": "vehicle_name",
+            "vehicleClassId": "vehicle_class_id",
+            "vehicleClassName": "vehicle_class_name",
+            "dailyRateUsd": "daily_rate_usd",
+            "currency": "currency",
+        }
+        values = self.model_dump(exclude_none=True)
+        return {mapping[key]: value for key, value in values.items()}
+
+    def has_identity(self) -> bool:
+        return any((
+            self.vehicleId,
+            self.vehicleName,
+            self.vehicleClassId,
+            self.vehicleClassName,
+        ))
+
+
+class AliAvailabilityDecisionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    decision: Literal["approve", "alternative", "decline"]
+    alternativeVehicle: AliAlternativeVehicleRequest | None = None
+    note: str | None = Field(default=None, max_length=500)
+    expectedRevision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class AliChecklistUpdateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    identity: Literal[
+        "awaiting_external_check", "verified", "not_required", "rejected"
+    ] | None = None
+    agreement: Literal[
+        "not_sent", "sent_external", "verified", "not_required", "rejected"
+    ] | None = None
+    payment: Literal[
+        "not_requested",
+        "awaiting_manual_verification",
+        "verified",
+        "not_required",
+        "rejected",
+    ] | None = None
+    note: str | None = Field(default=None, max_length=500)
+    expectedRevision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class AliReservationConfirmRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    note: str | None = Field(default=None, max_length=500)
+    expectedRevision: int | None = Field(default=None, ge=1, strict=True)
+
+
+def _raise_ali_reservation_error(exc: Exception, *, action: str) -> None:
+    """Translate workflow failures without exposing customer or DB details."""
+    if isinstance(exc, ali_reservation_workflow.AliReservationError):
+        status_code = exc.status_code if exc.status_code in {404, 409, 422} else 500
+        detail = {
+            404: "Reservation not found",
+            409: "Reservation state changed or this action is not allowed",
+            422: "Invalid reservation request",
+            500: "Reservation action failed",
+        }[status_code]
+        bm_logger.log(
+            "ali_reservation_dashboard_rejected",
+            action=action,
+            code=str(getattr(exc, "code", "workflow_error"))[:80],
+            status_code=status_code,
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    bm_logger.log(
+        "ali_reservation_dashboard_error",
+        action=action,
+        error_type=type(exc).__name__,
+    )
+    raise HTTPException(status_code=500, detail="Reservation action failed") from exc
+
+
+@router.get("/ali-reservations", dependencies=[Depends(_check_auth)])
+async def list_ali_reservations_endpoint(response: Response, status: str = None):
+    """Return Ali's durable post-quote reservation work queue."""
+    _require_ali_quote_leads()
+    if status is not None and status not in _ALI_RESERVATION_STATUSES:
+        raise HTTPException(status_code=422, detail="Invalid reservation status")
+    try:
+        items = ali_reservation_workflow.list_reservations(status=status)
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="list")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return {"items": items, "reservations": items}
+
+
+@router.get("/ali-reservations/{public_id}", dependencies=[Depends(_check_auth)])
+async def get_ali_reservation_endpoint(public_id: str):
+    _require_ali_quote_leads()
+    try:
+        item = ali_reservation_workflow.get_reservation(public_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Reservation not found")
+        return item
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="read")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/availability-decision",
+    dependencies=[Depends(_check_auth)],
+)
+async def decide_ali_reservation_availability_endpoint(
+    public_id: str,
+    req: AliAvailabilityDecisionRequest,
+):
+    _require_ali_quote_leads()
+    alternative = (
+        req.alternativeVehicle.to_workflow_dict()
+        if req.alternativeVehicle is not None
+        else None
+    )
+    if req.decision == "alternative":
+        if req.alternativeVehicle is None or not req.alternativeVehicle.has_identity():
+            raise HTTPException(
+                status_code=422,
+                detail="alternativeVehicle is required for an alternative decision",
+            )
+    elif alternative is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="alternativeVehicle is only valid for an alternative decision",
+        )
+    try:
+        return ali_reservation_workflow.apply_staff_decision(
+            public_id,
+            decision=req.decision,
+            actor="dashboard",
+            note=req.note,
+            alternative_vehicle=alternative,
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="availability_decision")
+
+
+@router.patch(
+    "/ali-reservations/{public_id}/checklist",
+    dependencies=[Depends(_check_auth)],
+)
+async def update_ali_reservation_checklist_endpoint(
+    public_id: str,
+    req: AliChecklistUpdateRequest,
+):
+    _require_ali_quote_leads()
+    if req.identity is None and req.agreement is None and req.payment is None:
+        raise HTTPException(status_code=422, detail="At least one checklist field is required")
+    try:
+        return ali_reservation_workflow.update_checklist(
+            public_id,
+            identity=req.identity,
+            agreement=req.agreement,
+            payment=req.payment,
+            actor="dashboard",
+            note=req.note,
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="checklist_update")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/confirm",
+    dependencies=[Depends(_check_auth)],
+)
+async def confirm_ali_reservation_endpoint(
+    public_id: str,
+    req: AliReservationConfirmRequest = AliReservationConfirmRequest(),
+):
+    _require_ali_quote_leads()
+    try:
+        confirmed = ali_reservation_workflow.confirm_reservation(
+            public_id,
+            actor="dashboard",
+            note=req.note,
+            expected_revision=req.expectedRevision,
+        )
+        return await asyncio.to_thread(
+            ali_quote_delivery.send_customer_reservation_confirmation,
+            confirmed,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="confirm")
 
 
 @router.get("/quote-leads", dependencies=[Depends(_check_auth)])
