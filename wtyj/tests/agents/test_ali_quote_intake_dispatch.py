@@ -287,14 +287,24 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     normalized = " ".join(prompt.split())
 
     assert "DISCOVERY BEFORE PERSONAL DETAILS is mandatory" in normalized
-    assert "Hi, I’m Carlos from Ali Car Rental." in normalized
+    assert "QUOTE-LED CUSTOMER GUIDANCE is mandatory" in normalized
+    assert "Hi, I’m Nick from Ali Car Rental." in normalized
+    assert "help you find the right car and prepare an official quote" in normalized
+    assert "Speak in the first person and take conversational ownership" in normalized
+    assert "I need a few more details so I can prepare and send you an official quote" in normalized
+    assert "Never add a checking-style preface" in normalized
+    assert "Just checking I’ve got everything right" not in normalized
+    assert "Does that all look right?" not in normalized
     assert "ask what they prefer" in normalized
     assert "If they explicitly say they are undecided" in normalized
     assert "never combine vehicle preference with passenger count" in normalized
     assert "ask only passenger_count next" in normalized
     assert "ask only about luggage when it is useful" in normalized
+    assert "approximate daily budget" in normalized
+    assert "Do not ask every discovery question mechanically" in normalized
     assert "never ask the vehicle question again" in normalized
     assert "Collect rental_start and rental_end during discovery" in normalized
+    assert "exact current daily_usd catalog rates at or closest to that budget" in normalized
     assert "Only after a vehicle direction or recommendation is established" in normalized
     assert "may you request customer_name" in normalized
     assert "Do not ask for name, age, email, identity documents" in normalized
@@ -381,8 +391,8 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
         raw_config=raw_config(),
     )
 
-    assert reply.startswith("Just checking I’ve got everything right:")
-    assert reply.endswith("Does that all look right?")
+    assert reply.startswith("I have these details from you:")
+    assert reply.endswith("Are these details correct?")
     assert "Economy" in reply
     assert "WhatsApp: +351000000000" in reply
     assert "wa.me" not in reply
@@ -593,7 +603,7 @@ def test_correction_replaces_summary_without_starting_quote(monkeypatch, tmp_pat
         processor=lambda public_id: started.append(public_id),
     )
 
-    assert corrected.startswith("Just checking I’ve got everything right:")
+    assert corrected.startswith("I have these details from you:")
     assert "Return: Synthetic hotel return" in corrected
     assert flags["ali_summary_hash"] != previous_hash
     assert flags["awaiting_quote_confirmation"] is True
@@ -852,7 +862,7 @@ def test_ineligible_affirmative_returns_fresh_summary_without_quote_promise(
 
     assert plan.outbound_kind == "summary"
     assert plan.reason_code == "confirmation_requires_current_summary"
-    assert "Just checking I’ve got everything right:" in plan.text
+    assert "I have these details from you:" in plan.text
     assert "quote is on its way" not in plan.text.lower()
     workflow.ensure_schema()
     connection = workflow._connection()

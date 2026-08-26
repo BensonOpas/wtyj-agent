@@ -236,7 +236,7 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
     })
     saved = state_registry.wa_get_booking_state(phone)
 
-    assert reply.count("Just checking I’ve got everything right:") == 1
+    assert reply.count("I have these details from you:") == 1
     assert "Car: Van" in reply
     assert "Kia Picanto" not in reply
     assert saved["fields"]["vehicle_class_id"] == VAN_CLASS_ID
@@ -254,7 +254,7 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
         "_zernio_sender_id": "+351000000000",
         "_zernio_account_id": "synthetic-account",
     })
-    assert "Just checking I’ve got everything right:" not in second
+    assert "I have these details from you:" not in second
     assert second == "Of course. I’ll update the vehicle."
 
 
@@ -322,7 +322,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
 
     assert visual["vehicle_recommendation"]["kind"] == "image"
     assert visual["vehicle_recommendation"]["options"][0]["id"] == SUV_VEHICLE_ID
-    assert "Just checking" not in visual["text"]
+    assert "I have these details from you:" not in visual["text"]
     assert after_visual["fields"]["vehicle_class_id"] == SUV_CLASS_ID
     assert "vehicle_id" not in after_visual["fields"]
     _commit_result(phone, visual, "visual")
@@ -359,7 +359,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
     )
     assert rejection["text"] == "Would you prefer a smaller car, an SUV, or a van?"
     assert rejection["vehicle_recommendation"] is None
-    assert "Just checking" not in rejection["text"]
+    assert "I have these details from you:" not in rejection["text"]
     _commit_result(phone, rejection, "rejection")
 
     choice_result = {
@@ -393,7 +393,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
     )
     after_choice = state_registry.wa_get_booking_state(phone)
 
-    assert corrected["text"].count("Just checking I’ve got everything right:") == 1
+    assert corrected["text"].count("I have these details from you:") == 1
     assert "Car: Kia Seltos or similar" in corrected["text"]
     _commit_result(phone, corrected, "corrected-summary")
     after_choice = state_registry.wa_get_booking_state(phone)
@@ -736,7 +736,7 @@ def test_generic_change_request_asks_clarification_without_old_summary(monkeypat
     saved = state_registry.wa_get_booking_state(phone)
 
     assert reply == "What would you like me to change?"
-    assert "Just checking" not in reply
+    assert "I have these details from you:" not in reply
     assert {
         key: saved["fields"].get(key) for key in fields
     } == fields
@@ -797,7 +797,7 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
     after_answer = state_registry.wa_get_booking_state(phone)
 
     assert answer["text"] == price_result["reply"]
-    assert "Just checking" not in answer["text"]
+    assert "I have these details from you:" not in answer["text"]
     assert after_answer["flags"]["ali_phase"] == "SUMMARY_PRESENTED"
     assert after_answer["flags"]["ali_presented_summary_hash"] == summary_hash
     assert after_answer["flags"]["awaiting_quote_confirmation"] is True
@@ -826,7 +826,7 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
         "_zernio_account_id": "synthetic-account",
     })
 
-    assert repeated.count("Just checking I’ve got everything right:") == 1
+    assert repeated.count("I have these details from you:") == 1
     assert "Car: Kia Picanto 2024 or similar" in repeated
 
 
@@ -1038,7 +1038,7 @@ def test_rejected_car_text_dump_becomes_carousel_picker_without_summary(
         option["selection_id"] for option in plan["options"]
     ]
     assert "Kia Picanto" not in response["text"]
-    assert "Just checking" not in response["text"]
+    assert "I have these details from you:" not in response["text"]
     assert saved["flags"]["ali_rejected_vehicle_ids"] == [SUV_VEHICLE_ID]
     _commit_result(phone, response, "issue-198-rejection")
     saved = state_registry.wa_get_booking_state(phone)
@@ -1115,7 +1115,7 @@ def test_native_picker_tap_selects_exact_vehicle_without_repeating_media(
     saved = state_registry.wa_get_booking_state(phone)
 
     assert response["vehicle_recommendation"] is None
-    assert response["text"].count("Just checking I’ve got everything right:") == 1
+    assert response["text"].count("I have these details from you:") == 1
     assert "Car: Toyota Yaris or similar" in response["text"]
     assert saved["fields"]["vehicle_id"] == YARIS_VEHICLE_ID
     assert saved["fields"]["vehicle_name"] == "Toyota Yaris or similar"
