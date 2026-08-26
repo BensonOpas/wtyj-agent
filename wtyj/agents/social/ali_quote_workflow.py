@@ -21,6 +21,7 @@ from typing import Callable
 
 import httpx
 
+from agents.social.ali_quote_brand_card import render_quote_brand_card
 from agents.social.ali_quote_pdf import render_quote_pdf
 from agents.social.ali_quote_presentation import format_rental_period
 from shared import bm_logger, config_loader, state_registry
@@ -287,12 +288,26 @@ def ensure_schema() -> None:
         "confirmed_at TEXT NOT NULL, sla_due_at TEXT NOT NULL, "
         "quote_reference TEXT, quote_snapshot_id TEXT, pricing_json TEXT, expires_at TEXT, "
         "pdf_path TEXT, pdf_sha256 TEXT, whatsapp_status TEXT NOT NULL DEFAULT 'pending', "
+        "brand_image_path TEXT, brand_image_sha256 TEXT, "
+        "brand_image_status TEXT NOT NULL DEFAULT 'pending', "
         "staff_email_status TEXT NOT NULL DEFAULT 'pending', "
         "notification_status_json TEXT NOT NULL DEFAULT '{}', "
         "attempt_count INTEGER NOT NULL DEFAULT 0, last_error_code TEXT, "
         "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
         "UNIQUE(conversation_id, summary_hash))"
     )
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(ali_quotes)").fetchall()
+    }
+    additions = {
+        "brand_image_path": "TEXT",
+        "brand_image_sha256": "TEXT",
+        "brand_image_status": "TEXT NOT NULL DEFAULT 'pending'",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE ali_quotes ADD COLUMN {name} {definition}")
     conn.commit()
     conn.close()
 
@@ -371,6 +386,7 @@ def update_quote(public_id: str, **changes) -> dict:
     allowed = {
         "status", "quote_reference", "quote_snapshot_id", "pricing_json", "expires_at",
         "pdf_path", "pdf_sha256", "whatsapp_status", "staff_email_status",
+        "brand_image_path", "brand_image_sha256", "brand_image_status",
         "notification_status_json", "attempt_count", "last_error_code",
     }
     if not changes or set(changes) - allowed:
@@ -663,6 +679,7 @@ def resolve_catalog_supplements(fields: dict, catalog: dict) -> dict:
 
 @dataclass
 class DeliveryAdapters:
+    send_brand_image: Callable[[dict, str], bool]
     send_whatsapp: Callable[[dict, str], bool]
     send_staff_email: Callable[[dict, bytes], bool]
     send_operator_alerts: Callable[[dict], dict]
@@ -719,6 +736,36 @@ def process_quote(
         pdf_bytes = open(quote["pdf_path"], "rb").read()
         if hashlib.sha256(pdf_bytes).hexdigest() != quote["pdf_sha256"]:
             raise AliQuoteError("pdf_integrity_failed")
+        brand_image_ready = False
+        if not quote.get("brand_image_path"):
+            try:
+                image_path, image_digest = render_quote_brand_card(
+                    public_id, quote["locale"], quote["quote_reference"],
+                    output_root=output_root, logo_path=logo_path,
+                )
+                quote = update_quote(
+                    public_id, brand_image_path=image_path,
+                    brand_image_sha256=image_digest,
+                )
+            except (OSError, ValueError):
+                quote = update_quote(
+                    public_id, brand_image_path=None, brand_image_sha256=None,
+                    brand_image_status="failed",
+                )
+        if quote.get("brand_image_path") and quote.get("brand_image_sha256"):
+            try:
+                image_bytes = open(quote["brand_image_path"], "rb").read()
+                brand_image_ready = (
+                    hashlib.sha256(image_bytes).hexdigest()
+                    == quote["brand_image_sha256"]
+                )
+            except OSError:
+                brand_image_ready = False
+            if not brand_image_ready:
+                quote = update_quote(
+                    public_id, brand_image_path=None, brand_image_sha256=None,
+                    brand_image_status="failed",
+                )
         quote = update_quote(public_id, status="delivering")
         delivery_errors = []
         if switches.get("staff_email") and quote["staff_email_status"] != "sent":
@@ -729,19 +776,37 @@ def process_quote(
         if switches.get("operator_alerts") and quote.get("notification_status_json") in (None, "", "{}"):
             outcomes = adapters.send_operator_alerts(quote)
             quote = update_quote(public_id, notification_status_json=_json(outcomes))
-        if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
+        customer_delivery_pending = switches.get("customer_delivery") and (
+            quote["brand_image_status"] != "accepted"
+            or quote["whatsapp_status"] != "accepted"
+        )
+        if customer_delivery_pending:
             remaining_delay = seconds_until_customer_quote_delivery(
                 quote, now=now(), delay_seconds=delay_seconds,
             )
             if remaining_delay:
                 sleep(remaining_delay)
+        if switches.get("customer_delivery") and quote["brand_image_status"] != "accepted":
+            ok = brand_image_ready and _attempt_twice(
+                adapters.send_brand_image, quote, quote["brand_image_path"],
+            )
+            quote = update_quote(
+                public_id, brand_image_status="accepted" if ok else "failed",
+            )
+            if not ok:
+                delivery_errors.append("brand_image_delivery_failed")
+        if switches.get("customer_delivery") and quote["whatsapp_status"] != "accepted":
             ok = _attempt_twice(adapters.send_whatsapp, quote, quote["pdf_path"])
             quote = update_quote(public_id, whatsapp_status="accepted" if ok else "failed")
             if not ok:
                 delivery_errors.append("whatsapp_delivery_failed")
         if delivery_errors:
             raise AliQuoteError(delivery_errors[0])
-        complete = quote["staff_email_status"] == "sent" and quote["whatsapp_status"] == "accepted"
+        complete = (
+            quote["staff_email_status"] == "sent"
+            and quote["brand_image_status"] == "accepted"
+            and quote["whatsapp_status"] == "accepted"
+        )
         return update_quote(public_id, status="complete" if complete else "pdf_ready")
     except AliQuoteError as exc:
         attempts = int(quote.get("attempt_count") or 0) + 1

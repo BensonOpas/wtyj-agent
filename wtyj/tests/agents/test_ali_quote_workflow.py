@@ -1,13 +1,22 @@
 import hashlib
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 import httpx
+from PIL import Image
 from pypdf import PdfReader
 
 from agents.social import ali_quote_delivery as delivery
 from agents.social import ali_quote_download as download
 from agents.social import ali_quote_workflow as workflow
+from agents.social.ali_quote_brand_card import (
+    HEIGHT as BRAND_CARD_HEIGHT,
+    MAX_IMAGE_BYTES,
+    WIDTH as BRAND_CARD_WIDTH,
+    render_quote_brand_card,
+)
 from agents.social.ali_quote_download import sign_download, verify_download
 from agents.social.ali_quote_pdf import render_quote_pdf
 
@@ -207,6 +216,40 @@ def test_duplicate_confirmation_creates_one_quote_and_ali_request_has_no_pii(mon
     assert not any(term in serialized for term in ("synthetic customer", "whatsapp", "location", "conversation", "phone", "email"))
 
 
+def test_existing_quote_database_adds_brand_delivery_columns(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    connection = sqlite3.connect(workflow.state_registry.DB_PATH)
+    connection.execute(
+        "CREATE TABLE ali_quotes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, public_id TEXT NOT NULL UNIQUE, "
+        "conversation_id TEXT NOT NULL, zernio_account_id TEXT NOT NULL, "
+        "summary_hash TEXT NOT NULL, summary_version INTEGER NOT NULL, locale TEXT NOT NULL, "
+        "customer_json TEXT NOT NULL, rental_json TEXT NOT NULL, ali_request_json TEXT NOT NULL, "
+        "idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL, "
+        "confirmed_at TEXT NOT NULL, sla_due_at TEXT NOT NULL, "
+        "quote_reference TEXT, quote_snapshot_id TEXT, pricing_json TEXT, expires_at TEXT, "
+        "pdf_path TEXT, pdf_sha256 TEXT, whatsapp_status TEXT NOT NULL DEFAULT 'pending', "
+        "staff_email_status TEXT NOT NULL DEFAULT 'pending', "
+        "notification_status_json TEXT NOT NULL DEFAULT '{}', "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, last_error_code TEXT, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "UNIQUE(conversation_id, summary_hash))"
+    )
+    connection.commit()
+    connection.close()
+
+    workflow.ensure_schema()
+
+    connection = sqlite3.connect(workflow.state_registry.DB_PATH)
+    columns = {
+        row[1]: row for row in connection.execute("PRAGMA table_info(ali_quotes)")
+    }
+    connection.close()
+    assert "brand_image_path" in columns
+    assert "brand_image_sha256" in columns
+    assert columns["brand_image_status"][4] == "'pending'"
+
+
 def test_child_seat_summary_and_no_pii_request_are_catalog_grounded_in_all_locales():
     for locale in ("en", "nl", "pap", "de"):
         selected = rental(locale)
@@ -292,6 +335,7 @@ def test_fresh_confirmation_delays_only_customer_whatsapp(monkeypatch, tmp_path)
             return pricing()
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: events.append("image") or True,
         send_whatsapp=lambda *_: events.append("whatsapp") or True,
         send_staff_email=lambda *_: events.append("email") or True,
         send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
@@ -308,7 +352,7 @@ def test_fresh_confirmation_delays_only_customer_whatsapp(monkeypatch, tmp_path)
     assert result["status"] == "complete"
     assert events == [
         "pricing", "pdf", "email", "alerts", ("sleep", 180.0),
-        "whatsapp",
+        "image", "whatsapp",
     ]
 
 
@@ -323,6 +367,7 @@ def test_resume_at_plus_60_waits_only_remaining_120_seconds(monkeypatch, tmp_pat
             return pricing()
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: events.append("image") or True,
         send_whatsapp=lambda *_: events.append("whatsapp") or True,
         send_staff_email=lambda *_: events.append("email") or True,
         send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
@@ -350,7 +395,7 @@ def test_resume_at_plus_60_waits_only_remaining_120_seconds(monkeypatch, tmp_pat
     )
 
     assert result["status"] == "complete"
-    assert events == [("sleep", 120.0), "whatsapp"]
+    assert events == [("sleep", 120.0), "image", "whatsapp"]
 
 
 def test_resume_at_three_minute_boundary_sends_without_wait(monkeypatch, tmp_path):
@@ -363,6 +408,7 @@ def test_resume_at_three_minute_boundary_sends_without_wait(monkeypatch, tmp_pat
             return pricing()
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: events.append("image") or True,
         send_whatsapp=lambda *_: events.append("whatsapp") or True,
         send_staff_email=lambda *_: events.append("email") or True,
         send_operator_alerts=lambda *_: events.append("alerts") or {"whatsapp": "sent"},
@@ -389,7 +435,7 @@ def test_resume_at_three_minute_boundary_sends_without_wait(monkeypatch, tmp_pat
     )
 
     assert result["status"] == "complete"
-    assert events == ["whatsapp"]
+    assert events == ["image", "whatsapp"]
 
 
 def test_ali_client_retries_one_transient_failure_and_validates_72_hours():
@@ -478,6 +524,82 @@ def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
     assert captured["args"][3].startswith("https://unboks.example/api/public/ali-quote/")
     assert "4 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
     assert "T" not in captured["args"][2].split("Valid until:", 1)[1].split("\n", 1)[0]
+    assert "Subject to final vehicle availability confirmation." not in captured["args"][2]
+
+
+def test_customer_quote_captions_remove_availability_sentence_in_all_locales(monkeypatch):
+    captured = []
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://unboks.example")
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
+    monkeypatch.setattr(
+        delivery, "send_dm_reply_with_attachment",
+        lambda *args, **kwargs: captured.append((args, kwargs)) or True,
+    )
+    forbidden = {
+        "en": "Subject to final vehicle availability confirmation.",
+        "nl": "Onder voorbehoud van definitieve beschikbaarheid.",
+        "pap": "Suhéto na konfirmashon final di disponibilidat.",
+        "de": "Vorbehaltlich der endgültigen Fahrzeugverfügbarkeit.",
+    }
+    for locale in forbidden:
+        quote = {
+            "public_id": f"quote-{locale}",
+            "conversation_id": "conversation-synthetic",
+            "zernio_account_id": "account-synthetic", "locale": locale,
+            "quote_reference": pricing()["quoteReference"],
+            "pricing_json": json.dumps(pricing()),
+            "customer_json": json.dumps(customer()),
+            "rental_json": json.dumps(rental(locale)),
+        }
+        assert delivery.send_customer_whatsapp(quote, "/private/quote.pdf")
+        assert forbidden[locale] not in captured[-1][0][2]
+        assert delivery.MESSAGES[locale][1] in captured[-1][0][2]
+
+    assert all(
+        phrase in render_quote_pdf.__globals__["LABELS"][locale]["availability"]
+        for locale, phrase in forbidden.items()
+    )
+
+
+def test_brand_card_is_localized_pii_free_and_mobile_sized(tmp_path):
+    customer_name = customer()["name"]
+    phone = customer()["whatsapp"]
+    digests = set()
+    for locale in ("en", "nl", "pap", "de"):
+        path, digest = render_quote_brand_card(
+            f"card-{locale}", locale, pricing()["quoteReference"],
+            output_root=str(tmp_path),
+        )
+        data = open(path, "rb").read()
+        digests.add(digest)
+        assert data.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(data) < MAX_IMAGE_BYTES
+        assert hashlib.sha256(data).hexdigest() == digest
+        assert customer_name.encode() not in data
+        assert phone.encode() not in data
+        with Image.open(path) as image:
+            assert image.size == (BRAND_CARD_WIDTH, BRAND_CARD_HEIGHT)
+            assert image.format == "PNG"
+    assert len(digests) == 4
+
+
+def test_customer_brand_card_uses_signed_image_attachment(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://unboks.example")
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
+    monkeypatch.setattr(
+        delivery, "send_dm_reply_with_attachment",
+        lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}) or True,
+    )
+    quote = {
+        "public_id": "quote-public-id",
+        "conversation_id": "conversation-synthetic",
+        "zernio_account_id": "account-synthetic",
+    }
+    assert delivery.send_customer_brand_image(quote, "/private/quote-card.png")
+    assert captured["args"][2] == ""
+    assert "/quote-public-id--image?" in captured["args"][3]
+    assert captured["kwargs"]["attachment_type"] == "image"
 
 
 def test_customer_delivery_itemizes_supplement_and_keeps_deposit_separate(monkeypatch):
@@ -550,6 +672,47 @@ def test_signed_download_uses_same_official_customer_filename(monkeypatch, tmp_p
     )
 
 
+def test_signed_image_download_is_separate_and_cannot_be_swapped(monkeypatch, tmp_path):
+    quote_root = tmp_path / "quotes"
+    quote_dir = quote_root / "quote-public-id"
+    quote_dir.mkdir(parents=True)
+    pdf_path = quote_dir / "quote.pdf"
+    image_path = quote_dir / "quote-card.png"
+    pdf_path.write_bytes(b"%PDF-1.4\nsynthetic quote")
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic image")
+    quote = {
+        "pdf_path": str(pdf_path), "pdf_sha256": "pdf-digest",
+        "brand_image_path": str(image_path), "brand_image_sha256": "image-digest",
+        "quote_reference": pricing()["quoteReference"],
+        "customer_json": json.dumps(customer()),
+        "pricing_json": json.dumps(pricing()),
+    }
+    secret = "synthetic-signing-secret"
+    monkeypatch.setenv("ALI_QUOTE_DATA_ROOT", str(quote_root))
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", secret)
+    monkeypatch.setattr(download, "get_quote", lambda public_id: quote if public_id == "quote-public-id" else None)
+
+    current_time = int(datetime.now(timezone.utc).timestamp())
+    image_url = download.build_signed_url(
+        "https://unboks.example", "quote-public-id", secret,
+        now=current_time, asset="image",
+    )
+    parsed = urlparse(image_url)
+    query = parse_qs(parsed.query)
+    signed_id = parsed.path.rsplit("/", 1)[-1]
+    response = download.quote_download_response(
+        signed_id, int(query["expires"][0]), query["signature"][0],
+    )
+    assert response.status_code == 200
+    assert response.media_type == "image/png"
+    assert response.headers["cache-control"] == "private, no-store"
+
+    swapped = download.quote_download_response(
+        "quote-public-id", int(query["expires"][0]), query["signature"][0],
+    )
+    assert swapped.status_code == 404
+
+
 def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
     _, digest = workflow.normalized_summary(customer(), rental())
@@ -559,13 +722,14 @@ def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
     )
     assert created is False
     assert duplicate["public_id"] == quote["public_id"]
-    counts = {"whatsapp": 0, "email": 0, "alerts": 0, "escalate": 0}
+    counts = {"image": 0, "whatsapp": 0, "email": 0, "alerts": 0, "escalate": 0}
 
     class Client:
         def create_quote(self, request, idempotency_key):
             return pricing()
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: counts.__setitem__("image", counts["image"] + 1) or True,
         send_whatsapp=lambda *_: counts.__setitem__("whatsapp", counts["whatsapp"] + 1) or True,
         send_staff_email=lambda *_: counts.__setitem__("email", counts["email"] + 1) or True,
         send_operator_alerts=lambda *_: counts.__setitem__("alerts", counts["alerts"] + 1) or {"whatsapp": "sent"},
@@ -583,12 +747,12 @@ def test_processing_replay_does_not_redeliver(monkeypatch, tmp_path):
         output_root=str(tmp_path), now=after_boundary,
     )
     assert first["status"] == second["status"] == "complete"
-    assert counts == {"whatsapp": 1, "email": 1, "alerts": 1, "escalate": 0}
+    assert counts == {"image": 1, "whatsapp": 1, "email": 1, "alerts": 1, "escalate": 0}
 
 
 def test_staff_email_failure_does_not_block_customer_whatsapp(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
-    counts = {"whatsapp": 0, "email": 0, "escalate": 0}
+    counts = {"image": 0, "whatsapp": 0, "email": 0, "escalate": 0}
 
     class Client:
         def create_quote(self, request, idempotency_key):
@@ -599,6 +763,7 @@ def test_staff_email_failure_does_not_block_customer_whatsapp(monkeypatch, tmp_p
         return False
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: counts.__setitem__("image", counts["image"] + 1) or True,
         send_whatsapp=lambda *_: counts.__setitem__("whatsapp", counts["whatsapp"] + 1) or True,
         send_staff_email=failed_email,
         send_operator_alerts=lambda *_: {},
@@ -612,12 +777,12 @@ def test_staff_email_failure_does_not_block_customer_whatsapp(monkeypatch, tmp_p
     assert result["status"] == "attention_required"
     assert result["whatsapp_status"] == "accepted"
     assert result["staff_email_status"] == "failed"
-    assert counts == {"whatsapp": 1, "email": 2, "escalate": 1}
+    assert counts == {"image": 1, "whatsapp": 1, "email": 2, "escalate": 1}
 
 
 def test_whatsapp_failure_does_not_block_staff_email(monkeypatch, tmp_path):
     quote = confirmed_quote(monkeypatch, tmp_path)
-    counts = {"whatsapp": 0, "email": 0, "escalate": 0}
+    counts = {"image": 0, "whatsapp": 0, "email": 0, "escalate": 0}
 
     class Client:
         def create_quote(self, request, idempotency_key):
@@ -628,6 +793,7 @@ def test_whatsapp_failure_does_not_block_staff_email(monkeypatch, tmp_path):
         return False
 
     adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: counts.__setitem__("image", counts["image"] + 1) or True,
         send_whatsapp=failed_whatsapp,
         send_staff_email=lambda *_: counts.__setitem__("email", counts["email"] + 1) or True,
         send_operator_alerts=lambda *_: {},
@@ -641,4 +807,93 @@ def test_whatsapp_failure_does_not_block_staff_email(monkeypatch, tmp_path):
     assert result["status"] == "attention_required"
     assert result["whatsapp_status"] == "failed"
     assert result["staff_email_status"] == "sent"
-    assert counts == {"whatsapp": 2, "email": 1, "escalate": 1}
+    assert counts == {"image": 1, "whatsapp": 2, "email": 1, "escalate": 1}
+
+
+def test_brand_image_failure_still_sends_pdf_and_replay_retries_only_image(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    counts = {"image": 0, "whatsapp": 0, "email": 0, "escalate": 0}
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            return pricing()
+
+    image_succeeds = False
+
+    def send_image(*_args):
+        counts["image"] += 1
+        return image_succeeds
+
+    adapters = workflow.DeliveryAdapters(
+        send_brand_image=send_image,
+        send_whatsapp=lambda *_: counts.__setitem__("whatsapp", counts["whatsapp"] + 1) or True,
+        send_staff_email=lambda *_: counts.__setitem__("email", counts["email"] + 1) or True,
+        send_operator_alerts=lambda *_: {},
+        escalate=lambda *_: counts.__setitem__("escalate", counts["escalate"] + 1),
+    )
+    switches = {
+        "automation": True, "customer_delivery": True,
+        "staff_email": True, "operator_alerts": False,
+    }
+    first = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+    assert first["status"] == "attention_required"
+    assert first["brand_image_status"] == "failed"
+    assert first["whatsapp_status"] == "accepted"
+    assert counts == {"image": 2, "whatsapp": 1, "email": 1, "escalate": 1}
+
+    image_succeeds = True
+    second = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+    assert second["status"] == "complete"
+    assert second["brand_image_status"] == "accepted"
+    assert second["whatsapp_status"] == "accepted"
+    assert counts == {"image": 3, "whatsapp": 1, "email": 1, "escalate": 1}
+
+
+def test_pdf_failure_after_image_success_retries_only_pdf(monkeypatch, tmp_path):
+    quote = confirmed_quote(monkeypatch, tmp_path)
+    counts = {"image": 0, "whatsapp": 0, "email": 0, "escalate": 0}
+    pdf_succeeds = False
+
+    class Client:
+        def create_quote(self, _request, _idempotency_key):
+            return pricing()
+
+    def send_pdf(*_args):
+        counts["whatsapp"] += 1
+        return pdf_succeeds
+
+    adapters = workflow.DeliveryAdapters(
+        send_brand_image=lambda *_: counts.__setitem__("image", counts["image"] + 1) or True,
+        send_whatsapp=send_pdf,
+        send_staff_email=lambda *_: counts.__setitem__("email", counts["email"] + 1) or True,
+        send_operator_alerts=lambda *_: {},
+        escalate=lambda *_: counts.__setitem__("escalate", counts["escalate"] + 1),
+    )
+    switches = {
+        "automation": True, "customer_delivery": True,
+        "staff_email": True, "operator_alerts": False,
+    }
+    first = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+    assert first["status"] == "attention_required"
+    assert first["brand_image_status"] == "accepted"
+    assert first["whatsapp_status"] == "failed"
+    assert counts == {"image": 1, "whatsapp": 2, "email": 1, "escalate": 1}
+
+    pdf_succeeds = True
+    second = workflow.process_quote(
+        quote["public_id"], Client(), adapters, switches,
+        output_root=str(tmp_path), delay_seconds=0,
+    )
+    assert second["status"] == "complete"
+    assert second["brand_image_status"] == "accepted"
+    assert second["whatsapp_status"] == "accepted"
+    assert counts == {"image": 1, "whatsapp": 3, "email": 1, "escalate": 1}
