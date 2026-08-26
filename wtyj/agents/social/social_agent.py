@@ -1547,31 +1547,52 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         and _ali_turn_plan is not None
         and _ali_turn_plan.outbound_kind == "vehicle_recommendation"
     ):
-        try:
-            vehicle_recommendation = build_vehicle_recommendation(
-                recommendation_action,
-                get_ali_intake_catalog(),
-                fields,
-                flags,
-                reply_text,
-            )
-        except AliVehicleRecommendationError as exc:
+        deliveries = flags.get("ali_vehicle_recommendation_deliveries") or []
+        already_delivered_for_action = any(
+            isinstance(item, dict)
+            and item.get("action_id") == _ali_turn_plan.action_id
+            for item in deliveries
+        )
+        if already_delivered_for_action:
             bm_logger.log(
-                "ali_vehicle_recommendation_rejected",
-                reason=str(exc)[:80],
-                mode=str(recommendation_action.get("mode") or "")[:20],
+                "ali_vehicle_recommendation_suppressed",
+                reason="already_delivered_for_this_turn",
+                action_id_prefix=_ali_turn_plan.action_id[:12],
             )
-        if vehicle_recommendation:
-            reply_text = vehicle_recommendation["text"]
-            _ali_turn_plan = replace(_ali_turn_plan, text=reply_text)
+            reply_text = ""
+            _ali_turn_plan = None
         else:
-            _ali_turn_plan = replace(
-                _ali_turn_plan,
-                outbound_kind="agent_reply",
-                text=reply_text,
-                phase="DISCOVERY",
-                reason_code="recommendation_invalid",
-            )
+            replay_flags = dict(flags)
+            replay_flags["ali_vehicle_recommendation_deliveries"] = []
+            try:
+                vehicle_recommendation = build_vehicle_recommendation(
+                    recommendation_action,
+                    get_ali_intake_catalog(),
+                    fields,
+                    replay_flags,
+                    reply_text,
+                )
+            except AliVehicleRecommendationError as exc:
+                bm_logger.log(
+                    "ali_vehicle_recommendation_rejected",
+                    reason=str(exc)[:80],
+                    mode=str(recommendation_action.get("mode") or "")[:20],
+                )
+            if vehicle_recommendation:
+                vehicle_recommendation = dict(vehicle_recommendation)
+                vehicle_recommendation["idempotency_key"] = (
+                    f"ali-vehicle-{_ali_turn_plan.action_id}"
+                )
+                reply_text = vehicle_recommendation["text"]
+                _ali_turn_plan = replace(_ali_turn_plan, text=reply_text)
+            else:
+                _ali_turn_plan = replace(
+                    _ali_turn_plan,
+                    outbound_kind="agent_reply",
+                    text=reply_text,
+                    phase="DISCOVERY",
+                    reason_code="recommendation_invalid",
+                )
     if _ali_workflow_on:
         bm_logger.log(
             "ali_summary_route_decision",
