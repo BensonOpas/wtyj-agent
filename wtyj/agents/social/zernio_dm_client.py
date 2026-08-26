@@ -224,6 +224,48 @@ def parse_zernio_sent_webhook(payload: dict) -> dict | None:
     }
 
 
+def parse_zernio_failed_webhook(payload: dict) -> dict | None:
+    """Normalize a late provider delivery failure without routing it to Nick."""
+    if payload.get("event") != "message.failed":
+        return None
+    raw_data = payload.get("data")
+    raw_data = raw_data if isinstance(raw_data, dict) else {}
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        nested = raw_data.get("message")
+        message = nested if isinstance(nested, dict) else raw_data
+    conversation = payload.get("conversation")
+    if not isinstance(conversation, dict):
+        nested = raw_data.get("conversation")
+        conversation = nested if isinstance(nested, dict) else {}
+    conversation_id = str(
+        message.get("conversationId")
+        or message.get("conversation_id")
+        or conversation.get("id")
+        or conversation.get("conversationId")
+        or ""
+    )
+    message_id = str(message.get("id") or message.get("messageId") or "")
+    if not conversation_id or not message_id:
+        bm_logger.log(
+            "zernio_failed_webhook_missing_ids",
+            payload_keys=list(payload.keys()),
+            message_keys=list(message.keys()),
+        )
+        return None
+    return {
+        "event": "message.failed",
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "failure_reason": str(
+            message.get("failureReason")
+            or message.get("errorMessage")
+            or raw_data.get("failureReason")
+            or ""
+        ),
+    }
+
+
 class ZernioReplyError(RuntimeError):
     """Provider rejected or did not confirm an operator reply."""
 
@@ -467,19 +509,53 @@ def _recommendation_session_open(
     )
 
 
-def _recommendation_is_visible(messages: list[dict], text: str) -> bool:
-    return any(
-        str(item.get("direction") or "").lower() == "outgoing"
-        and _recommendation_message_text(item) == text
-        for item in messages
+def _recommendation_visible_message(messages: list[dict], text: str) -> dict | None:
+    return next(
+        (
+            item for item in messages
+            if str(item.get("direction") or "").lower() == "outgoing"
+            and _recommendation_message_text(item) == text
+        ),
+        None,
     )
+
+
+def _response_message_id(response) -> str:
+    payload = _response_json(response)
+    data = payload.get("data")
+    data = data if isinstance(data, dict) else {}
+    nested = data.get("message")
+    nested = nested if isinstance(nested, dict) else {}
+    message = payload.get("message")
+    message = message if isinstance(message, dict) else {}
+    return str(
+        data.get("id")
+        or data.get("messageId")
+        or nested.get("id")
+        or nested.get("messageId")
+        or message.get("id")
+        or message.get("messageId")
+        or payload.get("id")
+        or payload.get("messageId")
+        or ""
+    ).strip()
+
+
+def _delivery_result(success: bool, delivery: str, *provider_ids: str) -> dict:
+    result = {"success": success, "delivery": delivery}
+    normalized = list(dict.fromkeys(
+        str(value or "").strip() for value in provider_ids if str(value or "").strip()
+    ))
+    if normalized:
+        result["provider_message_ids"] = normalized
+    return result
 
 
 def _post_recommendation_message(
     url: str,
     headers: dict,
     body: dict,
-) -> tuple[str, int | None]:
+) -> tuple[str, int | None, str]:
     """Return ``sent``, ``rejected``, or ``ambiguous`` with status."""
     last_status = None
     for _attempt in range(2):
@@ -494,10 +570,53 @@ def _post_recommendation_message(
             continue
         last_status = response.status_code
         if 200 <= response.status_code < 300:
-            return "sent", response.status_code
+            return "sent", response.status_code, _response_message_id(response)
         if response.status_code not in {408, 409, 429} and response.status_code < 500:
-            return "rejected", response.status_code
-    return "ambiguous", last_status
+            return "rejected", response.status_code, ""
+    return "ambiguous", last_status, ""
+
+
+def _confirm_recommendation_status(
+    request_url: str,
+    headers: dict,
+    account_id: str,
+    provider_message_id: str,
+) -> str:
+    """Return sent, rejected, or ambiguous for an accepted provider message."""
+    terminal_success = {"sent", "delivered", "read"}
+    terminal_failure = {"failed", "rejected", "undeliverable"}
+    for attempt in range(8):
+        if attempt:
+            time.sleep(0.5)
+        try:
+            response = http_requests.get(
+                request_url,
+                headers=headers,
+                params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
+                timeout=15,
+            )
+        except http_requests.RequestException:
+            continue
+        if not 200 <= response.status_code < 300:
+            continue
+        matched = next(
+            (
+                item for item in _payload_messages(_response_json(response))
+                if str(item.get("id") or item.get("messageId") or "")
+                == provider_message_id
+            ),
+            None,
+        )
+        if not matched:
+            continue
+        status = str(
+            matched.get("status") or matched.get("deliveryStatus") or ""
+        ).lower()
+        if status in terminal_success:
+            return "sent"
+        if status in terminal_failure:
+            return "rejected"
+    return "ambiguous"
 
 
 def _send_recommendation_part(
@@ -509,19 +628,26 @@ def _send_recommendation_part(
     body: dict,
     idempotency_key: str,
     visible_text: str,
-) -> tuple[str, int | None, bool]:
+) -> tuple[str, int | None, bool, str]:
     """Send or reconcile one idempotent visible part of a discovery bundle."""
-    if _recommendation_is_visible(existing_messages, visible_text):
-        return "sent", None, True
+    visible = _recommendation_visible_message(existing_messages, visible_text)
+    if visible:
+        return "sent", None, True, str(visible.get("id") or visible.get("messageId") or "")
     headers = dict(base_headers)
     headers["Idempotency-Key"] = idempotency_key
-    outcome, status = _post_recommendation_message(
+    outcome, status, provider_message_id = _post_recommendation_message(
         request_url,
         headers,
         body,
     )
+    if outcome == "sent" and provider_message_id:
+        outcome = _confirm_recommendation_status(
+            request_url, base_headers, account_id, provider_message_id,
+        )
     if outcome == "sent":
-        return outcome, status, False
+        return outcome, status, False, provider_message_id
+    if outcome == "rejected" and provider_message_id:
+        return outcome, status, False, provider_message_id
     try:
         response = http_requests.get(
             request_url,
@@ -532,12 +658,12 @@ def _send_recommendation_part(
     except http_requests.RequestException:
         response = None
     if response is not None and 200 <= response.status_code < 300:
-        if _recommendation_is_visible(
-            _payload_messages(_response_json(response)),
-            visible_text,
-        ):
-            return "sent", status, True
-    return outcome, status, False
+        visible = _recommendation_visible_message(
+            _payload_messages(_response_json(response)), visible_text,
+        )
+        if visible:
+            return "sent", status, True, str(visible.get("id") or visible.get("messageId") or "")
+    return outcome, status, False, ""
 
 
 def send_dm_vehicle_recommendation(
@@ -668,7 +794,7 @@ def send_dm_vehicle_recommendation(
         if kind == "picker" and len(options) > 1
         else text
     )
-    outcome, status, primary_reconciled = _send_recommendation_part(
+    outcome, status, primary_reconciled, primary_provider_id = _send_recommendation_part(
         request_url,
         base_headers,
         account_id,
@@ -689,10 +815,11 @@ def send_dm_vehicle_recommendation(
             recommendation_hash=state_hash[:12],
         )
         if kind in {"image", "picker"}:
-            return {
-                "success": True,
-                "delivery": "picker" if kind == "picker" else "image",
-            }
+            return _delivery_result(
+                True,
+                "picker" if kind == "picker" else "image",
+                primary_provider_id,
+            )
     else:
         if outcome == "ambiguous":
             bm_logger.log(
@@ -714,7 +841,7 @@ def send_dm_vehicle_recommendation(
             )
         fallback_headers = dict(base_headers)
         fallback_headers["Idempotency-Key"] = f"{idempotency_key}-fallback"
-        fallback_outcome, fallback_status = _post_recommendation_message(
+        fallback_outcome, fallback_status, fallback_provider_id = _post_recommendation_message(
             request_url,
             fallback_headers,
             {"accountId": account_id, "message": fallback_text},
@@ -726,10 +853,11 @@ def send_dm_vehicle_recommendation(
                 primary_status=status,
                 recommendation_hash=state_hash[:12],
             )
-            return {
-                "success": True,
-                "delivery": "picker_fallback" if kind == "picker" else "fallback",
-            }
+            return _delivery_result(
+                True,
+                "picker_fallback" if kind == "picker" else "fallback",
+                fallback_provider_id,
+            )
         bm_logger.log(
             "ali_vehicle_recommendation_failed",
             mode=kind,
@@ -751,7 +879,7 @@ def send_dm_vehicle_recommendation(
             },
         },
     }
-    picker_outcome, picker_status, picker_reconciled = _send_recommendation_part(
+    picker_outcome, picker_status, picker_reconciled, picker_provider_id = _send_recommendation_part(
         request_url,
         base_headers,
         account_id,
@@ -770,7 +898,9 @@ def send_dm_vehicle_recommendation(
             option_count=len(options),
             recommendation_hash=state_hash[:12],
         )
-        return {"success": True, "delivery": "carousel_picker"}
+        return _delivery_result(
+            True, "carousel_picker", primary_provider_id, picker_provider_id,
+        )
     if picker_outcome == "ambiguous":
         bm_logger.log(
             "ali_vehicle_picker_ambiguous",
@@ -779,7 +909,7 @@ def send_dm_vehicle_recommendation(
         )
 
     picker_fallback_text = str(picker["fallback_text"])
-    fallback_outcome, fallback_status, _ = _send_recommendation_part(
+    fallback_outcome, fallback_status, _, fallback_provider_id = _send_recommendation_part(
         request_url,
         base_headers,
         account_id,
@@ -794,7 +924,12 @@ def send_dm_vehicle_recommendation(
             picker_status=picker_status,
             recommendation_hash=state_hash[:12],
         )
-        return {"success": True, "delivery": "carousel_picker_fallback"}
+        return _delivery_result(
+            True,
+            "carousel_picker_fallback",
+            primary_provider_id,
+            fallback_provider_id,
+        )
     bm_logger.log(
         "ali_vehicle_picker_failed",
         picker_status=picker_status,

@@ -542,6 +542,7 @@ def commit_ali_turn_delivery(
     recommendation_state_hash: str = "",
     recommendation_delivery: str = "",
     recommendation_vehicle_ids: list[str] | None = None,
+    recommendation_provider_message_ids: list[str] | None = None,
 ) -> bool:
     """Atomically commit provider-confirmed Ali state, timeline, and inbound rows.
 
@@ -584,6 +585,11 @@ def commit_ali_turn_delivery(
         ):
             recommendation_ids.append(vehicle_id)
     recommendation_ids = recommendation_ids[:5]
+    provider_message_ids = list(dict.fromkeys(
+        str(value or "").strip()
+        for value in (recommendation_provider_message_ids or [])
+        if str(value or "").strip() and len(str(value or "").strip()) <= 240
+    ))[:5]
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -594,6 +600,30 @@ def commit_ali_turn_delivery(
             conn.rollback()
             raise AliQuoteError("turn_state_not_found")
         flags = json.loads(row[0] or "{}")
+        failed_provider_ids = {
+            str(value or "").strip()
+            for value in flags.get("ali_failed_provider_message_ids") or []
+            if str(value or "").strip()
+        }
+        failed_delivery_ids = failed_provider_ids.intersection(provider_message_ids)
+        if kind == "vehicle_recommendation" and failed_delivery_ids:
+            flags["ali_failed_provider_message_ids"] = [
+                value for value in failed_provider_ids
+                if value not in failed_delivery_ids
+            ]
+            conn.execute(
+                "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
+                "WHERE phone = ?",
+                (json.dumps(flags, ensure_ascii=False), now, conversation_id),
+            )
+            for message_id in ids:
+                conn.execute(
+                    "UPDATE inbound_processing_events SET status = 'send_failed', "
+                    "reason = 'provider_send_failed', updated_at = ? WHERE message_id = ?",
+                    (now, message_id),
+                )
+            conn.commit()
+            return False
         if flags.get("ali_last_delivery_action_id") == action_id:
             for message_id in ids:
                 conn.execute(
@@ -649,6 +679,8 @@ def commit_ali_turn_delivery(
                     "hash": recommendation_state_hash,
                     "delivery": recommendation_delivery,
                     "action_id": action_id,
+                    "vehicle_ids": recommendation_ids,
+                    "provider_message_ids": provider_message_ids,
                 })
             flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
             if recommendation_ids:
@@ -1279,16 +1311,10 @@ def apply_recommendation_selection_context(
     if mode == "specific":
         if len(options) != 1:
             return current, "clarify", ()
-        return apply_latest_rental_change(
-            current,
-            {"vehicle_name": options[0]["name"]},
-            {
-                "mode": "apply",
-                "changed_fields": ["vehicle_selection"],
-                "vehicle_selection_kind": "vehicle",
-            },
-            catalog,
-        )
+        # Showing one suggested car is not proof that the customer chose it.
+        # A category containing one vehicle must remain a category until the
+        # customer taps the picker or explicitly names that exact vehicle.
+        return current, "unchanged", ()
 
     class_ids = {str(option.get("classId") or "") for option in options}
     class_ids.discard("")

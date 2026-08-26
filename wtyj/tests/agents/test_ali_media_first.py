@@ -4,6 +4,7 @@ import pytest
 
 from agents.social.ali_media_first import (
     catalog_class_recommendation_action,
+    conversation_repair_reply,
     derive_media_first_action,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -168,6 +169,26 @@ def test_explicit_catalog_class_discovery_is_resolved_in_all_locales(
     }
 
 
+def test_bare_mobile_category_reply_is_an_explicit_category_selection():
+    assert infer_explicit_catalog_class_selection(
+        "SUV", _catalog(),
+    ) == {
+        "vehicle_class_id": "suv",
+        "vehicle_class_name": "SUV",
+    }
+
+
+def test_confusion_and_reengagement_keep_category_without_assuming_vehicle():
+    fields = {"conversation_language": "en", "vehicle_class_name": "Small Car"}
+    confused = conversation_repair_reply("???", fields, {})
+    resumed = conversation_repair_reply("Hello", fields, {})
+
+    assert "Small Car" in confused
+    assert "haven't selected a specific car" in confused
+    assert "Small Car" in resumed
+    assert "How many people" in resumed
+
+
 @pytest.mark.parametrize(
     "message_text",
     [
@@ -200,6 +221,7 @@ def test_validated_class_builds_server_owned_recommendation_action():
     ) == {
         "mode": "specific",
         "vehicle_names": ["Kia Seltos or similar"],
+        "selection_context": "category",
     }
 
 

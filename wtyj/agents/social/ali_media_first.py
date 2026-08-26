@@ -50,44 +50,104 @@ _POSITIVE_CLASS_PREFIX = re.compile(
     r"(?:(?:a|an|the|een|un|e|ein|eine|einen)\s+)?$",
     re.IGNORECASE,
 )
+_PUNCTUATION_ONLY_REPAIR = re.compile(r"^[\s?!.,;:\-–—…¡¿]+$")
+_REENGAGEMENT = re.compile(
+    r"^(?:hi|hello|hey|hallo|hoi|bon\s+(?:dia|tardi|nochi)|guten\s+tag)[!.?\s]*$",
+    re.IGNORECASE,
+)
 _COPY = {
     "en": {
-        "intro_one": "Here is the car we discussed. Does this one feel right for your trip?",
+        "intro_one": "Here is a car that matches what you asked for. Does this one feel right for your trip?",
         "intro_many": "Here are a few options that may suit your trip. Which one do you prefer?",
         "availability": "Final vehicle availability still needs confirmation.",
         "cta": "Car details",
         "needs_passengers": "How many people will be travelling in the car?",
         "needs_luggage": "How much luggage will you be bringing?",
         "clarify_preference": "Would you prefer a smaller car, an SUV, or a van?",
+        "repair_category": "Sorry, I wasn't clear. I have {category} as your preferred category, but you haven't selected a specific car yet. How many people will be travelling in the car?",
+        "resume_category": "Hi! I have {category} as your preferred category. How many people will be travelling in the car?",
+        "repair_vehicle": "Sorry, I wasn't clear. I have {vehicle} as your selected car. What rental dates do you need?",
+        "resume_vehicle": "Hi! I have {vehicle} as your selected car. What rental dates do you need?",
+        "repair_general": "Sorry, I wasn't clear. What would you like me to explain?",
     },
     "nl": {
-        "intro_one": "Hier is de auto die we bespraken. Past deze bij je reis?",
+        "intro_one": "Hier is een auto die past bij wat je zoekt. Past deze bij je reis?",
         "intro_many": "Hier zijn een paar opties die bij je reis kunnen passen. Welke heeft je voorkeur?",
         "availability": "De definitieve voertuigbeschikbaarheid moet nog worden bevestigd.",
         "cta": "Autodetails",
         "needs_passengers": "Met hoeveel personen reizen jullie in de auto?",
         "needs_luggage": "Hoeveel bagage nemen jullie mee?",
         "clarify_preference": "Heb je liever een kleinere auto, een SUV of een busje?",
+        "repair_category": "Sorry, ik was niet duidelijk. Ik heb {category} als je voorkeurscategorie, maar je hebt nog geen specifieke auto gekozen. Met hoeveel personen reizen jullie?",
+        "resume_category": "Hallo! Ik heb {category} als je voorkeurscategorie. Met hoeveel personen reizen jullie?",
+        "repair_vehicle": "Sorry, ik was niet duidelijk. Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
+        "resume_vehicle": "Hallo! Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
+        "repair_general": "Sorry, ik was niet duidelijk. Wat wil je dat ik uitleg?",
     },
     "pap": {
-        "intro_one": "Aki ta e outo ku nos a papia di dje. E ta pas ku bo biahe?",
+        "intro_one": "Aki tin un outo ku ta pas ku loke bo ta buska. E ta pas ku bo biahe?",
         "intro_many": "Aki tin algun opshon ku por pas ku bo biahe. Kua bo ta preferá?",
         "availability": "Disponibilidat final di e outo mester wordu konfirmá ainda.",
         "cta": "Detayenan di outo",
         "needs_passengers": "Kuantu persona lo biaha den e outo?",
         "needs_luggage": "Kuantu ekipahe boso lo hiba?",
         "clarify_preference": "Bo ta preferá un outo mas chikí, un SUV òf un van?",
+        "repair_category": "Pordon, mi no tabata kla. Mi tin {category} komo bo preferensia, pero bo no a skohe un outo spesífiko ainda. Kuantu persona lo biaha den e outo?",
+        "resume_category": "Bon dia! Mi tin {category} komo bo preferensia. Kuantu persona lo biaha den e outo?",
+        "repair_vehicle": "Pordon, mi no tabata kla. Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
+        "resume_vehicle": "Bon dia! Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
+        "repair_general": "Pordon, mi no tabata kla. Kiko bo ke pa mi splika?",
     },
     "de": {
-        "intro_one": "Hier ist das besprochene Auto. Passt es zu Ihrer Reise?",
+        "intro_one": "Hier ist ein Auto, das zu Ihrer Anfrage passt. Passt es zu Ihrer Reise?",
         "intro_many": "Hier sind einige passende Optionen. Welches Auto bevorzugen Sie?",
         "availability": "Die endgültige Fahrzeugverfügbarkeit muss noch bestätigt werden.",
         "cta": "Fahrzeugdetails",
         "needs_passengers": "Wie viele Personen fahren im Auto mit?",
         "needs_luggage": "Wie viel Gepäck bringen Sie mit?",
         "clarify_preference": "Bevorzugen Sie einen kleineren Wagen, einen SUV oder einen Van?",
+        "repair_category": "Entschuldigung, ich war nicht klar. Ich habe {category} als Ihre bevorzugte Kategorie, aber noch kein bestimmtes Auto. Wie viele Personen fahren mit?",
+        "resume_category": "Hallo! Ich habe {category} als Ihre bevorzugte Kategorie. Wie viele Personen fahren mit?",
+        "repair_vehicle": "Entschuldigung, ich war nicht klar. Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
+        "resume_vehicle": "Hallo! Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
+        "repair_general": "Entschuldigung, ich war nicht klar. Was soll ich erklären?",
     },
 }
+
+
+def explicit_visual_request(message_text: object) -> bool:
+    """Return true only when the customer explicitly asks to see vehicle media."""
+    return bool(_VISUAL_REQUEST.search(str(message_text or "")))
+
+
+def conversation_repair_reply(
+    message_text: object,
+    fields: dict,
+    flags: dict,
+) -> str:
+    """Own a confused/nudging turn without mutating selection or sending media."""
+    text = str(message_text or "").strip()
+    punctuation_only = bool(text and _PUNCTUATION_ONLY_REPAIR.fullmatch(text))
+    has_vehicle_context = bool(
+        fields.get("vehicle_id")
+        or fields.get("vehicle_class_id")
+        or fields.get("vehicle_class_name")
+        or _ids(flags, "ali_last_recommendation_ids")
+    )
+    reengagement = bool(has_vehicle_context and _REENGAGEMENT.fullmatch(text))
+    if not punctuation_only and not reengagement:
+        return ""
+
+    copy = _COPY[_locale(fields)]
+    category = str(fields.get("vehicle_class_name") or "").strip()
+    vehicle = str(fields.get("vehicle_name") or "").strip()
+    if category:
+        key = "resume_category" if reengagement else "repair_category"
+        return copy[key].format(category=category)
+    if vehicle:
+        key = "resume_vehicle" if reengagement else "repair_vehicle"
+        return copy[key].format(vehicle=vehicle)
+    return copy["repair_general"]
 
 
 def _locale(fields: dict) -> str:
@@ -195,11 +255,11 @@ def infer_media_first_intent(
         return "reject_or_hesitate"
     if _structured_names(structured_action):
         return "request_recommendation"
+    if _RECOMMENDATION_REQUEST.search(customer_text):
+        return "request_recommendation"
     vehicles = _active_visual_vehicles(catalog)
     mentioned = _mentioned_vehicles(reply_text, vehicles)
     if len(mentioned) >= 2:
-        return "request_recommendation"
-    if mentioned and not fields.get("vehicle_id"):
         return "request_recommendation"
 
     if has_vehicle_context and _VISUAL_REQUEST.search(customer_text):
@@ -248,7 +308,11 @@ def infer_explicit_catalog_class_selection(
             prefix = normalized[max(0, match.start() - 80):match.start()]
             if _NEGATIVE_CLASS_PREFIX.search(prefix):
                 continue
-            if has_discovery_request or _POSITIVE_CLASS_PREFIX.search(prefix):
+            if (
+                normalized == label
+                or has_discovery_request
+                or _POSITIVE_CLASS_PREFIX.search(prefix)
+            ):
                 candidates.append((len(label.split()), class_id, class_name))
                 break
 
@@ -300,6 +364,7 @@ def catalog_class_recommendation_action(
     return {
         "mode": "specific" if len(vehicles) == 1 else "curated",
         "vehicle_names": [str(vehicle["name"]).strip() for vehicle in vehicles],
+        "selection_context": "category",
     }
 
 
@@ -354,9 +419,14 @@ def derive_media_first_action(
         if name.casefold() in vehicles_by_name
     ]
     reason = "structured_action" if candidates else ""
-    if not candidates:
-        candidates = _mentioned_vehicles(reply_text, vehicles)
-        reason = "catalog_names_in_reply" if candidates else ""
+    if not candidates and intent in _DISCOVERY_INTENTS:
+        mentioned = _mentioned_vehicles(reply_text, vehicles)
+        # One car name in Nick's own prose is not proof that the customer
+        # selected or requested that car. Preserve only the multi-car safety
+        # net that converts an accidental text dump into visual options.
+        if len(mentioned) >= 2:
+            candidates = mentioned
+            reason = "catalog_names_in_reply"
 
     selected_id = str(fields.get("vehicle_id") or "").strip()
     last_ids = _ids(flags, "ali_last_recommendation_ids")
@@ -495,7 +565,15 @@ def derive_media_first_action(
             "availability_note": copy["availability"],
             "cta_label": copy["cta"],
         },
-        "reply_text": str(reply_text or "").strip() if explicit_names else intro,
+        "reply_text": (
+            intro
+            if not explicit_names
+            or (
+                isinstance(structured_action, dict)
+                and structured_action.get("selection_context") == "category"
+            )
+            else str(reply_text or "").strip()
+        ),
         "vehicle_ids": [str(vehicle["id"]).strip() for vehicle in candidates],
         "reason": reason,
     }

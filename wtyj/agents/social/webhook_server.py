@@ -19,6 +19,7 @@ from shared import icp_overrides
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
 from agents.social.zernio_dm_client import (
+    parse_zernio_failed_webhook,
     parse_zernio_webhook,
     parse_zernio_sent_webhook,
     verify_webhook_signature,
@@ -538,6 +539,9 @@ def _flush_buffer(phone):
                                 for option in (reply_vehicle_recommendation or {}).get("options") or []
                                 if isinstance(option, dict)
                             ],
+                            recommendation_provider_message_ids=list(
+                                (recommendation_delivery or {}).get("provider_message_ids") or []
+                            ),
                         )
                     else:
                         state_registry.dm_store_message(
@@ -782,6 +786,19 @@ def _process_zernio_sent_event(payload: dict) -> None:
 def _process_zernio_event(payload: dict):
     """Background task: parse Zernio webhook, dedup, route DM to booking or Q&A."""
     try:
+        if payload.get("event") == "message.failed":
+            failed = parse_zernio_failed_webhook(payload)
+            if failed:
+                reconciled = state_registry.wa_reconcile_vehicle_recommendation_failure(
+                    failed["conversation_id"], failed["message_id"],
+                )
+                log(
+                    "zernio_failed_event_reconciled",
+                    conversation_id=failed["conversation_id"][:20],
+                    message_id=failed["message_id"][:30],
+                    vehicle_recommendation=reconciled,
+                )
+            return
         if payload.get("event") == "message.sent":
             _process_zernio_sent_event(payload)
             return
