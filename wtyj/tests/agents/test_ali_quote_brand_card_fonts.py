@@ -104,6 +104,38 @@ def test_localized_titles_reference_and_footer_fit_safe_content_width():
     assert card._font(24).getlength(card.FOOTER_TEXT) <= card.CONTENT_WIDTH
 
 
+def test_lower_typography_and_divider_share_canvas_midpoint():
+    expected_center = card.WIDTH / 2
+    for title in card.TITLES.values():
+        font = card._fit_font(title, 60, 48, bold=True)
+        origin = card._centered_text_x(title, font)
+        assert abs(origin + (font.getlength(title) / 2) - expected_center) <= 0.5
+
+    for reference in (
+        "ALI-20260826-D15F0530",
+        "ALI-" + ("W" * 40),
+    ):
+        font = card._fit_font(reference, 37, 16, bold=True)
+        origin = card._centered_text_x(reference, font)
+        assert 0 <= origin
+        assert origin + font.getlength(reference) <= card.WIDTH
+        assert abs(
+            origin + (font.getlength(reference) / 2) - expected_center
+        ) <= 0.5
+
+    footer_font = card._font(24)
+    footer_origin = card._centered_text_x(card.FOOTER_TEXT, footer_font)
+    assert abs(
+        footer_origin
+        + (footer_font.getlength(card.FOOTER_TEXT) / 2)
+        - expected_center
+    ) <= 0.5
+
+    accent_left, _, accent_right, _ = card.ACCENT_BOX
+    assert accent_right - accent_left == card.ACCENT_WIDTH
+    assert (accent_left + accent_right) / 2 == expected_center
+
+
 def test_same_card_content_remains_deterministic_after_reflow(tmp_path):
     first_path, first_digest = card.render_quote_brand_card(
         "deterministic-one", "en", "ALI-20260826-DETERMINISTIC",
