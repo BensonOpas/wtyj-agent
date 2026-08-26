@@ -1,0 +1,394 @@
+"""Deterministic media-first policy for Ali vehicle discovery turns."""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+import re
+
+
+_DISCOVERY_INTENTS = {"request_recommendation", "reject_or_hesitate"}
+_VISUAL_REQUEST = re.compile(
+    r"\b(?:photo|photos|picture|pictures|image|images|foto|foto['’]?s|"
+    r"afbeelding|afbeeldingen|bild|bilder|potr[eè]t|potr[eè]tnan|"
+    r"show|see|view|toon|mira|mustra|zeigen|ansehen)\b",
+    re.IGNORECASE,
+)
+_VEHICLE_CONTEXT = re.compile(
+    r"\b(?:car|cars|vehicle|vehicles|auto|auto['’]?s|outo|outonan|wagen|"
+    r"suv|van|economy|compact)\b",
+    re.IGNORECASE,
+)
+_ALTERNATIVE_REQUEST = re.compile(
+    r"\b(?:what else|anything else|other|another|alternative|alternatives|"
+    r"option|options|smaller|larger|kleiner|groter|andere|alternatief|"
+    r"opshon|otro|mas chik[ií]|m[aá]s grandi|anders|kleiner|gr[oö][sß]er)\b",
+    re.IGNORECASE,
+)
+_RECOMMENDATION_REQUEST = re.compile(
+    r"\b(?:recommend|recommendation|suggest|suggestion|suitable|best car|"
+    r"aanraden|advies|geschikt|rekomend[aá]|sugerensia|"
+    r"empfehlen|empfehlung|geeignet)\b",
+    re.IGNORECASE,
+)
+_REJECTION = re.compile(
+    r"\b(?:don['’]?t like|do not like|doesn['’]?t work|does not work|"
+    r"not right|nope|nee|niet goed|no ta bon|mi no ke|gef[aä]llt nicht|"
+    r"passt nicht|changed? my mind|reconsider|bedacht|van gedachten|"
+    r"kambia di idea|cambié de idea|anders entschieden)\b",
+    re.IGNORECASE,
+)
+_COPY = {
+    "en": {
+        "intro_one": "Here is the car we discussed. Does this one feel right for your trip?",
+        "intro_many": "Here are a few options that may suit your trip. Which one do you prefer?",
+        "availability": "Final vehicle availability still needs confirmation.",
+        "cta": "View car",
+        "needs_passengers": "How many people will be travelling in the car?",
+        "needs_luggage": "How much luggage will you be bringing?",
+        "clarify_preference": "Would you prefer a smaller car, an SUV, or a van?",
+    },
+    "nl": {
+        "intro_one": "Hier is de auto die we bespraken. Past deze bij je reis?",
+        "intro_many": "Hier zijn een paar opties die bij je reis kunnen passen. Welke heeft je voorkeur?",
+        "availability": "De definitieve voertuigbeschikbaarheid moet nog worden bevestigd.",
+        "cta": "Bekijk auto",
+        "needs_passengers": "Met hoeveel personen reizen jullie in de auto?",
+        "needs_luggage": "Hoeveel bagage nemen jullie mee?",
+        "clarify_preference": "Heb je liever een kleinere auto, een SUV of een busje?",
+    },
+    "pap": {
+        "intro_one": "Aki ta e outo ku nos a papia di dje. E ta pas ku bo biahe?",
+        "intro_many": "Aki tin algun opshon ku por pas ku bo biahe. Kua bo ta preferá?",
+        "availability": "Disponibilidat final di e outo mester wordu konfirmá ainda.",
+        "cta": "Mira outo",
+        "needs_passengers": "Kuantu persona lo biaha den e outo?",
+        "needs_luggage": "Kuantu ekipahe boso lo hiba?",
+        "clarify_preference": "Bo ta preferá un outo mas chikí, un SUV òf un van?",
+    },
+    "de": {
+        "intro_one": "Hier ist das besprochene Auto. Passt es zu Ihrer Reise?",
+        "intro_many": "Hier sind einige passende Optionen. Welches Auto bevorzugen Sie?",
+        "availability": "Die endgültige Fahrzeugverfügbarkeit muss noch bestätigt werden.",
+        "cta": "Auto ansehen",
+        "needs_passengers": "Wie viele Personen fahren im Auto mit?",
+        "needs_luggage": "Wie viel Gepäck bringen Sie mit?",
+        "clarify_preference": "Bevorzugen Sie einen kleineren Wagen, einen SUV oder einen Van?",
+    },
+}
+
+
+def _locale(fields: dict) -> str:
+    value = str(fields.get("conversation_language") or "en").strip().lower()
+    return value if value in _COPY else "en"
+
+
+def media_first_clarification(fields: dict) -> str:
+    """Return one safe question when a discovery plan cannot be rendered."""
+    copy = _COPY[_locale(fields)]
+    passenger_count = fields.get("passenger_count")
+    if (
+        isinstance(passenger_count, bool)
+        or not isinstance(passenger_count, int)
+        or passenger_count < 1
+    ):
+        return copy["needs_passengers"]
+    luggage_count = fields.get("luggage_count")
+    if (
+        isinstance(luggage_count, bool)
+        or not isinstance(luggage_count, int)
+        or luggage_count < 0
+    ):
+        return copy["needs_luggage"]
+    return copy["clarify_preference"]
+
+
+def _active_visual_vehicles(catalog: dict) -> list[dict]:
+    return [
+        item
+        for item in catalog.get("vehicles") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        and str(item.get("name") or "").strip()
+        and item.get("active", True) is not False
+        and any(
+            isinstance(image, dict) and str(image.get("url") or "").strip()
+            for image in item.get("images") or []
+        )
+    ]
+
+
+def _amount(vehicle: dict) -> Decimal:
+    try:
+        return Decimal(str((vehicle.get("dailyRate") or {}).get("amount") or "999999"))
+    except InvalidOperation:
+        return Decimal("999999")
+
+
+def _catalog_order(vehicle: dict) -> tuple:
+    order = vehicle.get("displayOrder")
+    if isinstance(order, bool) or not isinstance(order, int):
+        order = 999999
+    return order, _amount(vehicle), str(vehicle.get("name") or "").casefold()
+
+
+def _mentioned_vehicles(reply_text: str, vehicles: list[dict]) -> list[dict]:
+    haystack = str(reply_text or "").casefold()
+    return [
+        vehicle
+        for vehicle in vehicles
+        if str(vehicle.get("name") or "").strip().casefold() in haystack
+    ]
+
+
+def infer_media_first_intent(
+    message_text: str,
+    reply_text: str,
+    structured_action: object,
+    fields: dict,
+    flags: dict,
+    catalog: dict,
+) -> str:
+    """Provide a deterministic fallback until #195 supplies primary intent."""
+    customer_text = str(message_text or "")
+    has_vehicle_context = bool(
+        _VEHICLE_CONTEXT.search(customer_text)
+        or fields.get("vehicle_id")
+        or fields.get("vehicle_class_id")
+        or fields.get("vehicle_class_name")
+        or _ids(flags, "ali_last_recommendation_ids")
+    )
+    reopens_comparison = bool(
+        _ALTERNATIVE_REQUEST.search(customer_text)
+        or _RECOMMENDATION_REQUEST.search(customer_text)
+    )
+    if (
+        _REJECTION.search(customer_text)
+        and (
+            _ids(flags, "ali_last_recommendation_ids")
+            or fields.get("vehicle_id")
+            or fields.get("vehicle_class_id")
+        )
+    ):
+        return "reject_or_hesitate"
+    if (
+        has_vehicle_context
+        and reopens_comparison
+        and (
+            fields.get("vehicle_id")
+            or fields.get("vehicle_class_id")
+            or _ids(flags, "ali_last_recommendation_ids")
+        )
+    ):
+        return "reject_or_hesitate"
+    if _structured_names(structured_action):
+        return "request_recommendation"
+    vehicles = _active_visual_vehicles(catalog)
+    mentioned = _mentioned_vehicles(reply_text, vehicles)
+    if len(mentioned) >= 2:
+        return "request_recommendation"
+    if mentioned and not fields.get("vehicle_id"):
+        return "request_recommendation"
+
+    if has_vehicle_context and _VISUAL_REQUEST.search(customer_text):
+        return "request_recommendation"
+    if has_vehicle_context and reopens_comparison:
+        return "request_recommendation"
+    return ""
+
+
+def _ids(flags: dict, key: str) -> set[str]:
+    values = flags.get(key) or []
+    return {
+        str(value).strip()
+        for value in values
+        if isinstance(value, str) and str(value).strip()
+    }
+
+
+def _structured_names(action: object) -> list[str]:
+    if not isinstance(action, dict):
+        return []
+    names = action.get("vehicle_names")
+    if not isinstance(names, list):
+        return []
+    return [str(name).strip() for name in names if str(name).strip()]
+
+
+def derive_media_first_action(
+    primary_intent: object,
+    structured_action: object,
+    reply_text: str,
+    fields: dict,
+    flags: dict,
+    catalog: dict,
+) -> dict:
+    """Return one deterministic media-first action decision.
+
+    This policy never parses arbitrary customer prose. It consumes #195's
+    structured primary intent, the model's catalog names when supplied, and
+    canonical server-owned catalog/state fields.
+    """
+    intent = str(primary_intent or "").strip().lower()
+    explicit_names = _structured_names(structured_action)
+    if intent not in _DISCOVERY_INTENTS and not explicit_names:
+        return {"status": "not_discovery", "action": None}
+
+    locale = _locale(fields)
+    copy = _COPY[locale]
+    vehicles = _active_visual_vehicles(catalog)
+    vehicles_by_name = {
+        str(vehicle["name"]).strip().casefold(): vehicle
+        for vehicle in vehicles
+    }
+
+    candidates = [
+        vehicles_by_name[name.casefold()]
+        for name in explicit_names
+        if name.casefold() in vehicles_by_name
+    ]
+    reason = "structured_action" if candidates else ""
+    if not candidates:
+        candidates = _mentioned_vehicles(reply_text, vehicles)
+        reason = "catalog_names_in_reply" if candidates else ""
+
+    selected_id = str(fields.get("vehicle_id") or "").strip()
+    last_ids = _ids(flags, "ali_last_recommendation_ids")
+    rejected_ids = _ids(flags, "ali_rejected_vehicle_ids")
+    shown_ids = _ids(flags, "ali_shown_vehicle_ids")
+    excluded_ids = set(rejected_ids)
+    if intent == "reject_or_hesitate":
+        excluded_ids.update(last_ids)
+        if selected_id:
+            excluded_ids.add(selected_id)
+
+    if not candidates and intent == "request_recommendation" and selected_id:
+        candidates = [
+            vehicle
+            for vehicle in vehicles
+            if str(vehicle.get("id") or "") == selected_id
+        ]
+        reason = "selected_vehicle_picture" if candidates else ""
+
+    class_id = str(fields.get("vehicle_class_id") or "").strip()
+    class_name = str(fields.get("vehicle_class_name") or "").strip().casefold()
+    classes = {
+        str(item.get("id") or "").strip(): str(item.get("name") or "").strip()
+        for item in catalog.get("vehicleClasses") or []
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    if not class_id and class_name:
+        class_id = next(
+            (
+                item_id
+                for item_id, name in classes.items()
+                if name.casefold() == class_name
+            ),
+            "",
+        )
+    if not candidates and class_id:
+        candidates = [
+            vehicle
+            for vehicle in vehicles
+            if str(vehicle.get("classId") or "") == class_id
+        ]
+        reason = "selected_category" if candidates else ""
+
+    passenger_count = fields.get("passenger_count")
+    luggage_count = fields.get("luggage_count")
+    if not candidates:
+        if (
+            isinstance(passenger_count, bool)
+            or not isinstance(passenger_count, int)
+            or passenger_count < 1
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_passengers"],
+                "reason": "missing_passenger_count",
+            }
+        if (
+            isinstance(luggage_count, bool)
+            or not isinstance(luggage_count, int)
+            or luggage_count < 0
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_luggage"],
+                "reason": "missing_luggage_count",
+            }
+        candidates = [
+            vehicle
+            for vehicle in vehicles
+            if vehicle.get("seats") is None
+            or (
+                isinstance(vehicle.get("seats"), int)
+                and not isinstance(vehicle.get("seats"), bool)
+                and vehicle["seats"] >= passenger_count
+            )
+        ]
+        reason = "capacity_curated"
+
+    unique = {}
+    for vehicle in candidates:
+        vehicle_id = str(vehicle.get("id") or "").strip()
+        if vehicle_id and vehicle_id not in excluded_ids:
+            unique.setdefault(vehicle_id, vehicle)
+    candidates = sorted(unique.values(), key=_catalog_order)
+
+    if not explicit_names and intent == "reject_or_hesitate":
+        unshown = [
+            vehicle
+            for vehicle in candidates
+            if str(vehicle.get("id") or "") not in shown_ids
+        ]
+        if unshown:
+            candidates = unshown
+    candidates = candidates[:5]
+    if not candidates:
+        return {
+            "status": "needs_context",
+            "action": None,
+            "reply_text": media_first_clarification(fields),
+            "reason": "no_unseen_suitable_options",
+        }
+
+    if len(candidates) >= 2:
+        if (
+            isinstance(passenger_count, bool)
+            or not isinstance(passenger_count, int)
+            or passenger_count < 1
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_passengers"],
+                "reason": "missing_passenger_count",
+            }
+        if (
+            isinstance(luggage_count, bool)
+            or not isinstance(luggage_count, int)
+            or luggage_count < 0
+        ):
+            return {
+                "status": "needs_context",
+                "action": None,
+                "reply_text": copy["needs_luggage"],
+                "reason": "missing_luggage_count",
+            }
+
+    mode = "specific" if len(candidates) == 1 else "curated"
+    intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
+    return {
+        "status": "planned",
+        "action": {
+            "mode": mode,
+            "vehicle_names": [str(vehicle["name"]).strip() for vehicle in candidates],
+            "availability_note": copy["availability"],
+            "cta_label": copy["cta"],
+        },
+        "reply_text": str(reply_text or "").strip() if explicit_names else intro,
+        "vehicle_ids": [str(vehicle["id"]).strip() for vehicle in candidates],
+        "reason": reason,
+    }

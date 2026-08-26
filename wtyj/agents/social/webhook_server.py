@@ -533,6 +533,11 @@ def _flush_buffer(phone):
                             recommendation_delivery=str(
                                 (recommendation_delivery or {}).get("delivery") or ""
                             ),
+                            recommendation_vehicle_ids=[
+                                str(option.get("id") or "")
+                                for option in (reply_vehicle_recommendation or {}).get("options") or []
+                                if isinstance(option, dict)
+                            ],
                         )
                     else:
                         state_registry.dm_store_message(
@@ -553,6 +558,11 @@ def _flush_buffer(phone):
                                 _zernio_conv,
                                 state_hash,
                                 delivery,
+                                [
+                                    str(option.get("id") or "")
+                                    for option in reply_vehicle_recommendation.get("options") or []
+                                    if isinstance(option, dict)
+                                ],
                             )
                         state_registry.dm_store_message(
                             conversation_id=_zernio_conv,
@@ -878,7 +888,11 @@ def _process_zernio_event(payload: dict):
                     error=str(_e)[:200])
 
         text = msg.get("text", "")
-        if not text:
+        has_whatsapp_interactive_reply = bool(
+            msg.get("platform") == "whatsapp"
+            and str(msg.get("interactive_id") or "").strip()
+        )
+        if not text and not has_whatsapp_interactive_reply:
             state_registry.inbound_processing_update(
                 message_id, "ignored", reason="non_text_message")
             log("zernio_dm_non_text_skipped", message_id=message_id,

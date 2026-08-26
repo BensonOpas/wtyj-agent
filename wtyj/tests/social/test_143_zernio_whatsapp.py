@@ -86,6 +86,36 @@ def test_zernio_whatsapp_uses_debounce(mock_buffer, mock_typing):
     _cleanup(conv_id)
 
 
+@patch("agents.social.webhook_server.send_typing_indicator")
+@patch("agents.social.webhook_server._buffer_message")
+def test_zernio_empty_text_native_picker_reply_is_not_ignored(
+    mock_buffer, mock_typing,
+):
+    from agents.social.webhook_server import _process_zernio_event
+    from agents.social.ali_vehicle_recommendations import vehicle_selection_payload
+
+    conv_id = "conv_143_picker"
+    _cleanup(conv_id)
+    payload = _make_zernio_wa_payload(
+        conv_id, "", message_id="test_143_picker_empty"
+    )
+    payload["data"]["metadata"] = {
+        "interactiveType": "list_reply",
+        "interactiveId": vehicle_selection_payload("vehicle-1"),
+    }
+
+    _process_zernio_event(payload)
+
+    mock_buffer.assert_called_once()
+    buffered = mock_buffer.call_args[0][0]
+    assert buffered["text"] == ""
+    assert buffered["_zernio_interactive_type"] == "list_reply"
+    assert buffered["_zernio_interactive_id"] == vehicle_selection_payload(
+        "vehicle-1"
+    )
+    _cleanup(conv_id)
+
+
 # --- Test 4: Zernio WhatsApp reply goes via send_reply ---
 @patch("agents.social.webhook_server.send_reply")
 @patch("agents.social.webhook_server.send_text_message")
