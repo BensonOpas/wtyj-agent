@@ -151,6 +151,8 @@ def test_ali_prompt_answers_known_prices_immediately_and_continues_intake(monkey
     assert "Do not repeat a known question or detail" in normalized
     assert "Do not calculate rental totals" in normalized
     assert "discounts, duration rates, dynamic" in normalized
+    assert "Always spell the currency as USD" in normalized
+    assert "never use a $ symbol or `/day` shorthand" in normalized
 
 
 def test_ali_prompt_sets_official_quote_expectation_in_all_supported_languages(monkeypatch):
@@ -179,8 +181,10 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "DISCOVERY BEFORE PERSONAL DETAILS is mandatory" in normalized
     assert "Hi, I’m Carlos from Ali Car Rental." in normalized
     assert "ask what they prefer" in normalized
-    assert "If they are undecided, ask passenger_count next" in normalized
-    assert "ask about luggage only when it is useful" in normalized
+    assert "If they explicitly say they are undecided" in normalized
+    assert "never combine vehicle preference with passenger count" in normalized
+    assert "ask only passenger_count next" in normalized
+    assert "ask only about luggage when it is useful" in normalized
     assert "never ask the vehicle question again" in normalized
     assert "Collect rental_start and rental_end during discovery" in normalized
     assert "Only after a vehicle direction or recommendation is established" in normalized
@@ -189,6 +193,8 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "Never ask the customer to type" in normalized
     assert "Email is optional" in normalized
     assert "never ask for any of those facts again" in normalized
+    assert "Never join two requested facts" in normalized
+    assert "never ask a conditional second question" in normalized
 
 
 def test_ali_prompt_keeps_recommendations_catalog_grounded_and_request_only(monkeypatch):
@@ -204,6 +210,7 @@ def test_ali_prompt_keeps_recommendations_catalog_grounded_and_request_only(monk
     assert "recommend only suitable current catalog options" in normalized
     assert 'Say "this looks suitable" or "I can prepare a quote for this option"' in normalized
     assert "never say or imply that a vehicle is available" in normalized
+    assert 'word "available" and its translations are forbidden' in normalized
     for language in ("English", "Dutch", "Papiamentu", "German"):
         assert language in normalized
 
