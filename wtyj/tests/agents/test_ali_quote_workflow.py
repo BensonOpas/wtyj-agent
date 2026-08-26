@@ -165,6 +165,8 @@ def test_confirmation_variants_and_corrections_change_the_summary_hash():
         "yes", "yes it does", "yes, it does look right", "Yes, it looks good",
         "That’s correct.",
         "Everything looks right.", "All good.", "Go ahead.",
+        "Yes, how much?", "Yes\nHow much", "OK", "OK thanks",
+        "send it", "SEND QUOTE", "Send my quote", "I agree",
         "ja dat klopt", "alles ziet er goed uit", "ga maar door",
         "si tur kos ta bon", "esaki ta korekto", "por sigui",
         "ja das stimmt", "alles sieht richtig aus", "machen Sie weiter",
@@ -194,10 +196,10 @@ def test_confirmation_variants_and_corrections_change_the_summary_hash():
 
 def test_nick_confirmation_copy_is_first_person_and_human_in_all_locales():
     expected = {
-        "en": ("I have these details from you:", "Are these details correct?"),
-        "nl": ("Ik heb deze gegevens van je:", "Kloppen deze gegevens?"),
-        "pap": ("Mi tin e detayanan aki di bo:", "E detayanan aki ta korekto?"),
-        "de": ("Ich habe diese Angaben von Ihnen:", "Sind diese Angaben korrekt?"),
+        "en": ("I have these details from you:", "If everything is correct, tap below and I’ll prepare your official quote."),
+        "nl": ("Ik heb deze gegevens van je:", "Als alles klopt, tik hieronder en dan maak ik je officiële offerte klaar."),
+        "pap": ("Mi tin e detayanan aki di bo:", "Si tur kos ta korekto, primi aki bou i mi lo prepara bo oferta ofisial."),
+        "de": ("Ich habe diese Angaben von Ihnen:", "Wenn alles stimmt, tippen Sie unten und ich bereite Ihr offizielles Angebot vor."),
     }
     banned = (
         "reply yes", "please confirm", "antwoord ja", "konfirmá e det",
@@ -211,6 +213,48 @@ def test_nick_confirmation_copy_is_first_person_and_human_in_all_locales():
         assert "2026-09-01" not in text
         assert "2026-09-08" not in text
         assert not any(phrase in text.lower() for phrase in banned)
+
+
+def test_send_my_quote_control_is_signed_opaque_current_and_stale(monkeypatch):
+    monkeypatch.setenv(
+        "ALI_QUOTE_CONFIRMATION_SECRET",
+        "synthetic-confirmation-secret-32-bytes",
+    )
+    summary, summary_hash = workflow.normalized_summary(customer(), rental())
+    plan = workflow.AliTurnPlan(
+        "summary",
+        workflow._summary_text(summary),
+        "SUMMARY_PRESENTED",
+        "continue_intake",
+        "initial_or_corrected_complete_draft",
+        "a" * 64,
+        "b" * 64,
+        summary_hash,
+        1,
+    )
+
+    control = workflow.build_quote_confirmation_control(
+        "conversation-synthetic", plan,
+    )
+    payload = control["button"]["payload"]
+    assert control["button"]["title"] == "Send my quote"
+    assert control["fallback_text"].endswith(
+        "Reply SEND QUOTE to continue."
+    )
+    assert payload.startswith("ali_quote_confirm:v1:")
+    assert "Synthetic" not in payload
+    flags = {
+        "awaiting_quote_confirmation": True,
+        "ali_presented_summary_hash": summary_hash,
+        "ali_summary_version": 1,
+    }
+    assert workflow.resolve_quote_confirmation_interaction(
+        "button_reply", payload, "conversation-synthetic", flags,
+    ) == "current"
+    flags["ali_summary_version"] = 2
+    assert workflow.resolve_quote_confirmation_interaction(
+        "button_reply", payload, "conversation-synthetic", flags,
+    ) == "stale"
 
 
 def test_nick_progress_copy_is_direct_and_quote_led_in_all_locales():

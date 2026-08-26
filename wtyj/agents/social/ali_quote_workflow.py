@@ -72,12 +72,18 @@ QUOTE_LEAD_FIELD_LABELS = {
     "vehicle_preference": "Preferred vehicle/category",
 }
 ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", "chargeSelections"}
+QUOTE_CONFIRMATION_PREFIX = "ali_quote_confirm:v1:"
+QUOTE_CONFIRMATION_BUTTON_TITLE = "Send my quote"
+QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = "Reply SEND QUOTE to continue."
+_QUOTE_CONFIRMATION_INTERACTIVE_TYPES = {"buttonreply", "listreply"}
 AFFIRMATIVE = {
     # English
     "yes", "yes it does", "yes it looks right", "yes it does look right",
     "that is right", "that s right", "that is correct", "that s correct",
     "everything looks right", "yes it looks good", "yes looks good",
-    "all good", "correct", "looks good", "go ahead",
+    "all good", "correct", "looks good", "go ahead", "ok", "okay",
+    "ok thanks", "okay thanks", "send it", "send quote", "send my quote",
+    "i agree", "i accept",
     # Dutch
     "ja", "ja dat klopt", "dat klopt", "klopt", "dat is juist", "dat is correct",
     "alles klopt", "alles ziet er goed uit", "ziet er goed uit", "helemaal goed",
@@ -283,23 +289,146 @@ def normalized_summary(customer: dict, rental: dict, version: int = 1) -> tuple[
 
 def confirmation_decision(text: str) -> tuple[bool, str]:
     """Classify a displayed-summary response without retaining its content."""
-    normalized = " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower(), flags=re.UNICODE).split())
+    raw = str(text or "")
+    normalized = " ".join(re.sub(r"[^\w\s]", " ", raw.lower(), flags=re.UNICODE).split())
     if not normalized:
         return False, "empty"
-    if "?" in str(text or ""):
-        return False, "question"
     words = set(normalized.split())
+    # Exact approved confirmations win before individual words such as Dutch
+    # "maar" in the idiom "ga maar door" or English "correct" are interpreted
+    # as qualification/correction signals.
     if normalized in AFFIRMATIVE:
         return True, "affirmative_allowlist"
     if words & NEGATION_OR_QUALIFICATION:
         return False, "negation_or_qualification"
     if words & CORRECTION_OR_DETAIL:
         return False, "correction_or_new_detail"
+    for phrase in sorted(AFFIRMATIVE, key=len, reverse=True):
+        if normalized.startswith(f"{phrase} "):
+            remainder = normalized[len(phrase):].strip()
+            if "?" in raw or remainder.split(maxsplit=1)[0] in {
+                "how", "what", "when", "where", "which", "who", "why",
+                "can", "could", "do", "does", "is", "are", "will", "would",
+            }:
+                return True, "affirmative_with_question"
+    if "?" in raw:
+        return False, "question"
     return False, "not_allowlisted"
 
 
 def is_unambiguous_confirmation(text: str) -> bool:
     return confirmation_decision(text)[0]
+
+
+def _confirmation_secret(secret: str | None = None) -> str:
+    value = str(
+        secret
+        or os.environ.get("ALI_QUOTE_CONFIRMATION_SECRET")
+        or os.environ.get("ZERNIO_WEBHOOK_SECRET")
+        or os.environ.get("ALI_QUOTE_DOWNLOAD_SECRET")
+        or ""
+    )
+    if len(value) < 16:
+        raise AliQuoteError("quote_confirmation_secret_missing")
+    return value
+
+
+def quote_confirmation_payload(
+    conversation_id: str,
+    summary_hash: str,
+    summary_version: int,
+    *,
+    secret: str | None = None,
+) -> str:
+    """Return an opaque signed postback for one immutable summary version."""
+    if (
+        not conversation_id
+        or not re.fullmatch(r"[0-9a-f]{64}", str(summary_hash or ""))
+        or isinstance(summary_version, bool)
+        or int(summary_version) < 1
+    ):
+        raise AliQuoteError("invalid_quote_confirmation_anchor")
+    material = f"{conversation_id}\x1f{summary_hash}\x1f{int(summary_version)}"
+    signature = hmac.new(
+        _confirmation_secret(secret).encode("utf-8"),
+        material.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{QUOTE_CONFIRMATION_PREFIX}{signature}"
+
+
+def build_quote_confirmation_control(
+    conversation_id: str,
+    plan: AliTurnPlan,
+    *,
+    secret: str | None = None,
+) -> dict:
+    """Build the structured control attached to one deterministic summary."""
+    if plan.outbound_kind != "summary":
+        raise AliQuoteError("quote_confirmation_requires_summary")
+    payload = quote_confirmation_payload(
+        conversation_id,
+        plan.summary_hash,
+        plan.summary_version,
+        secret=secret,
+    )
+    state_hash = hashlib.sha256(
+        f"{plan.action_id}\x1f{payload}".encode("utf-8")
+    ).hexdigest()
+    return {
+        "state_hash": state_hash,
+        "idempotency_key": f"ali-quote-confirm-{state_hash}",
+        "text": plan.text,
+        "button": {
+            "type": "postback",
+            "title": QUOTE_CONFIRMATION_BUTTON_TITLE,
+            "payload": payload,
+        },
+        "fallback_text": (
+            f"{plan.text.rstrip()}\n\n{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
+        ),
+        "summary_hash": plan.summary_hash,
+        "summary_version": plan.summary_version,
+    }
+
+
+def _normalized_interactive_type(value: object) -> str:
+    return re.sub(r"[^a-z]", "", str(value or "").strip().lower())
+
+
+def resolve_quote_confirmation_interaction(
+    interactive_type: object,
+    interactive_id: object,
+    conversation_id: str,
+    flags: dict,
+    *,
+    secret: str | None = None,
+) -> str | None:
+    """Return ``current``, ``repeated``, ``stale``, or None for a postback."""
+    payload = str(interactive_id or "").strip()
+    if not payload.startswith(QUOTE_CONFIRMATION_PREFIX):
+        return None
+    if _normalized_interactive_type(interactive_type) not in _QUOTE_CONFIRMATION_INTERACTIVE_TYPES:
+        return "stale"
+    current_hash = str(flags.get("ali_presented_summary_hash") or "")
+    current_version = int(flags.get("ali_summary_version") or 0)
+    if (
+        flags.get("awaiting_quote_confirmation") is True
+        and re.fullmatch(r"[0-9a-f]{64}", current_hash)
+        and current_version > 0
+    ):
+        try:
+            expected = quote_confirmation_payload(
+                conversation_id, current_hash, current_version, secret=secret,
+            )
+        except AliQuoteError:
+            expected = ""
+        if expected and hmac.compare_digest(payload, expected):
+            return "current"
+    previous = str(flags.get("ali_last_confirmed_summary_payload") or "")
+    if previous and hmac.compare_digest(payload, previous):
+        return "repeated"
+    return "stale"
 
 
 def _log_confirmation_decision(
@@ -543,6 +672,9 @@ def commit_ali_turn_delivery(
     recommendation_delivery: str = "",
     recommendation_vehicle_ids: list[str] | None = None,
     recommendation_provider_message_ids: list[str] | None = None,
+    confirmation_delivery: str = "",
+    confirmation_payload: str = "",
+    confirmation_provider_message_ids: list[str] | None = None,
 ) -> bool:
     """Atomically commit provider-confirmed Ali state, timeline, and inbound rows.
 
@@ -590,6 +722,17 @@ def commit_ali_turn_delivery(
         for value in (recommendation_provider_message_ids or [])
         if str(value or "").strip() and len(str(value or "").strip()) <= 240
     ))[:5]
+    confirmation_provider_ids = list(dict.fromkeys(
+        str(value or "").strip()
+        for value in (confirmation_provider_message_ids or [])
+        if str(value or "").strip() and len(str(value or "").strip()) <= 240
+    ))[:5]
+    if kind == "summary" and confirmation_delivery:
+        if (
+            confirmation_delivery not in {"interactive", "text_fallback"}
+            or not confirmation_payload.startswith(QUOTE_CONFIRMATION_PREFIX)
+        ):
+            raise AliQuoteError("invalid_quote_confirmation_delivery")
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -606,10 +749,18 @@ def commit_ali_turn_delivery(
             if str(value or "").strip()
         }
         failed_delivery_ids = failed_provider_ids.intersection(provider_message_ids)
-        if kind == "vehicle_recommendation" and failed_delivery_ids:
+        failed_confirmation_ids = failed_provider_ids.intersection(
+            confirmation_provider_ids
+        )
+        if (
+            kind == "vehicle_recommendation" and failed_delivery_ids
+        ) or (
+            kind == "summary" and failed_confirmation_ids
+        ):
+            failed_ids = failed_delivery_ids | failed_confirmation_ids
             flags["ali_failed_provider_message_ids"] = [
                 value for value in failed_provider_ids
-                if value not in failed_delivery_ids
+                if value not in failed_ids
             ]
             conn.execute(
                 "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
@@ -647,6 +798,40 @@ def commit_ali_turn_delivery(
             flags["ali_summary_hash"] = summary_hash
             flags["ali_summary_version"] = summary_version
             flags["awaiting_quote_confirmation"] = True
+            if confirmation_payload:
+                flags["ali_summary_confirmation_payload"] = confirmation_payload
+            # Every provider-confirmed summary gets an audit anchor.  The
+            # modern Zernio path also records its signed postback.  `plain_text`
+            # preserves contextual natural-confirmation compatibility for an
+            # older delivery adapter without pretending a button was shown.
+            flags["ali_summary_anchor"] = {
+                "conversation_hash": hashlib.sha256(
+                    conversation_id.encode("utf-8")
+                ).hexdigest(),
+                "draft_hash": draft_hash,
+                "summary_hash": summary_hash,
+                "summary_version": summary_version,
+                "delivered_at": now,
+                "required_fields": sorted(
+                    {*REQUIRED_RENTAL_FIELDS, "customer_name", "vehicle_selection"}
+                ),
+                "provider_message_ids": confirmation_provider_ids,
+                "interaction_payload": confirmation_payload,
+                "delivery": confirmation_delivery or "plain_text",
+            }
+        elif kind == "quote_preparing":
+            current_payload = str(
+                flags.get("ali_summary_confirmation_payload") or ""
+            )
+            if current_payload:
+                flags["ali_last_confirmed_summary_payload"] = current_payload
+                flags["ali_last_confirmed_quote_public_id"] = quote_public_id
+            flags.pop("ali_presented_summary_hash", None)
+            flags.pop("awaiting_quote_confirmation", None)
+            flags.pop("ali_summary_hash", None)
+            flags.pop("ali_summary_version", None)
+            flags.pop("ali_summary_confirmation_payload", None)
+            flags.pop("ali_summary_anchor", None)
         elif not (
             kind == "agent_reply"
             and phase == "SUMMARY_PRESENTED"
@@ -658,6 +843,8 @@ def commit_ali_turn_delivery(
         ):
             flags.pop("ali_presented_summary_hash", None)
             flags.pop("awaiting_quote_confirmation", None)
+            flags.pop("ali_summary_confirmation_payload", None)
+            flags.pop("ali_summary_anchor", None)
             if kind not in {"quote_preparing"}:
                 flags.pop("ali_summary_hash", None)
                 flags.pop("ali_summary_version", None)
@@ -731,6 +918,106 @@ def commit_ali_turn_delivery(
     return True
 
 
+def reconcile_quote_confirmation_failure(
+    conversation_id: str,
+    provider_message_id: str,
+) -> dict | None:
+    """Record a late failure for the current summary confirmation control."""
+    conn = state_registry._get_conn()
+    now = _iso(_now())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (conversation_id,),
+        ).fetchone()
+        if not row:
+            conn.commit()
+            return None
+        flags = json.loads(row[0] or "{}")
+        anchor = flags.get("ali_summary_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        provider_ids = {
+            str(value or "").strip()
+            for value in anchor.get("provider_message_ids") or []
+            if str(value or "").strip()
+        }
+        message_id = str(provider_message_id or "").strip()
+        if not message_id or message_id not in provider_ids:
+            pending = [
+                str(value or "").strip()
+                for value in flags.get("ali_failed_provider_message_ids") or []
+                if str(value or "").strip()
+            ]
+            if message_id and message_id not in pending:
+                pending.append(message_id)
+                flags["ali_failed_provider_message_ids"] = pending[-20:]
+                conn.execute(
+                    "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
+                    "WHERE phone = ?",
+                    (json.dumps(flags, ensure_ascii=False), now, conversation_id),
+                )
+            conn.commit()
+            return None
+        recovered = {
+            str(value or "").strip()
+            for value in flags.get("ali_quote_confirmation_recovered_failures") or []
+            if str(value or "").strip()
+        }
+        anchor["delivery"] = "late_failed"
+        anchor["failed_provider_message_id"] = message_id
+        flags["ali_summary_anchor"] = anchor
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
+            "WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), now, conversation_id),
+        )
+        conn.commit()
+        return {
+            "matched": True,
+            "already_recovered": message_id in recovered,
+        }
+    finally:
+        conn.close()
+
+
+def mark_quote_confirmation_failure_recovered(
+    conversation_id: str,
+    provider_message_id: str,
+) -> None:
+    conn = state_registry._get_conn()
+    now = _iso(_now())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row:
+            flags = json.loads(row[0] or "{}")
+            recovered = [
+                str(value or "").strip()
+                for value in flags.get("ali_quote_confirmation_recovered_failures") or []
+                if str(value or "").strip()
+            ]
+            message_id = str(provider_message_id or "").strip()
+            if message_id and message_id not in recovered:
+                recovered.append(message_id)
+            flags["ali_quote_confirmation_recovered_failures"] = recovered[-20:]
+            anchor = flags.get("ali_summary_anchor")
+            if isinstance(anchor, dict):
+                anchor["delivery"] = "text_fallback"
+                flags["ali_summary_anchor"] = anchor
+            conn.execute(
+                "UPDATE whatsapp_booking_state SET flags_json = ?, last_activity = ? "
+                "WHERE phone = ?",
+                (json.dumps(flags, ensure_ascii=False), now, conversation_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _set_quote_conversation_phase(quote: dict, phase: str) -> None:
     """Advance only the still-active quote pointer; never reopen an old quote."""
     if phase not in {"QUOTED", "ESCALATED"}:
@@ -790,6 +1077,8 @@ def _quote_lead_status(
     if flags.get("ali_quote_public_id"):
         if not quote or quote.get("whatsapp_status") != "accepted":
             return "ready_to_quote"
+    if not quote:
+        return "ready_to_quote"
     return "active"
 
 
@@ -897,7 +1186,10 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
                 if missing else "Collect the remaining rental details."
             ),
             "in_progress": "Official quote creation or delivery is in progress.",
-            "ready_to_quote": "Resume official quote delivery.",
+            "ready_to_quote": (
+                "Recover official quote creation."
+                if not quote else "Resume official quote delivery."
+            ),
             "active": (
                 "Waiting for customer confirmation of the rental summary."
                 if flags.get("awaiting_quote_confirmation")
@@ -1364,6 +1656,7 @@ def invalidate_active_quote_summary(flags: dict) -> None:
     for key in (
         "ali_summary_hash", "ali_summary_version",
         "ali_presented_summary_hash", "awaiting_quote_confirmation",
+        "ali_summary_confirmation_payload", "ali_summary_anchor",
     ):
         flags.pop(key, None)
     flags["ali_phase"] = "DISCOVERY"
@@ -1601,10 +1894,10 @@ def process_quote(
 
 
 SUMMARY_LABELS = {
-    "en": ("I have these details from you:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "Are these details correct?"),
-    "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Kloppen deze gegevens?"),
-    "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "E detayanan aki ta korekto?"),
-    "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Sind diese Angaben korrekt?"),
+    "en": ("I have these details from you:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "If everything is correct, tap below and I’ll prepare your official quote."),
+    "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Als alles klopt, tik hieronder en dan maak ik je officiële offerte klaar."),
+    "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Si tur kos ta korekto, primi aki bou i mi lo prepara bo oferta ofisial."),
+    "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Wenn alles stimmt, tippen Sie unten und ich bereite Ihr offizielles Angebot vor."),
 }
 
 SUPPLEMENT_LABELS = {
@@ -1626,6 +1919,27 @@ PREPARING = {
     "nl": "Bedankt, ik heb alles wat ik nodig heb. Ik maak je officiële offerte nu klaar en stuur die hier over een paar minuten.",
     "pap": "Danki, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial awor i lo manda e aki den un par di minüt.",
     "de": "Danke, ich habe alle Angaben. Ich bereite Ihr offizielles Angebot jetzt vor und sende es Ihnen hier in wenigen Minuten.",
+}
+
+QUOTE_ALREADY_PROCESSING = {
+    "en": "Your official quote is already being prepared. I’ll send it here in a few minutes.",
+    "nl": "Je officiële offerte wordt al klaargemaakt. Ik stuur die hier over een paar minuten.",
+    "pap": "Bo oferta ofisial ta den preparashon kaba. Mi lo manda e aki den un par di minüt.",
+    "de": "Ihr offizielles Angebot wird bereits vorbereitet. Ich sende es Ihnen hier in wenigen Minuten.",
+}
+
+QUOTE_ALREADY_SENT = {
+    "en": "Your official quote has already been sent above. Tell me here if you want to accept it or change anything.",
+    "nl": "Je officiële offerte is hierboven al verstuurd. Laat me hier weten als je die wilt accepteren of iets wilt wijzigen.",
+    "pap": "Bo oferta ofisial a wordu mandá ariba kaba. Bisa mi aki si bo ke asept'é òf kambia algu.",
+    "de": "Ihr offizielles Angebot wurde oben bereits gesendet. Schreiben Sie mir hier, wenn Sie es annehmen oder etwas ändern möchten.",
+}
+
+QUOTE_ACCEPTED = {
+    "en": "Thank you—I’ve recorded that you accept the official quote. Our team will continue with you here.",
+    "nl": "Bedankt—ik heb genoteerd dat je de officiële offerte accepteert. Ons team helpt je hier verder.",
+    "pap": "Danki—mi a registrá ku bo ta aseptá e oferta ofisial. Nos tim lo sigui ku bo aki.",
+    "de": "Danke—ich habe vermerkt, dass Sie das offizielle Angebot annehmen. Unser Team hilft Ihnen hier weiter.",
 }
 
 FALLBACK = {
@@ -1685,19 +1999,38 @@ def _summary_text(summary: dict) -> str:
 
 def _process_production(public_id: str) -> None:
     from agents.social.ali_quote_delivery import production_adapters
+    adapters = production_adapters()
     try:
         client = AliQuoteClient(
             os.environ.get("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com"),
             os.environ.get("ALI_QUOTE_API_TOKEN", ""),
         )
         process_quote(
-            public_id, client, production_adapters(),
+            public_id, client, adapters,
             output_root=os.environ.get("ALI_QUOTE_DATA_ROOT", "/app/data/ali-quotes"),
         )
     except AliQuoteError:
         quote = get_quote(public_id)
         if quote:
-            production_adapters().escalate(quote, "processor_unconfigured")
+            failed = update_quote(
+                public_id,
+                status="attention_required",
+                last_error_code="processor_unconfigured",
+                attempt_count=int(quote.get("attempt_count") or 0) + 1,
+            )
+            _set_quote_conversation_phase(failed, "ESCALATED")
+            adapters.escalate(failed, "processor_unconfigured")
+    except Exception:
+        quote = get_quote(public_id)
+        if quote:
+            failed = update_quote(
+                public_id,
+                status="attention_required",
+                last_error_code="unexpected_processor_failure",
+                attempt_count=int(quote.get("attempt_count") or 0) + 1,
+            )
+            _set_quote_conversation_phase(failed, "ESCALATED")
+            adapters.escalate(failed, "unexpected_processor_failure")
 
 
 def _turn_action_id(
@@ -1759,6 +2092,44 @@ def fail_closed_turn_plan(
         "turn_planner_failed_closed",
         _turn_action_id(conversation_id, message_text, supplied_action_id),
     )
+    _log_turn_plan(plan, ())
+    return plan
+
+
+def plan_repeated_quote_confirmation(
+    conversation_id: str,
+    fields: dict,
+    flags: dict,
+    supplied_action_id: str,
+) -> AliTurnPlan:
+    """Return truthful persisted status for a repeated confirmation tap."""
+    action_id = _turn_action_id(conversation_id, "SEND QUOTE", supplied_action_id)
+    locale = str(fields.get("conversation_language") or "en").lower()
+    if locale not in LOCALES:
+        locale = "en"
+    public_id = str(
+        flags.get("ali_last_confirmed_quote_public_id")
+        or flags.get("ali_active_quote_public_id")
+        or flags.get("ali_quote_public_id")
+        or ""
+    )
+    quote = get_quote(public_id) if public_id else None
+    if quote and quote.get("whatsapp_status") == "accepted":
+        plan = AliTurnPlan(
+            "agent_reply", QUOTE_ALREADY_SENT[locale], "QUOTED",
+            "confirm_summary", "quote_already_delivered", action_id,
+            quote_public_id=public_id,
+        )
+    elif quote:
+        plan = AliTurnPlan(
+            "quote_preparing", QUOTE_ALREADY_PROCESSING[locale],
+            "QUOTE_PROCESSING", "confirm_summary", "quote_already_processing",
+            action_id, quote_public_id=public_id,
+        )
+    else:
+        return fail_closed_turn_plan(
+            conversation_id, "SEND QUOTE", locale, supplied_action_id,
+        )
     _log_turn_plan(plan, ())
     return plan
 
@@ -1912,6 +2283,43 @@ def plan_ali_quote_turn(
             flags.pop("ali_quote_public_id", None)
             active_quote_id = ""
 
+    if (
+        intent == "confirm_summary"
+        and confirmation_decision(message_text)[0]
+        and change_outcome == "not_applicable"
+        and active_quote_id
+        and phase in {"QUOTE_PROCESSING", "QUOTED"}
+    ):
+        persisted_quote = get_quote(active_quote_id)
+        locale = rental["conversation_language"]
+        if (
+            phase == "QUOTED"
+            and persisted_quote
+            and persisted_quote.get("whatsapp_status") == "accepted"
+        ):
+            if flags.get("ali_quote_acceptance_notified_public_id") != active_quote_id:
+                notification_id = state_registry.create_pending_notification(
+                    "escalation", "whatsapp", conversation_id, customer["name"],
+                    "[ALI QUOTE ACCEPTED]",
+                    "The customer accepted the delivered official quote. Continue the rental follow-up in Unboks.",
+                    mode="soft",
+                )
+                flags["ali_quote_acceptance_notified_public_id"] = active_quote_id
+                flags["ali_quote_acceptance_notification_id"] = notification_id
+            plan = AliTurnPlan(
+                "agent_reply", QUOTE_ACCEPTED[locale], "QUOTED", intent,
+                "delivered_quote_accepted", action_id, state_hash,
+                quote_public_id=active_quote_id,
+            )
+        else:
+            plan = AliTurnPlan(
+                "quote_preparing", QUOTE_ALREADY_PROCESSING[locale],
+                "QUOTE_PROCESSING", intent, "quote_already_processing",
+                action_id, state_hash, quote_public_id=active_quote_id,
+            )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
     if requires_human:
         plan = AliTurnPlan(
             "escalation", model_reply, "ESCALATED", intent,
@@ -1973,18 +2381,24 @@ def plan_ali_quote_turn(
             or flags.get("ali_summary_hash")
             or ""
         )
-        legacy_presented = (
-            not flags.get("ali_phase")
-            and bool(flags.get("awaiting_quote_confirmation"))
-            and hmac.compare_digest(presented_hash, summary_hash)
-        )
+        anchor = flags.get("ali_summary_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
         delivery_anchored = bool(
-            re.fullmatch(
-                r"[0-9a-f]{64}",
-                str(flags.get("ali_presented_summary_hash") or ""),
+            flags.get("awaiting_quote_confirmation") is True
+            and hmac.compare_digest(
+                str(anchor.get("summary_hash") or ""), summary_hash,
             )
-            and flags.get("awaiting_quote_confirmation") is True
-        ) or legacy_presented
+            and int(anchor.get("summary_version") or 0) == summary_version
+            and anchor.get("delivery") in {
+                "interactive", "text_fallback", "plain_text",
+            }
+            and (
+                anchor.get("delivery") == "plain_text"
+                or str(anchor.get("interaction_payload") or "").startswith(
+                    QUOTE_CONFIRMATION_PREFIX
+                )
+            )
+        )
         eligible = (
             accepted
             and phase == "SUMMARY_PRESENTED"
@@ -2040,7 +2454,7 @@ def plan_ali_quote_turn(
             )
             _log_turn_plan(plan, changed_fields)
             return plan
-        if accepted and phase not in {
+        if phase not in {
             "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
         }:
             plan = AliTurnPlan(
