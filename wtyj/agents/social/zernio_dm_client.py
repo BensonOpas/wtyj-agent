@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import requests as http_requests
 
 from late import Late
-from shared import bm_logger
+from shared import bm_logger, state_registry
 
 
 _VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
@@ -1204,6 +1204,25 @@ def send_dm_vehicle_recommendation(
             option_count=len(options),
             recommendation_hash=state_hash[:12],
         )
+        primary_ids = (
+            individual_provider_ids
+            if primary_part == "individual_images"
+            else [primary_provider_id]
+        )
+        try:
+            state_registry.wa_stage_vehicle_recommendation_delivery(
+                conversation_id,
+                recommendation,
+                primary_part,
+                {primary_part: primary_ids},
+                account_id,
+            )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_vehicle_recommendation_stage_failed",
+                error=type(exc).__name__,
+                recommendation_hash=state_hash[:12],
+            )
         if kind in {"image", "picker"}:
             return _delivery_result(
                 True,
@@ -1300,6 +1319,25 @@ def send_dm_vehicle_recommendation(
             if primary_part == "individual_images"
             else [primary_provider_id]
         )
+        try:
+            state_registry.wa_stage_vehicle_recommendation_delivery(
+                conversation_id,
+                recommendation,
+                "individual_picker"
+                if primary_part == "individual_images"
+                else "carousel_picker",
+                {
+                    primary_part: primary_ids,
+                    "picker": [picker_provider_id],
+                },
+                account_id,
+            )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_vehicle_recommendation_stage_failed",
+                error=type(exc).__name__,
+                recommendation_hash=state_hash[:12],
+            )
         return _delivery_result(
             True,
             "individual_picker" if primary_part == "individual_images" else "carousel_picker",

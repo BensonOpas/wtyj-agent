@@ -894,8 +894,11 @@ def commit_ali_turn_delivery(
                 if isinstance(item, dict)
                 and re.fullmatch(r"[0-9a-f]{64}", str(item.get("hash") or ""))
             ]
-            if not any(item["hash"] == recommendation_state_hash for item in normalized):
-                normalized.append({
+            current_delivery = next((
+                item for item in reversed(normalized)
+                if item["hash"] == recommendation_state_hash
+            ), None)
+            delivery_record = {
                     "hash": recommendation_state_hash,
                     "delivery": recommendation_delivery,
                     "action_id": action_id,
@@ -905,7 +908,14 @@ def commit_ali_turn_delivery(
                     "snapshot": snapshot,
                     "account_id": recommendation_account_id,
                     "recovery_attempts": 0,
-                })
+                }
+            if current_delivery is None:
+                normalized.append(delivery_record)
+            else:
+                staged_attempts = int(current_delivery.get("recovery_attempts") or 0)
+                current_delivery.update(delivery_record)
+                current_delivery["recovery_attempts"] = staged_attempts
+                current_delivery.pop("staged", None)
             flags["ali_vehicle_recommendation_deliveries"] = normalized[-20:]
             if recommendation_ids:
                 flags["ali_last_recommendation_ids"] = recommendation_ids

@@ -1889,6 +1889,7 @@ def wa_mark_vehicle_recommendation_delivered(
     if delivery not in {
         "image", "carousel", "fallback", "carousel_picker",
         "carousel_picker_fallback", "picker", "picker_fallback",
+        "individual_picker", "individual_picker_fallback",
     }:
         return False
     normalized_vehicle_ids = []
@@ -2127,6 +2128,104 @@ def wa_claim_vehicle_recommendation_failure(
             "account_id": str(matched.get("account_id") or ""),
             "picker_present": bool(parts.get("picker") or parts.get("picker_fallback")),
         }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def wa_stage_vehicle_recommendation_delivery(
+    phone: str,
+    recommendation: dict,
+    delivery: str,
+    provider_parts: dict[str, list[str]],
+    account_id: str,
+) -> bool:
+    """Persist provider part IDs before a late failure webhook can race commit."""
+    state_hash = str((recommendation or {}).get("state_hash") or "")
+    if not phone or not re.fullmatch(r"[0-9a-f]{64}", state_hash):
+        return False
+    vehicle_ids = []
+    for option in (recommendation or {}).get("options") or []:
+        if not isinstance(option, dict):
+            continue
+        value = str(option.get("id") or "").strip()
+        if (
+            value
+            and len(value) <= 160
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", value)
+            and value not in vehicle_ids
+        ):
+            vehicle_ids.append(value)
+    normalized_parts = {}
+    for part, values in (provider_parts or {}).items():
+        if part not in {
+            "image", "carousel", "picker", "picker_fallback", "individual_images",
+        }:
+            continue
+        ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in values or []
+            if str(value or "").strip() and len(str(value or "").strip()) <= 240
+        ))[:10]
+        if ids:
+            normalized_parts[part] = ids
+    if not normalized_parts:
+        return False
+    snapshot = {
+        "kind": str((recommendation or {}).get("kind") or "")[:20],
+        "mode": str((recommendation or {}).get("mode") or "")[:20],
+        "locale": str((recommendation or {}).get("locale") or "en")[:5],
+        "state_hash": state_hash,
+        "text": str((recommendation or {}).get("text") or "")[:1500],
+        "vehicle_ids": vehicle_ids[:5],
+    }
+    if snapshot["kind"] not in {"image", "carousel"} or not snapshot["text"]:
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?", (phone,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        flags = json.loads(row[0] or "{}")
+        deliveries = [
+            item for item in flags.get("ali_vehicle_recommendation_deliveries") or []
+            if isinstance(item, dict)
+        ]
+        record = next((
+            item for item in reversed(deliveries) if item.get("hash") == state_hash
+        ), None)
+        if record is None:
+            record = {"hash": state_hash}
+            deliveries.append(record)
+        parts = record.get("provider_parts")
+        parts = dict(parts) if isinstance(parts, dict) else {}
+        parts.update(normalized_parts)
+        flat_ids = list(dict.fromkeys(
+            value for values in parts.values() for value in values
+        ))[:20]
+        record.update({
+            "delivery": delivery,
+            "vehicle_ids": vehicle_ids[:5],
+            "provider_message_ids": flat_ids,
+            "provider_parts": parts,
+            "snapshot": snapshot,
+            "account_id": str(account_id or "").strip()[:240],
+            "recovery_attempts": int(record.get("recovery_attempts") or 0),
+            "staged": True,
+        })
+        flags["ali_vehicle_recommendation_deliveries"] = deliveries[-20:]
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+            (json.dumps(flags, ensure_ascii=False), phone),
+        )
+        conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise

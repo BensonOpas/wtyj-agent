@@ -1108,6 +1108,12 @@ def test_carousel_provider_parts_track_images_and_picker_separately(monkeypatch)
     ])
     monkeypatch.setattr(zernio_dm_client.http_requests, "get", lambda *a, **k: next(gets))
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", lambda *a, **k: next(posts))
+    staged = []
+    monkeypatch.setattr(
+        zernio_dm_client.state_registry,
+        "wa_stage_vehicle_recommendation_delivery",
+        lambda *args: staged.append(args) or True,
+    )
 
     result = zernio_dm_client.send_dm_vehicle_recommendation(
         "conversation-1", "account-1", _carousel_plan(),
@@ -1121,6 +1127,11 @@ def test_carousel_provider_parts_track_images_and_picker_separately(monkeypatch)
     assert result["provider_message_ids"] == [
         "provider-carousel-1", "provider-picker-1",
     ]
+    assert staged[0][3] == {"carousel": ["provider-carousel-1"]}
+    assert staged[1][3] == {
+        "carousel": ["provider-carousel-1"],
+        "picker": ["provider-picker-1"],
+    }
 
 
 @pytest.mark.parametrize(
