@@ -35,6 +35,44 @@ VALID_UNTIL = {
     "de": "Gültig bis",
 }
 
+SUPPLEMENT_LABELS = {
+    "en": ("Supplements", "per rental day", "per rental", "days"),
+    "nl": ("Extra's", "per huurdag", "per huur", "dagen"),
+    "pap": ("Ekstranan", "pa dia di huur", "pa huur", "dia"),
+    "de": ("Extras", "pro Miettag", "pro Miete", "Tage"),
+}
+
+
+def _supplement_summary(pricing: dict, rental: dict, locale: str) -> str:
+    heading, per_day, per_rental, days_label = SUPPLEMENT_LABELS[locale]
+    lines = []
+    supplement_names = [
+        str(item.get("name") or "")
+        for item in rental.get("supplements") or []
+        if isinstance(item, dict)
+    ]
+    supplement_index = 0
+    for item in pricing.get("items") or []:
+        if item.get("category") != "extra":
+            continue
+        name = (
+            supplement_names[supplement_index]
+            if supplement_index < len(supplement_names)
+            else item.get("description", "Supplement")
+        )
+        supplement_index += 1
+        basis = item.get("billingBasis")
+        basis_label = per_day if basis == "per_day" else per_rental
+        detail = (
+            f"{name}: {item.get('quantity')} × "
+            f"USD {(item.get('unitPrice') or {}).get('amount')} {basis_label}"
+        )
+        if basis == "per_day":
+            detail += f" × {item.get('rentalDays')} {days_label}"
+        detail += f" = USD {(item.get('total') or {}).get('amount')}"
+        lines.append(detail)
+    return f"{heading}:\n" + "\n".join(lines) + "\n" if lines else ""
+
 
 def _valid_email(value: str) -> str:
     value = str(value or "").strip()
@@ -99,11 +137,14 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         return False
     pricing = json.loads(quote["pricing_json"])
     customer = json.loads(quote["customer_json"])
+    rental = json.loads(quote.get("rental_json") or "{}")
     locale = quote.get("locale") if quote.get("locale") in MESSAGES else "en"
     ready, reply, availability = MESSAGES[locale]
+    supplement_summary = _supplement_summary(pricing, rental, locale)
     text = (
         f"{ready}\n\nQuote: {quote['quote_reference']}\n"
         f"Rental total: USD {pricing['rentalTotal']['amount']}\n"
+        f"{supplement_summary}"
         f"Refundable security deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
         f"{VALID_UNTIL[locale]}: {format_curacao_datetime(pricing['expiresAt'], locale)}\n\n"
         f"{reply}\n{availability}"

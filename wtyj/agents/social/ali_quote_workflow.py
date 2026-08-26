@@ -176,7 +176,21 @@ def validate_rental_fields(rental: dict) -> dict:
     normalized = dict(rental)
     normalized["driver_age"] = age
     normalized["conversation_language"] = locale
-    normalized["extra_ids"] = sorted(set(normalized.get("extra_ids") or []))
+    supplements = []
+    for item in normalized.get("supplements") or []:
+        if not isinstance(item, dict) or not re.fullmatch(
+            r"[0-9a-fA-F-]{36}", str(item.get("id") or "")
+        ):
+            raise AliQuoteError("invalid_supplement_selection")
+        quantity = item.get("quantity")
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 20:
+            raise AliQuoteError("invalid_supplement_quantity")
+        supplements.append({**item, "id": str(item["id"]), "quantity": quantity})
+    legacy_ids = sorted(set(normalized.get("extra_ids") or []))
+    if supplements and legacy_ids:
+        raise AliQuoteError("duplicate_supplement_state")
+    normalized["supplements"] = sorted(supplements, key=lambda item: item["id"])
+    normalized["extra_ids"] = legacy_ids
     return normalized
 
 
@@ -240,7 +254,10 @@ def build_ali_request(rental: dict, required_deposit_id: str) -> dict:
         "rentalStart": rental["rental_start"],
         "rentalEnd": rental["rental_end"],
         "selection": selection,
-        "extraSelections": rental.get("extra_ids") or [],
+        "extraSelections": [
+            {"id": item["id"], "quantity": item["quantity"]}
+            for item in rental.get("supplements") or []
+        ] or rental.get("extra_ids") or [],
         "chargeSelections": [required_deposit_id],
     }
     if set(request) != ALI_REQUEST_KEYS:
@@ -518,6 +535,16 @@ def catalog_prompt_context(catalog: dict) -> dict:
         "currency": "USD",
         "categories": categories,
         "vehicles": vehicles,
+        "supplements": [{
+            "name": str(item.get("name") or ""),
+            "names": {
+                locale: str(name)
+                for locale, name in (item.get("names") or {}).items()
+                if locale in LOCALES and str(name).strip()
+            },
+            "price_usd": str((item.get("price") or {}).get("amount") or "") or None,
+            "billing_basis": str(item.get("billingBasis") or ""),
+        } for item in catalog.get("extras") or [] if isinstance(item, dict)],
     }
 
 
@@ -566,6 +593,71 @@ def resolve_catalog_selection(fields: dict, catalog: dict) -> dict:
     elif vehicle_class:
         resolved["vehicle_class_id"] = str(vehicle_class["id"])
         resolved["vehicle_class_name"] = str(vehicle_class["name"])
+    return resolved
+
+
+def _money_cents(amount: object) -> int:
+    text = str(amount or "")
+    if not re.fullmatch(r"(?:0|[1-9]\d*)\.\d{2}", text):
+        raise AliQuoteError("invalid_supplement_price")
+    whole, fraction = text.split(".")
+    cents = int(whole) * 100 + int(fraction)
+    if cents < 0:
+        raise AliQuoteError("invalid_supplement_price")
+    return cents
+
+
+def _money_text(cents: int) -> str:
+    if not isinstance(cents, int) or cents < 0:
+        raise AliQuoteError("invalid_supplement_price")
+    return f"{cents // 100}.{cents % 100:02d}"
+
+
+def resolve_catalog_supplements(fields: dict, catalog: dict) -> dict:
+    """Resolve model-visible supplement names to current Ali-owned IDs and prices."""
+    resolved = dict(fields or {})
+    extras = [item for item in catalog.get("extras") or [] if isinstance(item, dict)]
+    extra_by_id = {str(item.get("id")): item for item in extras if item.get("id")}
+
+    def labels(item: dict) -> set[str]:
+        values = [item.get("name"), *(item.get("names") or {}).values()]
+        return {_normalize_catalog_label(value) for value in values if str(value or "").strip()}
+
+    canonical = []
+    seen = set()
+    for requested in resolved.get("supplements") or []:
+        if not isinstance(requested, dict):
+            raise AliQuoteError("invalid_supplement_selection")
+        quantity = requested.get("quantity")
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or not 1 <= quantity <= 20:
+            raise AliQuoteError("invalid_supplement_quantity")
+        item = extra_by_id.get(str(requested.get("id") or ""))
+        if item is None:
+            target = _normalize_catalog_label(requested.get("name"))
+            matches = [extra for extra in extras if target and target in labels(extra)]
+            item = matches[0] if len(matches) == 1 else None
+        if item is None:
+            raise AliQuoteError("supplement_not_in_catalog")
+        public_id = str(item.get("id") or "")
+        if public_id in seen:
+            raise AliQuoteError("duplicate_supplement_selection")
+        basis = str(item.get("billingBasis") or "")
+        if basis not in {"per_day", "per_rental"}:
+            raise AliQuoteError("invalid_supplement_basis")
+        amount = str((item.get("price") or {}).get("amount") or "")
+        _money_cents(amount)
+        locale = str(resolved.get("conversation_language") or "en").lower()
+        localized_name = str((item.get("names") or {}).get(locale) or item.get("name") or "")
+        canonical.append({
+            "id": public_id,
+            "name": localized_name,
+            "quantity": quantity,
+            "billing_basis": basis,
+            "unit_price_usd": amount,
+        })
+        seen.add(public_id)
+    resolved["supplements"] = sorted(canonical, key=lambda item: item["id"])
+    resolved.pop("extra_ids", None)
     return resolved
 
 
@@ -665,6 +757,13 @@ SUMMARY_LABELS = {
     "de": ("Ich prüfe kurz, ob ich alles richtig verstanden habe:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Passt das so?"),
 }
 
+SUPPLEMENT_LABELS = {
+    "en": {"heading": "Supplements", "per_day": "per rental day", "per_rental": "per rental", "days": "days"},
+    "nl": {"heading": "Extra's", "per_day": "per huurdag", "per_rental": "per huur", "days": "dagen"},
+    "pap": {"heading": "Ekstranan", "per_day": "pa dia di huur", "per_rental": "pa huur", "days": "dia"},
+    "de": {"heading": "Extras", "per_day": "pro Miettag", "per_rental": "pro Miete", "days": "Tage"},
+}
+
 PREPARING = {
     "en": "Great, I have everything I need. I’ll prepare your official quote and send it here on WhatsApp within 30 minutes.",
     "nl": "Prima, ik heb alles wat ik nodig heb. Ik maak je officiële offerte en stuur die binnen 30 minuten hier via WhatsApp.",
@@ -689,12 +788,32 @@ def _summary_text(summary: dict) -> str:
         rental["rental_start"], rental["rental_end"],
         rental["conversation_language"],
     )
+    supplement_lines = []
+    supplement_labels = SUPPLEMENT_LABELS[rental["conversation_language"]]
+    rental_days = max(1, (
+        datetime.strptime(rental["rental_end"], "%Y-%m-%d").date()
+        - datetime.strptime(rental["rental_start"], "%Y-%m-%d").date()
+    ).days)
+    for item in rental.get("supplements") or []:
+        unit_cents = _money_cents(item.get("unit_price_usd"))
+        quantity = int(item["quantity"])
+        basis = item["billing_basis"]
+        multiplier = quantity * rental_days if basis == "per_day" else quantity
+        calculation = f"{quantity} × USD {_money_text(unit_cents)} {supplement_labels[basis]}"
+        if basis == "per_day":
+            calculation += f" × {rental_days} {supplement_labels['days']}"
+        supplement_lines.append(
+            f"{item['name']}: {calculation} = USD {_money_text(unit_cents * multiplier)}"
+        )
+    supplement_text = ""
+    if supplement_lines:
+        supplement_text = f"\n{supplement_labels['heading']}:\n" + "\n".join(supplement_lines)
     return (
         f"{labels[0]}\n\n{labels[1]}: {customer.get('name', '')}\n"
         f"{labels[2]}: {customer.get('whatsapp', '')}\n"
         f"{labels[3]}: {period}\n"
         f"{labels[4]}: {rental['pickup_location']}\n{labels[5]}: {rental['return_location']}\n"
-        f"{labels[6]}: {vehicle}\n\n{labels[7]}"
+        f"{labels[6]}: {vehicle}{supplement_text}\n\n{labels[7]}"
     )
 
 
@@ -735,7 +854,9 @@ def handle_ali_quote_turn(
     if not tenant_enabled(raw):
         return None
     try:
-        resolved_fields = resolve_catalog_selection(fields, get_intake_catalog())
+        catalog = get_intake_catalog()
+        resolved_fields = resolve_catalog_selection(fields, catalog)
+        resolved_fields = resolve_catalog_supplements(resolved_fields, catalog)
     except AliQuoteError:
         return None
     for key in ("vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name"):
@@ -743,10 +864,12 @@ def handle_ali_quote_turn(
             fields[key] = resolved_fields[key]
         else:
             fields.pop(key, None)
+    fields["supplements"] = resolved_fields.get("supplements") or []
+    fields.pop("extra_ids", None)
     rental = {key: fields.get(key) for key in (
         "rental_start", "rental_end", "pickup_location", "return_location",
         "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
-        "driver_age", "passenger_count", "luggage_count", "extra_ids", "comments",
+        "driver_age", "passenger_count", "luggage_count", "supplements", "comments",
         "conversation_language",
     )}
     customer = {
