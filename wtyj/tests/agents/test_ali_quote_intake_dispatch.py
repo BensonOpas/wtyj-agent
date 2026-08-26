@@ -762,7 +762,7 @@ def test_real_change_invalidates_only_active_summary_pointer():
     }
 
 
-def test_delivered_non_summary_suspends_bare_yes_until_summary_repeat(monkeypatch, tmp_path):
+def test_delivered_question_preserves_summary_for_following_confirmation(monkeypatch, tmp_path):
     monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
     monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
     phone = "synthetic-delivery-anchor"
@@ -805,14 +805,55 @@ def test_delivered_non_summary_suspends_bare_yes_until_summary_repeat(monkeypatc
     )
 
     state = workflow.state_registry.wa_get_booking_state(phone)
+    assert state["flags"]["ali_phase"] == "SUMMARY_PRESENTED"
+    assert state["flags"]["ali_presented_summary_hash"] == initial.summary_hash
+    assert state["flags"]["awaiting_quote_confirmation"] is True
     bare_yes = workflow.plan_ali_quote_turn(
         phone, "synthetic-account", "+351000000000", "yes",
-        state["fields"], state["flags"], "Which detail are you confirming?",
+        state["fields"], state["flags"], "Your quote is on its way.",
         raw_config=raw_config(), primary_intent="confirm_summary",
+        processor=lambda _public_id: None,
         supplied_action_id="3" * 64,
     )
-    assert bare_yes.outbound_kind == "agent_reply"
-    assert bare_yes.reason_code == "confirmation_not_eligible"
+    assert bare_yes.outbound_kind == "quote_preparing"
+    assert bare_yes.reason_code == "current_summary_confirmed"
+    workflow.ensure_schema()
+    connection = workflow._connection()
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM ali_quotes").fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_ineligible_affirmative_returns_fresh_summary_without_quote_promise(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    fields = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {"ali_phase": "DISCOVERY"}
+
+    plan = workflow.plan_ali_quote_turn(
+        "synthetic-ineligible-confirmation", "synthetic-account",
+        "+351000000000", "yes it looks right", fields, flags,
+        "Perfect, your quote is on its way.", raw_config=raw_config(),
+        primary_intent="confirm_summary", supplied_action_id="4" * 64,
+    )
+
+    assert plan.outbound_kind == "summary"
+    assert plan.reason_code == "confirmation_requires_current_summary"
+    assert "Just checking I’ve got everything right:" in plan.text
+    assert "quote is on its way" not in plan.text.lower()
     workflow.ensure_schema()
     connection = workflow._connection()
     try:
@@ -820,21 +861,58 @@ def test_delivered_non_summary_suspends_bare_yes_until_summary_repeat(monkeypatc
     finally:
         connection.close()
 
-    repeated = workflow.plan_ali_quote_turn(
-        phone, "synthetic-account", "+351000000000", "show the summary again",
-        state["fields"], state["flags"], "Here it is.",
-        raw_config=raw_config(), primary_intent="repeat_summary",
-        summary_action={"mode": "repeat"}, supplied_action_id="4" * 64,
+
+def test_question_with_validated_change_replaces_old_summary_before_confirmation(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(workflow.state_registry, "DB_PATH", str(tmp_path / "tenant.db"))
+    monkeypatch.setattr(workflow, "get_intake_catalog", catalog)
+    phone = "synthetic-question-with-change"
+    original = {
+        "customer_name": "Synthetic Customer",
+        "rental_start": "2026-09-01",
+        "rental_end": "2026-09-04",
+        "pickup_location": "Synthetic airport",
+        "return_location": "Synthetic hotel",
+        "vehicle_class_name": "Economy",
+        "driver_age": 30,
+        "conversation_language": "en",
+    }
+    flags = {}
+    workflow.state_registry.wa_save_booking_state(phone, original, flags)
+    initial = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "complete details",
+        original, flags, "Thanks.", raw_config=raw_config(),
+        primary_intent="continue_intake", supplied_action_id="5" * 64,
     )
-    workflow.state_registry.wa_save_booking_state(
-        phone, state["fields"], state["flags"],
-    )
+    workflow.state_registry.wa_save_booking_state(phone, original, flags)
     workflow.commit_ali_turn_delivery(
-        phone, repeated.delivery_commit(), repeated.text, ["anchor-repeat"],
+        phone, initial.delivery_commit(), initial.text, ["question-change-summary"],
     )
-    final_state = workflow.state_registry.wa_get_booking_state(phone)
-    assert final_state["flags"]["ali_phase"] == "SUMMARY_PRESENTED"
-    assert final_state["flags"]["ali_last_delivered_kind"] == "summary"
+    state = workflow.state_registry.wa_get_booking_state(phone)
+    changed = dict(state["fields"])
+    changed["return_location"] = "Corrected synthetic return"
+
+    corrected = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000",
+        "Can I return it somewhere else instead?", changed, state["flags"],
+        "Yes, I can update that.", raw_config=raw_config(),
+        primary_intent="ask_question", change_outcome="changed",
+        changed_fields=("return_location",), supplied_action_id="6" * 64,
+    )
+
+    assert corrected.outbound_kind == "summary"
+    assert corrected.phase == "SUMMARY_PRESENTED"
+    assert corrected.reason_code == "initial_or_corrected_complete_draft"
+    assert corrected.summary_hash != initial.summary_hash
+    assert "Corrected synthetic return" in corrected.text
+    workflow.ensure_schema()
+    connection = workflow._connection()
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM ali_quotes").fetchone()[0] == 0
+    finally:
+        connection.close()
 
 
 def test_summary_presented_transition_matrix_has_one_primary_action(monkeypatch, tmp_path):
@@ -1019,9 +1097,13 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
             elif intent == "repeat_summary" and phase not in terminal_phases:
                 expected_kind = "summary"
                 expected_phase = "SUMMARY_PRESENTED"
-            elif intent == "confirm_summary" and phase == "SUMMARY_PRESENTED":
+            elif intent == "confirm_summary" and phase not in terminal_phases:
                 expected_kind = "quote_preparing"
-                expected_phase = "QUOTE_PROCESSING"
+                if phase == "SUMMARY_PRESENTED":
+                    expected_phase = "QUOTE_PROCESSING"
+                else:
+                    expected_kind = "summary"
+                    expected_phase = "SUMMARY_PRESENTED"
             else:
                 expected_kind = "agent_reply"
                 if phase in terminal_phases and intent in {
@@ -1029,6 +1111,8 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
                     "confirm_summary", "other",
                 }:
                     expected_phase = phase
+                elif phase == "SUMMARY_PRESENTED" and intent == "ask_question":
+                    expected_phase = "SUMMARY_PRESENTED"
                 else:
                     expected_phase = "DISCOVERY"
 

@@ -76,7 +76,8 @@ AFFIRMATIVE = {
     # English
     "yes", "yes it does", "yes it looks right", "yes it does look right",
     "that is right", "that s right", "that is correct", "that s correct",
-    "everything looks right", "all good", "correct", "looks good", "go ahead",
+    "everything looks right", "yes it looks good", "yes looks good",
+    "all good", "correct", "looks good", "go ahead",
     # Dutch
     "ja", "ja dat klopt", "dat klopt", "klopt", "dat is juist", "dat is correct",
     "alles klopt", "alles ziet er goed uit", "ziet er goed uit", "helemaal goed",
@@ -616,7 +617,15 @@ def commit_ali_turn_delivery(
             flags["ali_summary_hash"] = summary_hash
             flags["ali_summary_version"] = summary_version
             flags["awaiting_quote_confirmation"] = True
-        else:
+        elif not (
+            kind == "agent_reply"
+            and phase == "SUMMARY_PRESENTED"
+            and re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(flags.get("ali_presented_summary_hash") or ""),
+            )
+            and flags.get("awaiting_quote_confirmation") is True
+        ):
             flags.pop("ali_presented_summary_hash", None)
             flags.pop("awaiting_quote_confirmation", None)
             if kind not in {"quote_preparing"}:
@@ -1893,13 +1902,17 @@ def plan_ali_quote_turn(
         _log_turn_plan(plan, changed_fields)
         return plan
 
-    if change_outcome == "clarify" or intent in {
-        "ask_question", "reject_or_hesitate",
-    }:
+    if (
+        change_outcome == "clarify"
+        or (
+            intent in {"ask_question", "reject_or_hesitate"}
+            and change_outcome != "changed"
+        )
+    ):
         reason = "change_needs_clarification" if change_outcome == "clarify" else intent
         target_phase = (
             phase if intent == "ask_question" and phase in {
-                "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
+                "SUMMARY_PRESENTED", "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
             }
             else "DISCOVERY"
         )
@@ -1934,17 +1947,23 @@ def plan_ali_quote_turn(
             or flags.get("ali_summary_hash")
             or ""
         )
-        last_kind = str(flags.get("ali_last_delivered_kind") or "")
         legacy_presented = (
             not flags.get("ali_phase")
             and bool(flags.get("awaiting_quote_confirmation"))
             and hmac.compare_digest(presented_hash, summary_hash)
         )
+        delivery_anchored = bool(
+            re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(flags.get("ali_presented_summary_hash") or ""),
+            )
+            and flags.get("awaiting_quote_confirmation") is True
+        ) or legacy_presented
         eligible = (
             accepted
             and phase == "SUMMARY_PRESENTED"
             and hmac.compare_digest(presented_hash, summary_hash)
-            and (last_kind == "summary" or legacy_presented)
+            and delivery_anchored
             and change_outcome == "not_applicable"
             and not recommendation_requested
         )
@@ -1992,6 +2011,16 @@ def plan_ali_quote_turn(
                 "QUOTE_PROCESSING", intent, "current_summary_confirmed",
                 action_id, state_hash, summary_hash, summary_version,
                 quote["public_id"],
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        if accepted and phase not in {
+            "QUOTE_PROCESSING", "QUOTED", "ESCALATED",
+        }:
+            plan = AliTurnPlan(
+                "summary", _summary_text(summary), "SUMMARY_PRESENTED", intent,
+                "confirmation_requires_current_summary", action_id, state_hash,
+                summary_hash, summary_version,
             )
             _log_turn_plan(plan, changed_fields)
             return plan

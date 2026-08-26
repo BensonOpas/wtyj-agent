@@ -409,6 +409,12 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
         "requires_human": False,
         "flags": {},
         "ali_primary_intent": "confirm_summary",
+        "ali_vehicle_recommendation": {
+            "mode": "specific",
+            "vehicle_names": ["Kia Seltos or similar"],
+            "availability_note": "Synthetic note",
+            "cta_label": "Car details",
+        },
     }
     monkeypatch.setattr(
         social_agent.marina_agent,
@@ -756,8 +762,13 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
     }
     _, summary_hash = workflow.normalized_summary(customer, rental)
     flags = {
+        "ali_phase": "SUMMARY_PRESENTED",
+        "ali_presented_summary_hash": summary_hash,
         "ali_summary_hash": summary_hash,
         "ali_summary_version": 1,
+        "ali_draft_hash": workflow.normalized_summary(
+            customer, rental, version=0,
+        )[1],
         "awaiting_quote_confirmation": True,
     }
     price_result = {
@@ -787,8 +798,9 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
 
     assert answer["text"] == price_result["reply"]
     assert "Just checking" not in answer["text"]
-    assert "ali_presented_summary_hash" not in after_answer["flags"]
-    assert "awaiting_quote_confirmation" not in after_answer["flags"]
+    assert after_answer["flags"]["ali_phase"] == "SUMMARY_PRESENTED"
+    assert after_answer["flags"]["ali_presented_summary_hash"] == summary_hash
+    assert after_answer["flags"]["awaiting_quote_confirmation"] is True
     assert after_answer["flags"]["ali_last_delivered_kind"] == "agent_reply"
 
     repeat_result = {
@@ -816,6 +828,64 @@ def test_awaiting_summary_keeps_price_answer_and_repeats_only_on_action(
 
     assert repeated.count("Just checking I’ve got everything right:") == 1
     assert "Car: Kia Picanto 2024 or similar" in repeated
+
+
+def test_pure_affirmative_ignores_model_quote_field_drift_and_creates_one_quote(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-issue-212-field-freeze"
+    fields = _stored_fields()
+    result = {
+        "intents": ["inquiry"],
+        "fields": {
+            **fields,
+            "return_location": "Incorrect model-only return",
+            "driver_age": 99,
+        },
+        "confidence": "high",
+        "reply": "Perfect, your quote is on its way.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "confirm_summary",
+    }
+    _configure(monkeypatch, tmp_path, result)
+    monkeypatch.setattr(workflow, "_process_production", lambda _public_id: None)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    initial = workflow.plan_ali_quote_turn(
+        phone, "synthetic-account", "+351000000000", "complete details",
+        fields, {}, "Thanks.", raw_config=raw_config(),
+        primary_intent="continue_intake", supplied_action_id="a" * 64,
+    )
+    state_registry.wa_save_booking_state(phone, fields, {})
+    workflow.commit_ali_turn_delivery(
+        phone, initial.delivery_commit(), initial.text, ["issue-212-summary"],
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Yes, it looks good",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-212-confirmation",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["ali_turn_commit"]["outbound_kind"] == "quote_preparing"
+    assert saved["fields"]["return_location"] == "Synthetic hotel"
+    assert saved["fields"]["driver_age"] == 30
+    workflow.ensure_schema()
+    connection = workflow._connection()
+    try:
+        rows = connection.execute(
+            "SELECT summary_hash FROM ali_quotes WHERE conversation_id = ?",
+            (phone,),
+        ).fetchall()
+    finally:
+        connection.close()
+    assert [row[0] for row in rows] == [initial.summary_hash]
 
 
 def test_unexpected_turn_planner_failure_suspends_old_confirmation_after_send(
