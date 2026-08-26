@@ -1406,6 +1406,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_change_fields = ()
     _ali_change_action = result.get("ali_rental_change")
     _ali_change_configured = ali_quote_tenant_configured()
+    _ali_explicit_class_this_turn = None
     if tenant_hard_rules.is_consulta_despertares():
         # A concise answer such as "15:30" may be unambiguous only because
         # the prior Alia turn asked when the team may call. Preserve it even
@@ -1524,7 +1525,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if (
         _ali_change_configured
         and not _ali_selected_this_turn
-        and _ali_change_outcome != "changed"
+        and not (
+            isinstance(_ali_change_action, dict)
+            and _ali_change_outcome == "changed"
+            and "vehicle_selection" in _ali_change_fields
+        )
     ):
         try:
             _explicit_class = infer_explicit_catalog_class_selection(
@@ -1534,6 +1539,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         except Exception:
             _explicit_class = None
         if _explicit_class:
+            _ali_explicit_class_this_turn = _explicit_class
             _before_selection = {
                 key: fields.get(key)
                 for key in (
@@ -1652,7 +1658,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_turn_plan = None
     recommendation_action = (
         None
-        if _ali_selected_this_turn
+        if _ali_selected_this_turn or _ali_explicit_class_this_turn
         else result.get("ali_vehicle_recommendation")
     )
     media_first_status = "not_evaluated"
