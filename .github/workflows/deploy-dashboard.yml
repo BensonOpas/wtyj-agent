@@ -124,15 +124,25 @@ jobs:
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'phone_normalized'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnMount'
             printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'refetchOnWindowFocus'
+            printf '%s' "$LIVE_FOLLOW_UPS" | grep -q 'Post-quote reservation'
 
-            INBOX_FILE=$(grep -l 'Mensaje entregado a WhatsApp' "$RELEASE_DIR"/assets/Inbox-*.js | head -1)
-            test -n "$INBOX_FILE"
-            INBOX_ASSET="/assets/$(basename "$INBOX_FILE")"
-            LIVE_INBOX=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$INBOX_ASSET?release=$DASHBOARD_SHA")
-            printf '%s' "$LIVE_INBOX" | grep -q 'Mensaje entregado a WhatsApp'
-            printf '%s' "$LIVE_INBOX" | grep -q 'Escribe un mensaje'
-            printf '%s' "$LIVE_INBOX" | grep -q 'Responder por WhatsApp'
-            printf '%s' "$LIVE_INBOX" | grep -q 'Plantilla de seguimiento enviada'
+            POST_QUOTE_API_FILE=$(grep -l '/ali-reservations/' "$RELEASE_DIR"/assets/*.js | head -1)
+            test -n "$POST_QUOTE_API_FILE"
+            POST_QUOTE_API_ASSET="/assets/$(basename "$POST_QUOTE_API_FILE")"
+            LIVE_POST_QUOTE_API=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$POST_QUOTE_API_ASSET?release=$DASHBOARD_SHA")
+            printf '%s' "$LIVE_POST_QUOTE_API" | grep -q '/ali-reservations/'
+
+            # Vite may split the WhatsApp reply composer out of Inbox into a
+            # shared lazy chunk. Locate the capability by its stable copy,
+            # then verify that exact built asset over the public CDN.
+            REPLY_UI_FILE=$(grep -l 'Mensaje entregado a WhatsApp' "$RELEASE_DIR"/assets/*.js | head -1)
+            test -n "$REPLY_UI_FILE"
+            REPLY_UI_ASSET="/assets/$(basename "$REPLY_UI_FILE")"
+            LIVE_REPLY_UI=$(curl -fsS --retry 5 --retry-delay 2 "https://dashboard.unboks.org$REPLY_UI_ASSET?release=$DASHBOARD_SHA")
+            printf '%s' "$LIVE_REPLY_UI" | grep -q 'Mensaje entregado a WhatsApp'
+            printf '%s' "$LIVE_REPLY_UI" | grep -q 'Escribe un mensaje'
+            printf '%s' "$LIVE_REPLY_UI" | grep -q 'Responder por WhatsApp'
+            printf '%s' "$LIVE_REPLY_UI" | grep -q 'Plantilla de seguimiento enviada'
 
             REPLY_API_FILE=$(grep -l '/whatsapp/reply' "$RELEASE_DIR"/assets/*.js | head -1)
             test -n "$REPLY_API_FILE"
