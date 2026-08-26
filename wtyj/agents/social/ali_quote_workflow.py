@@ -1109,6 +1109,27 @@ def _masked_whatsapp_identifier(value: object) -> str:
     return "WhatsApp conversation"
 
 
+def hydrate_quote_lead_contact_identities(
+    items: list[dict], contacts: dict[str, dict],
+) -> list[dict]:
+    """Apply provider-confirmed participant phones to Quote Leads.
+
+    Zernio conversation ids are routing keys, not customer phone numbers.  The
+    caller supplies contacts resolved through the tenant-guarded provider
+    lookup; unresolved or malformed values deliberately keep the fail-closed
+    generic label.
+    """
+    for item in items:
+        conversation_id = str(item.get("conversation_id") or "").strip()
+        contact = contacts.get(conversation_id) or {}
+        phone = str(contact.get("phone") or "").strip()
+        if phone.lower().startswith("whatsapp:"):
+            phone = phone.split(":", 1)[1].strip()
+        item["phone_raw"] = _masked_whatsapp_identifier(phone)
+        item["phone_normalized"] = ""
+    return items
+
+
 def _quote_lead_status(
     fields: dict,
     flags: dict,
@@ -1256,7 +1277,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             "customer_name": customer_name,
             "first_name": customer_name,
             "surnames": "",
-            "phone_raw": _masked_whatsapp_identifier(conversation_id),
+            "phone_raw": "WhatsApp conversation",
             "phone_normalized": "",
             "vehicle_preference": selection,
             "rental_period": rental_period,
