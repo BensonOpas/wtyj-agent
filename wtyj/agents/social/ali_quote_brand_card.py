@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from pathlib import Path
 
@@ -23,19 +22,34 @@ TITLES = {
     "pap": "OFERTA OFISIAL",
     "de": "OFFIZIELLES ANGEBOT",
 }
+FOOTER_TEXT = "ALI CAR RENTAL | CURAÇAO"
+FONT_ROOT = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "dejavu"
+FONT_FILES = {
+    False: "DejaVuSans.ttf",
+    True: "DejaVuSans-Bold.ttf",
+}
+FONT_SHA256 = {
+    False: "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+    True: "e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724",
+}
 
 
-def _font(size: int, *, bold: bool = False):
-    candidates = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold
-        else "/System/Library/Fonts/Supplemental/Arial.ttf",
-    )
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return ImageFont.truetype(candidate, size=size)
-    return ImageFont.load_default(size=size)
+class QuoteBrandCardRenderError(RuntimeError):
+    """Controlled failure for customer-facing brand-card rendering."""
+
+
+def _font(size: int, *, bold: bool = False, font_root: Path | None = None):
+    root = Path(font_root) if font_root is not None else FONT_ROOT
+    font_path = root / FONT_FILES[bool(bold)]
+    try:
+        font_bytes = font_path.read_bytes()
+        if hashlib.sha256(font_bytes).hexdigest() != FONT_SHA256[bool(bold)]:
+            raise ValueError("font checksum mismatch")
+        return ImageFont.truetype(str(font_path), size=size)
+    except (OSError, ValueError) as exc:
+        raise QuoteBrandCardRenderError(
+            f"Approved bundled quote-card font unavailable: {font_path.name}"
+        ) from exc
 
 
 def _fit_logo(source: Image.Image, max_width: int, max_height: int) -> Image.Image:
@@ -78,7 +92,7 @@ def render_quote_brand_card(
     draw.text((86, 414), TITLES[locale], font=_font(60, bold=True), fill=WHITE)
     draw.text((88, 515), reference, font=_font(37, bold=True), fill=GOLD)
     draw.text(
-        (88, 591), "ALI CAR RENTAL | CURAÇAO",
+        (88, 591), FOOTER_TEXT,
         font=_font(24), fill=MUTED,
     )
 
