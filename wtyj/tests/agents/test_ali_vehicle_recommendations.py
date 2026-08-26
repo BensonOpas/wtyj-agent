@@ -675,15 +675,16 @@ def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeyp
         zernio_dm_client.http_requests,
         "get",
         lambda *args, **kwargs: _Response(200, {"messages": [
-            _incoming(),
-            {
-                "direction": "outgoing",
-                "interactive": {"body": {"text": plan["text"]}},
-            },
+            # Zernio returns newest first: picker follows carousel.
             {
                 "direction": "outgoing",
                 "interactive": {"body": {"text": plan["picker"]["text"]}},
             },
+            {
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+            _incoming(),
         ]}),
     )
     posts = []
@@ -699,6 +700,43 @@ def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeyp
 
     assert result == {"success": True, "delivery": "carousel_picker"}
     assert posts == []
+
+
+def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan()
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            _incoming(),
+            {
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["picker"]["text"]}},
+            },
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert [post["json"]["interactive"]["type"] for post in posts] == [
+        "carousel", "list",
+    ]
+    assert posts[1]["json"]["interactive"]["action"]["button"] == (
+        "Choose a car"
+    )
 
 
 def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
