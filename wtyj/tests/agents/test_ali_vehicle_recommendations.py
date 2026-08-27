@@ -183,6 +183,27 @@ def test_curated_recommendation_rejects_undersized_or_fleet_dump_options():
         )
 
 
+def test_explicit_capacity_advisory_can_show_requested_smaller_cars():
+    plan = recommendations.build_vehicle_recommendation(
+        _action(
+            "curated",
+            ["Kia Picanto or similar", "Toyota Yaris or similar"],
+        ),
+        _catalog(),
+        {"conversation_language": "en", "passenger_count": 6},
+        {},
+        (
+            "These cars seat up to 5, so they will not fit your full group "
+            "of 6. Which one would you like to compare?"
+        ),
+        capacity_advisory=True,
+    )
+
+    assert plan["kind"] == "carousel"
+    assert [option["seats"] for option in plan["options"]] == [4, 5]
+    assert "will not fit your full group" in plan["text"]
+
+
 def test_accepted_discovery_hash_suppresses_replay():
     action = _action("specific", ["Kia Picanto or similar"])
     plan = recommendations.build_vehicle_recommendation(

@@ -8,6 +8,7 @@ from agents.social.ali_media_first import (
     derive_media_first_action,
     enforce_vehicle_first_reply,
     explicit_catalog_browse_request,
+    explicit_no_preference_request,
     explicit_smaller_vehicle_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -445,7 +446,24 @@ def test_calvin_browse_replay_returns_visual_options_instead_of_looping():
     assert len(decision["action"]["vehicle_names"]) == 5
     assert decision["reason"] == "explicit_catalog_browse"
     assert "current fleet" in decision["reply_text"]
+    assert "fewer than 6 seats" in decision["reply_text"]
     assert "Would you prefer" not in decision["reply_text"]
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    ["Whatever", "no preference", "maakt niet uit", "egal"],
+)
+def test_no_preference_is_a_suitable_recommendation_request(message_text):
+    assert explicit_no_preference_request(message_text) is True
+    assert infer_media_first_intent(
+        message_text,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        None,
+        {"passenger_count": 6, "luggage_count": 3},
+        {"ali_last_recommendation_ids": ["vehicle-6"]},
+        _catalog(),
+    ) == "request_recommendation"
 
 
 @pytest.mark.parametrize(

@@ -445,6 +445,7 @@ def build_vehicle_recommendation(
     public_base_url: str | None = None,
     turn_id: str | None = None,
     allow_repeat: bool = False,
+    capacity_advisory: bool = False,
 ) -> dict | None:
     """Return one validated image/carousel delivery plan or ``None``.
 
@@ -513,7 +514,7 @@ def build_vehicle_recommendation(
             or passenger_count < 1
         ):
             raise AliVehicleRecommendationError("missing_passenger_count")
-        if any(
+        if not capacity_advisory and any(
             option.get("seats") is not None and option["seats"] < passenger_count
             for option in options
         ):
@@ -529,6 +530,8 @@ def build_vehicle_recommendation(
     normalized_turn_id = str(turn_id or "").strip()
     if allow_repeat and normalized_turn_id:
         fingerprint["turn_id"] = normalized_turn_id[:200]
+    if capacity_advisory:
+        fingerprint["capacity_advisory"] = True
     state_hash = hashlib.sha256(
         json.dumps(
             fingerprint,
