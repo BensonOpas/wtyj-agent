@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/deploy-dashboard.yml'
+      - 'wtyj/scripts/ensure_dashboard_nginx.py'
   workflow_dispatch:
 
 permissions:
@@ -50,11 +51,12 @@ jobs:
         with:
           version: 10
 
-      - name: Install, typecheck, and build
+      - name: Install, test, typecheck, and build
         working-directory: dashboard
         run: |
           set -euo pipefail
           pnpm install --frozen-lockfile
+          pnpm --filter @workspace/unboks test
           pnpm --filter @workspace/unboks run typecheck
           pnpm --filter @workspace/unboks run build
           test -f artifacts/unboks/dist/public/index.html
@@ -98,6 +100,7 @@ jobs:
             NGINX_DASHBOARD_SITE=/etc/nginx/sites-enabled/unboks-dashboard
             NGINX_BACKUP_ROOT=/root/nginx-backups
             NGINX_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            NGINX_RESTORE_NEEDED=0
 
             echo "Deploying dashboard $DASHBOARD_SHA as $(whoami)"
             ls -ld /var/www /var/www/unboks-dashboard "$RELEASE_ROOT" "$CURRENT_LINK" "$ARCHIVE" 2>&1 || true
@@ -112,23 +115,104 @@ jobs:
               exit 1
             fi
 
+            NGINX_API_REAL=$(readlink -f "$NGINX_API_SITE")
+            NGINX_DASHBOARD_REAL=$(readlink -f "$NGINX_DASHBOARD_SITE")
+            case "$NGINX_API_REAL" in
+              /etc/nginx/*) ;;
+              *) echo "API config resolved outside /etc/nginx: $NGINX_API_REAL"; exit 1 ;;
+            esac
+            case "$NGINX_DASHBOARD_REAL" in
+              /etc/nginx/*) ;;
+              *) echo "Dashboard config resolved outside /etc/nginx: $NGINX_DASHBOARD_REAL"; exit 1 ;;
+            esac
+            test -f "$NGINX_API_REAL"
+            test -f "$NGINX_DASHBOARD_REAL"
+            if [ "$NGINX_API_REAL" = "$NGINX_DASHBOARD_REAL" ]; then
+              echo "API and dashboard config paths resolve to the same file; refusing mutation"
+              exit 1
+            fi
+
+            if ! NGINX_DUMP=$(nginx -T 2>&1); then
+              printf '%s\n' "$NGINX_DUMP"
+              exit 1
+            fi
+            if printf '%s\n' "$NGINX_DUMP" | grep -qi 'conflicting server name'; then
+              echo "Nginx reports a conflicting server name; refusing mutation"
+              printf '%s\n' "$NGINX_DUMP" | grep -i 'conflicting server name' >&2
+              exit 1
+            fi
+            DASHBOARD_SERVER_COUNT=$(printf '%s\n' "$NGINX_DUMP" | awk '
+              $1 == "server_name" {
+                for (index = 2; index <= NF; index++) {
+                  name = $index
+                  sub(/;$/, "", name)
+                  if (name == "dashboard.unboks.org") count++
+                }
+              }
+              END { print count + 0 }
+            ')
+            ALI_LOCATION_COUNT=$(printf '%s\n' "$NGINX_DUMP" | awk '
+              {
+                line = $0
+                sub(/#.*/, "", line)
+                if (line ~ /^[[:space:]]*location[[:space:]]+(\^~[[:space:]]+)?\/api\/ali-car-rental\/[[:space:]]*\{[[:space:]]*$/) count++
+              }
+              END { print count + 0 }
+            ')
+            if [ "$DASHBOARD_SERVER_COUNT" -ne 1 ]; then
+              echo "Expected exactly one dashboard.unboks.org server, found $DASHBOARD_SERVER_COUNT"
+              exit 1
+            fi
+            if [ "$ALI_LOCATION_COUNT" -ne 1 ]; then
+              echo "Expected exactly one /api/ali-car-rental/ location, found $ALI_LOCATION_COUNT"
+              exit 1
+            fi
+
             install -d -m 0700 "$NGINX_BACKUP_ROOT"
-            cp -a "$NGINX_API_SITE" \
-              "$NGINX_BACKUP_ROOT/api-unboks.before-dashboard-$NGINX_STAMP"
-            cp -a "$NGINX_DASHBOARD_SITE" \
-              "$NGINX_BACKUP_ROOT/unboks-dashboard.before-dashboard-$NGINX_STAMP"
+            NGINX_API_BACKUP="$NGINX_BACKUP_ROOT/api-unboks.before-dashboard-$NGINX_STAMP"
+            NGINX_DASHBOARD_BACKUP="$NGINX_BACKUP_ROOT/unboks-dashboard.before-dashboard-$NGINX_STAMP"
+            cp -p "$NGINX_API_REAL" "$NGINX_API_BACKUP"
+            cp -p "$NGINX_DASHBOARD_REAL" "$NGINX_DASHBOARD_BACKUP"
+
+            restore_nginx_on_exit() {
+              exit_status=$?
+              trap - 0
+              set +e
+              if [ "$exit_status" -ne 0 ] && [ "$NGINX_RESTORE_NEEDED" -eq 1 ]; then
+                echo "Deployment failed after Nginx mutation began; restoring both configs"
+                restore_failed=0
+                NGINX_API_RESTORE="$NGINX_API_REAL.restore-$NGINX_STAMP"
+                NGINX_DASHBOARD_RESTORE="$NGINX_DASHBOARD_REAL.restore-$NGINX_STAMP"
+                cp -p "$NGINX_API_BACKUP" "$NGINX_API_RESTORE" \
+                  && mv -f "$NGINX_API_RESTORE" "$NGINX_API_REAL" \
+                  || restore_failed=1
+                cp -p "$NGINX_DASHBOARD_BACKUP" "$NGINX_DASHBOARD_RESTORE" \
+                  && mv -f "$NGINX_DASHBOARD_RESTORE" "$NGINX_DASHBOARD_REAL" \
+                  || restore_failed=1
+                rm -f "$NGINX_API_RESTORE" "$NGINX_DASHBOARD_RESTORE"
+                if [ "$restore_failed" -eq 0 ]; then
+                  if nginx -t; then
+                    systemctl reload nginx \
+                      || echo "ERROR: restored Nginx config but reload failed" >&2
+                  else
+                    echo "ERROR: restored Nginx config does not validate" >&2
+                  fi
+                else
+                  echo "ERROR: Nginx config rollback was incomplete" >&2
+                fi
+              fi
+              rm -f /tmp/ensure-dashboard-nginx.py
+              exit "$exit_status"
+            }
+            trap restore_nginx_on_exit 0
+
+            NGINX_RESTORE_NEEDED=1
             python3 /tmp/ensure-dashboard-nginx.py \
               --api-config "$NGINX_API_SITE" \
               --dashboard-config "$NGINX_DASHBOARD_SITE"
-            if ! nginx -t; then
-              cp -a "$NGINX_BACKUP_ROOT/api-unboks.before-dashboard-$NGINX_STAMP" \
-                "$NGINX_API_SITE"
-              cp -a "$NGINX_BACKUP_ROOT/unboks-dashboard.before-dashboard-$NGINX_STAMP" \
-                "$NGINX_DASHBOARD_SITE"
-              nginx -t
-              exit 1
-            fi
+            nginx -t
             systemctl reload nginx
+            NGINX_RESTORE_NEEDED=0
             rm -f /tmp/ensure-dashboard-nginx.py
 
             mkdir -p "$RELEASE_DIR"

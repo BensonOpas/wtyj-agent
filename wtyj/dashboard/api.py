@@ -1034,6 +1034,32 @@ async def set_agent_status(req: AgentControlRequest):
 
 # --- Photos ---
 
+_RENTAL_MEDIA_SERVICE_PREFIX = "knowledge:rental_catalog:"
+
+
+def _guard_rental_media_mutation(photo: dict | None) -> None:
+    """Keep immutable Rental catalog snapshots from losing referenced media.
+
+    Generic photo-library endpoints remain unchanged for every non-Rental
+    asset. Rental-owned assets fail closed if tenant identity is unavailable.
+    """
+    if not isinstance(photo, dict):
+        return
+    service_key = str(photo.get("service_key") or "")
+    if not service_key.startswith(_RENTAL_MEDIA_SERVICE_PREFIX):
+        return
+    tenant_slug = _current_tenant_slug()
+    asset_id = str(photo.get("id") or "")
+    if (
+        not tenant_slug
+        or not asset_id
+        or rental_catalog.media_reference_count(tenant_slug, asset_id) > 0
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "rental_media_in_use"},
+        )
+
 @router.post("/photos/upload", dependencies=[Depends(_check_auth)])
 async def upload_photo(file: UploadFile = File(...), tags: str = Form(""), service_key: str = Form("")):
     file_bytes = await file.read()
@@ -1084,6 +1110,13 @@ async def get_photo_image(photo_id: int):
 
 @router.put("/photos/{photo_id}", dependencies=[Depends(_check_auth)])
 async def update_photo_endpoint(photo_id: int, req: PhotoUpdateRequest):
+    photo = state_registry.get_photo_by_id(photo_id)
+    if (
+        photo is not None
+        and req.service_key is not None
+        and req.service_key != photo.get("service_key")
+    ):
+        _guard_rental_media_mutation(photo)
     ok = state_registry.update_photo(photo_id, tags=req.tags, service_key=req.service_key)
     if not ok:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -1092,6 +1125,7 @@ async def update_photo_endpoint(photo_id: int, req: PhotoUpdateRequest):
 
 @router.delete("/photos/{photo_id}", dependencies=[Depends(_check_auth)])
 async def delete_photo_endpoint(photo_id: int):
+    _guard_rental_media_mutation(state_registry.get_photo_by_id(photo_id))
     filename = state_registry.delete_photo(photo_id)
     if not filename:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -2113,6 +2147,7 @@ async def delete_knowledge_media(media_id: str):
         photo_id = int(media_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Image not found")
+    _guard_rental_media_mutation(state_registry.get_photo_by_id(photo_id))
     filename = state_registry.delete_photo(photo_id)
     if not filename:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -4683,9 +4718,9 @@ def _rental_control_center_enabled() -> bool:
     try:
         raw = config_loader.get_raw() or {}
         features = raw.get("features") if isinstance(raw, dict) else {}
-        return bool(
+        return (
             isinstance(features, dict)
-            and features.get("rental_control_center_enabled", False)
+            and features.get("rental_control_center_enabled") is True
         )
     except Exception:
         return False
@@ -4935,11 +4970,7 @@ async def delete_rental_catalog_media(asset_id: str, response: Response):
     photo = _rental_media_photo(asset_id)
     if photo is None:
         raise HTTPException(status_code=404, detail={"code": "rental_media_not_found"})
-    if rental_catalog.media_reference_count(tenant_slug, asset_id) > 0:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "rental_media_in_use"},
-        )
+    _guard_rental_media_mutation(photo)
     filename = state_registry.delete_photo(int(asset_id))
     if not filename:
         raise HTTPException(status_code=404, detail={"code": "rental_media_not_found"})
