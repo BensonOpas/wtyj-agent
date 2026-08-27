@@ -8,6 +8,7 @@ from agents.social.ali_media_first import (
     derive_media_first_action,
     enforce_vehicle_first_reply,
     explicit_catalog_browse_request,
+    explicit_larger_vehicle_request,
     explicit_no_preference_request,
     explicit_smaller_vehicle_request,
     infer_explicit_catalog_class_selection,
@@ -44,6 +45,15 @@ def _catalog():
             _vehicle(6, "Kia Seltos or similar", "suv", 5, "65.00"),
         ],
     }
+
+
+def _catalog_with_van():
+    catalog = _catalog()
+    catalog["vehicleClasses"].append({"id": "van", "name": "Van"})
+    catalog["vehicles"].append(
+        _vehicle(7, "Suzuki Ertiga", "van", 7, "75.00")
+    )
+    return catalog
 
 
 def test_non_discovery_after_exact_choice_does_not_repeat_visuals():
@@ -180,6 +190,151 @@ def test_bare_mobile_category_reply_is_an_explicit_category_selection():
         "vehicle_class_id": "suv",
         "vehicle_class_name": "SUV",
     }
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    ["A van", "een van", "un van", "e van", "einen Van"],
+)
+def test_article_prefixed_active_class_is_an_explicit_selection(message_text):
+    assert infer_explicit_catalog_class_selection(
+        message_text, _catalog_with_van(),
+    ) == {
+        "vehicle_class_id": "van",
+        "vehicle_class_name": "Van",
+    }
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "Any bigger cars?",
+        "Wat hebben jullie groter?",
+        "Tin un outo mas grandi?",
+        "Haben Sie ein größeres Auto?",
+    ],
+)
+def test_larger_direction_is_actionable_in_all_locales(message_text):
+    catalog = _catalog_with_van()
+    assert explicit_larger_vehicle_request(message_text) is True
+    assert infer_media_first_intent(
+        message_text,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        None,
+        {
+            "vehicle_id": "vehicle-4",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {},
+        catalog,
+    ) == "request_recommendation"
+
+
+def test_negated_larger_direction_is_not_actionable():
+    assert explicit_larger_vehicle_request(
+        "I do not want a bigger car",
+    ) is False
+
+
+def test_larger_direction_overrides_stale_car_and_reopens_shown_van():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Toyota Yaris or similar",
+                "Kia Seltos or similar",
+            ],
+        },
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "vehicle_id": "vehicle-4",
+            "vehicle_name": "Toyota Yaris or similar",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_last_recommendation_ids": ["vehicle-7"],
+            "ali_rejected_vehicle_ids": ["vehicle-7"],
+            "ali_shown_vehicle_ids": ["vehicle-7"],
+        },
+        _catalog_with_van(),
+        message_text="Any bigger cars?",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_larger_preference"
+    assert decision["action"]["mode"] == "specific"
+    assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
+    assert "larger option" in decision["reply_text"]
+
+
+def test_exact_van_scope_overrides_stale_selection_and_delivery_history():
+    catalog = _catalog_with_van()
+    message_text = "A van"
+    intent = infer_media_first_intent(
+        message_text,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        None,
+        {
+            "conversation_language": "en",
+            "vehicle_id": "vehicle-4",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {"ali_last_recommendation_ids": ["vehicle-7"]},
+        catalog,
+    )
+    decision = derive_media_first_action(
+        intent,
+        None,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "vehicle_id": "vehicle-4",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_last_recommendation_ids": ["vehicle-7"],
+            "ali_rejected_vehicle_ids": ["vehicle-7"],
+            "ali_shown_vehicle_ids": ["vehicle-7"],
+        },
+        catalog,
+        message_text=message_text,
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_catalog_class"
+    assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
+
+
+def test_undersized_model_candidates_are_repaired_from_catalog_capacity():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Toyota Yaris or similar",
+                "Kia Seltos or similar",
+            ],
+        },
+        "Here are two options.",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {},
+        _catalog_with_van(),
+        message_text="What do you recommend?",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "capacity_curated"
+    assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
 
 
 def test_confusion_and_reengagement_keep_category_without_assuming_vehicle():

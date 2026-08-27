@@ -52,6 +52,7 @@ from agents.social.ali_media_first import (
     enforce_vehicle_first_reply,
     explicit_catalog_browse_request,
     explicit_no_preference_request,
+    explicit_larger_vehicle_request,
     explicit_smaller_vehicle_request,
     explicit_visual_request,
     infer_explicit_catalog_class_selection,
@@ -2246,8 +2247,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     ),
                     allow_repeat=(
                         explicit_visual_request(text)
+                        or explicit_catalog_browse_request(text)
                         or explicit_no_preference_request(text)
                         or explicit_smaller_vehicle_request(text)
+                        or explicit_larger_vehicle_request(text)
+                        or _ali_explicit_class_this_turn is not None
                     ),
                     capacity_advisory=capacity_advisory,
                 )
