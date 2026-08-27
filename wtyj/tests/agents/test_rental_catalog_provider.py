@@ -72,6 +72,7 @@ def test_local_provider_returns_published_contract_and_quote(monkeypatch, tmp_pa
     catalog = client.get_catalog()
     assert catalog["catalogVersion"] == 1
     assert catalog["vehicles"][0]["dailyRate"]["amount"] == "35.00"
+    assert catalog["vehicles"][0]["slug"] == "kia-picanto-or-similar"
     quote = client.create_quote({
         "rentalStart": "2026-09-01",
         "rentalEnd": "2026-09-04",

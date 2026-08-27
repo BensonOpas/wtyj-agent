@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -655,6 +656,16 @@ def _money(cents: int, currency: str) -> dict:
     return {"currency": currency, "amount": f"{whole}.{fraction:02d}"}
 
 
+def _public_slug(value: str, fallback: str) -> str:
+    """Return the stable ASCII route slug expected by fleet consumers."""
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    candidate = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    candidate = re.sub(r"[^a-z0-9]+", "-", candidate).strip("-")
+    if candidate:
+        return candidate
+    return re.sub(r"[^a-z0-9]+", "-", str(fallback).lower()).strip("-")
+
+
 def _published_media(asset_id: str, tenant_slug: str) -> dict | None:
     """Resolve tenant-owned catalog media into the existing consumer shape."""
     try:
@@ -725,6 +736,7 @@ def _consumer_catalog_from_published(
             "id": item["id"],
             "classId": category["id"],
             "name": item["displayName"],
+            "slug": _public_slug(item["displayName"], item["id"]),
             "seats": item["seats"],
             "transmission": item["transmission"],
             "dailyRate": _money(daily, currency),
