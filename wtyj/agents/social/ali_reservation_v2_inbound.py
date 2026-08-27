@@ -50,7 +50,7 @@ _COPY = {
         "failed": "I couldn't store that file safely. Please resend it as a clear JPG, PNG, or PDF under 10 MB.",
         "unclassified": "I stored the file securely, but I’m not expecting a document at this step. What document is it?",
         "extras": " I also stored {count} extra file(s) securely. Please tell me what they are.",
-        "identity": "Thanks. Please send the front of your driver's license here in WhatsApp.",
+        "identity": "Thanks. Please send {document} here in WhatsApp.",
         "opt_out": "Understood. I won't send you any more messages.",
         "cancelled": "Understood. I’ve stopped this reservation request.",
         "ambiguous": "Would you like me to stop this reservation, or would you like more time?",
@@ -63,7 +63,7 @@ _COPY = {
         "failed": "Ik kon dat bestand niet veilig opslaan. Stuur het opnieuw als duidelijke JPG, PNG of PDF onder 10 MB.",
         "unclassified": "Ik heb het bestand veilig opgeslagen, maar verwacht nu geen document. Welk document is het?",
         "extras": " Ik heb ook {count} extra bestand(en) veilig opgeslagen. Laat weten wat ze zijn.",
-        "identity": "Bedankt. Stuur nu de voorkant van je rijbewijs hier in WhatsApp.",
+        "identity": "Bedankt. Stuur nu {document} hier in WhatsApp.",
         "opt_out": "Begrepen. Ik stuur je geen berichten meer.",
         "cancelled": "Begrepen. Ik heb deze reserveringsaanvraag gestopt.",
         "ambiguous": "Wil je dat ik deze reservering stop, of wil je meer tijd?",
@@ -76,7 +76,7 @@ _COPY = {
         "failed": "Mi no por a warda e file ei sigur. Manda'é atrobe komo un JPG, PNG òf PDF kla bou di 10 MB.",
         "unclassified": "Mi a warda e file sigur, pero mi no ta spera un dokumento den e paso aki. Kua dokumento e ta?",
         "extras": " Mi a warda tambe {count} file extra sigur. Laga mi sa kiko nan ta.",
-        "identity": "Danki. Manda e parti dilanti di bo reibeweis aki den WhatsApp.",
+        "identity": "Danki. Manda {document} aki den WhatsApp.",
         "opt_out": "Komprondé. Mi no ta manda bo mas mensahe.",
         "cancelled": "Komprondé. Mi a stòp e petishon di reservashon aki.",
         "ambiguous": "Bo ke pa mi stòp e reservashon aki, òf bo ke mas tempu?",
@@ -89,7 +89,7 @@ _COPY = {
         "failed": "Ich konnte diese Datei nicht sicher speichern. Bitte senden Sie sie erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
         "unclassified": "Ich habe die Datei sicher gespeichert, erwarte in diesem Schritt aber kein Dokument. Um welches Dokument handelt es sich?",
         "extras": " Ich habe außerdem {count} zusätzliche Datei(en) sicher gespeichert. Bitte teilen Sie mir mit, was sie sind.",
-        "identity": "Danke. Bitte senden Sie jetzt die Vorderseite Ihres Führerscheins hier in WhatsApp.",
+        "identity": "Danke. Bitte senden Sie jetzt {document} hier über WhatsApp.",
         "opt_out": "Verstanden. Ich werde Ihnen keine weiteren Nachrichten senden.",
         "cancelled": "Verstanden. Ich habe diese Reservierungsanfrage beendet.",
         "ambiguous": "Soll ich diese Reservierung beenden, oder möchten Sie mehr Zeit?",
@@ -210,10 +210,21 @@ def process_structural_text(message: dict) -> dict:
             if str(getattr(exc, "code", "")) == "identity_type_not_recognized":
                 return {"handled": False}
             raise
+        expected_slot = str(updated.get("expectedDocumentSlot") or "")
+        bm_logger.log(
+            "ali_reservation_v2_identity_prompt_planned",
+            identity_type=str(updated.get("identityType") or ""),
+            expected_document_slot=expected_slot,
+        )
         return {
             "handled": True,
             "success": True,
-            "reply": _COPY[locale]["identity"],
+            "reply": _COPY[locale]["identity"].format(
+                document=_SLOT_LABELS[locale].get(
+                    expected_slot,
+                    expected_slot or "document",
+                ),
+            ),
             "workflow_v2": updated,
             "continue_to_documents": bool(message.get("_zernio_attachments")),
         }

@@ -915,9 +915,19 @@ def set_identity_type(public_id: str, value: object, *, message_id: str) -> dict
         row = _case(conn, public_id)
         if row["state"] != "documents_collecting":
             raise legacy.AliReservationError("identity_type_not_expected", 409)
-        if row["identity_type"] and row["identity_type"] != identity_type:
-            raise legacy.AliReservationError("identity_type_change_requires_staff", 409)
-        first_slot = "license_front"
+        if row["identity_type"]:
+            if row["identity_type"] != identity_type:
+                raise legacy.AliReservationError(
+                    "identity_type_change_requires_staff", 409,
+                )
+            # Same-choice replay is already applied. Never reset a partially
+            # completed document checklist back to its first slot.
+            conn.commit()
+            return get_case(public_id)
+        required_slots = required_document_slots(identity_type)
+        if not required_slots:
+            raise legacy.AliReservationError("identity_type_not_recognized", 422)
+        first_slot = required_slots[0]
         conn.execute(
             "UPDATE ali_reservation_v2_cases SET identity_type = ?, "
             "expected_document_slot = ?, last_client_activity_at = ?, "
@@ -930,6 +940,7 @@ def set_identity_type(public_id: str, value: object, *, message_id: str) -> dict
             str(row["state"]), str(row["state"]), "customer", "whatsapp",
             {
                 "identity_type": identity_type,
+                "expected_document_slot": first_slot,
                 "source_message_hash": hashlib.sha256(str(message_id).encode()).hexdigest(),
             },
         )
@@ -944,9 +955,9 @@ def set_identity_type(public_id: str, value: object, *, message_id: str) -> dict
 
 def required_document_slots(identity_type: str) -> tuple[str, ...]:
     if identity_type == "passport":
-        return ("license_front", "license_back", "passport")
+        return ("passport", "license_front", "license_back")
     if identity_type == "id_card":
-        return ("license_front", "license_back", "identity_front", "identity_back")
+        return ("identity_front", "identity_back", "license_front", "license_back")
     return ()
 
 

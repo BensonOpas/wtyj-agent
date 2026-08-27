@@ -498,14 +498,14 @@ def test_direct_whatsapp_documents_have_no_public_links_and_can_be_reclassified(
     ).fetchone()[0]
     conn.close()
     reassigned = dossier.reclassify_whatsapp_document(
-        "reservation-291", stored["public_id"], "license_front", "staff-291",
+        "reservation-291", stored["public_id"], "passport", "staff-291",
         expected_revision=revision,
     )
-    assert reassigned["slot"] == "license_front"
+    assert reassigned["slot"] == "passport"
     assert reassigned["status"] == "received"
     assert reassigned["classification_source"] == "staff_reclassified"
     assert reassigned["unclassified_expires_at"] is None
-    assert reassigned["workflowV2"]["expectedDocumentSlot"] == "license_back"
+    assert reassigned["workflowV2"]["expectedDocumentSlot"] == "license_front"
 
     with pytest.raises(legacy.AliReservationError) as missing_reason:
         dossier.review_document(
@@ -524,13 +524,45 @@ def test_identity_choice_is_required_before_first_document(configured):
         "reservation-291", "Passport", message_id="identity-choice-291",
     )
     assert selected["identityType"] == "passport"
-    assert selected["expectedDocumentSlot"] == "license_front"
+    assert selected["expectedDocumentSlot"] == "passport"
     assert workflow.required_document_slots("passport") == (
-        "license_front", "license_back", "passport",
+        "passport", "license_front", "license_back",
     )
     assert workflow.required_document_slots("id_card") == (
-        "license_front", "license_back", "identity_front", "identity_back",
+        "identity_front", "identity_back", "license_front", "license_back",
     )
+
+
+def test_replayed_identity_choice_does_not_reset_document_progress(configured):
+    workflow.initialize_reservation("reservation-291", now=BASE)
+    workflow.transition(
+        "reservation-291", "documents_collecting", actor_type="staff",
+        actor_id="staff-291", idempotency_key="approve-docs-replay", now=BASE,
+    )
+    selected = workflow.set_identity_type(
+        "reservation-291", "Passport", message_id="identity-choice-first",
+    )
+    conn = sqlite3.connect(workflow.state_registry.DB_PATH)
+    conn.execute(
+        "UPDATE ali_reservation_v2_cases SET expected_document_slot = ? "
+        "WHERE tenant_slug = ? AND reservation_public_id = ?",
+        ("license_back", "ali-car-rental", "reservation-291"),
+    )
+    conn.commit()
+    conn.close()
+
+    replayed = workflow.set_identity_type(
+        "reservation-291", "passport", message_id="identity-choice-replay",
+    )
+
+    assert selected["expectedDocumentSlot"] == "passport"
+    assert replayed["identityType"] == "passport"
+    assert replayed["expectedDocumentSlot"] == "license_back"
+    with pytest.raises(legacy.AliReservationError) as changed:
+        workflow.set_identity_type(
+            "reservation-291", "ID card", message_id="identity-choice-change",
+        )
+    assert changed.value.code == "identity_type_change_requires_staff"
 
 
 def test_early_payment_verification_requires_and_audits_reason(
