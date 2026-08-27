@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -653,15 +655,42 @@ def _money(cents: int, currency: str) -> dict:
     return {"currency": currency, "amount": f"{whole}.{fraction:02d}"}
 
 
+def _published_media(asset_id: str, tenant_slug: str) -> dict | None:
+    """Resolve tenant-owned catalog media into the existing consumer shape."""
+    try:
+        photo = state_registry.get_photo_by_id(int(asset_id))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(photo, dict):
+        return None
+    if not str(photo.get("service_key") or "").startswith("knowledge:rental_catalog:"):
+        return None
+    filename = str(photo.get("filename") or "")
+    if not filename or filename != os.path.basename(filename):
+        return None
+    base = os.environ.get("PUBLIC_API_BASE_URL", "https://api.unboks.org").rstrip("/")
+    url = (
+        f"{base}/api/{urllib.parse.quote(tenant_slug)}/dashboard/api/public/media/"
+        f"{urllib.parse.quote(filename)}"
+    )
+    tags = photo.get("tags") if isinstance(photo.get("tags"), list) else []
+    alt = str(tags[0]).strip() if tags else ""
+    return {"assetId": str(asset_id), "primary": True, "url": url, "alt": alt}
+
+
 def consumer_catalog(tenant_slug: str, *, db_path: str | None = None) -> dict | None:
     """Project the current version into the existing Carlos catalog contract."""
     published = get_published(tenant_slug, db_path=db_path)
     if published is None:
         return None
-    return _consumer_catalog_from_published(published)
+    return _consumer_catalog_from_published(published, include_media_urls=True)
 
 
-def _consumer_catalog_from_published(published: dict) -> dict:
+def _consumer_catalog_from_published(
+    published: dict,
+    *,
+    include_media_urls: bool = False,
+) -> dict:
     document = published["document"]
     settings = document["settings"]
     currency = settings["currency"]
@@ -685,10 +714,13 @@ def _consumer_catalog_from_published(published: dict) -> dict:
         if not item["active"] or item["archivedAt"] is not None or category is None:
             continue
         daily = int(category["dailyRateCents"])
-        image = (
-            {"assetId": item["primaryImageAssetId"], "primary": True}
-            if item["primaryImageAssetId"] is not None else None
-        )
+        image = None
+        if item["primaryImageAssetId"] is not None:
+            image = (
+                _published_media(item["primaryImageAssetId"], published["tenantSlug"])
+                if include_media_urls
+                else {"assetId": item["primaryImageAssetId"], "primary": True}
+            )
         vehicles.append({
             "id": item["id"],
             "classId": category["id"],

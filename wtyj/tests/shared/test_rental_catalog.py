@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from shared import rental_catalog
+from shared import rental_catalog, state_registry
 
 
 def catalog_document():
@@ -202,6 +202,61 @@ def test_consumer_projection_is_carlos_compatible_and_category_priced(tmp_path):
         "price": {"currency": "USD", "amount": "200.00"},
         "refundable": True,
     }]
+
+
+def test_consumer_projection_resolves_tenant_owned_media(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "registry.db")
+    document = catalog_document()
+    document["cars"][0]["primaryImageAssetId"] = "42"
+    rental_catalog.save_draft(
+        "tenant-a", document, expected_revision=0, actor="operator", db_path=db_path
+    )
+    rental_catalog.publish(
+        "tenant-a", expected_revision=1, idempotency_key="publish-1",
+        actor="operator", media_exists=lambda _asset_id: True, db_path=db_path,
+    )
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://api.unboks.org")
+    monkeypatch.setattr(state_registry, "get_photo_by_id", lambda _photo_id: {
+        "id": 42,
+        "filename": "photo_42_safe.jpg",
+        "service_key": "knowledge:rental_catalog:picanto",
+        "tags": ["Kia Picanto or similar"],
+    })
+
+    contract = rental_catalog.consumer_catalog("tenant-a", db_path=db_path)
+
+    assert contract["vehicles"][0]["images"] == [{
+        "assetId": "42",
+        "primary": True,
+        "url": (
+            "https://api.unboks.org/api/tenant-a/dashboard/api/public/media/"
+            "photo_42_safe.jpg"
+        ),
+        "alt": "Kia Picanto or similar",
+    }]
+
+
+def test_consumer_projection_rejects_non_catalog_media(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "registry.db")
+    document = catalog_document()
+    document["cars"][0]["primaryImageAssetId"] = "42"
+    rental_catalog.save_draft(
+        "tenant-a", document, expected_revision=0, actor="operator", db_path=db_path
+    )
+    rental_catalog.publish(
+        "tenant-a", expected_revision=1, idempotency_key="publish-1",
+        actor="operator", media_exists=lambda _asset_id: True, db_path=db_path,
+    )
+    monkeypatch.setattr(state_registry, "get_photo_by_id", lambda _photo_id: {
+        "id": 42,
+        "filename": "photo_42_other.jpg",
+        "service_key": "knowledge:other:picanto",
+        "tags": [],
+    })
+
+    contract = rental_catalog.consumer_catalog("tenant-a", db_path=db_path)
+
+    assert contract["vehicles"][0]["images"] == []
 
 
 def test_local_quote_snapshot_is_idempotent_and_financially_immutable(tmp_path):
