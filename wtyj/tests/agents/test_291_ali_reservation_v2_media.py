@@ -84,7 +84,11 @@ def _response(*, status=200, body=b"%PDF-test", headers=None):
 
 
 @patch("agents.social.zernio_whatsapp_media.requests.get")
-def test_download_uses_authenticated_endpoint_without_redirects(mock_get):
+def test_download_uses_authenticated_endpoint_without_redirects(
+    mock_get,
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-zernio-key")
     mock_get.return_value = _response()
 
     result = download_whatsapp_media("media-1", "account-1")
