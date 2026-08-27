@@ -5737,7 +5737,12 @@ async def record_ali_pickup_inspection_endpoint(
         _raise_ali_reservation_error(exc, action="pickup_inspection")
 
 
-def _public_ali_html(title: str, content: str) -> HTMLResponse:
+def _public_ali_html(
+    title: str,
+    content: str,
+    *,
+    allow_same_origin_connect: bool = False,
+) -> HTMLResponse:
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>{html.escape(title)}</title>
@@ -5746,13 +5751,19 @@ main{{max-width:680px;margin:32px auto;padding:28px;background:white;border-radi
 h1{{margin:0 0 20px}}label{{display:block;margin:14px 0 6px;font-weight:650}}
 input,button{{font:inherit}}input[type=text],input[type=file]{{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cbd5df;border-radius:10px}}
 button{{margin-top:18px;width:100%;padding:14px;border:0;border-radius:12px;background:#0e8b7e;color:white;font-weight:750}}
+button:disabled{{cursor:wait;opacity:.65}}
 canvas{{width:100%;height:160px;border:1px solid #cbd5df;border-radius:10px;touch-action:none}}
 iframe{{width:100%;height:60vh;border:1px solid #d8e0e6;border-radius:10px}}</style></head>
 <body><main><div style="font-weight:800;color:#08243c;margin-bottom:16px">ALI CAR RENTAL · CURAÇAO</div>{content}</main></body></html>"""
     response = HTMLResponse(page)
     _ali_no_store(response)
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; frame-src data:; form-action 'self'; base-uri 'none'"
+    connect_policy = " connect-src 'self';" if allow_same_origin_connect else ""
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; style-src 'unsafe-inline'; "
+        "script-src 'unsafe-inline';" + connect_policy +
+        " img-src data:; frame-src data:; form-action 'self'; base-uri 'none'"
+    )
     return response
 
 
@@ -5794,33 +5805,52 @@ async def public_ali_contract_page(token: str):
     try:
         context = ali_customer_dossier.contract_review_context(token)
         pdf = context["pdfBase64"]
-        script_token = json.dumps(token)
         content = f"""<h1>Review and sign pre-contract</h1>
 <p>Read the complete document before signing. Final approval is completed by our office.</p>
 <iframe title="Ali pre-contract" src="data:application/pdf;base64,{pdf}"></iframe>
 <label><input id="consent" type="checkbox"> I have read the complete pre-contract and agree to sign it.</label>
 <label for="legal">Full legal name</label><input id="legal" type="text" autocomplete="name" maxlength="120">
 <label>Signature</label><canvas id="signature" width="620" height="160"></canvas>
-<button id="sign">Sign pre-contract</button><p id="status" role="status"></p>
-<script>const c=document.getElementById('signature'),x=c.getContext('2d');let d=false;
+<button id="sign" type="button">Sign pre-contract</button><p id="status" role="status" aria-live="polite"></p>
+<script>const c=document.getElementById('signature'),x=c.getContext('2d'),b=document.getElementById('sign'),s=document.getElementById('status');let d=false,submitting=false,signed=false;
 for(const a of ['pointerdown','pointermove','pointerup','pointerleave'])c.addEventListener(a,e=>{{e.preventDefault();if(a==='pointerdown')d=true;if(a==='pointerup'||a==='pointerleave')d=false;if(a==='pointermove'&&d){{const r=c.getBoundingClientRect();x.lineWidth=2;x.lineTo((e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height);x.stroke();}}}});
-document.getElementById('sign').onclick=async()=>{{const s=document.getElementById('status');s.textContent='Submitting…';const r=await fetch(location.pathname+'/sign',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{consent:document.getElementById('consent').checked,legalName:document.getElementById('legal').value,signatureData:c.toDataURL('image/png')}})}});s.textContent=r.ok?'Signed. Thank you — our office will complete the final review.':'Unable to sign. Please check the form or request a new link.';}};</script>"""
-        return _public_ali_html("Review and sign pre-contract", content)
+b.onclick=async()=>{{if(submitting||signed)return;submitting=true;b.disabled=true;s.textContent='Submitting…';const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);try{{const endpoint=location.pathname.replace(/[/]$/,'')+'/sign';const r=await fetch(endpoint,{{method:'POST',headers:{{'content-type':'application/json'}},cache:'no-store',credentials:'same-origin',signal:controller.signal,body:JSON.stringify({{consent:document.getElementById('consent').checked,legalName:document.getElementById('legal').value,signatureData:c.toDataURL('image/png')}})}});if(!r.ok)throw new Error('sign_request_rejected');signed=true;s.textContent='Signed. Thank you — our office will complete the final review.';}}catch(error){{s.textContent='Unable to sign. Please check your connection and try again.';}}finally{{clearTimeout(timeout);submitting=false;if(!signed)b.disabled=false;}}}};</script>"""
+        return _public_ali_html(
+            "Review and sign pre-contract",
+            content,
+            allow_same_origin_connect=True,
+        )
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="public_contract_page")
 
 
 @router.post("/ali-reservations/public/contracts/{token}/sign")
 async def public_ali_contract_sign(token: str, req: AliContractSignRequest):
+    request_id = secrets.token_hex(6)
+    bm_logger.log(
+        "ali_public_contract_sign_requested",
+        request_id=request_id,
+    )
     try:
-        return ali_customer_dossier.sign_contract(
+        result = ali_customer_dossier.sign_contract(
             token,
             consent=req.consent,
             legal_name=req.legalName,
             signature_data=req.signatureData,
         )
     except Exception as exc:
+        bm_logger.log(
+            "ali_public_contract_sign_failed",
+            request_id=request_id,
+            error_code=str(getattr(exc, "code", type(exc).__name__))[:80],
+        )
         _raise_ali_reservation_error(exc, action="public_contract_sign")
+    bm_logger.log(
+        "ali_public_contract_sign_succeeded",
+        request_id=request_id,
+        contract_status=str(result.get("status") or "")[:40],
+    )
+    return result
 
 
 @router.get("/quote-leads", dependencies=[Depends(_check_auth)])
