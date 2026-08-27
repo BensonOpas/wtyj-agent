@@ -163,6 +163,26 @@ def test_signed_controls_bind_every_quote_anchor_and_reject_tampering(configured
     ) is None
 
 
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [
+        ("en", "How would you like to proceed?"),
+        ("nl", "Hoe wil je verdergaan?"),
+        ("pap", "Kon bo ke sigui?"),
+        ("de", "Wie möchten Sie fortfahren?"),
+    ],
+)
+def test_post_quote_prompt_is_natural_in_every_supported_locale(
+    configured, locale, expected,
+):
+    quote = {**_delivered_quote(), "locale": locale}
+
+    control = workflow.build_post_quote_control(quote, secret=SECRET)
+
+    assert control["text"] == expected
+    assert len(control["buttons"]) == 3
+
+
 def test_reserve_is_exactly_once_and_never_claims_booking_confirmation(configured):
     quote = _delivered_quote()
     first = _reserve(quote)
