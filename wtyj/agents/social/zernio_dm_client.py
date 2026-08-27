@@ -44,7 +44,7 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
     Returns None if not a message.received event or if parsing fails.
 
     Returns: {conversation_id, platform, channel, sender_name, sender_id, text,
-              message_id, account_id}
+              message_id, account_id, attachments}
     """
     event = payload.get("event", "")
     if event != "message.received":
@@ -78,6 +78,54 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         or metadata.get("interactive_id")
         or ""
     ).strip()
+
+    raw_attachments = data.get("attachments")
+    if not isinstance(raw_attachments, list) and isinstance(msg_obj, dict):
+        raw_attachments = msg_obj.get("attachments")
+    if not isinstance(raw_attachments, list):
+        raw_attachments = []
+    attachments = []
+    for item in raw_attachments[:8]:
+        if not isinstance(item, dict):
+            continue
+        attachment_payload = item.get("payload")
+        attachment_payload = (
+            attachment_payload if isinstance(attachment_payload, dict) else {}
+        )
+        media_id = str(
+            attachment_payload.get("id")
+            or item.get("mediaId")
+            or item.get("media_id")
+            or ""
+        ).strip()
+        attachment_id = str(
+            item.get("id")
+            or item.get("attachmentId")
+            or item.get("attachment_id")
+            or media_id
+        ).strip()
+        if not media_id or not attachment_id:
+            continue
+        # Provider URLs are deliberately discarded.  V2 retrieves media only
+        # through Zernio's authenticated WhatsApp media endpoint.
+        attachments.append({
+            "provider_attachment_id": attachment_id[:240],
+            "media_id": media_id[:240],
+            "type": str(item.get("type") or attachment_payload.get("type") or "").lower()[:40],
+            "filename": str(
+                item.get("filename")
+                or item.get("fileName")
+                or attachment_payload.get("filename")
+                or ""
+            )[:180],
+            "mime_type": str(
+                item.get("mimeType")
+                or item.get("contentType")
+                or attachment_payload.get("mimeType")
+                or attachment_payload.get("contentType")
+                or ""
+            ).split(";", 1)[0].strip().lower()[:100],
+        })
 
     conversation_id = data.get("conversationId", "") or data.get("conversation_id", "")
     message_id = data.get("id", "") or data.get("messageId", "")
@@ -122,6 +170,10 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         "account_id": account_id,
         "interactive_type": interactive_type,
         "interactive_id": interactive_id,
+        "attachments": attachments,
+        "event_id": str(
+            payload.get("id") or payload.get("eventId") or message_id
+        )[:240],
     }
 
 

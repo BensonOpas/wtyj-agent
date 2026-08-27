@@ -588,7 +588,14 @@ def _create_reservation_for_quote(
             if existing["status"] in {"cancelled", "superseded"}:
                 raise AliReservationError("stale_or_superseded_quote", 409)
             conn.commit()
-            return _public_row(existing), False
+            public = _public_row(existing)
+            from agents.social import ali_reservation_v2
+            if ali_reservation_v2.enabled():
+                ali_reservation_v2.initialize_reservation(str(existing["public_id"]))
+                public["workflow_v2"] = ali_reservation_v2.get_case(
+                    str(existing["public_id"])
+                )
+            return public, False
         conn.execute(
             "INSERT INTO ali_reservations ("
             "public_id, tenant_slug, quote_public_id, quote_snapshot_id, quote_reference, "
@@ -612,7 +619,13 @@ def _create_reservation_for_quote(
             "SELECT * FROM ali_reservations WHERE public_id = ?", (public_id,),
         ).fetchone()
         conn.commit()
-        return _public_row(row), True
+        public = _public_row(row)
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled():
+            public["workflow_v2"] = ali_reservation_v2.initialize_reservation(
+                public_id
+            )
+        return public, True
     except Exception:
         conn.rollback()
         raise
@@ -712,10 +725,20 @@ def list_reservations(status: str | None = None) -> list[dict]:
                 (TENANT_SLUG, status),
             ).fetchall()
         items = []
+        from agents.social import ali_reservation_v2
+        use_v2 = ali_reservation_v2.enabled()
         for row in rows:
             item = _public_row(row)
             item.pop("confirmation_pdf_path", None)
             item.pop("final_notes", None)
+            if use_v2:
+                try:
+                    item["workflow_v2"] = ali_reservation_v2.get_case(
+                        str(row["public_id"])
+                    )
+                except AliReservationError as exc:
+                    if exc.code != "reservation_v2_not_found":
+                        raise
             items.append(item)
         return items
     finally:
@@ -731,7 +754,16 @@ def get_reservation(public_id: str) -> dict | None:
         (TENANT_SLUG, public_id),
     ).fetchone()
     conn.close()
-    return _public_row(row)
+    item = _public_row(row)
+    if item is not None:
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled():
+            try:
+                item["workflow_v2"] = ali_reservation_v2.get_case(public_id)
+            except AliReservationError as exc:
+                if exc.code != "reservation_v2_not_found":
+                    raise
+    return item
 
 
 def list_reservation_events(public_id: str) -> list[dict]:
@@ -834,10 +866,24 @@ def apply_staff_decision(
         row = _require_case(conn, public_id)
         if decision == "approve" and row["availability_status"] == "approved":
             conn.commit()
-            return _public_row(row)
+            result = _public_row(row)
+            from agents.social import ali_reservation_v2
+            if ali_reservation_v2.enabled():
+                result["workflow_v2"] = ali_reservation_v2.sync_availability_decision(
+                    public_id, decision, actor=actor_id,
+                    legacy_revision=int(row["revision"]),
+                )
+            return result
         if decision == "decline" and row["status"] == "declined":
             conn.commit()
-            return _public_row(row)
+            result = _public_row(row)
+            from agents.social import ali_reservation_v2
+            if ali_reservation_v2.enabled():
+                result["workflow_v2"] = ali_reservation_v2.sync_availability_decision(
+                    public_id, decision, actor=actor_id,
+                    legacy_revision=int(row["revision"]),
+                )
+            return result
         if decision == "alternative" and row["status"] == "alternative_required":
             current = json.loads(row["alternative_vehicle_json"] or "{}")
             if current == alternative:
@@ -884,7 +930,14 @@ def apply_staff_decision(
         _event(conn, public_id, event_type, from_status, to_status, "staff", actor_id, metadata)
         updated = _require_case(conn, public_id)
         conn.commit()
-        return _public_row(updated)
+        result = _public_row(updated)
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled() and decision in {"approve", "decline"}:
+            result["workflow_v2"] = ali_reservation_v2.sync_availability_decision(
+                public_id, decision, actor=actor_id,
+                legacy_revision=int(updated["revision"]),
+            )
+        return result
     except Exception:
         conn.rollback()
         raise
@@ -999,7 +1052,22 @@ def confirm_reservation(
         row = _require_case(conn, public_id)
         if row["status"] == "confirmed":
             conn.commit()
-            return _public_row(row)
+            result = _public_row(row)
+            from agents.social import ali_reservation_v2
+            if ali_reservation_v2.enabled():
+                current_v2 = ali_reservation_v2.get_case(public_id)
+                if current_v2["state"] == "final_approval_pending":
+                    current_v2 = ali_reservation_v2.transition(
+                        public_id,
+                        "confirmed",
+                        actor_type="staff",
+                        actor_id=actor_id,
+                        idempotency_key="final-reservation-approved",
+                        reason="staff_final_approval",
+                        expected_revision=current_v2["revision"],
+                    )
+                result["workflow_v2"] = current_v2
+            return result
         _check_revision(row, expected_revision)
         if (
             row["status"] != "ready_to_confirm"
@@ -1051,7 +1119,22 @@ def confirm_reservation(
         )
         updated = _require_case(conn, public_id)
         conn.commit()
-        return _public_row(updated)
+        result = _public_row(updated)
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled():
+            current_v2 = ali_reservation_v2.get_case(public_id)
+            if current_v2["state"] == "final_approval_pending":
+                current_v2 = ali_reservation_v2.transition(
+                    public_id,
+                    "confirmed",
+                    actor_type="staff",
+                    actor_id=actor_id,
+                    idempotency_key="final-reservation-approved",
+                    reason="staff_final_approval",
+                    expected_revision=current_v2["revision"],
+                )
+            result["workflow_v2"] = current_v2
+        return result
     except Exception:
         conn.rollback()
         raise

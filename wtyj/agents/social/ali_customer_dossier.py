@@ -44,7 +44,7 @@ DOCUMENT_MIMES = {
 }
 DOCUMENT_STATUSES = {
     "received", "verified", "rejected", "replacement_requested",
-    "replaced", "deleted", "not_required",
+    "replaced", "deleted", "not_required", "unclassified", "quarantined",
 }
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_TEMPLATE_BYTES = 2 * 1024 * 1024
@@ -337,6 +337,7 @@ def ensure_schema() -> None:
                 customer_reported_at TEXT,
                 verified_at TEXT,
                 verified_by TEXT,
+                review_reason TEXT,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(reservation_public_id)
                     REFERENCES ali_reservations(public_id) ON DELETE RESTRICT
@@ -351,6 +352,7 @@ def ensure_schema() -> None:
                 page_count INTEGER NOT NULL,
                 page_size TEXT NOT NULL,
                 actor_id TEXT NOT NULL,
+                storage_name TEXT,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY(reservation_public_id, version),
                 FOREIGN KEY(reservation_public_id)
@@ -396,6 +398,53 @@ def ensure_schema() -> None:
             );
             """
         )
+        dossier_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(ali_reservation_dossier_audits)"
+            ).fetchall()
+        }
+        if "storage_name" not in dossier_columns:
+            conn.execute(
+                "ALTER TABLE ali_reservation_dossier_audits ADD COLUMN storage_name TEXT"
+            )
+        document_columns = {
+            str(item["name"])
+            for item in conn.execute(
+                "PRAGMA table_info(ali_reservation_documents)"
+            ).fetchall()
+        }
+        for name, definition in {
+            "provider_message_id_hash": "TEXT",
+            "provider_attachment_id_hash": "TEXT",
+            "original_filename": "TEXT",
+            "quarantine_status": "TEXT NOT NULL DEFAULT 'legacy'",
+            "classification_source": "TEXT NOT NULL DEFAULT 'legacy_upload_link'",
+            "unclassified_expires_at": "TEXT",
+            "review_reason": "TEXT",
+        }.items():
+            if name not in document_columns:
+                conn.execute(
+                    f"ALTER TABLE ali_reservation_documents ADD COLUMN {name} {definition}"
+                )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ali_documents_provider_attachment "
+            "ON ali_reservation_documents(tenant_slug, provider_attachment_id_hash) "
+            "WHERE provider_attachment_id_hash IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ali_documents_unclassified_expiry "
+            "ON ali_reservation_documents(tenant_slug, status, unclassified_expires_at)"
+        )
+        payment_columns = {
+            str(item["name"])
+            for item in conn.execute(
+                "PRAGMA table_info(ali_reservation_payments)"
+            ).fetchall()
+        }
+        if "review_reason" not in payment_columns:
+            conn.execute(
+                "ALTER TABLE ali_reservation_payments ADD COLUMN review_reason TEXT"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -478,6 +527,8 @@ def _safe_document(row: sqlite3.Row | dict) -> dict:
         "public_id", "slot", "version", "mime_type", "size_bytes", "sha256",
         "status", "previous_document_public_id", "created_at", "updated_at",
         "verified_at", "verified_by", "deleted_at", "deleted_by",
+        "original_filename", "quarantine_status", "classification_source",
+        "unclassified_expires_at", "review_reason",
     )}
 
 
@@ -1067,6 +1118,43 @@ def issue_document_links(
     expected_revision: int | None = None,
 ) -> dict:
     actor_id = reservation._validate_actor(actor)
+    from agents.social import ali_reservation_v2
+    if ali_reservation_v2.enabled():
+        workflow_case = ali_reservation_v2.get_case(public_id)
+        if workflow_case["state"] != "documents_collecting":
+            raise reservation.AliReservationError("document_intake_not_ready", 409)
+        ensure_schema()
+        conn = _connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = _available_case(conn, public_id)
+            reservation._check_revision(row, expected_revision)
+            if row["identity_status"] != "requested":
+                timestamp = _iso()
+                conn.execute(
+                    "UPDATE ali_reservations SET identity_status = 'requested', "
+                    "status = 'requirements_pending', last_staff_actor = ?, "
+                    "last_staff_action_at = ?, revision = revision + 1, updated_at = ? "
+                    "WHERE tenant_slug = ? AND public_id = ?",
+                    (actor_id, timestamp, timestamp, TENANT_SLUG, public_id),
+                )
+                reservation._event(
+                    conn, public_id, "direct_whatsapp_document_intake_requested",
+                    str(row["status"]), "requirements_pending", "staff", actor_id,
+                    {"workflow_version": 2, "public_upload_links": 0},
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return {
+            "reservationPublicId": public_id,
+            "mode": "direct_whatsapp",
+            "identityTypes": ["passport", "id_card"],
+            "links": [],
+        }
     ensure_schema()
     conn = _connection()
     try:
@@ -1104,6 +1192,9 @@ def issue_document_links(
 
 
 def document_upload_context(token: str) -> dict:
+    from agents.social import ali_reservation_v2
+    if ali_reservation_v2.enabled():
+        raise reservation.AliReservationError("public_document_upload_disabled", 404)
     conn, row = _verify_token(token, "document_upload")
     try:
         return {
@@ -1164,7 +1255,21 @@ def _document_rollup(conn: sqlite3.Connection, public_id: str) -> str:
         (TENANT_SLUG, public_id),
     ).fetchall():
         statuses[str(row["slot"])] = str(row["status"])
-    values = [statuses.get(slot) for slot in DOCUMENT_SLOTS]
+    required_slots = DOCUMENT_SLOTS
+    try:
+        from agents.social import ali_reservation_v2
+        workflow = conn.execute(
+            "SELECT identity_type FROM ali_reservation_v2_cases "
+            "WHERE tenant_slug = ? AND reservation_public_id = ?",
+            (TENANT_SLUG, public_id),
+        ).fetchone()
+        if workflow and workflow["identity_type"]:
+            required_slots = ali_reservation_v2.required_document_slots(
+                str(workflow["identity_type"]),
+            ) or DOCUMENT_SLOTS
+    except sqlite3.OperationalError:
+        required_slots = DOCUMENT_SLOTS
+    values = [statuses.get(slot) for slot in required_slots]
     if all(value in {"verified", "not_required"} for value in values):
         return "verified"
     if any(value == "replacement_requested" for value in values):
@@ -1172,7 +1277,7 @@ def _document_rollup(conn: sqlite3.Connection, public_id: str) -> str:
     if any(value == "rejected" for value in values):
         return "rejected"
     received = sum(value in {"received", "verified", "not_required"} for value in values)
-    if received == len(DOCUMENT_SLOTS):
+    if received == len(required_slots):
         return "received"
     if received:
         return "partially_received"
@@ -1200,6 +1305,9 @@ def _refresh_case(conn: sqlite3.Connection, public_id: str, actor: str) -> sqlit
 
 
 def store_document_upload(token: str, payload: bytes, claimed_mime: str) -> dict:
+    from agents.social import ali_reservation_v2
+    if ali_reservation_v2.enabled():
+        raise reservation.AliReservationError("public_document_upload_disabled", 404)
     conn, token_row = _verify_token(token, "document_upload", allow_used=True)
     try:
         if token_row["used_at"]:
@@ -1287,6 +1395,169 @@ def store_document_upload(token: str, payload: bytes, claimed_mime: str) -> dict
         conn.close()
 
 
+def store_whatsapp_document(
+    public_id: str,
+    *,
+    slot: str,
+    payload: bytes,
+    claimed_mime: str,
+    provider_message_id: str,
+    provider_attachment_id: str,
+    filename: str = "",
+    classification_source: str = "expected_slot",
+) -> dict:
+    """Persist one authenticated inbound WhatsApp attachment privately.
+
+    Provider URLs are intentionally absent from the API and schema.  Only
+    deterministic hashes of provider identifiers are retained for replay
+    protection.  The caller must already have verified the signed Zernio
+    webhook and tenant/account/conversation binding.
+    """
+    from agents.social import ali_reservation_v2
+
+    if not ali_reservation_v2.enabled():
+        raise reservation.AliReservationError("reservation_v2_not_enabled", 409)
+    if classification_source not in {"expected_slot", "customer_classified", "unclassified"}:
+        raise reservation.AliReservationError("invalid_document_classification", 422)
+    workflow_case = ali_reservation_v2.get_case(public_id)
+    collecting = workflow_case["state"] in {
+        "documents_collecting", "document_replacement_required",
+    }
+    if slot != "unclassified" and not collecting:
+        raise reservation.AliReservationError("document_not_expected", 409)
+    expected = str(workflow_case.get("expectedDocumentSlot") or "")
+    if slot != "unclassified" and slot != expected:
+        raise reservation.AliReservationError("unexpected_document_slot", 409)
+    if slot == "unclassified" and classification_source != "unclassified":
+        raise reservation.AliReservationError("invalid_document_classification", 422)
+    if not str(provider_message_id or "").strip() or not str(provider_attachment_id or "").strip():
+        raise reservation.AliReservationError("provider_attachment_identity_missing", 422)
+
+    mime, extension = _validated_upload(payload, claimed_mime)
+    digest = hashlib.sha256(payload).hexdigest()
+    message_hash = hashlib.sha256(str(provider_message_id).encode("utf-8")).hexdigest()
+    attachment_hash = hashlib.sha256(str(provider_attachment_id).encode("utf-8")).hexdigest()
+    safe_filename = Path(str(filename or "")).name.replace("\x00", "")[:180]
+    ensure_schema()
+    conn = _connection()
+    storage_name = ""
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _available_case(conn, public_id)
+        replay = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND provider_attachment_id_hash = ?",
+            (TENANT_SLUG, attachment_hash),
+        ).fetchone()
+        if replay:
+            if replay["reservation_public_id"] != public_id or replay["sha256"] != digest:
+                raise reservation.AliReservationError("provider_attachment_replay_mismatch", 409)
+            conn.commit()
+            result = _safe_document(replay)
+            result["replayed"] = True
+            result["workflowV2"] = ali_reservation_v2.get_case(public_id)
+            return result
+        duplicate_content = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? AND sha256 = ? AND status NOT IN "
+            "('deleted','replaced') ORDER BY version DESC LIMIT 1",
+            (TENANT_SLUG, public_id, digest),
+        ).fetchone()
+        if duplicate_content:
+            conn.commit()
+            result = _safe_document(duplicate_content)
+            result["replayed"] = True
+            result["workflowV2"] = ali_reservation_v2.get_case(public_id)
+            return result
+
+        storage_name = _write_private(payload, extension, public_id)
+        current = None
+        if slot != "unclassified":
+            current = conn.execute(
+                "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+                "AND reservation_public_id = ? AND slot = ? "
+                "ORDER BY version DESC LIMIT 1",
+                (TENANT_SLUG, public_id, slot),
+            ).fetchone()
+        version_row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM ali_reservation_documents "
+            "WHERE tenant_slug = ? AND reservation_public_id = ? AND slot = ?",
+            (TENANT_SLUG, public_id, slot),
+        ).fetchone()
+        version = int(version_row[0])
+        document_id = str(uuid.uuid4())
+        timestamp = _iso()
+        if current and current["status"] not in {"deleted", "replaced"}:
+            conn.execute(
+                "UPDATE ali_reservation_documents SET status = 'replaced', "
+                "updated_at = ? WHERE tenant_slug = ? AND public_id = ?",
+                (timestamp, TENANT_SLUG, current["public_id"]),
+            )
+        status = "unclassified" if slot == "unclassified" else "received"
+        unclassified_expiry = (
+            _iso(_now() + timedelta(days=7)) if status == "unclassified" else None
+        )
+        conn.execute(
+            "INSERT INTO ali_reservation_documents (public_id, tenant_slug, "
+            "reservation_public_id, slot, version, mime_type, size_bytes, sha256, "
+            "storage_name, status, previous_document_public_id, created_at, updated_at, "
+            "provider_message_id_hash, provider_attachment_id_hash, original_filename, "
+            "quarantine_status, classification_source, unclassified_expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'validated', ?, ?)",
+            (
+                document_id, TENANT_SLUG, public_id, slot, version, mime,
+                len(payload), digest, storage_name, status,
+                str(current["public_id"]) if current else None, timestamp, timestamp,
+                message_hash, attachment_hash, safe_filename or None,
+                classification_source, unclassified_expiry,
+            ),
+        )
+        case = _case(conn, public_id)
+        reservation._event(
+            conn, public_id,
+            "whatsapp_document_unclassified" if status == "unclassified" else "whatsapp_document_received",
+            str(case["status"]), str(case["status"]), "customer", "zernio_whatsapp",
+            {
+                "document_id": document_id,
+                "slot": slot,
+                "version": version,
+                "mime_type": mime,
+                "size_bytes": len(payload),
+                "digest_prefix": digest[:12],
+                "provider_message_hash": message_hash,
+                "provider_attachment_hash": attachment_hash,
+                "classification_source": classification_source,
+            },
+        )
+        created = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? AND public_id = ?",
+            (TENANT_SLUG, document_id),
+        ).fetchone()
+        conn.commit()
+        result = _safe_document(created)
+        result["replayed"] = False
+    except Exception:
+        conn.rollback()
+        if storage_name:
+            try:
+                stored = _stored_path(storage_name)
+                if stored.is_file():
+                    stored.unlink()
+            except reservation.AliReservationError:
+                pass
+        raise
+    finally:
+        conn.close()
+
+    if slot != "unclassified":
+        result["workflowV2"] = ali_reservation_v2.record_document_received(
+            public_id, slot, provider_message_id=provider_message_id,
+        )
+    else:
+        result["workflowV2"] = ali_reservation_v2.get_case(public_id)
+    return result
+
+
 def list_documents(public_id: str) -> list[dict]:
     ensure_schema()
     conn = _connection()
@@ -1308,10 +1579,23 @@ def review_document(
     decision: str,
     actor: str,
     expected_revision: int | None = None,
+    reason: str = "",
 ) -> dict:
     if decision not in {"verified", "rejected", "replacement_requested", "not_required"}:
         raise reservation.AliReservationError("invalid_document_decision", 422)
     actor_id = reservation._validate_actor(actor)
+    review_reason = str(reason or "").strip()
+    if len(review_reason) > 500:
+        raise reservation.AliReservationError("invalid_document_review_reason", 422)
+    from agents.social import ali_reservation_v2
+    if decision == "not_required" and ali_reservation_v2.enabled():
+        raise reservation.AliReservationError("document_slot_required", 409)
+    if (
+        ali_reservation_v2.enabled()
+        and decision in {"rejected", "replacement_requested"}
+        and not review_reason
+    ):
+        raise reservation.AliReservationError("document_review_reason_required", 422)
     ensure_schema()
     conn = _connection()
     try:
@@ -1329,15 +1613,22 @@ def review_document(
             raise reservation.AliReservationError("document_slot_required", 409)
         if row["status"] == decision:
             conn.commit()
-            return _safe_document(row)
+            result = _safe_document(row)
+            from agents.social import ali_reservation_v2_automation
+            result["automationV2"] = (
+                ali_reservation_v2_automation.after_document_review(public_id)
+            )
+            return result
         timestamp = _iso()
         conn.execute(
             "UPDATE ali_reservation_documents SET status = ?, updated_at = ?, "
-            "verified_at = ?, verified_by = ? WHERE public_id = ? AND tenant_slug = ?",
+            "verified_at = ?, verified_by = ?, review_reason = ? "
+            "WHERE public_id = ? AND tenant_slug = ?",
             (
                 decision, timestamp,
                 timestamp if decision in {"verified", "not_required"} else None,
                 actor_id if decision in {"verified", "not_required"} else None,
+                review_reason or None,
                 document_id, TENANT_SLUG,
             ),
         )
@@ -1350,13 +1641,23 @@ def review_document(
         reservation._event(
             conn, public_id, "document_reviewed", str(case["status"]),
             str(updated_case["status"]), "staff", actor_id,
-            {"document_id": document_id, "slot": row["slot"], "decision": decision},
+            {
+                "document_id": document_id,
+                "slot": row["slot"],
+                "decision": decision,
+                "reason_present": bool(review_reason),
+            },
         )
         updated = conn.execute(
             "SELECT * FROM ali_reservation_documents WHERE public_id = ?", (document_id,),
         ).fetchone()
         conn.commit()
-        return _safe_document(updated)
+        result = _safe_document(updated)
+        from agents.social import ali_reservation_v2_automation
+        result["automationV2"] = (
+            ali_reservation_v2_automation.after_document_review(public_id)
+        )
+        return result
     except Exception:
         conn.rollback()
         raise
@@ -1369,9 +1670,16 @@ def request_document_replacement(
     document_id: str,
     actor: str,
     expected_revision: int | None = None,
+    reason: str = "",
 ) -> dict:
-    """Request a replacement and issue one fresh slot-bound upload link."""
+    """Request one exact replacement through the active delivery channel."""
     actor_id = reservation._validate_actor(actor)
+    review_reason = str(reason or "").strip()
+    if len(review_reason) > 500:
+        raise reservation.AliReservationError("invalid_document_review_reason", 422)
+    from agents.social import ali_reservation_v2
+    if ali_reservation_v2.enabled() and not review_reason:
+        raise reservation.AliReservationError("document_review_reason_required", 422)
     ensure_schema()
     conn = _connection()
     try:
@@ -1388,9 +1696,10 @@ def request_document_replacement(
         timestamp = _iso()
         conn.execute(
             "UPDATE ali_reservation_documents SET status = 'replacement_requested', "
-            "updated_at = ?, verified_at = NULL, verified_by = NULL "
+            "updated_at = ?, verified_at = NULL, verified_by = NULL, "
+            "review_reason = ? "
             "WHERE tenant_slug = ? AND public_id = ?",
-            (timestamp, TENANT_SLUG, document_id),
+            (timestamp, review_reason or None, TENANT_SLUG, document_id),
         )
         conn.execute(
             "UPDATE ali_reservations SET identity_status = 'replacement_requested', "
@@ -1399,12 +1708,16 @@ def request_document_replacement(
             "WHERE tenant_slug = ? AND public_id = ?",
             (actor_id, timestamp, timestamp, TENANT_SLUG, public_id),
         )
-        token, expires = _new_token(
-            conn,
-            public_id,
-            "document_upload",
-            slot=str(document["slot"]),
-        )
+        direct_whatsapp = ali_reservation_v2.enabled()
+        token = ""
+        expires = ""
+        if not direct_whatsapp:
+            token, expires = _new_token(
+                conn,
+                public_id,
+                "document_upload",
+                slot=str(document["slot"]),
+            )
         reservation._event(
             conn,
             public_id,
@@ -1417,25 +1730,132 @@ def request_document_replacement(
                 "document_id": document_id,
                 "slot": document["slot"],
                 "version": document["version"],
+                "reason_present": bool(review_reason),
             },
         )
         conn.commit()
-        return {
+        result = {
             "document": _safe_document(conn.execute(
                 "SELECT * FROM ali_reservation_documents WHERE public_id = ?",
                 (document_id,),
             ).fetchone()),
-            "links": [{
+            "mode": "direct_whatsapp" if direct_whatsapp else "signed_upload_link",
+            "replacementSlot": str(document["slot"]) if direct_whatsapp else None,
+            "links": [] if direct_whatsapp else [{
                 "slot": document["slot"],
                 "url": f"{_public_base_url()}/dashboard/api/ali-reservations/public/documents/{token}",
                 "expiresAt": expires,
             }],
         }
+        if direct_whatsapp:
+            result["workflowV2"] = ali_reservation_v2.request_document_replacement(
+                public_id,
+                str(document["slot"]),
+                actor_id=actor_id,
+                idempotency_key=(
+                    f"replacement:{document['public_id']}:{document['version']}"
+                ),
+            )
+        return result
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+
+
+def reclassify_whatsapp_document(
+    public_id: str,
+    document_id: str,
+    slot: str,
+    actor: str,
+    expected_revision: int | None = None,
+) -> dict:
+    """Assign one validated, unclassified WhatsApp file to the expected slot."""
+    from agents.social import ali_reservation_v2
+
+    if not ali_reservation_v2.enabled():
+        raise reservation.AliReservationError("reservation_v2_not_enabled", 409)
+    actor_id = reservation._validate_actor(actor)
+    target_slot = str(slot or "").strip()
+    current_v2 = ali_reservation_v2.get_case(public_id)
+    if target_slot != str(current_v2.get("expectedDocumentSlot") or ""):
+        raise reservation.AliReservationError("unexpected_document_slot", 409)
+    if target_slot not in ali_reservation_v2.required_document_slots(
+        str(current_v2.get("identityType") or "")
+    ):
+        raise reservation.AliReservationError("invalid_document_slot", 422)
+
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        case = _available_case(conn, public_id)
+        reservation._check_revision(case, expected_revision)
+        document = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? AND public_id = ?",
+            (TENANT_SLUG, public_id, document_id),
+        ).fetchone()
+        if not document or document["status"] != "unclassified":
+            raise reservation.AliReservationError("unclassified_document_not_found", 404)
+        prior = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? AND slot = ? AND status NOT IN "
+            "('deleted','replaced') ORDER BY version DESC LIMIT 1",
+            (TENANT_SLUG, public_id, target_slot),
+        ).fetchone()
+        timestamp = _iso()
+        if prior:
+            conn.execute(
+                "UPDATE ali_reservation_documents SET status = 'replaced', "
+                "updated_at = ? WHERE tenant_slug = ? AND public_id = ?",
+                (timestamp, TENANT_SLUG, prior["public_id"]),
+            )
+        version = int(conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM ali_reservation_documents "
+            "WHERE tenant_slug = ? AND reservation_public_id = ? AND slot = ?",
+            (TENANT_SLUG, public_id, target_slot),
+        ).fetchone()[0])
+        conn.execute(
+            "UPDATE ali_reservation_documents SET slot = ?, version = ?, "
+            "status = 'received', classification_source = 'staff_reclassified', "
+            "unclassified_expires_at = NULL, previous_document_public_id = ?, "
+            "updated_at = ? WHERE tenant_slug = ? AND public_id = ?",
+            (
+                target_slot, version,
+                str(prior["public_id"]) if prior else None,
+                timestamp, TENANT_SLUG, document_id,
+            ),
+        )
+        reservation._event(
+            conn, public_id, "whatsapp_document_reclassified",
+            str(case["status"]), str(case["status"]), "staff", actor_id,
+            {
+                "document_id": document_id,
+                "slot": target_slot,
+                "version": version,
+            },
+        )
+        updated = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND public_id = ?",
+            (TENANT_SLUG, document_id),
+        ).fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    result = _safe_document(updated)
+    result["workflowV2"] = ali_reservation_v2.record_document_received(
+        public_id,
+        target_slot,
+        provider_message_id=f"reclassify:{document_id}",
+    )
+    return result
 
 
 def mark_document_slot_not_required(
@@ -1446,6 +1866,9 @@ def mark_document_slot_not_required(
 ) -> dict:
     """Mark only the optional licence-back slot as not required."""
     if slot != "license_back":
+        raise reservation.AliReservationError("document_slot_required", 409)
+    from agents.social import ali_reservation_v2
+    if ali_reservation_v2.enabled():
         raise reservation.AliReservationError("document_slot_required", 409)
     actor_id = reservation._validate_actor(actor)
     ensure_schema()
@@ -1973,7 +2396,14 @@ def sign_contract(token: str, *, consent: bool, legal_name: str, signature_data:
                 (_iso(), contract["public_id"], token_row["token_hash"]),
             )
             conn.commit()
-            return _safe_contract(contract)
+            result = _safe_contract(contract)
+            from agents.social import ali_reservation_v2_automation
+            result["automationV2"] = (
+                ali_reservation_v2_automation.after_contract_signed(
+                    str(token_row["reservation_public_id"])
+                )
+            )
+            return result
         if token_row["used_at"]:
             raise reservation.AliReservationError("invalid_or_expired_token", 404)
         if contract["status"] not in {"sent", "viewed"}:
@@ -2025,7 +2455,14 @@ def sign_contract(token: str, *, consent: bool, legal_name: str, signature_data:
             "SELECT * FROM ali_reservation_contracts WHERE public_id = ?", (contract["public_id"],),
         ).fetchone()
         conn.commit()
-        return _safe_contract(result)
+        output = _safe_contract(result)
+        from agents.social import ali_reservation_v2_automation
+        output["automationV2"] = (
+            ali_reservation_v2_automation.after_contract_signed(
+                str(token_row["reservation_public_id"])
+            )
+        )
+        return output
     except Exception:
         conn.rollback()
         raise
@@ -2088,7 +2525,8 @@ def set_payment_link(
             "payment_url, payment_domain, payment_reference, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(reservation_public_id) DO UPDATE SET payment_url=excluded.payment_url, "
             "payment_domain=excluded.payment_domain, payment_reference=excluded.payment_reference, "
-            "link_sent_at=NULL, customer_reported_at=NULL, verified_at=NULL, verified_by=NULL, updated_at=excluded.updated_at",
+            "link_sent_at=NULL, customer_reported_at=NULL, verified_at=NULL, "
+            "verified_by=NULL, review_reason=NULL, updated_at=excluded.updated_at",
             (public_id, TENANT_SLUG, payment_url, domain, payment_reference, timestamp),
         )
         conn.execute(
@@ -2156,7 +2594,7 @@ def payment_delivery_payload(public_id: str) -> dict:
     ensure_schema()
     conn = _connection()
     try:
-        _available_case(conn, public_id)
+        case = _available_case(conn, public_id)
         payment = conn.execute(
             "SELECT payment_url FROM ali_reservation_payments WHERE tenant_slug = ? "
             "AND reservation_public_id = ?",
@@ -2164,7 +2602,14 @@ def payment_delivery_payload(public_id: str) -> dict:
         ).fetchone()
         if not payment or not payment["payment_url"]:
             raise reservation.AliReservationError("payment_link_not_configured", 409)
-        return {"url": str(payment["payment_url"])}
+        snapshot = _quote_snapshot(conn, case)
+        amount = str(
+            (snapshot["pricing"].get("reservationDeposit") or {}).get("amount")
+            or ""
+        )
+        if not re.fullmatch(r"\d+(?:\.\d{2})", amount):
+            raise reservation.AliReservationError("reservation_payment_amount_missing", 409)
+        return {"url": str(payment["payment_url"]), "amount": amount}
     finally:
         conn.close()
 
@@ -2214,10 +2659,14 @@ def review_payment(
     decision: str,
     actor: str,
     expected_revision: int | None = None,
+    reason: str = "",
 ) -> dict:
     if decision not in {"verified", "rejected", "not_required"}:
         raise reservation.AliReservationError("invalid_payment_decision", 422)
     actor_id = reservation._validate_actor(actor)
+    review_reason = str(reason or "").strip()
+    if len(review_reason) > 500:
+        raise reservation.AliReservationError("invalid_payment_review_reason", 422)
     ensure_schema()
     conn = _connection()
     try:
@@ -2226,24 +2675,49 @@ def review_payment(
         reservation._check_revision(case, expected_revision)
         if decision == "verified" and case["payment_status"] not in {"customer_reports_paid", "link_sent"}:
             raise reservation.AliReservationError("payment_verification_not_expected", 409)
+        override = (
+            decision in {"rejected", "not_required"}
+            or (
+                decision == "verified"
+                and case["payment_status"] != "customer_reports_paid"
+            )
+        )
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled() and override and not review_reason:
+            raise reservation.AliReservationError("payment_review_reason_required", 422)
         timestamp = _iso()
         conn.execute(
             "UPDATE ali_reservations SET payment_status = ? WHERE tenant_slug = ? AND public_id = ?",
             (decision, TENANT_SLUG, public_id),
         )
         conn.execute(
-            "INSERT INTO ali_reservation_payments (reservation_public_id, tenant_slug, updated_at) "
-            "VALUES (?, ?, ?) ON CONFLICT(reservation_public_id) DO UPDATE SET "
-            "verified_at=excluded.updated_at, verified_by=?, updated_at=excluded.updated_at",
-            (public_id, TENANT_SLUG, timestamp, actor_id),
+            "INSERT INTO ali_reservation_payments (reservation_public_id, tenant_slug, "
+            "verified_at, verified_by, review_reason, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(reservation_public_id) DO UPDATE SET "
+            "verified_at=excluded.verified_at, verified_by=excluded.verified_by, "
+            "review_reason=excluded.review_reason, updated_at=excluded.updated_at",
+            (
+                public_id, TENANT_SLUG, timestamp, actor_id,
+                review_reason or None, timestamp,
+            ),
         )
         updated = _refresh_case(conn, public_id, actor_id)
         reservation._event(
             conn, public_id, "payment_reviewed", str(case["status"]),
-            str(updated["status"]), "staff", actor_id, {"decision": decision},
+            str(updated["status"]), "staff", actor_id,
+            {
+                "decision": decision,
+                "override": override,
+                "reason_present": bool(review_reason),
+            },
         )
         conn.commit()
-        return reservation._public_row(updated)
+        result = reservation._public_row(updated)
+        from agents.social import ali_reservation_v2_automation
+        result["automationV2"] = ali_reservation_v2_automation.after_payment_review(
+            public_id, decision,
+        )
+        return result
     except Exception:
         conn.rollback()
         raise
@@ -2319,6 +2793,7 @@ def get_customer_file(public_id: str) -> dict:
             "customerReportedAt": payment["customer_reported_at"] if payment else None,
             "verifiedAt": payment["verified_at"] if payment else None,
             "verifiedBy": payment["verified_by"] if payment else None,
+            "reviewReason": payment["review_reason"] if payment else None,
         }
         value["events"] = reservation.list_reservation_events(public_id)
         value["final_notes"] = case["final_notes"]
@@ -2335,6 +2810,9 @@ def get_customer_file(public_id: str) -> dict:
             and case["availability_status"] == "approved"
             and not missing
         )
+        from agents.social import ali_reservation_v2
+        if ali_reservation_v2.enabled():
+            value["workflow_v2"] = ali_reservation_v2.get_case(public_id)
         return value
     finally:
         conn.close()
@@ -2454,6 +2932,7 @@ def generate_dossier(
         if dossier_status == "incomplete":
             for page in writer.pages: _watermark_page(page, dimensions)
         output = io.BytesIO(); writer.write(output); data = output.getvalue(); digest = hashlib.sha256(data).hexdigest()
+        storage_name = _write_private(data, ".pdf", public_id)
         version_row = conn.execute(
             "SELECT COALESCE(MAX(version),0)+1 FROM ali_reservation_dossier_audits "
             "WHERE tenant_slug = ? AND reservation_public_id = ?",
@@ -2462,8 +2941,8 @@ def generate_dossier(
         created = _iso()
         conn.execute(
             "INSERT INTO ali_reservation_dossier_audits (reservation_public_id, tenant_slug, version, "
-            "status, content_sha256, page_count, page_size, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (public_id, TENANT_SLUG, version, dossier_status, digest, len(writer.pages), page_size, actor_id, created),
+            "status, content_sha256, page_count, page_size, actor_id, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (public_id, TENANT_SLUG, version, dossier_status, digest, len(writer.pages), page_size, actor_id, storage_name, created),
         )
         conn.execute(
             "UPDATE ali_reservations SET dossier_version = ?, revision = revision + 1, updated_at = ? "

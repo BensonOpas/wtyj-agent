@@ -268,7 +268,81 @@ def _ali_inbound_recovery_loop(stop_event: threading.Event) -> None:
             _recover_stale_ali_inbound_once()
         except Exception as exc:
             log("ali_inbound_recovery_failed", error=type(exc).__name__)
+        try:
+            _run_ali_reservation_v2_scheduled_once()
+        except Exception as exc:
+            log("ali_reservation_v2_scheduler_failed", error=type(exc).__name__)
         stop_event.wait(5)
+
+
+def _run_ali_reservation_v2_scheduled_once() -> int:
+    """Expire due V2 holds and send reminders only behind the hard gate."""
+    from agents.social import ali_customer_dossier, ali_quote_delivery
+    from agents.social import ali_reservation_v2
+
+    if not ali_reservation_v2.enabled():
+        return 0
+    handled = 0
+    for plan in ali_reservation_v2.reminder_plan():
+        if plan.get("kind") == "documents_prompt":
+            public_id = str(plan.get("reservationPublicId") or "")
+            payload = ali_customer_dossier.issue_document_links(
+                public_id,
+                actor="reservation_v2_scheduler",
+            )
+            ali_quote_delivery.send_customer_requirement_link(
+                public_id,
+                "documents",
+                payload,
+            )
+            handled += 1
+            continue
+        if plan.get("kind") == "expire":
+            ali_reservation_v2.expire_due_case(plan)
+        if plan.get("kind") in {"expire", "expiry_closure"}:
+            public_id = str(plan.get("reservationPublicId") or "")
+            context = ali_customer_dossier.customer_delivery_context(public_id)
+            delivered = send_reply(
+                "whatsapp",
+                str(context["conversation_id"]),
+                str(context["account_id"]),
+                ali_quote_delivery.reservation_hold_expired_text(
+                    str(context.get("locale") or "en"),
+                ),
+                confirm_delivery=True,
+                idempotency_key=(
+                    f"ali-v2-expiry-closure:{public_id}"
+                ),
+            )
+            ali_reservation_v2.record_expiry_closure_result(
+                {
+                    **plan,
+                    "kind": "expiry_closure",
+                    "idempotencyKey": f"ali-v2-expiry-closure:{public_id}",
+                },
+                sent=bool(delivered),
+            )
+            handled += 1
+            continue
+        if not ali_reservation_v2.reminder_sends_enabled():
+            continue
+        public_id = str(plan.get("reservationPublicId") or "")
+        context = ali_customer_dossier.customer_delivery_context(public_id)
+        message = ali_quote_delivery.reservation_reminder_text(
+            str(context.get("locale") or "en"),
+            str(plan.get("nextAction") or ""),
+        )
+        delivered = send_reply(
+            "whatsapp",
+            str(context["conversation_id"]),
+            str(context["account_id"]),
+            message,
+            confirm_delivery=True,
+            idempotency_key=str(plan["idempotencyKey"]),
+        )
+        ali_reservation_v2.record_reminder_result(plan, sent=bool(delivered))
+        handled += 1
+    return handled
 
 
 def _mark_delivery_failed(channel: str, conversation_id: str, customer_name: str,
@@ -485,6 +559,18 @@ def _flush_buffer(phone):
     # Use last message's metadata
     final_msg = messages[-1].copy()
     final_msg["text"] = combined_text
+    final_msg["_zernio_attachments"] = []
+    for buffered_message in messages:
+        for attachment in buffered_message.get("_zernio_attachments") or []:
+            if not isinstance(attachment, dict):
+                continue
+            safe_attachment = dict(attachment)
+            safe_attachment["provider_message_id"] = str(
+                buffered_message.get("message_id")
+                or buffered_message.get("_zernio_event_id")
+                or ""
+            )
+            final_msg["_zernio_attachments"].append(safe_attachment)
     final_msg["_ali_action_id"] = hashlib.sha256(
         "\x1f".join(ids or [str(final_msg.get("message_id") or "")]).encode("utf-8")
     ).hexdigest()
@@ -543,6 +629,114 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "ignored", reason="blocked_conversation")
                     return  # exits the with _phone_lock block
+                from agents.social.ali_reservation_v2_inbound import (
+                    process_structural_text,
+                )
+
+                _ali_v2_automation_available = (
+                    not state_registry.get_ai_muted(_zernio_conv)
+                    and icp_overrides.auto_reply_enabled()
+                )
+                structural_result = (
+                    process_structural_text(final_msg)
+                    if _ali_v2_automation_available
+                    else {"handled": False}
+                )
+                if (
+                    structural_result.get("handled")
+                    and not structural_result.get("continue_to_documents")
+                ):
+                    state_registry.dm_store_inbound_message(
+                        _zernio_conv, _zernio_channel, combined_text,
+                        _zernio_sender, ids,
+                    )
+                    structural_reply = str(structural_result.get("reply") or "")
+                    structural_ok = bool(structural_reply) and send_reply(
+                        _zernio_channel,
+                        _zernio_conv,
+                        _zernio_acct,
+                        structural_reply,
+                        confirm_delivery=True,
+                        idempotency_key=(
+                            "ali-v2-structural-"
+                            + str(final_msg.get("_ali_action_id") or "")
+                        ),
+                    )
+                    if not structural_ok:
+                        _mark_delivery_failed(
+                            _zernio_channel, _zernio_conv, _zernio_sender,
+                            ids, "structural reply failed",
+                        )
+                        return
+                    state_registry.dm_store_message(
+                        conversation_id=_zernio_conv,
+                        channel=_zernio_channel,
+                        role="assistant",
+                        text=structural_reply,
+                    )
+                    state_registry.inbound_processing_bulk_update(
+                        ids, "replied", reason="reservation_v2_structural_gate",
+                    )
+                    return
+                if (
+                    _ali_v2_automation_available
+                    and final_msg.get("_zernio_attachments")
+                ):
+                    from agents.social.ali_reservation_v2_inbound import (
+                        process_whatsapp_documents,
+                    )
+
+                    document_result = process_whatsapp_documents(final_msg)
+                    if document_result.get("handled"):
+                        state_registry.dm_store_inbound_message(
+                            _zernio_conv, _zernio_channel,
+                            "[Secure reservation document received]",
+                            _zernio_sender, ids,
+                        )
+                        if state_registry.get_ai_muted(_zernio_conv):
+                            state_registry.inbound_processing_bulk_update(
+                                ids, "escalated", reason="human_takeover_ai_muted",
+                            )
+                            return
+                        if not icp_overrides.auto_reply_enabled():
+                            state_registry.inbound_processing_bulk_update(
+                                ids, "paused", reason="tenant_agent_paused",
+                            )
+                            return
+                        reply_text = str(document_result.get("reply") or "")
+                        reply_ok = bool(reply_text) and send_reply(
+                            _zernio_channel,
+                            _zernio_conv,
+                            _zernio_acct,
+                            reply_text,
+                            confirm_delivery=True,
+                            idempotency_key=(
+                                "ali-v2-document-ack-"
+                                + str(final_msg.get("_ali_action_id") or "")
+                            ),
+                        )
+                        if not reply_ok:
+                            _mark_delivery_failed(
+                                _zernio_channel, _zernio_conv, _zernio_sender,
+                                ids, "document acknowledgement failed",
+                            )
+                            return
+                        state_registry.dm_store_message(
+                            conversation_id=_zernio_conv,
+                            channel=_zernio_channel,
+                            role="assistant",
+                            text=reply_text,
+                        )
+                        state_registry.inbound_processing_bulk_update(
+                            ids,
+                            "replied" if document_result.get("success") else "processing_failed",
+                            reason=(
+                                "reservation_document_stored"
+                                if document_result.get("success")
+                                else "reservation_document_rejected"
+                            ),
+                        )
+                        return
                 # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
                 if state_registry.get_ai_muted(_zernio_conv):
                     state_registry.dm_store_inbound_message(
@@ -1253,7 +1447,10 @@ def _process_zernio_event(payload: dict):
             msg.get("platform") == "whatsapp"
             and str(msg.get("interactive_id") or "").strip()
         )
-        if not text and not has_whatsapp_interactive_reply:
+        has_whatsapp_attachment = bool(
+            msg.get("platform") == "whatsapp" and msg.get("attachments")
+        )
+        if not text and not has_whatsapp_interactive_reply and not has_whatsapp_attachment:
             state_registry.inbound_processing_update(
                 message_id, "ignored", reason="non_text_message")
             log("zernio_dm_non_text_skipped", message_id=message_id,
