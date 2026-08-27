@@ -50,6 +50,9 @@ from agents.social.ali_media_first import (
     conversation_repair_reply,
     derive_media_first_action,
     enforce_vehicle_first_reply,
+    explicit_catalog_browse_request,
+    explicit_no_preference_request,
+    explicit_smaller_vehicle_request,
     explicit_visual_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -2211,6 +2214,18 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             reply_text = ""
             _ali_turn_plan = None
         else:
+            capacity_advisory = bool(
+                explicit_catalog_browse_request(text)
+                or explicit_smaller_vehicle_request(text)
+            )
+            bm_logger.log(
+                "ali_vehicle_recommendation_build_decision",
+                deterministic_reason=media_first_reason[:80],
+                capacity_advisory=capacity_advisory,
+                recommendation_mode=str(
+                    recommendation_action.get("mode") or ""
+                )[:20],
+            )
             try:
                 vehicle_recommendation = build_vehicle_recommendation(
                     recommendation_action,
@@ -2219,11 +2234,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     flags,
                     reply_text,
                     turn_id=str(message.get("message_id") or ""),
-                    allow_repeat=explicit_visual_request(text),
-                    capacity_advisory=media_first_reason in {
-                        "explicit_catalog_browse",
-                        "explicit_smaller_preference",
-                    },
+                    allow_repeat=(
+                        explicit_visual_request(text)
+                        or explicit_no_preference_request(text)
+                    ),
+                    capacity_advisory=capacity_advisory,
                 )
             except AliVehicleRecommendationError as exc:
                 media_first_status = "invalid"

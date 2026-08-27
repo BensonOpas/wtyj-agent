@@ -415,7 +415,7 @@ def test_explicit_catalog_browse_is_actionable_in_all_locales(message_text):
     assert explicit_catalog_browse_request(message_text) is True
     assert infer_media_first_intent(
         message_text,
-        "Would you prefer a smaller car, an SUV, or a van?",
+        "The Kia Picanto and Toyota Yaris are good options.",
         None,
         {"passenger_count": 6, "luggage_count": 3},
         {"ali_last_recommendation_ids": ["vehicle-6"]},
@@ -448,6 +448,33 @@ def test_calvin_browse_replay_returns_visual_options_instead_of_looping():
     assert "current fleet" in decision["reply_text"]
     assert "fewer than 6 seats" in decision["reply_text"]
     assert "Would you prefer" not in decision["reply_text"]
+
+
+def test_explicit_browse_overrides_simultaneous_model_candidates():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Picanto 2024 or similar",
+                "Toyota Yaris or similar",
+            ],
+        },
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {},
+        _catalog(),
+        message_text="Show me what you have",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_catalog_browse"
+    assert len(decision["action"]["vehicle_names"]) == 5
+    assert "fewer than 6 seats" in decision["reply_text"]
 
 
 @pytest.mark.parametrize(
@@ -498,6 +525,38 @@ def test_no_preference_reopens_the_only_suitable_previously_rejected_car():
     assert "Would you prefer" not in decision["reply_text"]
 
 
+def test_no_preference_overrides_simultaneous_model_candidates():
+    catalog = _catalog()
+    catalog["vehicleClasses"].append({"id": "van", "name": "Van"})
+    catalog["vehicles"].append(
+        _vehicle(7, "Suzuki Ertiga", "van", 7, "75.00")
+    )
+
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Picanto 2024 or similar",
+                "Toyota Yaris or similar",
+            ],
+        },
+        "The Kia Picanto and Toyota Yaris are good options.",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {},
+        catalog,
+        message_text="Whatever",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "capacity_curated"
+    assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
+
+
 @pytest.mark.parametrize(
     "message_text",
     ["Smaller", "kleinere auto", "outo mas chikí", "kleiner Wagen"],
@@ -537,6 +596,33 @@ def test_calvin_smaller_replay_shows_smaller_cars_with_capacity_context():
     assert "Kia Seltos" not in decision["action"]["vehicle_names"]
     assert "seat up to 5" in decision["reply_text"]
     assert "6 people" in decision["reply_text"]
+
+
+def test_explicit_smaller_overrides_simultaneous_model_candidates():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "curated",
+            "vehicle_names": [
+                "Kia Seltos or similar",
+                "Toyota Yaris or similar",
+            ],
+        },
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {},
+        _catalog(),
+        message_text="Smaller",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_smaller_preference"
+    assert "Kia Seltos" not in decision["action"]["vehicle_names"]
+    assert "seat up to 5" in decision["reply_text"]
 
 
 def test_negative_smaller_phrase_is_not_treated_as_positive_preference():
