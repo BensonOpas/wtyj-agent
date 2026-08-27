@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules, rental_catalog
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import (
     content_agent,
@@ -4582,6 +4582,265 @@ class AliReservationConfirmRequest(BaseModel):
 
     note: str | None = Field(default=None, max_length=500)
     expectedRevision: int | None = Field(default=None, ge=1, strict=True)
+
+
+# ── FRD-005: Spartan rental tenant control center ──────────────────────────
+
+
+class RentalDraftUpdateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expectedRevision: int = Field(ge=0, strict=True)
+    document: dict
+
+
+class RentalValidateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    document: dict
+
+
+class RentalPreviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    document: dict
+    scenario: dict
+
+
+class RentalPublishRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expectedRevision: int = Field(ge=1, strict=True)
+    idempotencyKey: str = Field(min_length=1, max_length=128)
+
+
+class RentalRollbackRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expectedCurrentVersion: int = Field(ge=1, strict=True)
+    idempotencyKey: str = Field(min_length=1, max_length=128)
+
+
+def _rental_control_center_enabled() -> bool:
+    try:
+        raw = config_loader.get_raw() or {}
+        features = raw.get("features") if isinstance(raw, dict) else {}
+        return bool(
+            isinstance(features, dict)
+            and features.get("rental_control_center_enabled", False)
+        )
+    except Exception:
+        return False
+
+
+def _require_rental_control_center() -> str:
+    tenant_slug = _current_tenant_slug()
+    if not tenant_slug or not _rental_control_center_enabled():
+        raise HTTPException(
+            status_code=404,
+            detail="Rental control center is not enabled for this tenant",
+        )
+    return tenant_slug
+
+
+def _check_rental_catalog_consumer_auth(
+    authorization: str = Header(default=""),
+) -> None:
+    expected = os.environ.get("RENTAL_CATALOG_CONSUMER_TOKEN", "")
+    if not expected or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid service credential")
+    if not secrets.compare_digest(authorization[7:], expected):
+        raise HTTPException(status_code=401, detail="Invalid service credential")
+
+
+def _rental_no_store(response: Response, tenant_slug: str) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Unboks-Tenant"] = tenant_slug
+
+
+def _raise_rental_catalog_error(exc: Exception, *, action: str) -> None:
+    if isinstance(exc, rental_catalog.RentalCatalogError):
+        bm_logger.log(
+            "rental_catalog_rejected",
+            action=action,
+            code=exc.code[:80],
+            status_code=exc.status_code,
+        )
+        detail: dict = {"code": exc.code}
+        if exc.errors:
+            detail["errors"] = exc.errors
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+    bm_logger.log(
+        "rental_catalog_error",
+        action=action,
+        error_type=type(exc).__name__,
+    )
+    raise HTTPException(status_code=500, detail={"code": "rental_catalog_failed"}) from exc
+
+
+@router.get("/rental-catalog/draft", dependencies=[Depends(_check_auth)])
+async def get_rental_catalog_draft(response: Response):
+    tenant_slug = _require_rental_control_center()
+    try:
+        result = rental_catalog.get_draft(tenant_slug)
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="draft_read")
+    _rental_no_store(response, tenant_slug)
+    return result
+
+
+@router.put("/rental-catalog/draft", dependencies=[Depends(_check_auth)])
+async def update_rental_catalog_draft(
+    req: RentalDraftUpdateRequest,
+    response: Response,
+):
+    tenant_slug = _require_rental_control_center()
+    try:
+        result = rental_catalog.save_draft(
+            tenant_slug,
+            req.document,
+            expected_revision=req.expectedRevision,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="draft_save")
+    bm_logger.log(
+        "rental_catalog_draft_saved",
+        tenant_slug=tenant_slug,
+        revision=result["revision"],
+    )
+    _rental_no_store(response, tenant_slug)
+    return result
+
+
+@router.post("/rental-catalog/validate", dependencies=[Depends(_check_auth)])
+async def validate_rental_catalog(req: RentalValidateRequest, response: Response):
+    tenant_slug = _require_rental_control_center()
+    validation = rental_catalog.validate_document(req.document, for_publish=True)
+    result = {
+        "tenantSlug": tenant_slug,
+        "valid": validation.valid,
+        "errors": validation.errors,
+        "warnings": validation.warnings,
+    }
+    if not validation.valid:
+        bm_logger.log(
+            "rental_catalog_validation_failed",
+            tenant_slug=tenant_slug,
+            error_count=len(validation.errors),
+        )
+    _rental_no_store(response, tenant_slug)
+    return result
+
+
+@router.post("/rental-catalog/preview", dependencies=[Depends(_check_auth)])
+async def preview_rental_catalog(req: RentalPreviewRequest, response: Response):
+    """Calculate a synthetic preview. This path has no delivery adapters."""
+    tenant_slug = _require_rental_control_center()
+    try:
+        from agents.social import rental_catalog_preview
+        result = rental_catalog_preview.render_preview(
+            tenant_slug, req.document, req.scenario,
+        )
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="preview")
+    bm_logger.log("rental_catalog_previewed", tenant_slug=tenant_slug)
+    _rental_no_store(response, tenant_slug)
+    return {"tenantSlug": tenant_slug, **result}
+
+
+@router.get(
+    "/rental-catalog/previews/{preview_id}/pdf",
+    dependencies=[Depends(_check_auth)],
+)
+async def download_rental_catalog_preview_pdf(preview_id: str):
+    tenant_slug = _require_rental_control_center()
+    try:
+        from agents.social import rental_catalog_preview
+        path = rental_catalog_preview.resolve_preview_pdf(tenant_slug, preview_id)
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="preview_download")
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename="rental-quote-preview.pdf",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Unboks-Tenant": tenant_slug,
+        },
+    )
+
+
+@router.post("/rental-catalog/publish", dependencies=[Depends(_check_auth)])
+async def publish_rental_catalog(req: RentalPublishRequest, response: Response):
+    tenant_slug = _require_rental_control_center()
+    try:
+        result = rental_catalog.publish(
+            tenant_slug,
+            expected_revision=req.expectedRevision,
+            idempotency_key=req.idempotencyKey,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="publish")
+    bm_logger.log(
+        "rental_catalog_published",
+        tenant_slug=tenant_slug,
+        version=result["version"],
+        content_hash=result["contentHash"],
+    )
+    ali_quote_workflow.invalidate_catalog_cache()
+    _rental_no_store(response, tenant_slug)
+    return result
+
+
+@router.post("/rental-catalog/rollback", dependencies=[Depends(_check_auth)])
+async def rollback_rental_catalog(req: RentalRollbackRequest, response: Response):
+    tenant_slug = _require_rental_control_center()
+    try:
+        result = rental_catalog.rollback(
+            tenant_slug,
+            expected_current_version=req.expectedCurrentVersion,
+            idempotency_key=req.idempotencyKey,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="rollback")
+    bm_logger.log(
+        "rental_catalog_rolled_back",
+        tenant_slug=tenant_slug,
+        version=result["version"],
+        source_version=result["sourceVersion"],
+    )
+    ali_quote_workflow.invalidate_catalog_cache()
+    _rental_no_store(response, tenant_slug)
+    return result
+
+
+@router.get(
+    "/rental-catalog/published",
+    dependencies=[Depends(_check_rental_catalog_consumer_auth)],
+)
+async def get_published_rental_catalog(response: Response):
+    tenant_slug = _require_rental_control_center()
+    try:
+        result = rental_catalog.consumer_catalog(tenant_slug)
+    except Exception as exc:
+        _raise_rental_catalog_error(exc, action="consumer_read")
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "published_catalog_not_found"})
+    bm_logger.log(
+        "rental_catalog_consumer_loaded",
+        tenant_slug=tenant_slug,
+        version=result["catalogVersion"],
+        content_hash=result["contentHash"],
+    )
+    _rental_no_store(response, tenant_slug)
+    return result
 
 
 def _raise_ali_reservation_error(exc: Exception, *, action: str) -> None:

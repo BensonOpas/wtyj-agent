@@ -24,7 +24,7 @@ import httpx
 from agents.social.ali_quote_brand_card import render_quote_brand_card
 from agents.social.ali_quote_pdf import render_quote_pdf
 from agents.social.ali_quote_presentation import format_rental_period
-from shared import bm_logger, config_loader, state_registry
+from shared import bm_logger, config_loader, state_registry, rental_catalog
 
 TENANT_SLUG = "ali-car-rental"
 WORKFLOW_TYPE = "ali_quote"
@@ -117,7 +117,7 @@ CORRECTION_OR_DETAIL = {
     "ändern", "korrigieren", "hinzufügen", "entfernen", "datum", "daten", "abholung",
     "rückgabe", "kindersitz", "gepäck", "alter", "name", "ort", "flughafen", "hotel",
 }
-_CATALOG_CACHE = {"expires_at": 0.0, "value": None}
+_CATALOG_CACHE = {"expires_at": 0.0, "value": None, "provider": None}
 _CATALOG_CACHE_SECONDS = 60.0
 CUSTOMER_QUOTE_DELAY_SECONDS = 3 * 60
 _FORBIDDEN_CONTACT_REDIRECT = re.compile(
@@ -1447,6 +1447,55 @@ class AliQuoteClient:
         raise AliQuoteError("ali_temporary_failure")
 
 
+class RentalControlCenterQuoteClient:
+    """Local published-catalog provider behind a separately reversible flag."""
+
+    def __init__(self, tenant_slug: str = TENANT_SLUG):
+        self.tenant_slug = tenant_slug
+
+    def get_catalog(self) -> dict:
+        try:
+            catalog = rental_catalog.consumer_catalog(self.tenant_slug)
+        except rental_catalog.RentalCatalogError as exc:
+            raise AliQuoteError(f"rental_catalog_{exc.code}") from exc
+        if catalog is None:
+            raise AliQuoteError("rental_catalog_not_published")
+        return catalog
+
+    def create_quote(self, request: dict, idempotency_key: str) -> dict:
+        try:
+            return rental_catalog.create_quote_snapshot(
+                self.tenant_slug,
+                request,
+                idempotency_key=idempotency_key,
+            )
+        except rental_catalog.RentalCatalogError as exc:
+            raise AliQuoteError(f"rental_catalog_{exc.code}") from exc
+
+
+def rental_control_center_provider_enabled(raw: dict | None = None) -> bool:
+    raw = raw if raw is not None else (config_loader.get_raw() or {})
+    features = raw.get("features") if isinstance(raw, dict) else {}
+    return bool(
+        tenant_configured(raw)
+        and isinstance(features, dict)
+        and features.get("rental_catalog_consumer_enabled", False)
+    )
+
+
+def active_quote_client(raw: dict | None = None):
+    if rental_control_center_provider_enabled(raw):
+        return RentalControlCenterQuoteClient(TENANT_SLUG)
+    return AliQuoteClient(
+        os.environ.get("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com"),
+        os.environ.get("ALI_QUOTE_API_TOKEN", ""),
+    )
+
+
+def invalidate_catalog_cache() -> None:
+    _CATALOG_CACHE.update({"expires_at": 0.0, "value": None, "provider": None})
+
+
 def get_intake_catalog(
     client: AliQuoteClient | None = None,
     *,
@@ -1454,16 +1503,22 @@ def get_intake_catalog(
 ) -> dict:
     """Return the current published Ali catalog without customer data."""
     now = time.monotonic()
-    cached = _CATALOG_CACHE.get("value")
-    if not force_refresh and cached is not None and now < float(_CATALOG_CACHE["expires_at"]):
-        return cached
-    active_client = client or AliQuoteClient(
-        os.environ.get("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com"),
-        os.environ.get("ALI_QUOTE_API_TOKEN", ""),
+    provider = "custom" if client is not None else (
+        "control_center" if rental_control_center_provider_enabled() else "legacy"
     )
+    cached = _CATALOG_CACHE.get("value")
+    if (
+        not force_refresh
+        and cached is not None
+        and _CATALOG_CACHE.get("provider") == provider
+        and now < float(_CATALOG_CACHE["expires_at"])
+    ):
+        return cached
+    active_client = client or active_quote_client()
     catalog = active_client.get_catalog()
     _CATALOG_CACHE["value"] = catalog
     _CATALOG_CACHE["expires_at"] = now + _CATALOG_CACHE_SECONDS
+    _CATALOG_CACHE["provider"] = provider
     return catalog
 
 
@@ -1916,6 +1971,9 @@ def process_quote(
                 public_id, quote["locale"], json.loads(quote["customer_json"]),
                 json.loads(quote["rental_json"]), pricing, output_root=output_root,
                 logo_path=logo_path,
+                availability_copy=pricing.get("availabilityCopy"),
+                quote_footer=pricing.get("quoteFooter"),
+                validity_hours=pricing.get("quoteValidityHours"),
             )
             quote = update_quote(public_id, status="pdf_ready", pdf_path=path, pdf_sha256=digest)
         pdf_bytes = open(quote["pdf_path"], "rb").read()
@@ -2135,10 +2193,7 @@ def _process_production(public_id: str) -> None:
     from agents.social.ali_quote_delivery import production_adapters
     adapters = production_adapters()
     try:
-        client = AliQuoteClient(
-            os.environ.get("ALI_QUOTE_API_BASE_URL", "https://alicarrental.com"),
-            os.environ.get("ALI_QUOTE_API_TOKEN", ""),
-        )
+        client = active_quote_client()
         process_quote(
             public_id, client, adapters,
             output_root=os.environ.get("ALI_QUOTE_DATA_ROOT", "/app/data/ali-quotes"),

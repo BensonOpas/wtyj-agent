@@ -146,18 +146,7 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         return False
     pricing = json.loads(quote["pricing_json"])
     customer = json.loads(quote["customer_json"])
-    rental = json.loads(quote.get("rental_json") or "{}")
-    locale = quote.get("locale") if quote.get("locale") in MESSAGES else "en"
-    ready, reply = MESSAGES[locale]
-    supplement_summary = _supplement_summary(pricing, rental, locale)
-    text = (
-        f"{ready}\n\nQuote: {quote['quote_reference']}\n"
-        f"Rental total: USD {pricing['rentalTotal']['amount']}\n"
-        f"{supplement_summary}"
-        f"Refundable security deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
-        f"{VALID_UNTIL[locale]}: {format_curacao_datetime(pricing['expiresAt'], locale)}\n\n"
-        f"{reply}"
-    )
+    text = build_customer_quote_text(quote)
     url = build_signed_url(base_url, quote["public_id"], secret)
     filename = build_quote_filename(
         customer.get("name", ""), quote["quote_reference"],
@@ -167,6 +156,23 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         quote["conversation_id"], quote["zernio_account_id"], text,
         url, attachment_type="file", attachment_name=filename,
         idempotency_key=f"ali-quote-pdf-{quote['public_id']}",
+    )
+
+
+def build_customer_quote_text(quote: dict) -> str:
+    """Build the production customer caption without performing delivery."""
+    pricing = json.loads(quote["pricing_json"])
+    rental = json.loads(quote.get("rental_json") or "{}")
+    locale = quote.get("locale") if quote.get("locale") in MESSAGES else "en"
+    ready, reply = MESSAGES[locale]
+    supplement_summary = _supplement_summary(pricing, rental, locale)
+    return (
+        f"{ready}\n\nQuote: {quote['quote_reference']}\n"
+        f"Rental total: USD {pricing['rentalTotal']['amount']}\n"
+        f"{supplement_summary}"
+        f"Refundable security deposit: USD {pricing['refundableSecurityDeposit']['amount']}\n"
+        f"{VALID_UNTIL[locale]}: {format_curacao_datetime(pricing['expiresAt'], locale)}\n\n"
+        f"{reply}"
     )
 
 
