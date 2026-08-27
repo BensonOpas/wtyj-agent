@@ -177,6 +177,52 @@ def test_expected_media_is_stored_then_next_slot_is_requested(
 @patch("agents.social.ali_reservation_v2_inbound.download_whatsapp_media")
 @patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.get_active_case")
 @patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.enabled")
+def test_passport_is_stored_before_drivers_license_is_requested(
+    enabled, get_case, download, store, booking,
+):
+    enabled.return_value = True
+    get_case.return_value = {
+        "reservationPublicId": "reservation-1",
+        "state": "documents_collecting",
+        "expectedDocumentSlot": "passport",
+    }
+    download.return_value = {
+        "payload": b"%PDF-valid",
+        "content_type": "application/pdf",
+    }
+    store.return_value = {
+        "workflowV2": {
+            "state": "documents_collecting",
+            "expectedDocumentSlot": "license_front",
+        },
+    }
+    booking.return_value = {"fields": {"conversation_language": "en"}}
+
+    result = process_whatsapp_documents({
+        "message_id": "message-passport-1",
+        "_zernio_event_id": "event-passport-1",
+        "_zernio_conversation_id": "conversation-1",
+        "_zernio_account_id": "account-1",
+        "_zernio_attachments": [{
+            "media_id": "media-passport-1",
+            "provider_attachment_id": "attachment-passport-1",
+            "mime_type": "application/pdf",
+        }],
+    })
+
+    assert result["success"] is True
+    assert result["reply"] == (
+        "Got it — your passport is stored securely. Please send "
+        "the front of your driver's license next."
+    )
+    assert store.call_args.kwargs["slot"] == "passport"
+
+
+@patch("agents.social.ali_reservation_v2_inbound.state_registry.wa_get_booking_state")
+@patch("agents.social.ali_reservation_v2_inbound.ali_customer_dossier.store_whatsapp_document")
+@patch("agents.social.ali_reservation_v2_inbound.download_whatsapp_media")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.get_active_case")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.enabled")
 def test_multiple_media_stores_extras_unclassified_before_expected(
     enabled, get_case, download, store, booking,
 ):
@@ -308,7 +354,7 @@ def test_identity_type_is_selected_without_a_claude_turn(
     set_identity.return_value = {
         "state": "documents_collecting",
         "identityType": "passport",
-        "expectedDocumentSlot": "license_front",
+        "expectedDocumentSlot": "passport",
     }
     booking.return_value = {"fields": {"conversation_language": "en"}}
 
@@ -320,10 +366,85 @@ def test_identity_type_is_selected_without_a_claude_turn(
     })
 
     assert result["handled"] is True
-    assert "front of your driver's license" in result["reply"]
+    assert result["reply"] == (
+        "Thanks. Please send your passport here in WhatsApp."
+    )
     note_activity.assert_called_once_with("reservation-1", "message-1")
     set_identity.assert_called_once_with(
         "reservation-1", "passport", message_id="message-1",
+    )
+
+
+@pytest.mark.parametrize(
+    "locale,choice,identity_type,slot,expected_reply",
+    [
+        (
+            "en", "passport", "passport", "passport",
+            "Thanks. Please send your passport here in WhatsApp.",
+        ),
+        (
+            "nl", "paspoort", "passport", "passport",
+            "Bedankt. Stuur nu je paspoort hier in WhatsApp.",
+        ),
+        (
+            "pap", "pasport", "passport", "passport",
+            "Danki. Manda bo pasport aki den WhatsApp.",
+        ),
+        (
+            "de", "Reisepass", "passport", "passport",
+            "Danke. Bitte senden Sie jetzt Ihren Reisepass hier über WhatsApp.",
+        ),
+        (
+            "en", "ID card", "id_card", "identity_front",
+            "Thanks. Please send the front of your ID card here in WhatsApp.",
+        ),
+        (
+            "nl", "identiteitskaart", "id_card", "identity_front",
+            "Bedankt. Stuur nu de voorkant van je identiteitskaart hier in WhatsApp.",
+        ),
+        (
+            "pap", "karta di identidat", "id_card", "identity_front",
+            "Danki. Manda e parti dilanti di bo karta di identidat aki den WhatsApp.",
+        ),
+        (
+            "de", "Personalausweis", "id_card", "identity_front",
+            "Danke. Bitte senden Sie jetzt die Vorderseite Ihres Personalausweises hier über WhatsApp.",
+        ),
+    ],
+)
+@patch("agents.social.ali_reservation_v2_inbound.state_registry.wa_get_booking_state")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.set_identity_type")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.note_client_activity")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.get_active_case")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.enabled")
+def test_identity_prompt_matches_persisted_choice_in_all_locales(
+    enabled, get_case, note_activity, set_identity, booking,
+    locale, choice, identity_type, slot, expected_reply,
+):
+    enabled.return_value = True
+    get_case.return_value = {
+        "reservationPublicId": "reservation-1",
+        "state": "documents_collecting",
+        "identityType": None,
+    }
+    set_identity.return_value = {
+        "state": "documents_collecting",
+        "identityType": identity_type,
+        "expectedDocumentSlot": slot,
+    }
+    booking.return_value = {"fields": {"conversation_language": locale}}
+
+    result = process_structural_text({
+        "text": choice,
+        "message_id": "message-locale-1",
+        "_zernio_conversation_id": "conversation-1",
+        "_zernio_account_id": "account-1",
+    })
+
+    assert result["handled"] is True
+    assert result["reply"] == expected_reply
+    set_identity.assert_called_once_with(
+        "reservation-1", choice, message_id="message-locale-1",
     )
 
 
