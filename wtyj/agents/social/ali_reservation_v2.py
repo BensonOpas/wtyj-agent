@@ -211,6 +211,13 @@ _TYPED_RESERVE = (
     re.compile(r"^(?:buchen sie ihn|reservieren sie ihn|ich möchte dieses auto|ich möchte dieses auto reservieren)$", re.I),
 )
 
+_STRUCTURAL_PUNCTUATION = str.maketrans({
+    "’": "'",
+    "‘": "'",
+    "ʼ": "'",
+    "`": "'",
+})
+
 
 class AvailabilityProvider(Protocol):
     def check(self, category: str, pickup: str, return_at: str) -> dict: ...
@@ -1051,8 +1058,19 @@ def request_document_replacement(
     return get_case(public_id)
 
 
+def _normalize_structural_phrase(text: object) -> str:
+    return " ".join(
+        str(text or "")
+        .translate(_STRUCTURAL_PUNCTUATION)
+        .strip()
+        .rstrip(".! ")
+        .casefold()
+        .split()
+    )
+
+
 def classify_structural_intent(text: object) -> dict:
-    normalized = " ".join(str(text or "").strip().rstrip(".! ").casefold().split())
+    normalized = _normalize_structural_phrase(text)
     if not normalized:
         return {"classification": "none", "confidence": "none", "decisionSource": "deterministic"}
     if any(pattern.fullmatch(normalized) for pattern in _GLOBAL_OPT_OUT):
@@ -1075,9 +1093,7 @@ def classify_structural_intent(text: object) -> dict:
 
 
 def classify_ambiguous_resolution(text: object) -> str:
-    normalized = " ".join(
-        str(text or "").strip().rstrip(".! ").casefold().split()
-    )
+    normalized = _normalize_structural_phrase(text)
     if normalized in _AMBIGUOUS_MORE_TIME:
         return "more_time"
     if normalized in _AMBIGUOUS_RELEASE:
