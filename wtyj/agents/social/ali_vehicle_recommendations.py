@@ -251,6 +251,8 @@ def build_vehicle_picker_recovery(
     *,
     public_base_url: str | None = None,
     turn_id: str | None = None,
+    trigger_message_id: str | None = None,
+    trigger_sent_at: str | None = None,
 ) -> dict | None:
     """Rebuild only the last safe native picker from the current catalog.
 
@@ -321,6 +323,8 @@ def build_vehicle_picker_recovery(
         "idempotency_key": f"ali-vehicle-{state_hash}",
         "text": str(reply_text or "").strip(),
         "options": options,
+        "trigger_message_id": str(trigger_message_id or "").strip()[:240],
+        "trigger_sent_at": str(trigger_sent_at or "").strip()[:80],
     }
     if len(options) == 1:
         plan["buttons"] = [{
@@ -407,6 +411,12 @@ def rebuild_vehicle_recommendation(
         "idempotency_key": f"ali-vehicle-{state_hash}",
         "text": text,
         "options": options,
+        "trigger_message_id": str(
+            snapshot.get("trigger_message_id") or ""
+        ).strip()[:240],
+        "trigger_sent_at": str(
+            snapshot.get("trigger_sent_at") or ""
+        ).strip()[:80],
     }
     if kind == "image":
         plan["buttons"] = [{
@@ -444,6 +454,8 @@ def build_vehicle_recommendation(
     *,
     public_base_url: str | None = None,
     turn_id: str | None = None,
+    trigger_message_id: str | None = None,
+    trigger_sent_at: str | None = None,
     allow_repeat: bool = False,
     capacity_advisory: bool = False,
 ) -> dict | None:
@@ -558,6 +570,8 @@ def build_vehicle_recommendation(
         "idempotency_key": f"ali-vehicle-{state_hash}",
         "text": text,
         "options": options,
+        "trigger_message_id": str(trigger_message_id or "").strip()[:240],
+        "trigger_sent_at": str(trigger_sent_at or "").strip()[:80],
     }
     if mode == "specific":
         option = options[0]

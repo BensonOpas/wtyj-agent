@@ -1314,6 +1314,8 @@ def test_live_smaller_turn_overrides_model_candidates_and_builds_carousel(
         "text": "Smaller",
         "from_name": "Synthetic Customer",
         "message_id": "issue-266-smaller-turn",
+        "_zernio_provider_message_id": "wamid.issue-268-smaller-turn",
+        "_zernio_sent_at": "2026-08-27T14:59:02Z",
     }, include_media=True)
 
     recommendation = response["vehicle_recommendation"]
@@ -1325,6 +1327,37 @@ def test_live_smaller_turn_overrides_model_candidates_and_builds_carousel(
     ]
     assert "seat up to 5" in response["text"]
     assert "Would you prefer" not in response["text"]
+    assert recommendation["trigger_message_id"] == (
+        "wamid.issue-268-smaller-turn"
+    )
+    assert recommendation["trigger_sent_at"] == "2026-08-27T14:59:02Z"
+
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_phase": "DISCOVERY",
+            "ali_vehicle_recommendation_deliveries": [{
+                "hash": recommendation["state_hash"],
+                "delivery": "carousel_picker",
+            }],
+        },
+    )
+    repeated = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Smaller",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-smaller-turn-2",
+    }, include_media=True)
+
+    assert repeated["vehicle_recommendation"] is not None
+    assert repeated["vehicle_recommendation"]["state_hash"] != (
+        recommendation["state_hash"]
+    )
 
 
 def test_live_no_preference_turn_ignores_model_candidates_and_uses_capacity(

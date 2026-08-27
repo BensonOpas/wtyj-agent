@@ -1379,6 +1379,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     or message.get("message_id")
                     or ""
                 ),
+                trigger_message_id=str(
+                    message.get("_zernio_provider_message_id") or ""
+                ),
+                trigger_sent_at=str(message.get("_zernio_sent_at") or ""),
             )
             invalid_plan = fail_closed_turn_plan(
                 phone,
@@ -2234,9 +2238,16 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     flags,
                     reply_text,
                     turn_id=str(message.get("message_id") or ""),
+                    trigger_message_id=str(
+                        message.get("_zernio_provider_message_id") or ""
+                    ),
+                    trigger_sent_at=str(
+                        message.get("_zernio_sent_at") or ""
+                    ),
                     allow_repeat=(
                         explicit_visual_request(text)
                         or explicit_no_preference_request(text)
+                        or explicit_smaller_vehicle_request(text)
                     ),
                     capacity_advisory=capacity_advisory,
                 )

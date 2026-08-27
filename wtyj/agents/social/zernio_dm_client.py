@@ -129,6 +129,35 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
 
     conversation_id = data.get("conversationId", "") or data.get("conversation_id", "")
     message_id = data.get("id", "") or data.get("messageId", "")
+    # Keep the platform-native message id separately from Zernio's internal
+    # message id.  GET /inbox/.../messages exposes the former (for WhatsApp,
+    # the ``wamid``), so it is the only exact causal anchor suitable for
+    # delivery reconciliation.
+    provider_message_id = str(
+        data.get("platformMessageId")
+        or data.get("platform_message_id")
+        or (
+            msg_obj.get("platformMessageId")
+            if isinstance(msg_obj, dict) else ""
+        )
+        or (
+            msg_obj.get("platform_message_id")
+            if isinstance(msg_obj, dict) else ""
+        )
+        or ""
+    ).strip()
+    sent_at = str(
+        data.get("sentAt")
+        or data.get("sent_at")
+        or (
+            msg_obj.get("sentAt") if isinstance(msg_obj, dict) else ""
+        )
+        or (
+            msg_obj.get("sent_at") if isinstance(msg_obj, dict) else ""
+        )
+        or payload.get("timestamp")
+        or ""
+    ).strip()
     # account_id may be in message object or top-level account object
     account_id = data.get("accountId", "") or data.get("account_id", "")
     if not account_id:
@@ -167,6 +196,8 @@ def parse_zernio_webhook(payload: dict) -> dict | None:
         "sender_id": sender_id,
         "text": text,
         "message_id": message_id,
+        "provider_message_id": provider_message_id[:240],
+        "sent_at": sent_at[:80],
         "account_id": account_id,
         "interactive_type": interactive_type,
         "interactive_id": interactive_id,
@@ -567,6 +598,7 @@ def _recommendation_session_open(
     base_url: str,
     headers: dict,
     account_id: str,
+    trigger_sent_at: str = "",
 ) -> tuple[bool, list[dict]]:
     response = http_requests.get(
         f"{base_url}/messages",
@@ -586,6 +618,13 @@ def _recommendation_session_open(
         for item in messages
         if str(item.get("direction") or "").lower() == "incoming"
     ]
+    # The signed webhook can arrive before Zernio's list endpoint reflects the
+    # same inbound message.  Its platform timestamp is still a valid 24-hour
+    # session anchor; without it, a brand-new conversation can be dropped
+    # before any recommendation POST is attempted.
+    trigger_time = _parse_provider_time(trigger_sent_at)
+    if trigger_time is not None:
+        incoming_times.append(trigger_time)
     latest = max((item for item in incoming_times if item is not None), default=None)
     return (
         latest is not None
@@ -605,29 +644,48 @@ def _recommendation_visible_message(messages: list[dict], text: str) -> dict | N
     )
 
 
-def _messages_after_visible_message(messages: list[dict], text: str) -> list[dict]:
-    """Return messages newer than the latest matching message.
-
-    Zernio is queried with ``sortOrder=desc``.  Carousel picker text is reused
-    across recommendations, so replay reconciliation must only consider a
-    picker delivered after the carousel it belongs to.  Otherwise any older
-    "Choose your car below" message can suppress the current picker.
-    """
-    for index, item in enumerate(messages):
-        if (
-            str(item.get("direction") or "").lower() == "outgoing"
-            and _recommendation_message_text(item) == text
-        ):
-            return messages[:index]
-    return []
-
-
 def _messages_after_latest_incoming(messages: list[dict]) -> list[dict]:
     """Return only messages newer than the latest customer inbound."""
     for index, item in enumerate(messages):
         if str(item.get("direction") or "").lower() == "incoming":
             return messages[:index]
     return []
+
+
+def _messages_after_trigger(
+    messages: list[dict],
+    trigger_message_id: str,
+    trigger_sent_at: str,
+) -> list[dict]:
+    """Return only provider messages causally newer than this inbound turn.
+
+    Zernio webhook payloads expose the platform-native message id while the
+    message-list endpoint may lag behind the webhook.  Prefer the exact id; if
+    it has not appeared yet, use the platform-reported send time as a strict
+    lower bound.  With neither anchor, reconciliation is deliberately disabled
+    so an older same-text message can never acknowledge a new customer turn.
+    """
+    normalized_id = str(trigger_message_id or "").strip()
+    if normalized_id:
+        for index, item in enumerate(messages):
+            if (
+                str(item.get("direction") or "").lower() == "incoming"
+                and str(item.get("id") or item.get("messageId") or "").strip()
+                == normalized_id
+            ):
+                return messages[:index]
+    trigger_time = _parse_provider_time(trigger_sent_at)
+    if trigger_time is None:
+        return []
+    return [
+        item for item in messages
+        if (
+            (item_time := _parse_provider_time(
+                item.get("createdAt") or item.get("created_at")
+            )) is not None
+            and item_time > trigger_time
+        )
+    ]
 
 
 def _response_message_id(response) -> str:
@@ -818,13 +876,22 @@ def _send_recommendation_part(
     idempotency_key: str,
     visible_text: str,
     reconcile_after_latest_incoming: bool = False,
+    reconcile_after_trigger: bool = False,
+    trigger_message_id: str = "",
+    trigger_sent_at: str = "",
     require_delivered: bool = False,
 ) -> tuple[str, int | None, bool, str]:
     """Send or reconcile one idempotent visible part of a discovery bundle."""
-    reconciliation_messages = (
-        _messages_after_latest_incoming(existing_messages)
-        if reconcile_after_latest_incoming else existing_messages
-    )
+    if reconcile_after_trigger:
+        reconciliation_messages = _messages_after_trigger(
+            existing_messages, trigger_message_id, trigger_sent_at,
+        )
+    elif reconcile_after_latest_incoming:
+        reconciliation_messages = _messages_after_latest_incoming(
+            existing_messages,
+        )
+    else:
+        reconciliation_messages = existing_messages
     visible = _recommendation_visible_message(
         reconciliation_messages, visible_text,
     )
@@ -833,7 +900,7 @@ def _send_recommendation_part(
         visible_status = str(
             visible.get("status") or visible.get("deliveryStatus") or ""
         ).lower()
-        if require_delivered and visible_status in {
+        if visible_status in {
             "failed", "rejected", "undeliverable",
         }:
             return "rejected", None, True, visible_id
@@ -878,11 +945,35 @@ def _send_recommendation_part(
         response = None
     if response is not None and 200 <= response.status_code < 300:
         retry_messages = _payload_messages(_response_json(response))
-        if reconcile_after_latest_incoming:
+        if reconcile_after_trigger:
+            retry_messages = _messages_after_trigger(
+                retry_messages, trigger_message_id, trigger_sent_at,
+            )
+        elif reconcile_after_latest_incoming:
             retry_messages = _messages_after_latest_incoming(retry_messages)
         visible = _recommendation_visible_message(retry_messages, visible_text)
         if visible:
-            return "sent", status, True, str(visible.get("id") or visible.get("messageId") or "")
+            visible_id = str(
+                visible.get("id") or visible.get("messageId") or ""
+            )
+            visible_status = str(
+                visible.get("status")
+                or visible.get("deliveryStatus")
+                or ""
+            ).lower()
+            if visible_status in {"failed", "rejected", "undeliverable"}:
+                return "rejected", status, True, visible_id
+            if require_delivered and visible_status == "sent" and visible_id:
+                confirmed = _confirm_recommendation_status(
+                    request_url,
+                    base_headers,
+                    account_id,
+                    visible_id,
+                    require_delivered=True,
+                )
+                if confirmed != "sent":
+                    return confirmed, status, True, visible_id
+            return "sent", status, True, visible_id
     return outcome, status, False, ""
 
 
@@ -1182,6 +1273,13 @@ def _send_individual_vehicle_images(
                 f"{recommendation['idempotency_key']}-{idempotency_suffix}-{index}"
             ),
             visible_text=caption,
+            reconcile_after_trigger=True,
+            trigger_message_id=str(
+                recommendation.get("trigger_message_id") or ""
+            ),
+            trigger_sent_at=str(
+                recommendation.get("trigger_sent_at") or ""
+            ),
             require_delivered=True,
         )
         if outcome != "sent":
@@ -1219,7 +1317,10 @@ def recover_dm_vehicle_recommendation(
         "Content-Type": "application/json",
     }
     window_open, existing_messages = _recommendation_session_open(
-        base_url, headers, account_id,
+        base_url,
+        headers,
+        account_id,
+        str(plan.get("trigger_sent_at") or ""),
     )
     if not window_open:
         return {"success": False, "delivery": "window_closed"}
@@ -1243,6 +1344,9 @@ def recover_dm_vehicle_recommendation(
             },
             idempotency_key=f"{plan['idempotency_key']}-late-carousel-retry",
             visible_text=plan["text"],
+            reconcile_after_trigger=True,
+            trigger_message_id=str(plan.get("trigger_message_id") or ""),
+            trigger_sent_at=str(plan.get("trigger_sent_at") or ""),
         )
         if outcome == "sent":
             return _delivery_result(
@@ -1288,6 +1392,12 @@ def send_dm_vehicle_recommendation(
     kind = str(recommendation.get("kind") or "")
     state_hash = str(recommendation.get("state_hash") or "")
     idempotency_key = str(recommendation.get("idempotency_key") or "")
+    trigger_message_id = str(
+        recommendation.get("trigger_message_id") or ""
+    ).strip()
+    trigger_sent_at = str(
+        recommendation.get("trigger_sent_at") or ""
+    ).strip()
     text = str(recommendation.get("text") or "")
     options = recommendation.get("options") or []
     if (
@@ -1354,6 +1464,7 @@ def send_dm_vehicle_recommendation(
         base_url,
         base_headers,
         account_id,
+        trigger_sent_at,
     )
     if not window_open:
         bm_logger.log(
@@ -1362,6 +1473,17 @@ def send_dm_vehicle_recommendation(
             recommendation_hash=state_hash[:12],
         )
         return {"success": False, "delivery": "window_closed"}
+    current_turn_messages = _messages_after_trigger(
+        existing_messages, trigger_message_id, trigger_sent_at,
+    )
+    bm_logger.log(
+        "ali_vehicle_recommendation_reconciliation_scope",
+        mode=kind,
+        recommendation_hash=state_hash[:12],
+        trigger_id_present=bool(trigger_message_id),
+        trigger_time_present=bool(_parse_provider_time(trigger_sent_at)),
+        candidate_count=len(current_turn_messages),
+    )
     if kind == "image":
         media_url = str(
             options[0].get("whatsapp_image_url")
@@ -1445,6 +1567,9 @@ def send_dm_vehicle_recommendation(
             body=primary_body,
             idempotency_key=f"{idempotency_key}-primary",
             visible_text=primary_visible_text,
+            reconcile_after_trigger=True,
+            trigger_message_id=trigger_message_id,
+            trigger_sent_at=trigger_sent_at,
             require_delivered=(kind == "carousel"),
         )
     if outcome == "sent":
@@ -1544,11 +1669,10 @@ def send_dm_vehicle_recommendation(
             },
         },
     }
-    picker_existing_messages = (
-        _messages_after_visible_message(existing_messages, primary_visible_text)
-        if primary_reconciled
-        else []
-    )
+    # The picker is independently idempotent, but may reconcile only inside
+    # this trigger's causal window.  Never reuse the globally repeated picker
+    # body from an older recommendation bundle.
+    picker_existing_messages = existing_messages
     picker_outcome, picker_status, picker_reconciled, picker_provider_id = _send_recommendation_part(
         request_url,
         base_headers,
@@ -1557,6 +1681,9 @@ def send_dm_vehicle_recommendation(
         body=picker_body,
         idempotency_key=f"{idempotency_key}-picker",
         visible_text=picker_text,
+        reconcile_after_trigger=True,
+        trigger_message_id=trigger_message_id,
+        trigger_sent_at=trigger_sent_at,
     )
     if picker_outcome == "sent":
         bm_logger.log(
@@ -1618,6 +1745,9 @@ def send_dm_vehicle_recommendation(
         body={"accountId": account_id, "message": picker_fallback_text},
         idempotency_key=f"{idempotency_key}-picker-fallback",
         visible_text=picker_fallback_text,
+        reconcile_after_trigger=True,
+        trigger_message_id=trigger_message_id,
+        trigger_sent_at=trigger_sent_at,
     )
     if fallback_outcome == "sent":
         bm_logger.log(

@@ -84,6 +84,34 @@ def test_parse_webhook_message_received():
     assert result["account_id"] == "69b8689d6cb7b8cf4c7846ff"
 
 
+def test_parse_webhook_preserves_platform_delivery_anchor():
+    payload = {
+        "id": "event-1",
+        "event": "message.received",
+        "timestamp": "2026-08-27T14:59:03Z",
+        "message": {
+            "id": "zernio-message-1",
+            "platformMessageId": "wamid.trigger-1",
+            "conversationId": "conversation-1",
+            "platform": "whatsapp",
+            "direction": "incoming",
+            "text": "Show me larger cars",
+            "attachments": [],
+            "sender": {"id": "synthetic-user", "name": "Synthetic"},
+            "sentAt": "2026-08-27T14:59:02Z",
+            "isRead": False,
+        },
+        "account": {"id": "account-1"},
+    }
+
+    result = parse_zernio_webhook(payload)
+
+    assert result is not None
+    assert result["message_id"] == "zernio-message-1"
+    assert result["provider_message_id"] == "wamid.trigger-1"
+    assert result["sent_at"] == "2026-08-27T14:59:02Z"
+
+
 # --- Test 5: Parse Facebook DM webhook ---
 def test_parse_webhook_facebook_message():
     payload = _make_fb_payload()

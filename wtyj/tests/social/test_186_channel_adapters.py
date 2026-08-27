@@ -41,6 +41,8 @@ def test_whatsapp_zernio_adapter_includes_metadata():
         "sender_id": "sender_xyz",
         "text": "hello",
         "message_id": "msg_123",
+        "provider_message_id": "wamid.msg_123",
+        "sent_at": "2026-08-27T14:59:02Z",
         "account_id": "acct_456",
     }
     result = WhatsAppZernioChannel.from_zernio(zernio_msg)
@@ -53,6 +55,8 @@ def test_whatsapp_zernio_adapter_includes_metadata():
     assert result["_zernio_account_id"] == "acct_456"
     assert result["_zernio_channel"] == "whatsapp"
     assert result["_zernio_sender_name"] == "Test User"
+    assert result["_zernio_provider_message_id"] == "wamid.msg_123"
+    assert result["_zernio_sent_at"] == "2026-08-27T14:59:02Z"
 
 
 # --- Test 2: Generic DM adapter produces minimal dict (no _zernio_* keys) ---

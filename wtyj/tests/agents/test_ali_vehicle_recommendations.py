@@ -413,8 +413,9 @@ def _valid_vehicle_media_preflight(monkeypatch):
     monkeypatch.setattr(zernio_dm_client, "_preflight_vehicle_media", lambda _url: True)
 
 
-def _incoming(hours_ago=1):
+def _incoming(hours_ago=1, message_id="trigger-message-1"):
     return {
+        "id": message_id,
         "direction": "incoming",
         "createdAt": (
             datetime.now(timezone.utc) - timedelta(hours=hours_ago)
@@ -422,13 +423,15 @@ def _incoming(hours_ago=1):
     }
 
 
-def _carousel_plan():
+def _carousel_plan(trigger_message_id="trigger-message-1", trigger_sent_at=""):
     return recommendations.build_vehicle_recommendation(
         _action("curated", ["Toyota Yaris or similar", "Kia Seltos or similar"]),
         _catalog(),
         {"conversation_language": "en", "passenger_count": 4},
         {},
         "These two options suit your trip. Which one feels right?",
+        trigger_message_id=trigger_message_id,
+        trigger_sent_at=trigger_sent_at,
     )
 
 
@@ -540,6 +543,39 @@ def test_closed_session_attempts_no_interactive_or_free_text(monkeypatch):
 
     assert result == {"success": False, "delivery": "window_closed"}
     assert posts == []
+
+
+def test_fresh_signed_trigger_opens_session_before_history_catches_up(
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan(
+        trigger_message_id="trigger-not-listed-yet",
+        trigger_sent_at=datetime.now(timezone.utc).isoformat(),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": []}),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert [post["json"]["interactive"]["type"] for post in posts] == [
+        "carousel", "list",
+    ]
 
 
 def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
@@ -708,6 +744,56 @@ def test_late_image_rejection_before_commit_uses_visible_text_fallback(monkeypat
     }
 
 
+def test_failed_visible_message_never_acknowledges_current_trigger(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = recommendations.build_vehicle_recommendation(
+        _action("specific", ["Kia Picanto or similar"]),
+        _catalog(),
+        {"conversation_language": "en", "passenger_count": 2},
+        {},
+        "Here is the Picanto. What pickup date works for you?",
+        trigger_message_id="trigger-current",
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            {
+                "id": "failed-current-image",
+                "direction": "outgoing",
+                "message": plan["text"],
+                "status": "failed",
+            },
+            _incoming(message_id="trigger-current"),
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201, {"id": "fallback-current"})
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {
+        "success": True,
+        "delivery": "fallback",
+        "provider_message_ids": ["fallback-current"],
+        "provider_parts": {"picker_fallback": ["fallback-current"]},
+    }
+    assert len(posts) == 1
+    assert posts[0]["json"] == {
+        "accountId": "account-1",
+        "message": plan["text"],
+    }
+
+
 def test_parses_late_zernio_message_failure():
     parsed = zernio_dm_client.parse_zernio_failed_webhook({
         "event": "message.failed",
@@ -796,7 +882,7 @@ def test_ambiguous_send_reconciles_visible_carousel_without_fallback(monkeypatch
         _Response(200, {"messages": [{
             "direction": "outgoing",
             "interactive": {"body": {"text": plan["text"]}},
-        }]}),
+        }, _incoming()]}),
     ])
     post_attempts = []
     monkeypatch.setattr(
@@ -859,6 +945,137 @@ def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeyp
     assert posts == []
 
 
+def test_prior_same_text_bundle_cannot_acknowledge_new_trigger(monkeypatch):
+    """Regression for production incident #268."""
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan(trigger_message_id="trigger-current")
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            _incoming(message_id="trigger-current"),
+            {
+                "id": "old-picker",
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["picker"]["text"]}},
+            },
+            {
+                "id": "old-carousel",
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+            _incoming(hours_ago=2, message_id="trigger-old"),
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert [post["json"]["interactive"]["type"] for post in posts] == [
+        "carousel", "list",
+    ]
+
+
+def test_provider_history_lag_uses_trigger_time_not_old_same_text(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    now = datetime.now(timezone.utc)
+    trigger_time = now - timedelta(minutes=5)
+    plan = _carousel_plan(
+        trigger_message_id="trigger-not-visible-yet",
+        trigger_sent_at=trigger_time.isoformat(),
+    )
+    old_time = (trigger_time - timedelta(minutes=1)).isoformat()
+    old_incoming = (trigger_time - timedelta(minutes=2)).isoformat()
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            {
+                "id": "old-picker",
+                "direction": "outgoing",
+                "createdAt": old_time,
+                "interactive": {"body": {"text": plan["picker"]["text"]}},
+            },
+            {
+                "id": "old-carousel",
+                "direction": "outgoing",
+                "createdAt": old_time,
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+            {
+                "id": "trigger-old",
+                "direction": "incoming",
+                "createdAt": old_incoming,
+            },
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert len(posts) == 2
+
+
+def test_missing_trigger_anchors_disable_visible_text_reconciliation(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    plan = _carousel_plan(trigger_message_id="", trigger_sent_at="")
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: _Response(200, {"messages": [
+            {
+                "id": "old-picker",
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["picker"]["text"]}},
+            },
+            {
+                "id": "old-carousel",
+                "direction": "outgoing",
+                "interactive": {"body": {"text": plan["text"]}},
+            },
+            _incoming(message_id="some-other-trigger"),
+        ]}),
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or _Response(201)
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", plan,
+    )
+
+    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert len(posts) == 2
+
+
 def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan()
@@ -903,11 +1120,11 @@ def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
         zernio_dm_client.http_requests,
         "get",
         lambda *args, **kwargs: _Response(200, {"messages": [
-            _incoming(),
             {
                 "direction": "outgoing",
                 "interactive": {"body": {"text": plan["text"]}},
             },
+            _incoming(),
         ]}),
     )
     posts = []
@@ -1197,6 +1414,7 @@ def test_carousel_provider_parts_track_images_and_picker_separately(monkeypatch)
         "carousel": ["provider-carousel-1"],
         "picker": ["provider-picker-1"],
     }
+    assert staged[1][1]["trigger_message_id"] == "trigger-message-1"
 
 
 @pytest.mark.parametrize(

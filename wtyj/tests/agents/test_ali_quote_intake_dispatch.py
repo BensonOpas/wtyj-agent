@@ -1287,6 +1287,8 @@ def test_late_failed_recommendation_is_removed_from_delivered_and_shown_state(
             "locale": "en",
             "state_hash": "e" * 64,
             "text": "Here is one suitable car.",
+            "trigger_message_id": "wamid.synthetic-trigger",
+            "trigger_sent_at": "2026-08-27T14:59:02Z",
         },
         recommendation_account_id="account-1",
     )
@@ -1296,6 +1298,12 @@ def test_late_failed_recommendation_is_removed_from_delivered_and_shown_state(
     assert delivery["provider_parts"] == {"image": ["provider-image-1"]}
     assert delivery["account_id"] == "account-1"
     assert delivery["snapshot"]["vehicle_ids"] == [ECONOMY_VEHICLE_ID]
+    assert delivery["snapshot"]["trigger_message_id"] == (
+        "wamid.synthetic-trigger"
+    )
+    assert delivery["snapshot"]["trigger_sent_at"] == (
+        "2026-08-27T14:59:02Z"
+    )
 
     assert workflow.state_registry.wa_reconcile_vehicle_recommendation_failure(
         phone, "provider-image-1",
