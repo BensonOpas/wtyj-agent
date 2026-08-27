@@ -124,8 +124,9 @@ def _sanitize_tenant_whatsapp_reply(reply_text: str, channel: str) -> str:
         log("ali_quote_outbound_safety_failed", error=str(exc)[:200])
         return ""
 
-from dashboard.api import router as dashboard_router
+from dashboard.api import public_router as ali_public_router, router as dashboard_router
 app.include_router(dashboard_router)
+app.include_router(ali_public_router)
 
 # Brief 207: Tasks API mounted at root level (/tasks/*) so SR's frontend's
 # /api/unboks/tasks calls (after nginx prefix-strip → /tasks) hit it directly.

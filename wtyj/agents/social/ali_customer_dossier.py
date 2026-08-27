@@ -51,6 +51,7 @@ MAX_TEMPLATE_BYTES = 2 * 1024 * 1024
 MAX_PDF_PAGES = 20
 MAX_IMAGE_PIXELS = 40_000_000
 TOKEN_PURPOSES = {"document_upload", "contract_sign"}
+COMPACT_TOKEN_BYTES = 24
 PAYMENT_MODES = {"fixed_link", "per_reservation"}
 DEFAULT_DOCUMENT_RETENTION_DAYS = 90
 DEFAULT_PAPER_SHREDDING_POLICY = (
@@ -1057,8 +1058,11 @@ def _new_token(
     ttl = settings.get("link_ttl_seconds", 1800)
     if isinstance(ttl, bool) or not isinstance(ttl, int) or not 300 <= ttl <= 86400:
         raise reservation.AliReservationError("invalid_link_ttl", 409)
-    nonce = secrets.token_urlsafe(32)
-    token = f"{nonce}.{_token_signature(nonce)}"
+    # The database hash is the verifier for this opaque bearer credential.
+    # Twenty-four random bytes provide 192 bits of entropy while keeping the
+    # customer-facing URL compact enough for WhatsApp. Legacy nonce.signature
+    # tokens remain accepted by _verify_token until their normal expiry.
+    token = secrets.token_urlsafe(COMPACT_TOKEN_BYTES)
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
     expires_at = _iso(_now() + timedelta(seconds=ttl))
     conn.execute(
@@ -1085,17 +1089,23 @@ def _verify_token(
     *,
     allow_used: bool = False,
 ) -> tuple[sqlite3.Connection, sqlite3.Row]:
-    parts = str(token or "").split(".")
-    if len(parts) != 2 or not parts[0] or not hmac.compare_digest(
-        parts[1], _token_signature(parts[0]),
-    ):
+    value = str(token or "")
+    parts = value.split(".")
+    compact = bool(re.fullmatch(r"[A-Za-z0-9_-]{32}", value))
+    legacy = (
+        len(parts) == 2
+        and bool(parts[0])
+        and bool(parts[1])
+        and hmac.compare_digest(parts[1], _token_signature(parts[0]))
+    )
+    if not compact and not legacy:
         raise reservation.AliReservationError("invalid_or_expired_token", 404)
     ensure_schema()
     conn = _connection()
     row = conn.execute(
         "SELECT * FROM ali_reservation_tokens WHERE token_hash = ? "
         "AND tenant_slug = ? AND purpose = ?",
-        (hashlib.sha256(token.encode("ascii")).hexdigest(), TENANT_SLUG, purpose),
+        (hashlib.sha256(value.encode("ascii")).hexdigest(), TENANT_SLUG, purpose),
     ).fetchone()
     if not row or (row["used_at"] and not allow_used):
         conn.close()
@@ -2263,7 +2273,7 @@ def issue_contract_link(
         conn.commit()
         return {
             "contract": _safe_contract(conn.execute("SELECT * FROM ali_reservation_contracts WHERE public_id = ?", (contract_id,)).fetchone()),
-            "url": f"{_public_base_url()}/dashboard/api/ali-reservations/public/contracts/{token}",
+            "url": f"{_public_base_url()}/r/{token}",
             "expiresAt": expires,
         }
     except Exception:

@@ -14,6 +14,7 @@ def client(monkeypatch) -> TestClient:
     monkeypatch.setattr(api.ali_quote_workflow, "tenant_configured", lambda: True)
     app = FastAPI()
     app.include_router(api.router)
+    app.include_router(api.public_router)
     return TestClient(app)
 
 
@@ -351,6 +352,44 @@ def test_contract_signature_page_allows_same_origin_submit_and_recovers(
 
     upload_page = api._public_ali_html("Upload", "<p>Upload</p>")
     assert "connect-src" not in upload_page.headers["content-security-policy"]
+
+
+def test_compact_contract_routes_reuse_the_hardened_page_and_signing_handler(
+    client, monkeypatch,
+):
+    captured = {}
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "contract_review_context",
+        lambda token: {
+            "contract": {"publicId": "contract-276"},
+            "pdfBase64": "JVBERi0xLjQK",
+            "consentRequired": True,
+        },
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "sign_contract",
+        lambda token, **kwargs: captured.update({"token": token, **kwargs})
+        or {"status": "signed"},
+    )
+
+    page = client.get("/r/compact-token-276")
+    signed = client.post(
+        "/r/compact-token-276/sign",
+        json={
+            "consent": True,
+            "legalName": "Synthetic Customer",
+            "signatureData": "data:image/png;base64," + "a" * 40,
+        },
+    )
+
+    assert page.status_code == 200
+    assert "location.pathname.replace(/[/]$/,'')+'/sign'" in page.text
+    assert "connect-src 'self'" in page.headers["content-security-policy"]
+    assert signed.status_code == 200
+    assert captured["token"] == "compact-token-276"
+    assert captured["consent"] is True
 
 
 def test_contract_signature_public_endpoint_requires_explicit_consent(client, monkeypatch):
