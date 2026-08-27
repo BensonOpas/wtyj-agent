@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta, timezone
 import json
 
 from agents.social import ali_quote_workflow as workflow
 from agents.social import social_agent
+from agents.social import zernio_dm_client
 from agents.social.ali_vehicle_recommendations import vehicle_selection_payload
 from shared import state_registry
 
@@ -1160,6 +1162,293 @@ def _select_vehicle(fields, vehicle_id, vehicle_name, class_id, class_name):
         "vehicle_class_id": class_id,
         "vehicle_class_name": class_name,
     })
+
+
+def _live_discovery_model_result():
+    return {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": "Would you prefer a smaller car, an SUV, or a van?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+        # This simultaneous model action was the missing condition in the
+        # earlier replay and preempted the customer's explicit instruction.
+        "ali_vehicle_recommendation": {
+            "mode": "curated",
+            "vehicle_names": [
+                "Toyota Yaris or similar",
+                "Kia Seltos or similar",
+            ],
+            "availability_note": (
+                "Final vehicle availability still needs confirmation."
+            ),
+            "cta_label": "Car details",
+        },
+    }
+
+
+def test_live_browse_turn_overrides_model_candidates_and_builds_carousel(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-266-browse"
+    _configure(monkeypatch, tmp_path, _live_discovery_model_result())
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {"ali_phase": "DISCOVERY"},
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Show me what you have",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-browse-turn",
+    }, include_media=True)
+
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "carousel"
+    assert len(recommendation["options"]) == 4
+    assert "current fleet" in response["text"]
+    assert "fewer than 6 seats" in response["text"]
+    assert "Would you prefer" not in response["text"]
+
+
+def test_live_browse_turn_reaches_ordered_carousel_and_picker_transport(
+    monkeypatch, tmp_path,
+):
+    class Response:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    phone = "synthetic-issue-266-provider"
+    _configure(monkeypatch, tmp_path, _live_discovery_model_result())
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {"ali_phase": "DISCOVERY"},
+    )
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Show me what you have",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-provider-turn",
+    }, include_media=True)
+
+    posts = []
+    monkeypatch.setenv("LATE_API_KEY", "synthetic-key")
+    monkeypatch.setattr(
+        zernio_dm_client,
+        "_preflight_vehicle_media",
+        lambda _url: True,
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *_args, **_kwargs: Response(200, {"messages": [{
+            "direction": "incoming",
+            "createdAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        }]}),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda _url, headers, json, timeout: (
+            posts.append({"headers": headers, "json": json})
+            or Response(201)
+        ),
+    )
+
+    delivery = zernio_dm_client.send_dm_vehicle_recommendation(
+        "synthetic-conversation",
+        "synthetic-account",
+        response["vehicle_recommendation"],
+    )
+
+    assert response["ali_turn_commit"]["outbound_kind"] == (
+        "vehicle_recommendation"
+    )
+    assert delivery == {"success": True, "delivery": "carousel_picker"}
+    assert [post["json"]["interactive"]["type"] for post in posts] == [
+        "carousel", "list",
+    ]
+    assert all("message" not in post["json"] for post in posts)
+
+
+def test_live_smaller_turn_overrides_model_candidates_and_builds_carousel(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-266-smaller"
+    _configure(monkeypatch, tmp_path, _live_discovery_model_result())
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {"ali_phase": "DISCOVERY"},
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Smaller",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-smaller-turn",
+    }, include_media=True)
+
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "carousel"
+    assert [option["name"] for option in recommendation["options"]] == [
+        "Kia Picanto 2024 or similar",
+        "Toyota Yaris or similar",
+        "Toyota Corolla or similar",
+    ]
+    assert "seat up to 5" in response["text"]
+    assert "Would you prefer" not in response["text"]
+
+
+def test_live_no_preference_turn_ignores_model_candidates_and_uses_capacity(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-266-no-preference"
+    result = _live_discovery_model_result()
+    result["reply"] = "The Toyota Yaris and Kia Seltos are good options."
+    _configure(monkeypatch, tmp_path, result)
+    catalog = media_catalog()
+    catalog["vehicles"].append({
+        "id": "40000000-0000-4000-8000-000000000007",
+        "slug": "suzuki-ertiga",
+        "classId": VAN_CLASS_ID,
+        "name": "Suzuki Ertiga or similar",
+        "seats": 7,
+        "transmission": "automatic",
+        "features": ["Air conditioning"],
+        "dailyRate": {"currency": "USD", "amount": "75.00"},
+        "weeklyRate": {"currency": "USD", "amount": "525.00"},
+        "images": [{
+            "url": "/brand/vehicles/suzuki-ertiga.png",
+            "alt": "Ali Suzuki Ertiga",
+        }],
+    })
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog)
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_phase": "DISCOVERY",
+            "ali_rejected_vehicle_ids": [
+                "40000000-0000-4000-8000-000000000007",
+            ],
+        },
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Whatever",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-no-preference-turn",
+    }, include_media=True)
+
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "image"
+    assert [option["name"] for option in recommendation["options"]] == [
+        "Suzuki Ertiga or similar",
+    ]
+    assert "Toyota Yaris" not in response["text"]
+    assert "Would you prefer" not in response["text"]
+
+
+def test_live_no_preference_reopens_a_previously_delivered_suitable_car(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-266-no-preference-reopen"
+    result = _live_discovery_model_result()
+    _configure(monkeypatch, tmp_path, result)
+    catalog = media_catalog()
+    ertiga_id = "40000000-0000-4000-8000-000000000007"
+    catalog["vehicles"].append({
+        "id": ertiga_id,
+        "slug": "suzuki-ertiga",
+        "classId": VAN_CLASS_ID,
+        "name": "Suzuki Ertiga or similar",
+        "seats": 7,
+        "transmission": "automatic",
+        "features": ["Air conditioning"],
+        "dailyRate": {"currency": "USD", "amount": "75.00"},
+        "weeklyRate": {"currency": "USD", "amount": "525.00"},
+        "images": [{
+            "url": "/brand/vehicles/suzuki-ertiga.png",
+            "alt": "Ali Suzuki Ertiga",
+        }],
+    })
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", lambda: catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog)
+    fields = {
+        "conversation_language": "en",
+        "passenger_count": 6,
+        "luggage_count": 3,
+    }
+    prior = social_agent.build_vehicle_recommendation(
+        {
+            "mode": "specific",
+            "vehicle_names": ["Suzuki Ertiga or similar"],
+            "availability_note": (
+                "Final vehicle availability still needs confirmation."
+            ),
+            "cta_label": "Car details",
+        },
+        catalog,
+        fields,
+        {},
+        "Here is the suitable van.",
+    )
+    state_registry.wa_save_booking_state(phone, fields, {
+        "ali_phase": "DISCOVERY",
+        "ali_last_recommendation_ids": [ertiga_id],
+        "ali_rejected_vehicle_ids": [ertiga_id],
+        "ali_vehicle_recommendation_deliveries": [{
+            "state_hash": prior["state_hash"],
+            "delivery": "image",
+        }],
+    })
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Whatever",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-266-no-preference-reopen-turn",
+    }, include_media=True)
+
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "image"
+    assert recommendation["options"][0]["id"] == ertiga_id
+    assert recommendation["state_hash"] != prior["state_hash"]
+    assert "Would you prefer" not in response["text"]
 
 
 def test_rejected_car_text_dump_becomes_carousel_picker_without_summary(

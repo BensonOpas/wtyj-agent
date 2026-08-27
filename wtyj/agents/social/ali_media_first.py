@@ -542,8 +542,23 @@ def derive_media_first_action(
     browse_requested = explicit_catalog_browse_request(message_text)
     smaller_requested = explicit_smaller_vehicle_request(message_text)
     no_preference_requested = explicit_no_preference_request(message_text)
+    explicit_class_request = infer_explicit_catalog_class_selection(
+        message_text,
+        catalog,
+    )
+    broad_smaller_request = bool(
+        smaller_requested and explicit_class_request is None
+    )
 
-    candidates = [
+    # A broad, explicit customer instruction owns the discovery scope. Claude's
+    # structured candidates are only a fallback when the customer did not ask
+    # to browse the fleet, narrow to smaller cars, or express no preference.
+    # Otherwise a simultaneous model list can silently override the latest
+    # customer instruction and fail the downstream capacity policy.
+    deterministic_discovery = bool(
+        browse_requested or broad_smaller_request or no_preference_requested
+    )
+    candidates = [] if deterministic_discovery else [
         vehicles_by_name[name.casefold()]
         for name in explicit_names
         if name.casefold() in vehicles_by_name
@@ -596,7 +611,7 @@ def derive_media_first_action(
         ]
         reason = "selected_vehicle_picture" if candidates else ""
 
-    if not candidates and smaller_requested:
+    if broad_smaller_request:
         class_names = {
             str(item.get("id") or "").strip(): str(item.get("name") or "").casefold()
             for item in catalog.get("vehicleClasses") or []
@@ -615,7 +630,7 @@ def derive_media_first_action(
         ]
         reason = "explicit_smaller_preference" if candidates else ""
 
-    if not candidates and browse_requested:
+    elif browse_requested:
         candidates = list(vehicles)
         reason = "explicit_catalog_browse"
 
@@ -635,13 +650,19 @@ def derive_media_first_action(
             ),
             "",
         )
-    if not candidates and class_id:
+    if not candidates and class_id and not no_preference_requested:
         candidates = [
             vehicle
             for vehicle in vehicles
             if str(vehicle.get("classId") or "") == class_id
         ]
         reason = "selected_category" if candidates else ""
+
+    # "Whatever / no preference" explicitly discards model-mentioned and
+    # previously selected candidates. Recompute from current capacity truth.
+    if no_preference_requested:
+        candidates = []
+        reason = ""
 
     passenger_count = fields.get("passenger_count")
     luggage_count = fields.get("luggage_count")
@@ -774,7 +795,7 @@ def derive_media_first_action(
             intro = copy["browse_capacity"].format(
                 passengers=passenger_count,
             )
-    if smaller_requested and not explicit_names:
+    if broad_smaller_request:
         max_seats = max(
             (
                 int(vehicle["seats"])
