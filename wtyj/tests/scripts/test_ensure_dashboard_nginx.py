@@ -1,6 +1,8 @@
 import importlib.util
 import os
 from pathlib import Path
+import re
+import subprocess
 
 import pytest
 
@@ -323,3 +325,31 @@ def test_deployment_workflow_tracks_enforcer_and_has_config_rollback_guard():
     assert "DASHBOARD_SERVER_COUNT" in workflow
     assert "grep -qi 'conflicting server name'" in workflow
     assert "pnpm --filter @workspace/unboks test" in workflow
+
+
+def test_dashboard_server_count_uses_production_compatible_awk():
+    workflow = WORKFLOW.read_text()
+    match = re.search(
+        r"DASHBOARD_SERVER_COUNT=.*?\| awk '\n(?P<program>.*?)\n\s*'\)",
+        workflow,
+        flags=re.DOTALL,
+    )
+    assert match, "dashboard server-count awk program is missing"
+
+    completed = subprocess.run(
+        ["awk", match.group("program")],
+        input="""# configuration file /etc/nginx/sites-enabled/unboks-dashboard:
+server {
+    server_name dashboard.unboks.org;
+}
+server {
+    server_name api.unboks.org;
+}
+""",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "1\n"

@@ -143,8 +143,8 @@ jobs:
             fi
             DASHBOARD_SERVER_COUNT=$(printf '%s\n' "$NGINX_DUMP" | awk '
               $1 == "server_name" {
-                for (index = 2; index <= NF; index++) {
-                  name = $index
+                for (field_number = 2; field_number <= NF; field_number++) {
+                  name = $field_number
                   sub(/;$/, "", name)
                   if (name == "dashboard.unboks.org") count++
                 }
