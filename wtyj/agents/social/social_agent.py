@@ -49,6 +49,7 @@ from agents.social.ali_media_first import (
     catalog_class_recommendation_action,
     conversation_repair_reply,
     derive_media_first_action,
+    enforce_vehicle_first_reply,
     explicit_visual_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
@@ -2115,6 +2116,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 "ali_media_first_policy_failed",
                 reason=media_first_reason[:80],
             )
+    if _ali_workflow_on:
+        reply_text = enforce_vehicle_first_reply(reply_text, fields)
     _ali_effective_primary_intent = (
         "confirm_summary"
         if _ali_pure_confirmation and not _ali_selected_this_turn

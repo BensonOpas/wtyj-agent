@@ -64,6 +64,47 @@ _REENGAGEMENT = re.compile(
     r"^(?:hi|hello|hey|hallo|hoi|bon\s+(?:dia|tardi|nochi)|guten\s+tag)[!.?\s]*$",
     re.IGNORECASE,
 )
+_BROWSE_REQUEST = re.compile(
+    r"(?:\bshow\s+me\s+(?:what|which(?:\s+kinds?\s+of)?\s+(?:cars?|vehicles?|options?))"
+    r"|\bshow\s+(?:me\s+)?(?:the\s+)?(?:cars?|vehicles?|options?|fleet)\b"
+    r"|\bwhat\s+(?:(?:kinds?\s+of)\s+)?(?:cars?|vehicles?|options?)?\s*"
+    r"(?:do\s+)?(?:you|ya)\s+have\b"
+    r"|\bwhich\s+(?:cars?|vehicles?|options?)\s+(?:do\s+)?you\s+have\b"
+    r"|\bmore\s+(?:cars?|vehicles?|options?)\b"
+    r"|\bwat\s+(?:voor\s+)?(?:auto['’]?s|wagens|opties)\s+heb(?:ben)?\s+(?:je|jullie)\b"
+    r"|\bwat\s+heb(?:ben)?\s+(?:je|jullie)\b"
+    r"|\blaat\s+(?:me|mij)\s+zien\s+wat\b"
+    r"|\bkiko\s+bo\s+tin\b"
+    r"|\bkua\s+outo(?:nan)?\s+bo\s+tin\b"
+    r"|\bmustra\s+mi\s+(?:kiko|loke|e\s+outo(?:nan)?)\b"
+    r"|\bwas\s+haben\s+(?:sie|ihr)\b"
+    r"|\bwelche\s+(?:autos?|fahrzeuge?|optionen)\s+haben\s+(?:sie|ihr)\b"
+    r"|\bzeigen\s+sie\s+mir\s+(?:was|die\s+(?:autos?|fahrzeuge?))\b)",
+    re.IGNORECASE,
+)
+_SMALLER_REQUEST = re.compile(
+    r"\b(?:smaller|small|compact|economy|kleiner|kleine|kleines|compacte|"
+    r"mas\s+chik[ií]|chik[ií]|kleinere|kompakt)\b"
+    r"(?:\s+(?:car|cars|vehicle|vehicles|one|option|auto|auto['’]?s|outo|"
+    r"outonan|wagen|fahrzeug))?",
+    re.IGNORECASE,
+)
+_NEGATED_SMALLER_REQUEST = re.compile(
+    r"\b(?:don['’]?t|do\s+not|not|no|niet|geen|mi\s+no\s+ke|nicht|kein|keine|keinen)\b"
+    r".{0,32}\b(?:smaller|small|compact|economy|kleiner|kleine|kleines|compacte|"
+    r"mas\s+chik[ií]|chik[ií]|kleinere|kompakt)\b",
+    re.IGNORECASE,
+)
+_PERSONAL_DETAIL_REQUEST = re.compile(
+    r"(?:\b(?:what(?:'s|\s+is)|tell\s+me|may\s+i\s+have|can\s+i\s+have)\s+"
+    r"(?:your\s+)?(?:full\s+)?name\b"
+    r"|\bhow\s+old\s+are\s+you\b|\bdriver(?:'s)?\s+age\b|\byour\s+email\b"
+    r"|\bwat\s+is\s+(?:je|uw)\s+(?:volledige\s+)?naam\b|\bhoe\s+oud\s+ben\s+(?:je|u)\b"
+    r"|\bkiko\s+ta\s+bo\s+n[òo]mber\b|\bkuantu\s+a[ñn]a\s+bo\s+tin\b"
+    r"|\bwie\s+hei(?:ß|ss)t\s+(?:du|sie)\b|\bwie\s+ist\s+(?:ihr|dein)\s+(?:vollst[aä]ndiger\s+)?name\b"
+    r"|\bwie\s+alt\s+sind\s+sie\b)",
+    re.IGNORECASE,
+)
 _COPY = {
     "en": {
         "intro_one": "Here is a car that matches what you asked for. Does this one feel right for your trip?",
@@ -80,6 +121,9 @@ _COPY = {
         "repair_general": "Sorry, I wasn't clear. What would you like me to explain?",
         "lowest_price_many": "{vehicle} is the lowest-priced suitable option at USD {price} per day. I’ve included the closest alternatives so you can compare.",
         "lowest_price_one": "{vehicle} is the lowest-priced suitable option at USD {price} per day.",
+        "browse_many": "Here are a few cars from our current fleet. Swipe through them and tell me which one you prefer.",
+        "smaller_many": "Here are the smaller cars. Which one would you like to look at?",
+        "smaller_capacity": "Here are the smaller cars. They seat up to {max_seats}, so if {passengers} people are travelling, you’ll need a larger option. Which one would you like to look at?",
     },
     "nl": {
         "intro_one": "Hier is een auto die past bij wat je zoekt. Past deze bij je reis?",
@@ -96,6 +140,9 @@ _COPY = {
         "repair_general": "Sorry, ik was niet duidelijk. Wat wil je dat ik uitleg?",
         "lowest_price_many": "{vehicle} is de voordeligste passende optie voor USD {price} per dag. Ik heb de dichtstbijzijnde alternatieven toegevoegd zodat je kunt vergelijken.",
         "lowest_price_one": "{vehicle} is de voordeligste passende optie voor USD {price} per dag.",
+        "browse_many": "Hier zijn een paar auto's uit ons huidige wagenpark. Bekijk ze en laat me weten welke je voorkeur heeft.",
+        "smaller_many": "Hier zijn de kleinere auto's. Welke wil je bekijken?",
+        "smaller_capacity": "Hier zijn de kleinere auto's. Ze hebben maximaal {max_seats} zitplaatsen, dus als er {passengers} personen reizen, heb je een grotere optie nodig. Welke wil je bekijken?",
     },
     "pap": {
         "intro_one": "Aki tin un outo ku ta pas ku loke bo ta buska. E ta pas ku bo biahe?",
@@ -112,6 +159,9 @@ _COPY = {
         "repair_general": "Pordon, mi no tabata kla. Kiko bo ke pa mi splika?",
         "lowest_price_many": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia. Mi a agregá e alternativanan mas serka pa bo por kompará.",
         "lowest_price_one": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia.",
+        "browse_many": "Aki tin algun outo for di nos flota aktual. Mira nan i laga mi sa kua bo ta preferá.",
+        "smaller_many": "Aki tin e outonan mas chikí. Kua bo ke mira?",
+        "smaller_capacity": "Aki tin e outonan mas chikí. Nan tin te ku {max_seats} asiento, pues si {passengers} persona ta biaha, bo tin mester di un opshon mas grandi. Kua bo ke mira?",
     },
     "de": {
         "intro_one": "Hier ist ein Auto, das zu Ihrer Anfrage passt. Passt es zu Ihrer Reise?",
@@ -128,6 +178,9 @@ _COPY = {
         "repair_general": "Entschuldigung, ich war nicht klar. Was soll ich erklären?",
         "lowest_price_many": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option. Ich habe die nächstgelegenen Alternativen zum Vergleichen hinzugefügt.",
         "lowest_price_one": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option.",
+        "browse_many": "Hier sind einige Autos aus unserer aktuellen Flotte. Sehen Sie sie durch und sagen Sie mir, welches Sie bevorzugen.",
+        "smaller_many": "Hier sind die kleineren Autos. Welches möchten Sie ansehen?",
+        "smaller_capacity": "Hier sind die kleineren Autos. Sie haben bis zu {max_seats} Sitzplätze. Wenn {passengers} Personen mitfahren, benötigen Sie eine größere Option. Welches möchten Sie ansehen?",
     },
 }
 
@@ -135,6 +188,34 @@ _COPY = {
 def explicit_visual_request(message_text: object) -> bool:
     """Return true only when the customer explicitly asks to see vehicle media."""
     return bool(_VISUAL_REQUEST.search(str(message_text or "")))
+
+
+def explicit_catalog_browse_request(message_text: object) -> bool:
+    """Recognize a clear request to browse the current fleet in four locales."""
+    return bool(_BROWSE_REQUEST.search(str(message_text or "")))
+
+
+def explicit_smaller_vehicle_request(message_text: object) -> bool:
+    """Recognize a positive smaller-car preference without accepting negation."""
+    text = str(message_text or "")
+    return bool(
+        _SMALLER_REQUEST.search(text)
+        and not _NEGATED_SMALLER_REQUEST.search(text)
+    )
+
+
+def enforce_vehicle_first_reply(reply_text: object, fields: dict) -> str:
+    """Block personal-detail collection until a vehicle direction is chosen."""
+    text = str(reply_text or "").strip()
+    has_selection = bool(
+        fields.get("vehicle_id")
+        or fields.get("vehicle_name")
+        or fields.get("vehicle_class_id")
+        or fields.get("vehicle_class_name")
+    )
+    if has_selection or not _PERSONAL_DETAIL_REQUEST.search(text):
+        return text
+    return media_first_clarification(fields)
 
 
 def conversation_repair_reply(
@@ -255,6 +336,11 @@ def infer_media_first_intent(
         _ALTERNATIVE_REQUEST.search(customer_text)
         or _RECOMMENDATION_REQUEST.search(customer_text)
     )
+    if (
+        explicit_catalog_browse_request(customer_text)
+        or explicit_smaller_vehicle_request(customer_text)
+    ):
+        return "request_recommendation"
     if (
         _REJECTION.search(customer_text)
         and (
@@ -437,6 +523,8 @@ def derive_media_first_action(
     lowest_price_requested = bool(
         _LOWEST_PRICE_REQUEST.search(str(message_text or ""))
     )
+    browse_requested = explicit_catalog_browse_request(message_text)
+    smaller_requested = explicit_smaller_vehicle_request(message_text)
 
     candidates = [
         vehicles_by_name[name.casefold()]
@@ -467,14 +555,49 @@ def derive_media_first_action(
         excluded_ids.update(last_ids)
         if selected_id:
             excluded_ids.add(selected_id)
+    elif intent == "request_recommendation" and _ALTERNATIVE_REQUEST.search(
+        str(message_text or "")
+    ):
+        # Asking for another/smaller option reopens discovery without
+        # permanently recording the previous car as rejected.
+        excluded_ids.update(last_ids)
 
-    if not candidates and intent == "request_recommendation" and selected_id:
+    if (
+        not candidates
+        and intent == "request_recommendation"
+        and selected_id
+        and not browse_requested
+        and not smaller_requested
+    ):
         candidates = [
             vehicle
             for vehicle in vehicles
             if str(vehicle.get("id") or "") == selected_id
         ]
         reason = "selected_vehicle_picture" if candidates else ""
+
+    if not candidates and smaller_requested:
+        class_names = {
+            str(item.get("id") or "").strip(): str(item.get("name") or "").casefold()
+            for item in catalog.get("vehicleClasses") or []
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        candidates = [
+            vehicle
+            for vehicle in vehicles
+            if isinstance(vehicle.get("seats"), int)
+            and not isinstance(vehicle.get("seats"), bool)
+            and vehicle["seats"] <= 5
+            and not any(
+                token in class_names.get(str(vehicle.get("classId") or ""), "")
+                for token in ("suv", "van")
+            )
+        ]
+        reason = "explicit_smaller_preference" if candidates else ""
+
+    if not candidates and browse_requested:
+        candidates = list(vehicles)
+        reason = "explicit_catalog_browse"
 
     class_id = str(fields.get("vehicle_class_id") or "").strip()
     class_name = str(fields.get("vehicle_class_name") or "").strip().casefold()
@@ -595,6 +718,30 @@ def derive_media_first_action(
 
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
+    if browse_requested:
+        intro = copy["browse_many"]
+    if smaller_requested and not explicit_names:
+        max_seats = max(
+            (
+                int(vehicle["seats"])
+                for vehicle in candidates
+                if isinstance(vehicle.get("seats"), int)
+                and not isinstance(vehicle.get("seats"), bool)
+            ),
+            default=0,
+        )
+        if (
+            isinstance(passenger_count, int)
+            and not isinstance(passenger_count, bool)
+            and max_seats > 0
+            and passenger_count > max_seats
+        ):
+            intro = copy["smaller_capacity"].format(
+                max_seats=max_seats,
+                passengers=passenger_count,
+            )
+        else:
+            intro = copy["smaller_many"]
     if lowest_price_requested:
         cheapest = candidates[0]
         amount = _amount(cheapest)
@@ -613,15 +760,10 @@ def derive_media_first_action(
             "availability_note": copy["availability"],
             "cta_label": copy["cta"],
         },
-        "reply_text": (
-            intro
-            if lowest_price_requested or not explicit_names
-            or (
-                isinstance(structured_action, dict)
-                and structured_action.get("selection_context") == "category"
-            )
-            else str(reply_text or "").strip()
-        ),
+        # Recommendations are deterministic product surfaces. Do not retain
+        # a model-added personal-data question in the same message before the
+        # customer has chosen one of the displayed options.
+        "reply_text": intro,
         "vehicle_ids": [str(vehicle["id"]).strip() for vehicle in candidates],
         "reason": reason,
     }

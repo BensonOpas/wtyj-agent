@@ -6,6 +6,9 @@ from agents.social.ali_media_first import (
     catalog_class_recommendation_action,
     conversation_repair_reply,
     derive_media_first_action,
+    enforce_vehicle_first_reply,
+    explicit_catalog_browse_request,
+    explicit_smaller_vehicle_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
@@ -392,7 +395,139 @@ def test_media_first_copy_is_localized(locale):
     assert decision["action"]["mode"] == "specific"
     assert decision["action"]["availability_note"]
     assert len(decision["action"]["cta_label"]) <= 24
-    assert decision["reply_text"] == "Natural introduction"
+    assert decision["reply_text"] != "Natural introduction"
+    assert decision["reply_text"]
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "What ya have?",
+        "Show me what you have",
+        "Show me which kind of cars you have!",
+        "Wat voor auto's hebben jullie?",
+        "Kua outonan bo tin?",
+        "Welche Autos haben Sie?",
+    ],
+)
+def test_explicit_catalog_browse_is_actionable_in_all_locales(message_text):
+    assert explicit_catalog_browse_request(message_text) is True
+    assert infer_media_first_intent(
+        message_text,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        None,
+        {"passenger_count": 6, "luggage_count": 3},
+        {"ali_last_recommendation_ids": ["vehicle-6"]},
+        _catalog(),
+    ) == "request_recommendation"
+
+
+def test_calvin_browse_replay_returns_visual_options_instead_of_looping():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_last_recommendation_ids": ["vehicle-6"],
+            "ali_rejected_vehicle_ids": ["vehicle-6"],
+        },
+        _catalog(),
+        message_text="Show me what you have",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["action"]["mode"] == "curated"
+    assert len(decision["action"]["vehicle_names"]) == 5
+    assert decision["reason"] == "explicit_catalog_browse"
+    assert "current fleet" in decision["reply_text"]
+    assert "Would you prefer" not in decision["reply_text"]
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    ["Smaller", "kleinere auto", "outo mas chikí", "kleiner Wagen"],
+)
+def test_smaller_preference_is_actionable_in_all_locales(message_text):
+    assert explicit_smaller_vehicle_request(message_text) is True
+    assert infer_media_first_intent(
+        message_text,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        None,
+        {"passenger_count": 6, "luggage_count": 3},
+        {"ali_last_recommendation_ids": ["vehicle-6"]},
+        _catalog(),
+    ) == "request_recommendation"
+
+
+def test_calvin_smaller_replay_shows_smaller_cars_with_capacity_context():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_last_recommendation_ids": ["vehicle-6"],
+            "ali_rejected_vehicle_ids": ["vehicle-6"],
+        },
+        _catalog(),
+        message_text="Smaller car",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_smaller_preference"
+    assert "Kia Seltos" not in decision["action"]["vehicle_names"]
+    assert "seat up to 5" in decision["reply_text"]
+    assert "6 people" in decision["reply_text"]
+
+
+def test_negative_smaller_phrase_is_not_treated_as_positive_preference():
+    assert explicit_smaller_vehicle_request("I don't want a smaller car") is False
+
+
+def test_personal_details_are_blocked_until_vehicle_direction_is_chosen():
+    fields = {
+        "conversation_language": "en",
+        "passenger_count": 6,
+        "luggage_count": 3,
+    }
+    reply = enforce_vehicle_first_reply(
+        "The Suzuki Ertiga is the largest option. What's your full name for the quote?",
+        fields,
+    )
+
+    assert reply == "Would you prefer a smaller car, an SUV, or a van?"
+    assert "name" not in reply.casefold()
+
+
+def test_specific_recommendation_never_keeps_model_personal_question():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        {
+            "mode": "specific",
+            "vehicle_names": ["Kia Seltos or similar"],
+        },
+        "The Seltos fits your trip. What's your full name for the quote?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 4,
+            "luggage_count": 2,
+        },
+        {},
+        _catalog(),
+    )
+
+    assert decision["status"] == "planned"
+    assert "name" not in decision["reply_text"].casefold()
+    assert "feel right" in decision["reply_text"]
 
 
 @pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])
