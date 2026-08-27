@@ -46,6 +46,23 @@ def test_dashboard_html_is_no_store_but_hashed_assets_keep_their_cache():
     assert MODULE.ensure_dashboard_shell_no_store(updated) == updated
 
 
+def test_existing_equivalent_dashboard_policy_is_idempotent():
+    existing = """server {
+    location = /index.html {
+        expires -1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    }
+    location / {
+        expires -1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        try_files $uri $uri/ /index.html;
+    }
+}
+"""
+
+    assert MODULE.ensure_dashboard_shell_no_store(existing) == existing
+
+
 def test_unknown_dashboard_shape_fails_closed():
     with pytest.raises(ValueError, match="was not recognized"):
         MODULE.ensure_dashboard_shell_no_store("server { return 200; }\n")
