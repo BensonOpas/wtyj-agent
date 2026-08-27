@@ -203,6 +203,9 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
     assert ready["status"] == "ready_to_confirm"
     customer_file = dossier.get_customer_file(case["public_id"])
     assert customer_file["dossier_status"] == "ready_for_review"
+    assert customer_file["dossier_review_status"] == "not_generated"
+    assert customer_file["dossier_ready_for_approval"] is False
+    assert customer_file["can_confirm"] is False
     assert customer_file["payment"]["status"] == "verified"
     assert "url" not in customer_file["payment"]
     assert {item["slot"] for item in customer_file["documents"]} == {
@@ -213,6 +216,10 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
     assert printed["status"] == "ready_for_review"
     assert printed["pageCount"] >= 5
     assert PdfReader(io.BytesIO(printed["bytes"])).pages
+    printed_file = dossier.get_customer_file(case["public_id"])
+    assert printed_file["dossier_review_status"] == "ready_for_review"
+    assert printed_file["dossier_ready_for_approval"] is True
+    assert printed_file["can_confirm"] is True
 
     confirmed = reservations.confirm_reservation(
         case["public_id"],

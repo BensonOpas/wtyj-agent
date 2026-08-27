@@ -2791,6 +2791,18 @@ def get_customer_file(public_id: str) -> dict:
         value["pricing"] = snapshot["pricing"]
         value["documents"] = list_documents(public_id)
         value["contract"] = _safe_contract(contract)
+        dossier_audit = conn.execute(
+            "SELECT status, version, created_at FROM ali_reservation_dossier_audits "
+            "WHERE tenant_slug = ? AND reservation_public_id = ? "
+            "ORDER BY version DESC LIMIT 1",
+            (TENANT_SLUG, public_id),
+        ).fetchone()
+        value["dossier_review_status"] = (
+            str(dossier_audit["status"]) if dossier_audit else "not_generated"
+        )
+        value["dossier_ready_for_approval"] = bool(
+            dossier_audit and dossier_audit["status"] == "ready_for_review"
+        )
         value["payment"] = {
             "status": case["payment_status"],
             "mode": str(settings.get("payment_mode") or "per_reservation"),
@@ -2819,6 +2831,7 @@ def get_customer_file(public_id: str) -> dict:
             case["status"] == "ready_to_confirm"
             and case["availability_status"] == "approved"
             and not missing
+            and value["dossier_ready_for_approval"]
         )
         from agents.social import ali_reservation_v2
         if ali_reservation_v2.enabled():
