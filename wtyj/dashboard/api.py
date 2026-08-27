@@ -6,6 +6,7 @@
 import asyncio
 import io
 import csv
+import html
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import requests as http_requests
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
 
@@ -28,6 +29,7 @@ from agents.social import (
     graphics_engine,
     ali_quote_delivery,
     ali_quote_workflow,
+    ali_customer_dossier,
     ali_reservation_workflow,
 )
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
@@ -4584,6 +4586,46 @@ class AliReservationConfirmRequest(BaseModel):
     expectedRevision: int | None = Field(default=None, ge=1, strict=True)
 
 
+class AliDossierMutationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expectedRevision: int = Field(ge=1, strict=True)
+
+
+class AliDocumentReviewRequest(AliDossierMutationRequest):
+    decision: Literal["verified", "rejected", "replacement_requested"]
+
+
+class AliDocumentSlotRequest(AliDossierMutationRequest):
+    slot: Literal["license_back"]
+
+
+class AliPaymentLinkRequest(AliDossierMutationRequest):
+    url: str = Field(min_length=8, max_length=2048)
+    reference: str = Field(default="", max_length=120)
+
+
+class AliPaymentReviewRequest(AliDossierMutationRequest):
+    decision: Literal["verified", "rejected", "not_required"]
+
+
+class AliFinalNotesRequest(AliDossierMutationRequest):
+    notes: str = Field(default="", max_length=2000)
+
+
+class AliDossierPrintRequest(AliDossierMutationRequest):
+    allowIncomplete: StrictBool = False
+    pageSize: Literal["A4", "LETTER"] = "A4"
+
+
+class AliContractSignRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    consent: StrictBool
+    legalName: str = Field(min_length=1, max_length=120)
+    signatureData: str = Field(min_length=32, max_length=1_500_000)
+
+
 # ── FRD-005: Spartan rental tenant control center ──────────────────────────
 
 
@@ -5019,7 +5061,12 @@ async def decide_ali_reservation_availability_endpoint(
             detail="alternativeVehicle is only valid for an alternative decision",
         )
     try:
-        return ali_reservation_workflow.apply_staff_decision(
+        before = (
+            ali_reservation_workflow.get_reservation(public_id)
+            if req.decision == "approve"
+            else None
+        )
+        updated = ali_reservation_workflow.apply_staff_decision(
             public_id,
             decision=req.decision,
             actor="dashboard",
@@ -5027,6 +5074,27 @@ async def decide_ali_reservation_availability_endpoint(
             alternative_vehicle=alternative,
             expected_revision=req.expectedRevision,
         )
+        if (
+            req.decision == "approve"
+            and (before or {}).get("availability_status") != "approved"
+            and ali_customer_dossier.configuration_status().get("ready")
+        ):
+            document_links = ali_customer_dossier.issue_document_links(
+                public_id,
+                actor="dashboard_availability",
+                expected_revision=updated.get("revision"),
+            )
+            delivered = await asyncio.to_thread(
+                ali_quote_delivery.send_customer_requirement_link,
+                public_id,
+                "documents",
+                document_links,
+            )
+            updated = ali_reservation_workflow.get_reservation(public_id) or updated
+            updated["documentRequestDelivery"] = (
+                "accepted" if delivered else "failed"
+            )
+        return updated
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="availability_decision")
 
@@ -5078,6 +5146,404 @@ async def confirm_ali_reservation_endpoint(
         )
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="confirm")
+
+
+def _ali_no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+
+@router.get(
+    "/ali-dossier/configuration",
+    dependencies=[Depends(_check_auth)],
+)
+async def get_ali_dossier_configuration_endpoint(response: Response):
+    _require_ali_quote_leads()
+    _ali_no_store(response)
+    return ali_customer_dossier.configuration_status()
+
+
+@router.get(
+    "/ali-reservations/{public_id}/customer-file",
+    dependencies=[Depends(_check_auth)],
+)
+async def get_ali_customer_file_endpoint(public_id: str, response: Response):
+    _require_ali_quote_leads()
+    try:
+        result = ali_customer_dossier.get_customer_file(public_id)
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="customer_file_read")
+    _ali_no_store(response)
+    return result
+
+
+@router.post(
+    "/ali-reservations/{public_id}/documents/request",
+    dependencies=[Depends(_check_auth)],
+)
+async def request_ali_documents_endpoint(
+    public_id: str,
+    req: AliDossierMutationRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        links = ali_customer_dossier.issue_document_links(
+            public_id,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+        delivered = await asyncio.to_thread(
+            ali_quote_delivery.send_customer_requirement_link,
+            public_id,
+            "documents",
+            links,
+        )
+        return {
+            "delivered": delivered,
+            "reservation": ali_customer_dossier.get_customer_file(public_id),
+        }
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_request")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/documents/{document_id}/review",
+    dependencies=[Depends(_check_auth)],
+)
+async def review_ali_document_endpoint(
+    public_id: str,
+    document_id: str,
+    req: AliDocumentReviewRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.review_document(
+            public_id,
+            document_id,
+            req.decision,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_review")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/documents/not-required",
+    dependencies=[Depends(_check_auth)],
+)
+async def mark_ali_document_not_required_endpoint(
+    public_id: str,
+    req: AliDocumentSlotRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.mark_document_slot_not_required(
+            public_id,
+            req.slot,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_not_required")
+
+
+@router.delete(
+    "/ali-reservations/{public_id}/documents/{document_id}",
+    dependencies=[Depends(_check_auth)],
+)
+async def delete_ali_document_endpoint(
+    public_id: str,
+    document_id: str,
+    expectedRevision: int | None = Query(default=None, ge=1),
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.delete_document(
+            public_id,
+            document_id,
+            "dashboard",
+            expected_revision=expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_delete")
+
+
+@router.get(
+    "/ali-reservations/{public_id}/documents/{document_id}/content",
+    dependencies=[Depends(_check_auth)],
+)
+async def download_ali_document_endpoint(
+    public_id: str,
+    document_id: str,
+):
+    _require_ali_quote_leads()
+    try:
+        data, mime = ali_customer_dossier.document_bytes(public_id, document_id)
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_download")
+    response = Response(content=data, media_type=mime)
+    _ali_no_store(response)
+    response.headers["Content-Disposition"] = "inline; filename=document"
+    return response
+
+
+@router.post(
+    "/ali-reservations/{public_id}/contract/send",
+    dependencies=[Depends(_check_auth)],
+)
+async def send_ali_contract_endpoint(
+    public_id: str,
+    req: AliDossierMutationRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        result = ali_customer_dossier.issue_contract_link(
+            public_id,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+        delivered = await asyncio.to_thread(
+            ali_quote_delivery.send_customer_requirement_link,
+            public_id,
+            "contract",
+            result,
+        )
+        if delivered:
+            ali_customer_dossier.mark_contract_link_sent(
+                public_id,
+                result["contract"]["public_id"],
+                "customer_requirement_delivery",
+            )
+        return {
+            "delivered": delivered,
+            "reservation": ali_customer_dossier.get_customer_file(public_id),
+        }
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="contract_send")
+
+
+@router.get(
+    "/ali-reservations/{public_id}/contract/signed",
+    dependencies=[Depends(_check_auth)],
+)
+async def download_ali_signed_contract_endpoint(public_id: str):
+    _require_ali_quote_leads()
+    try:
+        data = ali_customer_dossier.signed_contract_bytes(public_id)
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="contract_download")
+    response = Response(content=data, media_type="application/pdf")
+    _ali_no_store(response)
+    response.headers["Content-Disposition"] = "inline; filename=Ali-signed-pre-contract.pdf"
+    return response
+
+
+@router.put(
+    "/ali-reservations/{public_id}/payment-link",
+    dependencies=[Depends(_check_auth)],
+)
+async def set_ali_payment_link_endpoint(
+    public_id: str,
+    req: AliPaymentLinkRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.set_payment_link(
+            public_id,
+            req.url,
+            req.reference,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="payment_link_set")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/payment-link/send",
+    dependencies=[Depends(_check_auth)],
+)
+async def send_ali_payment_link_endpoint(public_id: str):
+    _require_ali_quote_leads()
+    try:
+        customer_file = ali_customer_dossier.get_customer_file(public_id)
+        url = str((customer_file.get("payment") or {}).get("url") or "")
+        if customer_file.get("payment_status") == "link_sent":
+            return {"delivered": True, "reservation": customer_file}
+        delivered = await asyncio.to_thread(
+            ali_quote_delivery.send_customer_requirement_link,
+            public_id,
+            "payment",
+            {"url": url},
+        )
+        if delivered:
+            ali_customer_dossier.mark_payment_link_sent(
+                public_id,
+                "customer_requirement_delivery",
+            )
+        return {
+            "delivered": delivered,
+            "reservation": ali_customer_dossier.get_customer_file(public_id),
+        }
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="payment_link_send")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/payment/review",
+    dependencies=[Depends(_check_auth)],
+)
+async def review_ali_payment_endpoint(
+    public_id: str,
+    req: AliPaymentReviewRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.review_payment(
+            public_id,
+            req.decision,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="payment_review")
+
+
+@router.patch(
+    "/ali-reservations/{public_id}/final-notes",
+    dependencies=[Depends(_check_auth)],
+)
+async def update_ali_final_notes_endpoint(
+    public_id: str,
+    req: AliFinalNotesRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.update_final_notes(
+            public_id,
+            req.notes,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="final_notes_update")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/dossier.pdf",
+    dependencies=[Depends(_check_auth)],
+)
+async def print_ali_dossier_endpoint(
+    public_id: str,
+    req: AliDossierPrintRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        result = ali_customer_dossier.generate_dossier(
+            public_id,
+            "dashboard",
+            allow_incomplete=req.allowIncomplete,
+            page_size=req.pageSize,
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="dossier_print")
+    response = Response(content=result.pop("bytes"), media_type="application/pdf")
+    _ali_no_store(response)
+    response.headers["Content-Disposition"] = (
+        f"inline; filename={result['filename']}"
+    )
+    response.headers["X-Ali-Dossier-Version"] = str(result["version"])
+    response.headers["X-Ali-Dossier-Status"] = str(result["status"])
+    return response
+
+
+def _public_ali_html(title: str, content: str) -> HTMLResponse:
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>{html.escape(title)}</title>
+<style>body{{margin:0;background:#f5f8fa;color:#08243c;font:16px system-ui,sans-serif}}
+main{{max-width:680px;margin:32px auto;padding:28px;background:white;border-radius:20px;box-shadow:0 12px 40px #08243c1c}}
+h1{{margin:0 0 20px}}label{{display:block;margin:14px 0 6px;font-weight:650}}
+input,button{{font:inherit}}input[type=text],input[type=file]{{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cbd5df;border-radius:10px}}
+button{{margin-top:18px;width:100%;padding:14px;border:0;border-radius:12px;background:#0e8b7e;color:white;font-weight:750}}
+canvas{{width:100%;height:160px;border:1px solid #cbd5df;border-radius:10px;touch-action:none}}
+iframe{{width:100%;height:60vh;border:1px solid #d8e0e6;border-radius:10px}}</style></head>
+<body><main><div style="font-weight:800;color:#08243c;margin-bottom:16px">ALI CAR RENTAL · CURAÇAO</div>{content}</main></body></html>"""
+    response = HTMLResponse(page)
+    _ali_no_store(response)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; frame-src data:; form-action 'self'; base-uri 'none'"
+    return response
+
+
+@router.get("/ali-reservations/public/documents/{token}")
+async def public_ali_document_upload_page(token: str):
+    try:
+        context = ali_customer_dossier.document_upload_context(token)
+        slot = html.escape(str(context["slot"]).replace("_", " ").title())
+        return _public_ali_html(
+            "Secure document upload",
+            f"<h1>Secure document upload</h1><p>{slot}</p>"
+            f"<form method='post' enctype='multipart/form-data'><label>Choose PDF, PNG or JPEG</label>"
+            f"<input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg' required>"
+            f"<button type='submit'>Upload securely</button></form>",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="public_document_page")
+
+
+@router.post("/ali-reservations/public/documents/{token}")
+async def public_ali_document_upload(token: str, file: UploadFile = File(...)):
+    try:
+        payload = await file.read(ali_customer_dossier.MAX_UPLOAD_BYTES + 1)
+        ali_customer_dossier.store_document_upload(
+            token,
+            payload,
+            str(file.content_type or ""),
+        )
+        return _public_ali_html(
+            "Upload received",
+            "<h1>Upload received</h1><p>Thank you. Our team will check this document manually.</p>",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="public_document_upload")
+
+
+@router.get("/ali-reservations/public/contracts/{token}")
+async def public_ali_contract_page(token: str):
+    try:
+        context = ali_customer_dossier.contract_review_context(token)
+        pdf = context["pdfBase64"]
+        script_token = json.dumps(token)
+        content = f"""<h1>Review and sign pre-contract</h1>
+<p>Read the complete document before signing. Final approval is completed by our office.</p>
+<iframe title="Ali pre-contract" src="data:application/pdf;base64,{pdf}"></iframe>
+<label><input id="consent" type="checkbox"> I have read the complete pre-contract and agree to sign it.</label>
+<label for="legal">Full legal name</label><input id="legal" type="text" autocomplete="name" maxlength="120">
+<label>Signature</label><canvas id="signature" width="620" height="160"></canvas>
+<button id="sign">Sign pre-contract</button><p id="status" role="status"></p>
+<script>const c=document.getElementById('signature'),x=c.getContext('2d');let d=false;
+for(const a of ['pointerdown','pointermove','pointerup','pointerleave'])c.addEventListener(a,e=>{{e.preventDefault();if(a==='pointerdown')d=true;if(a==='pointerup'||a==='pointerleave')d=false;if(a==='pointermove'&&d){{const r=c.getBoundingClientRect();x.lineWidth=2;x.lineTo((e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height);x.stroke();}}}});
+document.getElementById('sign').onclick=async()=>{{const s=document.getElementById('status');s.textContent='Submitting…';const r=await fetch(location.pathname+'/sign',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{consent:document.getElementById('consent').checked,legalName:document.getElementById('legal').value,signatureData:c.toDataURL('image/png')}})}});s.textContent=r.ok?'Signed. Thank you — our office will complete the final review.':'Unable to sign. Please check the form or request a new link.';}};</script>"""
+        return _public_ali_html("Review and sign pre-contract", content)
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="public_contract_page")
+
+
+@router.post("/ali-reservations/public/contracts/{token}/sign")
+async def public_ali_contract_sign(token: str, req: AliContractSignRequest):
+    try:
+        return ali_customer_dossier.sign_contract(
+            token,
+            consent=req.consent,
+            legal_name=req.legalName,
+            signature_data=req.signatureData,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="public_contract_sign")
 
 
 @router.get("/quote-leads", dependencies=[Depends(_check_auth)])

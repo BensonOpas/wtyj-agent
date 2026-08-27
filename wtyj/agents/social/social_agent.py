@@ -69,6 +69,7 @@ from agents.social.ali_reservation_workflow import (
     is_exact_reserve_fallback as is_ali_exact_reserve_fallback,
     resolve_post_quote_interaction as resolve_ali_post_quote_interaction,
 )
+from agents.social import ali_customer_dossier
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
@@ -1136,6 +1137,50 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 "ali_turn_commit": None,
             }
         return _reply_text
+
+    # Issue 241: a customer's clear standalone payment report records only
+    # customer_reports_paid. It never verifies payment or confirms a rental.
+    if (
+        channel == "whatsapp"
+        and ali_quote_tenant_enabled()
+        and _ali_account_id
+        and ali_customer_dossier.is_customer_payment_report(text)
+    ):
+        try:
+            _payment_case = ali_customer_dossier.record_customer_payment_report(
+                phone,
+                _ali_account_id,
+                str(message.get("_ali_action_id") or message.get("message_id") or ""),
+            )
+        except AliReservationError as exc:
+            if exc.code != "payment_report_not_expected":
+                bm_logger.log(
+                    "ali_payment_report_rejected",
+                    code=exc.code,
+                    conversation_id=phone[:20],
+                )
+        else:
+            _payment_locale = ali_customer_dossier.customer_delivery_context(
+                str(_payment_case.get("public_id") or "")
+            ).get("locale", "en")
+            _payment_reply = {
+                "en": "Thanks. I’ve recorded that you paid. Our team will verify the deposit manually before final approval.",
+                "nl": "Dank je. Ik heb genoteerd dat je hebt betaald. Ons team controleert de borg handmatig vóór de definitieve goedkeuring.",
+                "pap": "Danki. Mi a registrá ku bo a paga. Nos tim ta verifiká e depósito manualmente promé ku aprobashon final.",
+                "de": "Danke. Ich habe vermerkt, dass Sie bezahlt haben. Unser Team prüft die Kaution vor der endgültigen Freigabe manuell.",
+            }.get(str(_payment_locale), "Thanks. I’ve recorded that you paid. Our team will verify the deposit manually before final approval.")
+            _reply_times.append(int(time.time()))
+            flags["reply_times"] = _reply_times
+            state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
+            if include_media:
+                return {
+                    "text": _payment_reply,
+                    "media": None,
+                    "vehicle_recommendation": None,
+                    "quote_confirmation": None,
+                    "ali_turn_commit": None,
+                }
+            return _payment_reply
 
     # Brief 285: quote confirmation postbacks are signed protocol events, not
     # prose. Resolve them before Claude and reload all quote facts from this

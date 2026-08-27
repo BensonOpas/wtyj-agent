@@ -39,12 +39,20 @@ RESERVATION_STATES = {
     "superseded",
 }
 AVAILABILITY_STATES = {"pending", "approved", "alternative", "declined"}
-IDENTITY_STATES = {"awaiting_external_check", "verified", "not_required", "rejected"}
-AGREEMENT_STATES = {"not_sent", "sent_external", "verified", "not_required", "rejected"}
-PAYMENT_STATES = {
-    "not_requested", "awaiting_manual_verification", "verified", "not_required", "rejected",
+IDENTITY_STATES = {
+    "awaiting_external_check", "not_requested", "requested",
+    "partially_received", "received", "replacement_requested",
+    "verified", "rejected", "not_required",
 }
-CHECKLIST_FINAL = {"verified", "not_required"}
+AGREEMENT_STATES = {
+    "not_sent", "sent_external", "sent", "viewed", "signed",
+    "verified", "rejected", "not_required",
+}
+PAYMENT_STATES = {
+    "not_requested", "not_sent", "link_sent", "customer_reports_paid",
+    "awaiting_manual_verification", "verified", "rejected", "not_required",
+}
+CHECKLIST_FINAL = {"verified", "signed", "not_required"}
 DELIVERY_STATES = {"pending", "accepted", "confirmed", "failed", "skipped"}
 _BOUND_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
@@ -125,6 +133,24 @@ def _tenant_slug() -> str:
     return slug
 
 
+def customer_dossier_enabled(raw: dict | None = None) -> bool:
+    """Return the separately reversible Brief 241 activation flag."""
+    raw = raw if raw is not None else (config_loader.get_raw() or {})
+    features = raw.get("features") if isinstance(raw, dict) else {}
+    return bool(
+        isinstance(features, dict)
+        and features.get("ali_customer_dossier_enabled", False)
+    )
+
+
+def _requirements_complete(identity: str, agreement: str, payment: str) -> bool:
+    return (
+        identity in {"verified", "not_required"}
+        and agreement in {"signed", "verified", "not_required"}
+        and payment in {"verified", "not_required"}
+    )
+
+
 def _secret(secret: str | None = None) -> str:
     value = str(
         secret
@@ -170,6 +196,8 @@ def ensure_schema() -> None:
             "confirmation_delivery_error_code TEXT, "
             "reminder_status TEXT NOT NULL DEFAULT 'not_scheduled', reminder_due_at TEXT, "
             "last_staff_actor TEXT, last_staff_action_at TEXT, "
+            "final_notes TEXT NOT NULL DEFAULT '', "
+            "dossier_version INTEGER NOT NULL DEFAULT 0, "
             "confirmed_at TEXT, revision INTEGER NOT NULL DEFAULT 1, "
             "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
         )
@@ -194,6 +222,18 @@ def ensure_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_ali_reservation_events_case "
             "ON ali_reservation_events(reservation_public_id, id)"
         )
+        columns = {
+            str(item["name"])
+            for item in conn.execute("PRAGMA table_info(ali_reservations)").fetchall()
+        }
+        for name, definition in {
+            "final_notes": "TEXT NOT NULL DEFAULT ''",
+            "dossier_version": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in columns:
+                conn.execute(
+                    f"ALTER TABLE ali_reservations ADD COLUMN {name} {definition}"
+                )
         conn.execute(
             "CREATE TRIGGER IF NOT EXISTS ali_reservation_events_no_update "
             "BEFORE UPDATE ON ali_reservation_events BEGIN "
@@ -405,10 +445,13 @@ def _checklist_defaults() -> tuple[str, str, str]:
     raw = config_loader.get_raw() or {}
     post_quote = (raw.get("workflow") or {}).get("post_quote") or {}
     requirements = post_quote.get("required_checks") or {}
+    modern = customer_dossier_enabled(raw)
     return (
-        "awaiting_external_check" if requirements.get("identity", True) else "not_required",
+        ("not_requested" if modern else "awaiting_external_check")
+        if requirements.get("identity", True) else "not_required",
         "not_sent" if requirements.get("agreement", True) else "not_required",
-        "not_requested" if requirements.get("payment", True) else "not_required",
+        ("not_sent" if modern else "not_requested")
+        if requirements.get("payment", True) else "not_required",
     )
 
 
@@ -466,8 +509,17 @@ def _public_row(row: sqlite3.Row | dict | None) -> dict | None:
         "agreement": value.get("agreement_status"),
         "payment": value.get("payment_status"),
     }
-    value["checklist_complete"] = all(
-        item in CHECKLIST_FINAL for item in value["checklist"].values()
+    value["documents_status"] = value.get("identity_status")
+    value["checklist_complete"] = _requirements_complete(
+        str(value.get("identity_status") or ""),
+        str(value.get("agreement_status") or ""),
+        str(value.get("payment_status") or ""),
+    )
+    value["dossier_status"] = (
+        "approved" if value.get("status") == "confirmed"
+        else "ready_for_review"
+        if value.get("availability_status") == "approved" and value["checklist_complete"]
+        else "incomplete"
     )
     value["next_action"] = _next_action(str(value.get("status") or ""))
     return value
@@ -645,7 +697,13 @@ def list_reservations(status: str | None = None) -> list[dict]:
                 "ORDER BY updated_at DESC, id DESC",
                 (TENANT_SLUG, status),
             ).fetchall()
-        return [_public_row(row) for row in rows]
+        items = []
+        for row in rows:
+            item = _public_row(row)
+            item.pop("confirmation_pdf_path", None)
+            item.pop("final_notes", None)
+            items.append(item)
+        return items
     finally:
         conn.close()
 
@@ -779,9 +837,9 @@ def apply_staff_decision(
 
         from_status = str(row["status"])
         if decision == "approve":
-            complete = all(row[key] in CHECKLIST_FINAL for key in (
-                "identity_status", "agreement_status", "payment_status",
-            ))
+            complete = _requirements_complete(
+                row["identity_status"], row["agreement_status"], row["payment_status"],
+            )
             to_status = "ready_to_confirm" if complete else "requirements_pending"
             availability = "approved"
             event_type = "availability_approved"
@@ -831,6 +889,8 @@ def update_checklist(
     expected_revision: int | None = None,
 ) -> dict:
     _tenant_slug()
+    if customer_dossier_enabled():
+        raise AliReservationError("customer_file_controls_required", 409)
     actor_id = _validate_actor(actor)
     note_provided = _note_marker(note)
     supplied = {"identity": identity, "agreement": agreement, "payment": payment}
@@ -859,7 +919,9 @@ def update_checklist(
         to_status = (
             "ready_to_confirm"
             if row["availability_status"] == "approved"
-            and all(value in CHECKLIST_FINAL for value in desired.values())
+            and _requirements_complete(
+                desired["identity"], desired["agreement"], desired["payment"],
+            )
             else "requirements_pending"
         )
         changed = {
@@ -914,6 +976,9 @@ def confirm_reservation(
     actor_id = _validate_actor(actor)
     note_provided = _note_marker(note)
     ensure_schema()
+    if customer_dossier_enabled():
+        from agents.social import ali_customer_dossier
+        ali_customer_dossier.ensure_schema()
     conn = _connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -922,13 +987,23 @@ def confirm_reservation(
             conn.commit()
             return _public_row(row)
         _check_revision(row, expected_revision)
-        checklist = [row["identity_status"], row["agreement_status"], row["payment_status"]]
         if (
             row["status"] != "ready_to_confirm"
             or row["availability_status"] != "approved"
-            or not all(value in CHECKLIST_FINAL for value in checklist)
+            or not _requirements_complete(
+                row["identity_status"], row["agreement_status"], row["payment_status"],
+            )
         ):
             raise AliReservationError("confirmation_preconditions_not_met", 409)
+        if customer_dossier_enabled():
+            audit = conn.execute(
+                "SELECT status FROM ali_reservation_dossier_audits "
+                "WHERE tenant_slug = ? AND reservation_public_id = ? "
+                "ORDER BY version DESC LIMIT 1",
+                (TENANT_SLUG, public_id),
+            ).fetchone()
+            if not audit or audit["status"] != "ready_for_review":
+                raise AliReservationError("dossier_review_required", 409)
         quote = _quote_by_public_id(conn, str(row["quote_public_id"]))
         if not quote or str(quote["quote_snapshot_id"] or "") != str(row["quote_snapshot_id"]):
             raise AliReservationError("quote_snapshot_not_found", 409)
@@ -947,11 +1022,12 @@ def confirm_reservation(
             "UPDATE ali_reservations SET status = 'confirmed', confirmation_reference = ?, "
             "confirmation_pdf_path = ?, confirmation_pdf_sha256 = ?, "
             "confirmation_delivery_status = 'pending', confirmed_at = ?, "
-            "last_staff_actor = ?, last_staff_action_at = ?, revision = revision + 1, "
+            "last_staff_actor = ?, last_staff_action_at = ?, final_notes = ?, "
+            "revision = revision + 1, "
             "updated_at = ? WHERE public_id = ? AND tenant_slug = ?",
             (
                 reference, pdf_path, pdf_sha256, confirmed_at, actor_id, confirmed_at,
-                confirmed_at, public_id, TENANT_SLUG,
+                str(note or "").strip(), confirmed_at, public_id, TENANT_SLUG,
             ),
         )
         _event(
