@@ -374,6 +374,138 @@ def test_payment_questions_and_uncertain_statements_never_mutate_state(text):
     assert not dossier.is_customer_payment_report(text)
 
 
+def test_dashboard_settings_activate_immutable_template_and_hide_payment_url(configured):
+    saved = dossier.save_tenant_settings(
+        payment_mode="fixed_link",
+        payment_provider_name="Synthetic Pay",
+        payment_url="https://pay.example.test/tenant/ali",
+        clear_payment_url=False,
+        payment_allowed_domains=[],
+        document_retention_days=90,
+        paper_shredding_policy="Securely shred paper copies after 90 days.",
+        actor="staff-241",
+    )
+
+    assert saved["payment"] == {
+        "mode": "fixed_link",
+        "providerName": "Synthetic Pay",
+        "defaultLinkConfigured": True,
+        "defaultDomain": "pay.example.test",
+        "allowedDomains": ["pay.example.test"],
+    }
+    assert "https://" not in json.dumps(saved)
+    assert saved["retention"]["documentRetentionDays"] == 90
+
+    first = dossier.upload_contract_template(
+        "owner-v2",
+        "approved-contract.md",
+        "text/markdown",
+        b"Customer: {customer_name}\nQuote: {quote_reference}\n",
+        "staff-241",
+    )
+    replay = dossier.upload_contract_template(
+        "owner-v2",
+        "approved-contract.md",
+        "text/markdown",
+        b"Customer: {customer_name}\nQuote: {quote_reference}\n",
+        "staff-241",
+    )
+
+    assert first["contractTemplate"]["publicId"] == replay["contractTemplate"]["publicId"]
+    assert first["contractTemplate"]["version"] == "owner-v2"
+    assert first["status"]["configurationReady"] is True
+    with pytest.raises(reservations.AliReservationError) as conflict:
+        dossier.upload_contract_template(
+            "owner-v2",
+            "different.md",
+            "text/markdown",
+            b"Different approved content.",
+            "staff-241",
+        )
+    assert conflict.value.code == "contract_template_version_already_exists"
+
+
+def test_fixed_tenant_payment_link_can_be_applied_without_browser_readback(configured):
+    dossier.save_tenant_settings(
+        payment_mode="fixed_link",
+        payment_provider_name="Synthetic Pay",
+        payment_url="https://pay.example.test/tenant/ali",
+        clear_payment_url=False,
+        payment_allowed_domains=["pay.example.test"],
+        document_retention_days=90,
+        paper_shredding_policy="Securely shred paper copies after 90 days.",
+        actor="staff-241",
+    )
+    case = _reservation(configured["raw"])
+
+    saved = dossier.set_payment_link(
+        case["public_id"], "", "SYNTHETIC-REF", "staff-241",
+    )
+    customer_file = dossier.get_customer_file(case["public_id"])
+
+    assert saved["paymentDomain"] == "pay.example.test"
+    assert customer_file["payment"]["tenantDefaultAvailable"] is True
+    assert customer_file["payment"]["domain"] == "pay.example.test"
+    assert "url" not in customer_file["payment"]
+
+    with pytest.raises(reservations.AliReservationError) as removed_domain:
+        dossier.save_tenant_settings(
+            payment_mode="fixed_link",
+            payment_provider_name="Synthetic Pay",
+            payment_url=None,
+            clear_payment_url=False,
+            payment_allowed_domains=["different.example.test"],
+            document_retention_days=90,
+            paper_shredding_policy="Securely shred paper copies after 90 days.",
+            actor="staff-241",
+        )
+    assert removed_domain.value.code == "payment_url_not_allowed"
+
+
+def test_retention_deletes_private_bytes_after_rental_window(configured):
+    dossier.save_tenant_settings(
+        payment_mode="per_reservation",
+        payment_provider_name="Synthetic Pay",
+        payment_url=None,
+        clear_payment_url=True,
+        payment_allowed_domains=["pay.example.test"],
+        document_retention_days=90,
+        paper_shredding_policy="Securely shred paper copies after 90 days.",
+        actor="staff-241",
+    )
+    case = _reservation(configured["raw"])
+    link = dossier.issue_document_links(case["public_id"], "staff-241")["links"][0]
+    document = dossier.store_document_upload(
+        link["url"].rsplit("/", 1)[-1], _png(), "image/png",
+    )
+    stored_before, _ = dossier.document_bytes(case["public_id"], document["public_id"])
+    assert stored_before
+    conn = sqlite3.connect(dossier.state_registry.DB_PATH)
+    conn.execute(
+        "UPDATE ali_reservations SET status = 'confirmed' WHERE public_id = ?",
+        (case["public_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    result = dossier.purge_expired_documents(
+        datetime(2200, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert result == {"documentsDeleted": 1, "retentionDays": 90}
+    with pytest.raises(reservations.AliReservationError) as missing:
+        dossier.document_bytes(case["public_id"], document["public_id"])
+    assert missing.value.code == "document_not_found"
+    conn = sqlite3.connect(dossier.state_registry.DB_PATH)
+    row = conn.execute(
+        "SELECT status, storage_name, sha256, size_bytes FROM ali_reservation_documents "
+        "WHERE public_id = ?",
+        (document["public_id"],),
+    ).fetchone()
+    conn.close()
+    assert row == ("deleted", None, None, 0)
+
+
 def _create_minimal_delivered_quote(raw: dict) -> tuple[str, str]:
     customer = {"name": "Synthetic Customer", "whatsapp": "+59990000000"}
     rental = {

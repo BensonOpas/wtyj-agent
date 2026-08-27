@@ -48,6 +48,73 @@ def test_customer_file_and_configuration_are_authenticated_no_store(client, monk
     assert "no-store" in customer_file.headers["cache-control"]
 
 
+def test_tenant_settings_and_template_upload_are_authenticated_no_store(client, monkeypatch):
+    captured = {}
+    settings = {
+        "status": {"enabled": False, "ready": False, "configurationReady": False, "blockers": []},
+        "contractTemplate": None,
+        "payment": {
+            "mode": "per_reservation",
+            "providerName": "",
+            "defaultLinkConfigured": False,
+            "defaultDomain": None,
+            "allowedDomains": ["pay.example.test"],
+        },
+        "retention": {
+            "documentRetentionDays": 90,
+            "paperShreddingPolicy": "Securely shred paper copies after 90 days.",
+        },
+    }
+    monkeypatch.setattr(api.ali_customer_dossier, "tenant_settings", lambda: settings)
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "save_tenant_settings",
+        lambda **kwargs: captured.update({"settings": kwargs}) or settings,
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "upload_contract_template",
+        lambda version, filename, content_type, payload, actor: captured.update({
+            "version": version,
+            "filename": filename,
+            "content_type": content_type,
+            "payload": payload,
+            "actor": actor,
+        }) or settings,
+    )
+
+    assert client.get("/dashboard/api/ali-dossier/settings").status_code == 401
+    fetched = client.get("/dashboard/api/ali-dossier/settings", headers=_auth())
+    updated = client.put(
+        "/dashboard/api/ali-dossier/settings",
+        headers=_auth(),
+        json={
+            "paymentMode": "per_reservation",
+            "paymentProviderName": "Synthetic Pay",
+            "clearPaymentUrl": True,
+            "paymentAllowedDomains": ["pay.example.test"],
+            "documentRetentionDays": 90,
+            "paperShreddingPolicy": "Securely shred paper copies after 90 days.",
+        },
+    )
+    uploaded = client.post(
+        "/dashboard/api/ali-dossier/settings/contract-template",
+        headers=_auth(),
+        data={"version": "owner-v1"},
+        files={"file": ("contract.md", b"Approved terms", "text/markdown")},
+    )
+
+    assert fetched.status_code == 200
+    assert updated.status_code == 200
+    assert uploaded.status_code == 200
+    assert "no-store" in fetched.headers["cache-control"]
+    assert "no-store" in updated.headers["cache-control"]
+    assert "no-store" in uploaded.headers["cache-control"]
+    assert captured["settings"]["document_retention_days"] == 90
+    assert captured["payload"] == b"Approved terms"
+    assert captured["actor"] == "dashboard"
+
+
 def test_document_mutations_require_revision_and_auth(client, monkeypatch):
     captured = {}
     monkeypatch.setattr(

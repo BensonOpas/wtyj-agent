@@ -19,9 +19,11 @@ import sqlite3
 import tempfile
 import urllib.parse
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
+from xml.etree import ElementTree
 
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader, PdfWriter
@@ -45,10 +47,30 @@ DOCUMENT_STATUSES = {
     "replaced", "deleted", "not_required",
 }
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_TEMPLATE_BYTES = 2 * 1024 * 1024
 MAX_PDF_PAGES = 20
 MAX_IMAGE_PIXELS = 40_000_000
 TOKEN_PURPOSES = {"document_upload", "contract_sign"}
+PAYMENT_MODES = {"fixed_link", "per_reservation"}
+DEFAULT_DOCUMENT_RETENTION_DAYS = 90
+DEFAULT_PAPER_SHREDDING_POLICY = (
+    "Securely shred paper copies after the 90-day retention period."
+)
+CONTRACT_PLACEHOLDERS = {
+    "reservation_reference",
+    "quote_reference",
+    "customer_name",
+    "rental_start",
+    "rental_end",
+    "pickup_location",
+    "return_location",
+    "vehicle",
+    "rental_total",
+    "refundable_deposit",
+    "grand_total",
+}
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+_CONTRACT_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,79}$")
 _ACTIVE_PDF_MARKERS = (
     b"/JavaScript", b"/JS", b"/Launch", b"/EmbeddedFile",
     b"/RichMedia", b"/OpenAction", b"/AA",
@@ -91,10 +113,63 @@ def _config(raw: dict | None = None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _runtime_config(raw: dict | None = None) -> dict:
+    """Merge immutable file config with tenant-managed dashboard settings."""
+    settings = dict(_config(raw))
+    settings.setdefault("document_retention_days", DEFAULT_DOCUMENT_RETENTION_DAYS)
+    settings.setdefault("paper_shredding_policy", DEFAULT_PAPER_SHREDDING_POLICY)
+    settings.setdefault("payment_mode", "per_reservation")
+    ensure_schema()
+    conn = _connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM ali_customer_dossier_settings WHERE tenant_slug = ?",
+            (TENANT_SLUG,),
+        ).fetchone()
+        if not row:
+            return settings
+        try:
+            domains = json.loads(row["payment_allowed_domains_json"] or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            domains = []
+        settings.update({
+            "payment_mode": str(row["payment_mode"] or "per_reservation"),
+            "payment_provider_name": str(row["payment_provider_name"] or ""),
+            "default_payment_url": str(row["default_payment_url"] or ""),
+            "default_payment_domain": str(row["default_payment_domain"] or ""),
+            "payment_allowed_domains": domains if isinstance(domains, list) else [],
+            "document_retention_days": int(
+                row["document_retention_days"] or DEFAULT_DOCUMENT_RETENTION_DAYS
+            ),
+            "paper_shredding_policy": str(
+                row["paper_shredding_policy"] or DEFAULT_PAPER_SHREDDING_POLICY
+            ),
+        })
+        template_id = str(row["active_contract_template_public_id"] or "")
+        if template_id:
+            template = conn.execute(
+                "SELECT * FROM ali_contract_templates WHERE tenant_slug = ? "
+                "AND public_id = ?",
+                (TENANT_SLUG, template_id),
+            ).fetchone()
+            if template:
+                root = (_private_root(settings) / TENANT_SLUG).resolve()
+                target = (root / str(template["canonical_storage_name"])).resolve()
+                if root in target.parents:
+                    settings["contract_template_path"] = str(target)
+                    settings["contract_template_version"] = str(
+                        template["version_name"]
+                    )
+                    settings["contract_template_public_id"] = template_id
+        return settings
+    finally:
+        conn.close()
+
+
 def configuration_status(raw: dict | None = None) -> dict:
     """Return non-secret activation gates for staff diagnostics."""
     raw = raw if raw is not None else (config_loader.get_raw() or {})
-    settings = _config(raw)
+    settings = _runtime_config(raw)
     template = Path(str(settings.get("contract_template_path") or ""))
     domains = settings.get("payment_allowed_domains") or []
     retention = settings.get("document_retention_days")
@@ -107,6 +182,19 @@ def configuration_status(raw: dict | None = None) -> dict:
         blockers.append("contract_template_version_missing")
     if not isinstance(domains, list) or not any(str(item).strip() for item in domains):
         blockers.append("payment_domain_allowlist_missing")
+    if (
+        settings.get("payment_mode") == "fixed_link"
+        and not str(settings.get("default_payment_url") or "").strip()
+    ):
+        blockers.append("default_payment_link_missing")
+    elif settings.get("payment_mode") == "fixed_link":
+        try:
+            _validated_payment_url(
+                str(settings.get("default_payment_url") or ""),
+                _normalize_payment_domains(domains),
+            )
+        except reservation.AliReservationError:
+            blockers.append("default_payment_link_not_allowed")
     if isinstance(retention, bool) or not isinstance(retention, int) or retention < 1:
         blockers.append("document_retention_policy_missing")
     if not str(settings.get("paper_shredding_policy") or "").strip():
@@ -120,6 +208,9 @@ def configuration_status(raw: dict | None = None) -> dict:
     return {
         "enabled": reservation.customer_dossier_enabled(raw),
         "ready": not blockers,
+        "configurationReady": not [
+            blocker for blocker in blockers if blocker != "feature_disabled"
+        ],
         "blockers": blockers,
     }
 
@@ -128,7 +219,7 @@ def _require_ready() -> dict:
     status = configuration_status()
     if not status["ready"]:
         raise reservation.AliReservationError("customer_dossier_not_configured", 409)
-    return _config()
+    return _runtime_config()
 
 
 def _private_root(settings: dict | None = None) -> Path:
@@ -265,6 +356,44 @@ def ensure_schema() -> None:
                 FOREIGN KEY(reservation_public_id)
                     REFERENCES ali_reservations(public_id) ON DELETE RESTRICT
             );
+
+            CREATE TABLE IF NOT EXISTS ali_contract_templates (
+                public_id TEXT PRIMARY KEY,
+                tenant_slug TEXT NOT NULL,
+                version_name TEXT NOT NULL,
+                source_filename TEXT NOT NULL,
+                source_mime TEXT NOT NULL,
+                canonical_storage_name TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                UNIQUE(tenant_slug, version_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS ali_customer_dossier_settings (
+                tenant_slug TEXT PRIMARY KEY,
+                active_contract_template_public_id TEXT,
+                payment_mode TEXT NOT NULL DEFAULT 'per_reservation',
+                payment_provider_name TEXT NOT NULL DEFAULT '',
+                default_payment_url TEXT,
+                default_payment_domain TEXT,
+                payment_allowed_domains_json TEXT NOT NULL DEFAULT '[]',
+                document_retention_days INTEGER NOT NULL DEFAULT 90,
+                paper_shredding_policy TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                FOREIGN KEY(active_contract_template_public_id)
+                    REFERENCES ali_contract_templates(public_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS ali_customer_dossier_settings_audit (
+                public_id TEXT PRIMARY KEY,
+                tenant_slug TEXT NOT NULL,
+                action TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
             """
         )
         conn.commit()
@@ -395,6 +524,404 @@ def _stored_path(storage_name: str) -> Path:
     if root not in target.parents:
         raise reservation.AliReservationError("invalid_private_storage_path", 500)
     return target
+
+
+def _normalize_payment_domains(values: object) -> list[str]:
+    if not isinstance(values, list):
+        raise reservation.AliReservationError("invalid_payment_domains", 422)
+    domains: list[str] = []
+    for value in values:
+        candidate = str(value or "").strip().lower().rstrip(".")
+        if not candidate:
+            continue
+        if (
+            len(candidate) > 253
+            or "://" in candidate
+            or "/" in candidate
+            or ":" in candidate
+            or not re.fullmatch(
+                r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                candidate,
+            )
+        ):
+            raise reservation.AliReservationError("invalid_payment_domain", 422)
+        if candidate not in domains:
+            domains.append(candidate)
+    return domains
+
+
+def _validated_payment_url(value: str, allowed_domains: list[str]) -> tuple[str, str]:
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+    except ValueError as exc:
+        raise reservation.AliReservationError("invalid_payment_url", 422) from exc
+    host = str(parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username
+        or parsed.password
+        or parsed.port not in {None, 443}
+        or host not in set(allowed_domains)
+        or parsed.fragment
+    ):
+        raise reservation.AliReservationError("payment_url_not_allowed", 422)
+    return urllib.parse.urlunsplit(parsed), host
+
+
+def _contract_template_text(payload: bytes, filename: str, content_type: str) -> str:
+    if not payload or len(payload) > MAX_TEMPLATE_BYTES:
+        raise reservation.AliReservationError("invalid_contract_template_size", 422)
+    suffix = Path(str(filename or "")).suffix.casefold()
+    text = ""
+    if suffix in {".txt", ".md"}:
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise reservation.AliReservationError(
+                "contract_template_must_be_utf8", 422
+            ) from exc
+    elif suffix == ".pdf" and payload.startswith(b"%PDF-"):
+        if any(marker in payload for marker in _ACTIVE_PDF_MARKERS):
+            raise reservation.AliReservationError("unsafe_contract_template", 422)
+        try:
+            reader = PdfReader(io.BytesIO(payload), strict=True)
+            if reader.is_encrypted or not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
+                raise reservation.AliReservationError("invalid_contract_template", 422)
+            text = "\n\n".join((page.extract_text() or "").strip() for page in reader.pages)
+        except reservation.AliReservationError:
+            raise
+        except Exception as exc:
+            raise reservation.AliReservationError("invalid_contract_template", 422) from exc
+    elif suffix == ".docx" and payload.startswith(b"PK"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = archive.namelist()
+                if (
+                    "word/document.xml" not in names
+                    or len(names) > 250
+                    or sum(item.file_size for item in archive.infolist()) > 8 * 1024 * 1024
+                    or any("vbaProject.bin" in name for name in names)
+                    or any(name.startswith("/") or ".." in Path(name).parts for name in names)
+                ):
+                    raise reservation.AliReservationError("unsafe_contract_template", 422)
+                root = ElementTree.fromstring(archive.read("word/document.xml"))
+                paragraphs = []
+                for paragraph in root.iter():
+                    if paragraph.tag.rsplit("}", 1)[-1] != "p":
+                        continue
+                    parts = [
+                        str(node.text or "")
+                        for node in paragraph.iter()
+                        if node.tag.rsplit("}", 1)[-1] == "t"
+                    ]
+                    if parts:
+                        paragraphs.append("".join(parts))
+                text = "\n".join(paragraphs)
+        except reservation.AliReservationError:
+            raise
+        except Exception as exc:
+            raise reservation.AliReservationError("invalid_contract_template", 422) from exc
+    else:
+        raise reservation.AliReservationError("unsupported_contract_template_type", 422)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    fields = set(re.findall(r"\{([a-z_]+)\}", normalized))
+    if not normalized or len(normalized) > 250_000 or fields - CONTRACT_PLACEHOLDERS:
+        raise reservation.AliReservationError("contract_template_placeholder_invalid", 422)
+    return normalized + "\n"
+
+
+def upload_contract_template(
+    version_name: str,
+    filename: str,
+    content_type: str,
+    payload: bytes,
+    actor: str,
+) -> dict:
+    actor_id = reservation._validate_actor(actor)
+    version = " ".join(str(version_name or "").split())
+    if not _CONTRACT_VERSION.fullmatch(version):
+        raise reservation.AliReservationError("invalid_contract_template_version", 422)
+    canonical = _contract_template_text(payload, filename, content_type)
+    canonical_bytes = canonical.encode("utf-8")
+    digest = hashlib.sha256(canonical_bytes).hexdigest()
+    safe_filename = Path(str(filename or "contract-template")).name[:180]
+    baseline = _runtime_config()
+    baseline_domains = _normalize_payment_domains(
+        baseline.get("payment_allowed_domains") or []
+    )
+    ensure_schema()
+    conn = _connection()
+    storage_name = ""
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM ali_contract_templates WHERE tenant_slug = ? "
+            "AND version_name = ?",
+            (TENANT_SLUG, version),
+        ).fetchone()
+        if existing:
+            if existing["content_sha256"] != digest:
+                raise reservation.AliReservationError(
+                    "contract_template_version_already_exists", 409
+                )
+            template_id = str(existing["public_id"])
+            storage_name = str(existing["canonical_storage_name"])
+        else:
+            template_id = str(uuid.uuid4())
+            storage_name = _write_private(canonical_bytes, ".txt", "_templates")
+            conn.execute(
+                "INSERT INTO ali_contract_templates (public_id, tenant_slug, "
+                "version_name, source_filename, source_mime, canonical_storage_name, "
+                "content_sha256, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    template_id,
+                    TENANT_SLUG,
+                    version,
+                    safe_filename,
+                    str(content_type or "application/octet-stream")[:120],
+                    storage_name,
+                    digest,
+                    _iso(),
+                    actor_id,
+                ),
+            )
+        timestamp = _iso()
+        conn.execute(
+            "INSERT INTO ali_customer_dossier_settings (tenant_slug, "
+            "active_contract_template_public_id, payment_mode, payment_provider_name, "
+            "default_payment_url, default_payment_domain, payment_allowed_domains_json, "
+            "document_retention_days, paper_shredding_policy, updated_at, updated_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_slug) DO UPDATE SET "
+            "active_contract_template_public_id=excluded.active_contract_template_public_id, "
+            "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (
+                TENANT_SLUG,
+                template_id,
+                str(baseline.get("payment_mode") or "per_reservation"),
+                str(baseline.get("payment_provider_name") or ""),
+                str(baseline.get("default_payment_url") or "") or None,
+                str(baseline.get("default_payment_domain") or "") or None,
+                json.dumps(baseline_domains, separators=(",", ":")),
+                int(
+                    baseline.get("document_retention_days")
+                    or DEFAULT_DOCUMENT_RETENTION_DAYS
+                ),
+                str(
+                    baseline.get("paper_shredding_policy")
+                    or DEFAULT_PAPER_SHREDDING_POLICY
+                ),
+                timestamp,
+                actor_id,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO ali_customer_dossier_settings_audit "
+            "(public_id, tenant_slug, action, actor_id, metadata_json, created_at) "
+            "VALUES (?, ?, 'contract_template_activated', ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                TENANT_SLUG,
+                actor_id,
+                json.dumps(
+                    {"template_id": template_id, "version": version, "sha256": digest},
+                    sort_keys=True,
+                ),
+                timestamp,
+            ),
+        )
+        conn.commit()
+        return tenant_settings()
+    except Exception:
+        conn.rollback()
+        if storage_name:
+            stored = _stored_path(storage_name)
+            if stored.is_file() and not conn.execute(
+                "SELECT 1 FROM ali_contract_templates WHERE canonical_storage_name = ?",
+                (storage_name,),
+            ).fetchone():
+                stored.unlink()
+        raise
+    finally:
+        conn.close()
+
+
+def save_tenant_settings(
+    *,
+    payment_mode: str,
+    payment_provider_name: str,
+    payment_url: str | None,
+    clear_payment_url: bool,
+    payment_allowed_domains: list[str],
+    document_retention_days: int,
+    paper_shredding_policy: str,
+    actor: str,
+) -> dict:
+    actor_id = reservation._validate_actor(actor)
+    mode = str(payment_mode or "")
+    if mode not in PAYMENT_MODES:
+        raise reservation.AliReservationError("invalid_payment_mode", 422)
+    provider = " ".join(str(payment_provider_name or "").split())
+    if len(provider) > 80:
+        raise reservation.AliReservationError("invalid_payment_provider_name", 422)
+    if (
+        isinstance(document_retention_days, bool)
+        or not isinstance(document_retention_days, int)
+        or not 1 <= document_retention_days <= 3650
+    ):
+        raise reservation.AliReservationError("invalid_document_retention_days", 422)
+    shredding = " ".join(str(paper_shredding_policy or "").split())
+    if not 10 <= len(shredding) <= 500:
+        raise reservation.AliReservationError("invalid_paper_shredding_policy", 422)
+    domains = _normalize_payment_domains(payment_allowed_domains)
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM ali_customer_dossier_settings WHERE tenant_slug = ?",
+            (TENANT_SLUG,),
+        ).fetchone()
+        active_template = (
+            str(current["active_contract_template_public_id"] or "")
+            if current else ""
+        )
+        current_url = str(current["default_payment_url"] or "") if current else ""
+        next_url = "" if clear_payment_url or mode == "per_reservation" else current_url
+        if payment_url is not None and str(payment_url).strip():
+            raw_url = str(payment_url).strip()
+            try:
+                candidate_host = str(urllib.parse.urlsplit(raw_url).hostname or "").lower().rstrip(".")
+            except ValueError as exc:
+                raise reservation.AliReservationError("invalid_payment_url", 422) from exc
+            if candidate_host and candidate_host not in domains:
+                domains.append(candidate_host)
+                domains = _normalize_payment_domains(domains)
+            next_url, _ = _validated_payment_url(raw_url, domains)
+        if mode == "fixed_link" and not next_url:
+            raise reservation.AliReservationError("default_payment_link_required", 422)
+        if next_url:
+            next_url, default_domain = _validated_payment_url(next_url, domains)
+        else:
+            default_domain = ""
+        timestamp = _iso()
+        conn.execute(
+            "INSERT INTO ali_customer_dossier_settings (tenant_slug, "
+            "active_contract_template_public_id, payment_mode, payment_provider_name, "
+            "default_payment_url, default_payment_domain, payment_allowed_domains_json, "
+            "document_retention_days, paper_shredding_policy, updated_at, updated_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_slug) DO UPDATE SET "
+            "payment_mode=excluded.payment_mode, payment_provider_name=excluded.payment_provider_name, "
+            "default_payment_url=excluded.default_payment_url, "
+            "default_payment_domain=excluded.default_payment_domain, "
+            "payment_allowed_domains_json=excluded.payment_allowed_domains_json, "
+            "document_retention_days=excluded.document_retention_days, "
+            "paper_shredding_policy=excluded.paper_shredding_policy, "
+            "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (
+                TENANT_SLUG,
+                active_template or None,
+                mode,
+                provider,
+                next_url or None,
+                default_domain or None,
+                json.dumps(domains, separators=(",", ":")),
+                document_retention_days,
+                shredding,
+                timestamp,
+                actor_id,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO ali_customer_dossier_settings_audit "
+            "(public_id, tenant_slug, action, actor_id, metadata_json, created_at) "
+            "VALUES (?, ?, 'settings_updated', ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                TENANT_SLUG,
+                actor_id,
+                json.dumps(
+                    {
+                        "payment_mode": mode,
+                        "provider_present": bool(provider),
+                        "default_link_configured": bool(next_url),
+                        "payment_domains": domains,
+                        "document_retention_days": document_retention_days,
+                        "paper_shredding_policy_configured": bool(shredding),
+                    },
+                    sort_keys=True,
+                ),
+                timestamp,
+            ),
+        )
+        conn.commit()
+        return tenant_settings()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def tenant_settings() -> dict:
+    """Return tenant configuration without paths, secrets, or payment URLs."""
+    settings = _runtime_config()
+    ensure_schema()
+    conn = _connection()
+    try:
+        template = None
+        template_id = str(settings.get("contract_template_public_id") or "")
+        if template_id:
+            row = conn.execute(
+                "SELECT version_name, source_filename, content_sha256, created_at "
+                "FROM ali_contract_templates WHERE tenant_slug = ? AND public_id = ?",
+                (TENANT_SLUG, template_id),
+            ).fetchone()
+            if row:
+                template = {
+                    "publicId": template_id,
+                    "version": row["version_name"],
+                    "sourceFilename": row["source_filename"],
+                    "sha256": row["content_sha256"],
+                    "uploadedAt": row["created_at"],
+                }
+        if template is None and settings.get("contract_template_version"):
+            path = Path(str(settings.get("contract_template_path") or ""))
+            template = {
+                "publicId": None,
+                "version": str(settings["contract_template_version"]),
+                "sourceFilename": path.name if path.name else "configured template",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+                "uploadedAt": None,
+            }
+        return {
+            "status": configuration_status(),
+            "contractTemplate": template,
+            "payment": {
+                "mode": str(settings.get("payment_mode") or "per_reservation"),
+                "providerName": str(settings.get("payment_provider_name") or ""),
+                "defaultLinkConfigured": bool(settings.get("default_payment_url")),
+                "defaultDomain": str(settings.get("default_payment_domain") or "") or None,
+                "allowedDomains": _normalize_payment_domains(
+                    settings.get("payment_allowed_domains") or []
+                ),
+            },
+            "retention": {
+                "documentRetentionDays": int(
+                    settings.get("document_retention_days")
+                    or DEFAULT_DOCUMENT_RETENTION_DAYS
+                ),
+                "paperShreddingPolicy": str(
+                    settings.get("paper_shredding_policy")
+                    or DEFAULT_PAPER_SHREDDING_POLICY
+                ),
+            },
+        }
+    finally:
+        conn.close()
 
 
 def _token_signature(nonce: str) -> str:
@@ -987,6 +1514,86 @@ def delete_document(
         conn.close()
 
 
+def purge_expired_documents(now: datetime | None = None) -> dict:
+    """Delete private identity bytes after the tenant's post-rental window."""
+    settings = _runtime_config()
+    retention_days = int(
+        settings.get("document_retention_days") or DEFAULT_DOCUMENT_RETENTION_DAYS
+    )
+    current = (now or _now()).astimezone(timezone.utc)
+    ensure_schema()
+    conn = _connection()
+    deleted = 0
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT d.*, r.status AS reservation_status, r.updated_at AS reservation_updated_at, "
+            "q.rental_json FROM ali_reservation_documents d "
+            "JOIN ali_reservations r ON r.public_id = d.reservation_public_id "
+            "LEFT JOIN ali_quotes q ON q.public_id = r.quote_public_id "
+            "AND q.quote_snapshot_id = r.quote_snapshot_id "
+            "WHERE d.tenant_slug = ? AND d.status NOT IN ('deleted','replaced') "
+            "AND r.status IN ('confirmed','cancelled','declined')",
+            (TENANT_SLUG,),
+        ).fetchall()
+        for row in rows:
+            anchor: datetime | None = None
+            if row["reservation_status"] == "confirmed":
+                try:
+                    rental = json.loads(row["rental_json"] or "{}")
+                    rental_end = str(rental.get("rental_end") or "")[:10]
+                    anchor = datetime.fromisoformat(rental_end).replace(
+                        hour=23, minute=59, second=59, tzinfo=timezone.utc
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    anchor = None
+            if anchor is None:
+                try:
+                    anchor = datetime.fromisoformat(
+                        str(row["reservation_updated_at"]).replace("Z", "+00:00")
+                    ).astimezone(timezone.utc)
+                except (TypeError, ValueError):
+                    continue
+            if anchor + timedelta(days=retention_days) > current:
+                continue
+            storage_name = str(row["storage_name"] or "")
+            if storage_name:
+                path = _stored_path(storage_name)
+                if path.is_file():
+                    path.unlink()
+            timestamp = _iso(current)
+            conn.execute(
+                "UPDATE ali_reservation_documents SET status = 'deleted', mime_type = NULL, "
+                "size_bytes = 0, sha256 = NULL, storage_name = NULL, deleted_at = ?, "
+                "deleted_by = 'retention_policy', updated_at = ? WHERE tenant_slug = ? "
+                "AND public_id = ?",
+                (timestamp, timestamp, TENANT_SLUG, row["public_id"]),
+            )
+            reservation._event(
+                conn,
+                str(row["reservation_public_id"]),
+                "document_retention_deleted",
+                str(row["reservation_status"]),
+                str(row["reservation_status"]),
+                "system",
+                "retention_policy",
+                {
+                    "document_id": row["public_id"],
+                    "slot": row["slot"],
+                    "version": row["version"],
+                    "retention_days": retention_days,
+                },
+            )
+            deleted += 1
+        conn.commit()
+        return {"documentsDeleted": deleted, "retentionDays": retention_days}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def document_bytes(public_id: str, document_id: str) -> tuple[bytes, str]:
     ensure_schema()
     conn = _connection()
@@ -1387,19 +1994,13 @@ def signed_contract_bytes(public_id: str) -> bytes:
 
 def _allowed_payment_url(value: str) -> tuple[str, str]:
     settings = _require_ready()
-    try:
-        parsed = urllib.parse.urlsplit(str(value or "").strip())
-    except ValueError as exc:
-        raise reservation.AliReservationError("invalid_payment_url", 422) from exc
-    host = str(parsed.hostname or "").lower().rstrip(".")
-    allowed = {str(item).strip().lower().rstrip(".") for item in settings.get("payment_allowed_domains") or []}
-    if (
-        parsed.scheme != "https" or not host or parsed.username or parsed.password
-        or parsed.port not in {None, 443} or host not in allowed
-        or parsed.fragment
-    ):
-        raise reservation.AliReservationError("payment_url_not_allowed", 422)
-    return urllib.parse.urlunsplit(parsed), host
+    candidate = str(value or "").strip()
+    if not candidate and settings.get("payment_mode") == "fixed_link":
+        candidate = str(settings.get("default_payment_url") or "")
+    return _validated_payment_url(
+        candidate,
+        _normalize_payment_domains(settings.get("payment_allowed_domains") or []),
+    )
 
 
 def set_payment_link(
@@ -1625,6 +2226,7 @@ def update_final_notes(
 
 def get_customer_file(public_id: str) -> dict:
     ensure_schema()
+    settings = _runtime_config()
     conn = _connection()
     try:
         case = _case(conn, public_id)
@@ -1646,6 +2248,10 @@ def get_customer_file(public_id: str) -> dict:
         value["contract"] = _safe_contract(contract)
         value["payment"] = {
             "status": case["payment_status"],
+            "mode": str(settings.get("payment_mode") or "per_reservation"),
+            "providerName": str(settings.get("payment_provider_name") or ""),
+            "tenantDefaultAvailable": bool(settings.get("default_payment_url")),
+            "tenantDefaultDomain": str(settings.get("default_payment_domain") or "") or None,
             "domain": payment["payment_domain"] if payment else None,
             "reference": payment["payment_reference"] if payment else None,
             "linkSentAt": payment["link_sent_at"] if payment else None,
