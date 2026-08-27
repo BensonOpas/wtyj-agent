@@ -305,7 +305,9 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "never ask the vehicle question again" in normalized
     assert "Collect rental_start and rental_end during discovery" in normalized
     assert "exact current daily_usd catalog rates at or closest to that budget" in normalized
-    assert "Only after a vehicle direction or recommendation is established" in normalized
+    assert "A recommendation is not a customer decision" in normalized
+    assert "Only after the customer explicitly chooses" in normalized
+    assert "While they are browsing or comparing, keep talking about the cars" in normalized
     assert "may you request customer_name" in normalized
     assert "Do not ask for name, age, email, identity documents" in normalized
     assert "Never ask the customer to type" in normalized
