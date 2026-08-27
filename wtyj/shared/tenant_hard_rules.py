@@ -95,6 +95,26 @@ CONSULTA_DESPERTARES_SPANISH_CALLBACK_ACKNOWLEDGEMENT = (
 CONSULTA_DESPERTARES_ENGLISH_CALLBACK_ACKNOWLEDGEMENT = (
     "Perfect, thank you for letting us know."
 )
+CONSULTA_DESPERTARES_SERVICE_CONTACT_REPLY = (
+    "Gracias por contactar con Consulta Despertares. Para propuestas de "
+    "colaboración, servicios u otros asuntos comerciales, por favor escribe "
+    "a info@consultadespertares.com. El equipo correspondiente revisará tu "
+    "mensaje por esa vía."
+)
+CONSULTA_DESPERTARES_ENGLISH_SERVICE_CONTACT_REPLY = (
+    "Thank you for contacting Consulta Despertares. For collaboration "
+    "proposals, services, or other commercial matters, please email "
+    "info@consultadespertares.com. The appropriate team will review your "
+    "message there."
+)
+CONSULTA_DESPERTARES_SERVICE_CONTACT_ESCALATED_REPLY = (
+    "Gracias. He trasladado tu mensaje al equipo para que puedan revisarlo. "
+    "No necesito pedirte datos de paciente."
+)
+CONSULTA_DESPERTARES_ENGLISH_SERVICE_CONTACT_ESCALATED_REPLY = (
+    "Thank you. I have passed your message to the team for review. I do not "
+    "need to ask you for patient information."
+)
 CONSULTA_DESPERTARES_AUGUST_2026_RULE = """
 TEMPORARY CONSULTA DESPERTARES AUGUST 2026 SCHEDULING RULE (HIGHEST PRIORITY):
 - The clinic is closed from 10 August through 23 August 2026, both dates inclusive.
@@ -112,6 +132,13 @@ The goal is a natural, supportive conversation that builds a useful prospect
 card for the human team. It is NOT to collect fields as quickly as possible.
 These rules override generic booking pacing and checklist-like intake.
 
+- Before entering patient intake, distinguish people seeking psychological
+  care from companies, associations, professionals, job applicants, suppliers,
+  or agencies offering services or proposing a commercial collaboration. A
+  non-patient contact must be directed to info@consultadespertares.com without
+  asking about their reason for consultation, preferred clinic, appointment,
+  callback availability, or any other patient field. Do not create a prospect
+  card for that contact. Escalate only if the email direction is not sufficient.
 - Listen and help first. Answer the customer's actual question before requesting
   contact details. If they share emotional or sensitive context, acknowledge it
   naturally and orient them without diagnosing.
@@ -217,6 +244,51 @@ _CONSULTA_WEBSITE_LEAD_RE = re.compile(
 )
 _CONSULTA_BOOKING_RE = re.compile(
     r"\b(?:cita|terapia|consulta|reservar|reserva|acudir|appointment|book|booking)\b",
+    re.IGNORECASE,
+)
+_CONSULTA_NON_PATIENT_SERVICE_CONTACT_RE = re.compile(
+    r"(?:"
+    r"(?:le|les|os)?\s*(?:escribo|contacto|hablo)\s+"
+    r"(?:en\s+representaci[oó]n|de\s+parte)\s+de"
+    r"|(?:propuesta|tema|acuerdo|oportunidad)\s+(?:de\s+)?"
+    r"(?:colaboraci[oó]n|comercial)"
+    r"|(?:ofrecer|ofrecemos|ofreceros|ofrecerles|presentar)\b.{0,120}\b"
+    r"(?:servicios?|soluciones?|productos?|colaboraci[oó]n)"
+    r"|(?:derivaci[oó]n|captaci[oó]n)\s+de\s+(?:posibles\s+)?pacientes"
+    r"|bonificaci[oó]n.{0,80}\b(?:derivador|derivaci[oó]n|comisi[oó]n)"
+    r"|(?:proveedor|distribuidor|agencia|empresa|asociaci[oó]n).{0,100}\b"
+    r"(?:colaboraci[oó]n|servicios?|propuesta|comercial)"
+    r"|(?:curr[ií]culum|\bcv\b|candidatura|busco\s+trabajo|"
+    r"trabajar\s+con\s+(?:vosotros|ustedes))"
+    r"|(?:writing|contacting|reaching\s+out)\s+(?:on\s+behalf|"
+    r"as\s+a\s+representative)\s+of"
+    r"|(?:commercial|business|partnership|collaboration)\s+proposal"
+    r"|(?:offer|offering|provide|providing)\b.{0,120}\b"
+    r"(?:services?|solutions?|products?|partnership)"
+    r"|(?:patient|client)\s+referrals?.{0,80}\b(?:commission|fee|bonus)"
+    r"|(?:job\s+application|r[eé]sum[eé]|work\s+with\s+you)"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+_CONSULTA_EXPLICIT_PATIENT_REENTRY_RE = re.compile(
+    r"(?:"
+    r"\b(?:quiero|quisiera|necesito|me\s+gustar[ií]a)\s+"
+    r"(?:pedir|solicitar|concertar|reservar)?\s*(?:una\s+)?cita\b"
+    r"|\b(?:para\s+m[ií]|como\s+paciente)\b.{0,80}\b"
+    r"(?:terapia|psic[oó]log[oa]|psiquiatra|cita)\b"
+    r"|\b(?:sufro|padezco|tengo)\s+(?:de\s+)?"
+    r"(?:ansiedad|depresi[oó]n|p[aá]nico|insomnio|trauma)\b"
+    r"|\b(?:i\s+want|i\s+need|i(?:'d|\s+would)\s+like)\s+to\s+"
+    r"(?:book|request|arrange)\s+(?:an?\s+)?appointment\b"
+    r"|\b(?:for\s+myself|as\s+a\s+patient)\b.{0,80}\b"
+    r"(?:therapy|psychologist|psychiatrist|appointment)\b"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+_CONSULTA_SERVICE_CONTACT_ACK_RE = re.compile(
+    r"^\s*(?:gracias(?:\s+por\s+(?:la\s+)?informaci[oó]n)?|"
+    r"muchas\s+gracias|de\s+acuerdo|vale|perfecto|entendido|"
+    r"thanks|thank\s+you|okay|ok|understood)[.!\s]*$",
     re.IGNORECASE,
 )
 _CONSULTA_SUPPORT_CONTEXT_RE = re.compile(
@@ -456,6 +528,56 @@ def consulta_despertares_reply_language(
     # The clinic's normal operating language is Spanish when the message is
     # genuinely language-neutral (numbers, punctuation, or emoji only).
     return "Spanish"
+
+
+def consulta_despertares_non_patient_service_contact(
+    inbound_text: str,
+    already_routed: bool = False,
+) -> bool:
+    """Identify a non-patient commercial/service contact for Despertares.
+
+    Strong commercial signals win on the first turn. Once the route is known,
+    keep it for the active conversation unless the person explicitly changes
+    context and asks for care as a patient.
+    """
+
+    if not is_consulta_despertares():
+        return False
+    text = str(inbound_text or "").strip()
+    if _CONSULTA_EXPLICIT_PATIENT_REENTRY_RE.search(text):
+        return False
+    return bool(
+        already_routed
+        or _CONSULTA_NON_PATIENT_SERVICE_CONTACT_RE.search(text)
+    )
+
+
+def consulta_despertares_service_contact_acknowledgement(
+    inbound_text: str,
+) -> bool:
+    """Return True for a short acknowledgement after the email direction."""
+
+    return bool(_CONSULTA_SERVICE_CONTACT_ACK_RE.fullmatch(inbound_text or ""))
+
+
+def consulta_despertares_service_contact_reply(
+    inbound_text: str,
+    escalated: bool = False,
+) -> str:
+    """Return the controlled no-question reply for non-patient contacts."""
+
+    language = consulta_despertares_reply_language(inbound_text)
+    if escalated:
+        return (
+            CONSULTA_DESPERTARES_ENGLISH_SERVICE_CONTACT_ESCALATED_REPLY
+            if language == "English"
+            else CONSULTA_DESPERTARES_SERVICE_CONTACT_ESCALATED_REPLY
+        )
+    return (
+        CONSULTA_DESPERTARES_ENGLISH_SERVICE_CONTACT_REPLY
+        if language == "English"
+        else CONSULTA_DESPERTARES_SERVICE_CONTACT_REPLY
+    )
 
 
 def reply_violates_tenant_language_lock(
