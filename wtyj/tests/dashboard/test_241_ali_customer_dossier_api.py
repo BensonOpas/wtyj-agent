@@ -320,13 +320,52 @@ def test_public_upload_is_slot_bound_and_has_no_store(client, monkeypatch):
     }
 
 
+def test_contract_signature_page_allows_same_origin_submit_and_recovers(
+    client, monkeypatch,
+):
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "contract_review_context",
+        lambda token: {
+            "contract": {"publicId": "contract-241"},
+            "pdfBase64": "JVBERi0xLjQK",
+            "consentRequired": True,
+        },
+    )
+
+    page = client.get(
+        "/dashboard/api/ali-reservations/public/contracts/token-241",
+    )
+
+    assert page.status_code == 200
+    policy = page.headers["content-security-policy"]
+    assert "default-src 'none'" in policy
+    assert "connect-src 'self'" in policy
+    assert "<button id=\"sign\" type=\"button\">" in page.text
+    assert "location.pathname.replace(/[/]$/,'')+'/sign'" in page.text
+    assert "new AbortController()" in page.text
+    assert "if(submitting||signed)return" in page.text
+    assert "catch(error)" in page.text
+    assert "if(!signed)b.disabled=false" in page.text
+    assert "Unable to sign. Please check your connection and try again." in page.text
+
+    upload_page = api._public_ali_html("Upload", "<p>Upload</p>")
+    assert "connect-src" not in upload_page.headers["content-security-policy"]
+
+
 def test_contract_signature_public_endpoint_requires_explicit_consent(client, monkeypatch):
     captured = {}
+    events = []
     monkeypatch.setattr(
         api.ali_customer_dossier,
         "sign_contract",
         lambda token, **kwargs: captured.update({"token": token, **kwargs})
         or {"status": "signed"},
+    )
+    monkeypatch.setattr(
+        api.bm_logger,
+        "log",
+        lambda event, **fields: events.append((event, fields)),
     )
 
     invalid = client.post(
@@ -351,6 +390,53 @@ def test_contract_signature_public_endpoint_requires_explicit_consent(client, mo
     assert valid.status_code == 200
     assert captured["token"] == "token-241"
     assert captured["consent"] is True
+    assert [event for event, _fields in events] == [
+        "ali_public_contract_sign_requested",
+        "ali_public_contract_sign_succeeded",
+        "ali_public_contract_sign_requested",
+        "ali_public_contract_sign_succeeded",
+    ]
+    assert "token-241" not in repr(events)
+    assert "Synthetic Customer" not in repr(events)
+    assert "data:image/png" not in repr(events)
+
+
+def test_contract_signature_failure_is_sanitized_and_returns(client, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "sign_contract",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            api.ali_reservation_workflow.AliReservationError(
+                "invalid_signature_image", 422,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        api.bm_logger,
+        "log",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    response = client.post(
+        "/dashboard/api/ali-reservations/public/contracts/token-secret/sign",
+        json={
+            "consent": True,
+            "legalName": "Sensitive Name",
+            "signatureData": "data:image/png;base64," + "a" * 40,
+        },
+    )
+
+    assert response.status_code == 422
+    assert [event for event, _fields in events] == [
+        "ali_public_contract_sign_requested",
+        "ali_public_contract_sign_failed",
+        "ali_reservation_dashboard_rejected",
+    ]
+    assert events[1][1]["error_code"] == "invalid_signature_image"
+    assert "token-secret" not in repr(events)
+    assert "Sensitive Name" not in repr(events)
+    assert "data:image/png" not in repr(events)
 
 
 def test_dossier_print_is_authenticated_streamed_and_revision_bound(client, monkeypatch):
