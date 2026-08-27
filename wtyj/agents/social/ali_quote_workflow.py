@@ -1971,9 +1971,6 @@ def process_quote(
                 public_id, quote["locale"], json.loads(quote["customer_json"]),
                 json.loads(quote["rental_json"]), pricing, output_root=output_root,
                 logo_path=logo_path,
-                availability_copy=pricing.get("availabilityCopy"),
-                quote_footer=pricing.get("quoteFooter"),
-                validity_hours=pricing.get("quoteValidityHours"),
             )
             quote = update_quote(public_id, status="pdf_ready", pdf_path=path, pdf_sha256=digest)
         pdf_bytes = open(quote["pdf_path"], "rb").read()

@@ -61,7 +61,7 @@ LABELS = {
         "deposit": "Refundable security deposit",
         "issued": "Issued",
         "expires": "Valid until",
-        "validity": "This quote is valid for 72 hours.",
+        "validity": "This quote is valid for {hours} hours.",
         "availability": "Subject to final vehicle availability confirmation.",
         "reply": "Reply in WhatsApp to accept this quote or ask a question.",
     },
@@ -87,7 +87,7 @@ LABELS = {
         "deposit": "Terugbetaalbare borg",
         "issued": "Uitgegeven",
         "expires": "Geldig tot",
-        "validity": "Deze offerte is 72 uur geldig.",
+        "validity": "Deze offerte is {hours} uur geldig.",
         "availability": "Onder voorbehoud van definitieve beschikbaarheid.",
         "reply": "Reageer via WhatsApp om te accepteren of iets te vragen.",
     },
@@ -113,7 +113,7 @@ LABELS = {
         "deposit": "Depósito reembolsabel",
         "issued": "Emití",
         "expires": "Válido te ku",
-        "validity": "E oferta aki ta válido pa 72 ora.",
+        "validity": "E oferta aki ta válido pa {hours} ora.",
         "availability": "Suhéto na konfirmashon final di disponibilidat.",
         "reply": "Kontestá via WhatsApp pa aseptá of hasi un pregunta.",
     },
@@ -139,7 +139,7 @@ LABELS = {
         "deposit": "Rückerstattbare Kaution",
         "issued": "Ausgestellt",
         "expires": "Gültig bis",
-        "validity": "Dieses Angebot ist 72 Stunden gültig.",
+        "validity": "Dieses Angebot ist {hours} Stunden gültig.",
         "availability": "Vorbehaltlich der endgültigen Fahrzeugverfügbarkeit.",
         "reply": "Antworten Sie in WhatsApp, um anzunehmen oder etwas zu fragen.",
     },
@@ -186,6 +186,9 @@ def render_quote_pdf(
     pricing: dict,
     output_root: str = "/app/data/ali-quotes",
     logo_path: str | None = None,
+    availability_copy: str | None = None,
+    quote_footer: str | None = None,
+    validity_hours: int | None = None,
 ) -> tuple[str, str]:
     labels = LABELS.get(locale)
     if labels is None:
@@ -314,7 +317,18 @@ def render_quote_pdf(
     if usd_cents(deposit):
         total_styles.append(("SPAN", (0, 1), (1, 1)))
     totals.setStyle(TableStyle(total_styles))
-    story.append(KeepTogether([totals, Spacer(1, 5 * mm), Paragraph(f"<b>{_safe(labels['issued'])}:</b> {_safe(format_curacao_datetime(pricing.get('createdAt', ''), locale))}<br/>{_safe(labels['validity'])}<br/><b>{_safe(labels['availability'])}</b><br/>{_safe(labels['reply'])}", small)]))
+    resolved_validity_hours = validity_hours or int(pricing.get("quoteValidityHours") or 72)
+    resolved_availability = availability_copy or pricing.get("availabilityCopy") or labels["availability"]
+    resolved_footer = quote_footer if quote_footer is not None else pricing.get("quoteFooter")
+    closing = (
+        f"<b>{_safe(labels['issued'])}:</b> "
+        f"{_safe(format_curacao_datetime(pricing.get('createdAt', ''), locale))}<br/>"
+        f"{_safe(labels['validity'].format(hours=resolved_validity_hours))}<br/>"
+        f"<b>{_safe(resolved_availability)}</b><br/>{_safe(labels['reply'])}"
+    )
+    if resolved_footer:
+        closing += f"<br/><br/>{_safe(resolved_footer, 500)}"
+    story.append(KeepTogether([totals, Spacer(1, 5 * mm), Paragraph(closing, small)]))
     document.build(story)
 
     data = target.read_bytes()
