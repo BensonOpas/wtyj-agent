@@ -89,6 +89,22 @@ _SMALLER_REQUEST = re.compile(
     r"outonan|wagen|fahrzeug))?",
     re.IGNORECASE,
 )
+_LARGER_REQUEST = re.compile(
+    r"(?:\b(?:bigger|larger|more\s+spacious|more\s+room)\b"
+    r"|\b(?:groter|grotere|ruimer|ruimere|meer\s+ruimte)\b"
+    r"|\b(?:m[aá]s\s+grandi|mas\s+grandi|mas\s+espasio)\b"
+    r"|\b(?:gr[oö][sß]er|gr[oö][sß]ere|gr[oö][sß]eres|mehr\s+platz)\b)",
+    re.IGNORECASE,
+)
+_NEGATED_LARGER_REQUEST = re.compile(
+    r"\b(?:don['’]?t|do\s+not|not|no|niet|geen|mi\s+no\s+ke|nicht|kein|keine|keinen)\b"
+    r".{0,32}"
+    r"(?:\b(?:bigger|larger|more\s+spacious|more\s+room)\b"
+    r"|\b(?:groter|grotere|ruimer|ruimere|meer\s+ruimte)\b"
+    r"|\b(?:m[aá]s\s+grandi|mas\s+grandi|mas\s+espasio)\b"
+    r"|\b(?:gr[oö][sß]er|gr[oö][sß]ere|gr[oö][sß]eres|mehr\s+platz)\b)",
+    re.IGNORECASE,
+)
 _NEGATED_SMALLER_REQUEST = re.compile(
     r"\b(?:don['’]?t|do\s+not|not|no|niet|geen|mi\s+no\s+ke|nicht|kein|keine|keinen)\b"
     r".{0,32}\b(?:smaller|small|compact|economy|kleiner|kleine|kleines|compacte|"
@@ -131,6 +147,9 @@ _COPY = {
         "browse_capacity": "Here are a few cars from our current fleet. Seat capacity is shown on each card; cars with fewer than {passengers} seats will not fit your full group. Which one would you like to compare?",
         "smaller_many": "Here are the smaller cars. Which one would you like to look at?",
         "smaller_capacity": "Here are the smaller cars. They seat up to {max_seats}, so if {passengers} people are travelling, you’ll need a larger option. Which one would you like to look at?",
+        "larger_one": "This is the larger option that fits your group. Does this one work for your trip?",
+        "larger_many": "Here are the larger options that fit your group. Which one do you prefer?",
+        "largest_one": "This is the largest option in our current fleet. Does this one work for your trip?",
     },
     "nl": {
         "intro_one": "Hier is een auto die past bij wat je zoekt. Past deze bij je reis?",
@@ -151,6 +170,9 @@ _COPY = {
         "browse_capacity": "Hier zijn een paar auto's uit ons huidige wagenpark. Op elke kaart staat het aantal zitplaatsen; auto's met minder dan {passengers} zitplaatsen zijn te klein voor je hele groep. Welke wil je vergelijken?",
         "smaller_many": "Hier zijn de kleinere auto's. Welke wil je bekijken?",
         "smaller_capacity": "Hier zijn de kleinere auto's. Ze hebben maximaal {max_seats} zitplaatsen, dus als er {passengers} personen reizen, heb je een grotere optie nodig. Welke wil je bekijken?",
+        "larger_one": "Dit is de grotere optie die bij je groep past. Past deze bij je reis?",
+        "larger_many": "Hier zijn de grotere opties die bij je groep passen. Welke heeft je voorkeur?",
+        "largest_one": "Dit is de grootste optie in ons huidige wagenpark. Past deze bij je reis?",
     },
     "pap": {
         "intro_one": "Aki tin un outo ku ta pas ku loke bo ta buska. E ta pas ku bo biahe?",
@@ -171,6 +193,9 @@ _COPY = {
         "browse_capacity": "Aki tin algun outo for di nos flota aktual. Kada karta ta mustra e kantidat di asiento; outonan ku ménos ku {passengers} asiento ta chikí pa henter bo grupo. Kua bo ke kompará?",
         "smaller_many": "Aki tin e outonan mas chikí. Kua bo ke mira?",
         "smaller_capacity": "Aki tin e outonan mas chikí. Nan tin te ku {max_seats} asiento, pues si {passengers} persona ta biaha, bo tin mester di un opshon mas grandi. Kua bo ke mira?",
+        "larger_one": "Esaki ta e opshon mas grandi ku ta pas ku bo grupo. E ta pas ku bo biahe?",
+        "larger_many": "Aki tin e opshonnan mas grandi ku ta pas ku bo grupo. Kua bo ta preferá?",
+        "largest_one": "Esaki ta e opshon di mas grandi den nos flota aktual. E ta pas ku bo biahe?",
     },
     "de": {
         "intro_one": "Hier ist ein Auto, das zu Ihrer Anfrage passt. Passt es zu Ihrer Reise?",
@@ -191,6 +216,9 @@ _COPY = {
         "browse_capacity": "Hier sind einige Autos aus unserer aktuellen Flotte. Die Sitzplatzanzahl steht auf jeder Karte; Fahrzeuge mit weniger als {passengers} Sitzen sind für Ihre gesamte Gruppe zu klein. Welches möchten Sie vergleichen?",
         "smaller_many": "Hier sind die kleineren Autos. Welches möchten Sie ansehen?",
         "smaller_capacity": "Hier sind die kleineren Autos. Sie haben bis zu {max_seats} Sitzplätze. Wenn {passengers} Personen mitfahren, benötigen Sie eine größere Option. Welches möchten Sie ansehen?",
+        "larger_one": "Dies ist die größere Option, die zu Ihrer Gruppe passt. Passt sie zu Ihrer Reise?",
+        "larger_many": "Hier sind die größeren Optionen, die zu Ihrer Gruppe passen. Welches Auto bevorzugen Sie?",
+        "largest_one": "Dies ist die größte Option in unserer aktuellen Flotte. Passt sie zu Ihrer Reise?",
     },
 }
 
@@ -211,6 +239,15 @@ def explicit_smaller_vehicle_request(message_text: object) -> bool:
     return bool(
         _SMALLER_REQUEST.search(text)
         and not _NEGATED_SMALLER_REQUEST.search(text)
+    )
+
+
+def explicit_larger_vehicle_request(message_text: object) -> bool:
+    """Recognize a positive larger-vehicle request in four locales."""
+    text = str(message_text or "")
+    return bool(
+        _LARGER_REQUEST.search(text)
+        and not _NEGATED_LARGER_REQUEST.search(text)
     )
 
 
@@ -354,7 +391,9 @@ def infer_media_first_intent(
     if (
         explicit_catalog_browse_request(customer_text)
         or explicit_smaller_vehicle_request(customer_text)
+        or explicit_larger_vehicle_request(customer_text)
         or explicit_no_preference_request(customer_text)
+        or infer_explicit_catalog_class_selection(customer_text, catalog)
     ):
         return "request_recommendation"
     if (
@@ -427,12 +466,18 @@ def infer_explicit_catalog_class_selection(
         label = re.sub(r"[^\w]+", " ", label, flags=re.UNICODE).strip()
         if not label:
             continue
+        exact_positive_labels = {
+            label,
+            *(f"{article} {label}" for article in (
+                "a", "an", "the", "een", "un", "e", "ein", "eine", "einen",
+            )),
+        }
         for match in re.finditer(rf"(?<!\w){re.escape(label)}(?!\w)", normalized):
             prefix = normalized[max(0, match.start() - 80):match.start()]
             if _NEGATIVE_CLASS_PREFIX.search(prefix):
                 continue
             if (
-                normalized == label
+                normalized in exact_positive_labels
                 or has_discovery_request
                 or _POSITIVE_CLASS_PREFIX.search(prefix)
             ):
@@ -541,6 +586,7 @@ def derive_media_first_action(
     )
     browse_requested = explicit_catalog_browse_request(message_text)
     smaller_requested = explicit_smaller_vehicle_request(message_text)
+    larger_requested = explicit_larger_vehicle_request(message_text)
     no_preference_requested = explicit_no_preference_request(message_text)
     explicit_class_request = infer_explicit_catalog_class_selection(
         message_text,
@@ -556,7 +602,11 @@ def derive_media_first_action(
     # Otherwise a simultaneous model list can silently override the latest
     # customer instruction and fail the downstream capacity policy.
     deterministic_discovery = bool(
-        browse_requested or broad_smaller_request or no_preference_requested
+        browse_requested
+        or broad_smaller_request
+        or larger_requested
+        or explicit_class_request is not None
+        or no_preference_requested
     )
     candidates = [] if deterministic_discovery else [
         vehicles_by_name[name.casefold()]
@@ -585,7 +635,15 @@ def derive_media_first_action(
     # A clear "whatever / no preference" reopens suitable catalog choices,
     # including a previously rejected car. Without this reset a tenant with
     # only one capacity-suitable vehicle can fall back into clarification.
-    excluded_ids = set() if no_preference_requested else set(rejected_ids)
+    excluded_ids = (
+        set()
+        if (
+            no_preference_requested
+            or larger_requested
+            or explicit_class_request is not None
+        )
+        else set(rejected_ids)
+    )
     if intent == "reject_or_hesitate":
         excluded_ids.update(last_ids)
         if selected_id:
@@ -603,6 +661,8 @@ def derive_media_first_action(
         and selected_id
         and not browse_requested
         and not smaller_requested
+        and not larger_requested
+        and explicit_class_request is None
     ):
         candidates = [
             vehicle
@@ -633,6 +693,17 @@ def derive_media_first_action(
     elif browse_requested:
         candidates = list(vehicles)
         reason = "explicit_catalog_browse"
+
+    if explicit_class_request is not None:
+        requested_class_id = str(
+            explicit_class_request.get("vehicle_class_id") or ""
+        ).strip()
+        candidates = [
+            vehicle
+            for vehicle in vehicles
+            if str(vehicle.get("classId") or "").strip() == requested_class_id
+        ]
+        reason = "explicit_catalog_class" if candidates else ""
 
     class_id = str(fields.get("vehicle_class_id") or "").strip()
     class_name = str(fields.get("vehicle_class_name") or "").strip().casefold()
@@ -666,6 +737,91 @@ def derive_media_first_action(
 
     passenger_count = fields.get("passenger_count")
     luggage_count = fields.get("luggage_count")
+    if larger_requested:
+        selected_vehicle = next(
+            (
+                vehicle for vehicle in vehicles
+                if str(vehicle.get("id") or "").strip() == selected_id
+            ),
+            None,
+        )
+        selected_seats = (
+            selected_vehicle.get("seats")
+            if isinstance(selected_vehicle, dict) else None
+        )
+        minimum_seats = (
+            passenger_count
+            if isinstance(passenger_count, int)
+            and not isinstance(passenger_count, bool)
+            and passenger_count > 0
+            else 1
+        )
+        if (
+            isinstance(selected_seats, int)
+            and not isinstance(selected_seats, bool)
+        ):
+            minimum_seats = max(minimum_seats, selected_seats + 1)
+        larger_candidates = [
+            vehicle
+            for vehicle in vehicles
+            if isinstance(vehicle.get("seats"), int)
+            and not isinstance(vehicle.get("seats"), bool)
+            and vehicle["seats"] >= minimum_seats
+        ]
+        if larger_candidates:
+            candidates = larger_candidates
+            reason = "explicit_larger_preference"
+        else:
+            suitable = [
+                vehicle
+                for vehicle in vehicles
+                if isinstance(vehicle.get("seats"), int)
+                and not isinstance(vehicle.get("seats"), bool)
+                and vehicle["seats"] >= (
+                    passenger_count
+                    if isinstance(passenger_count, int)
+                    and not isinstance(passenger_count, bool)
+                    and passenger_count > 0
+                    else 1
+                )
+            ]
+            largest_seats = max(
+                (vehicle["seats"] for vehicle in suitable),
+                default=0,
+            )
+            candidates = [
+                vehicle for vehicle in suitable
+                if vehicle.get("seats") == largest_seats
+            ]
+            reason = "largest_current_option" if candidates else ""
+
+    # Claude may return valid catalog names that do not fit the already-known
+    # group size. Repair that candidate set from server-owned capacity truth
+    # before the delivery builder sees it; rejecting the whole bundle would
+    # collapse the turn back into the repeated generic clarification loop.
+    if (
+        candidates
+        and isinstance(passenger_count, int)
+        and not isinstance(passenger_count, bool)
+        and passenger_count > 0
+        and not browse_requested
+        and not broad_smaller_request
+        and explicit_class_request is None
+        and not larger_requested
+    ):
+        capacity_candidates = [
+            vehicle
+            for vehicle in candidates
+            if vehicle.get("seats") is None
+            or (
+                isinstance(vehicle.get("seats"), int)
+                and not isinstance(vehicle.get("seats"), bool)
+                and vehicle["seats"] >= passenger_count
+            )
+        ]
+        if len(capacity_candidates) != len(candidates):
+            candidates = capacity_candidates
+            reason = "structured_action_capacity_filtered" if candidates else ""
     if lowest_price_requested:
         candidates = []
     if not candidates:
@@ -817,6 +973,12 @@ def derive_media_first_action(
             )
         else:
             intro = copy["smaller_many"]
+    if larger_requested:
+        intro = copy[
+            "largest_one"
+            if reason == "largest_current_option"
+            else ("larger_one" if mode == "specific" else "larger_many")
+        ]
     if lowest_price_requested:
         cheapest = candidates[0]
         amount = _amount(cheapest)

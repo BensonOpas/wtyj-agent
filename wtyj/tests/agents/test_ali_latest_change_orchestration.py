@@ -15,6 +15,7 @@ SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000003"
 SECOND_SUV_VEHICLE_ID = "40000000-0000-4000-8000-000000000004"
 YARIS_VEHICLE_ID = "40000000-0000-4000-8000-000000000005"
 COROLLA_VEHICLE_ID = "40000000-0000-4000-8000-000000000006"
+VAN_VEHICLE_ID = "40000000-0000-4000-8000-000000000007"
 
 
 def raw_config():
@@ -119,6 +120,26 @@ def media_catalog():
             }],
         },
     ])
+    return catalog
+
+
+def media_catalog_with_van():
+    catalog = media_catalog()
+    catalog["vehicles"].append({
+        "id": VAN_VEHICLE_ID,
+        "slug": "suzuki-ertiga",
+        "classId": VAN_CLASS_ID,
+        "name": "Suzuki Ertiga",
+        "seats": 7,
+        "transmission": "automatic",
+        "features": ["Air conditioning"],
+        "dailyRate": {"currency": "USD", "amount": "75.00"},
+        "weeklyRate": {"currency": "USD", "amount": "525.00"},
+        "images": [{
+            "url": "/brand/vehicles/suzuki-ertiga.png",
+            "alt": "Ali Suzuki Ertiga",
+        }],
+    })
     return catalog
 
 
@@ -1357,6 +1378,157 @@ def test_live_smaller_turn_overrides_model_candidates_and_builds_carousel(
     assert repeated["vehicle_recommendation"] is not None
     assert repeated["vehicle_recommendation"]["state_hash"] != (
         recommendation["state_hash"]
+    )
+
+
+def test_live_larger_turn_replaces_stale_undersized_model_candidates(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-270-larger"
+    _configure(monkeypatch, tmp_path, _live_discovery_model_result())
+    monkeypatch.setattr(
+        social_agent, "get_ali_intake_catalog", media_catalog_with_van,
+    )
+    monkeypatch.setattr(
+        workflow, "get_intake_catalog", media_catalog_with_van,
+    )
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "vehicle_id": YARIS_VEHICLE_ID,
+            "vehicle_name": "Toyota Yaris or similar",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_phase": "DISCOVERY",
+            "ali_last_recommendation_ids": [VAN_VEHICLE_ID],
+            "ali_rejected_vehicle_ids": [VAN_VEHICLE_ID],
+            "ali_shown_vehicle_ids": [VAN_VEHICLE_ID],
+        },
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Any bigger cars?",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-270-larger-turn",
+        "_zernio_provider_message_id": "wamid.issue-270-larger-turn",
+        "_zernio_sent_at": "2026-08-27T15:33:22Z",
+    }, include_media=True)
+
+    recommendation = response["vehicle_recommendation"]
+    assert response["ali_turn_commit"]["outbound_kind"] == (
+        "vehicle_recommendation"
+    )
+    assert recommendation["kind"] == "image"
+    assert [option["id"] for option in recommendation["options"]] == [
+        VAN_VEHICLE_ID,
+    ]
+    assert "larger option" in response["text"]
+    assert "Would you prefer" not in response["text"]
+
+
+def test_live_article_prefixed_van_turn_builds_exact_class_image(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-270-van"
+    model_result = _live_discovery_model_result()
+    model_result["fields"] = {}
+    model_result["ali_vehicle_recommendation"] = None
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(
+        social_agent, "get_ali_intake_catalog", media_catalog_with_van,
+    )
+    monkeypatch.setattr(
+        workflow, "get_intake_catalog", media_catalog_with_van,
+    )
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "vehicle_id": YARIS_VEHICLE_ID,
+            "vehicle_name": "Toyota Yaris or similar",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_phase": "DISCOVERY",
+            "ali_last_recommendation_ids": [VAN_VEHICLE_ID],
+            "ali_rejected_vehicle_ids": [VAN_VEHICLE_ID],
+            "ali_shown_vehicle_ids": [VAN_VEHICLE_ID],
+        },
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "A van",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-270-van-turn",
+        "_zernio_provider_message_id": "wamid.issue-270-van-turn",
+        "_zernio_sent_at": "2026-08-27T15:33:50Z",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    recommendation = response["vehicle_recommendation"]
+    assert response["ali_turn_commit"]["outbound_kind"] == (
+        "vehicle_recommendation"
+    )
+    assert recommendation["kind"] == "image"
+    assert [option["id"] for option in recommendation["options"]] == [
+        VAN_VEHICLE_ID,
+    ]
+    assert saved["fields"]["vehicle_class_id"] == VAN_CLASS_ID
+    assert saved["fields"]["vehicle_class_name"] == "Van"
+    assert "vehicle_id" not in saved["fields"]
+    assert "Would you prefer" not in response["text"]
+
+
+def test_same_exact_class_can_be_reoffered_on_new_turn_without_replay_duplication(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-issue-270-van-repeat"
+    model_result = _live_discovery_model_result()
+    model_result["fields"] = {}
+    model_result["ali_vehicle_recommendation"] = None
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(
+        social_agent, "get_ali_intake_catalog", media_catalog_with_van,
+    )
+    monkeypatch.setattr(
+        workflow, "get_intake_catalog", media_catalog_with_van,
+    )
+    state_registry.wa_save_booking_state(
+        phone,
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {"ali_phase": "DISCOVERY"},
+    )
+
+    first = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "A van",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-270-van-repeat-1",
+        "_ali_action_id": "a" * 64,
+    }, include_media=True)
+    _commit_result(phone, first, "issue-270-van-repeat-1")
+    second = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "A van",
+        "from_name": "Synthetic Customer",
+        "message_id": "issue-270-van-repeat-2",
+        "_ali_action_id": "b" * 64,
+    }, include_media=True)
+
+    assert first["vehicle_recommendation"] is not None
+    assert second["vehicle_recommendation"] is not None
+    assert second["vehicle_recommendation"]["state_hash"] != (
+        first["vehicle_recommendation"]["state_hash"]
     )
 
 
