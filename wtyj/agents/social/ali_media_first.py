@@ -541,6 +541,7 @@ def derive_media_first_action(
     )
     browse_requested = explicit_catalog_browse_request(message_text)
     smaller_requested = explicit_smaller_vehicle_request(message_text)
+    no_preference_requested = explicit_no_preference_request(message_text)
 
     candidates = [
         vehicles_by_name[name.casefold()]
@@ -566,7 +567,10 @@ def derive_media_first_action(
     last_ids = _ids(flags, "ali_last_recommendation_ids")
     rejected_ids = _ids(flags, "ali_rejected_vehicle_ids")
     shown_ids = _ids(flags, "ali_shown_vehicle_ids")
-    excluded_ids = set(rejected_ids)
+    # A clear "whatever / no preference" reopens suitable catalog choices,
+    # including a previously rejected car. Without this reset a tenant with
+    # only one capacity-suitable vehicle can fall back into clarification.
+    excluded_ids = set() if no_preference_requested else set(rejected_ids)
     if intent == "reject_or_hesitate":
         excluded_ids.update(last_ids)
         if selected_id:

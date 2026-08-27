@@ -466,6 +466,38 @@ def test_no_preference_is_a_suitable_recommendation_request(message_text):
     ) == "request_recommendation"
 
 
+def test_no_preference_reopens_the_only_suitable_previously_rejected_car():
+    catalog = _catalog()
+    catalog["vehicleClasses"].append({"id": "van", "name": "Van"})
+    catalog["vehicles"].append(
+        _vehicle(7, "Suzuki Ertiga", "van", 7, "75.00")
+    )
+
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "Would you prefer a smaller car, an SUV, or a van?",
+        {
+            "conversation_language": "en",
+            "passenger_count": 6,
+            "luggage_count": 3,
+        },
+        {
+            "ali_last_recommendation_ids": ["vehicle-7"],
+            "ali_rejected_vehicle_ids": ["vehicle-7"],
+            "ali_shown_vehicle_ids": ["vehicle-7"],
+        },
+        catalog,
+        message_text="Whatever",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "capacity_curated"
+    assert decision["action"]["mode"] == "specific"
+    assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
+    assert "Would you prefer" not in decision["reply_text"]
+
+
 @pytest.mark.parametrize(
     "message_text",
     ["Smaller", "kleinere auto", "outo mas chikí", "kleiner Wagen"],
