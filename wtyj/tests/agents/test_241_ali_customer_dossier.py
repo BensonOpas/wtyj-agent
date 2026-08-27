@@ -197,6 +197,7 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
     customer_file = dossier.get_customer_file(case["public_id"])
     assert customer_file["dossier_status"] == "ready_for_review"
     assert customer_file["payment"]["status"] == "verified"
+    assert "url" not in customer_file["payment"]
     assert {item["slot"] for item in customer_file["documents"]} == {
         "license_front", "license_back", "identity",
     }
@@ -253,6 +254,97 @@ def test_security_gates_fail_closed_without_mutating_state(configured):
     ).fetchone()[0]
     conn.close()
     assert "Synthetic Customer" not in stored
+
+
+def test_replacement_link_is_fresh_and_pickup_checks_are_durable(configured):
+    case = _reservation(configured["raw"])
+    links = dossier.issue_document_links(case["public_id"], "staff-241")["links"]
+    front_token = next(
+        item["url"].rsplit("/", 1)[-1]
+        for item in links
+        if item["slot"] == "license_front"
+    )
+    original = dossier.store_document_upload(front_token, _png(), "image/png")
+    revision = reservations.get_reservation(case["public_id"])["revision"]
+
+    replacement = dossier.request_document_replacement(
+        case["public_id"],
+        original["public_id"],
+        "staff-241",
+        expected_revision=revision,
+    )
+
+    assert replacement["document"]["status"] == "replacement_requested"
+    assert replacement["links"][0]["slot"] == "license_front"
+    replacement_token = replacement["links"][0]["url"].rsplit("/", 1)[-1]
+    assert replacement_token != front_token
+    uploaded = dossier.store_document_upload(
+        replacement_token,
+        _png((40, 80, 120)),
+        "image/png",
+    )
+    assert uploaded["version"] == 2
+    assert uploaded["previous_document_public_id"] == original["public_id"]
+
+    completed = _upload_all(case)
+    assert completed
+    contract_link = dossier.issue_contract_link(case["public_id"], "staff-241")
+    contract_token = contract_link["url"].rsplit("/", 1)[-1]
+    dossier.contract_review_context(contract_token)
+    signature = "data:image/png;base64," + base64.b64encode(_png((1, 1, 1))).decode()
+    dossier.sign_contract(
+        contract_token,
+        consent=True,
+        legal_name="Synthetic Customer",
+        signature_data=signature,
+    )
+    dossier.set_payment_link(
+        case["public_id"],
+        "https://pay.example.test/deposit/synthetic-pickup",
+        "SYNTH-PICKUP",
+        "staff-241",
+    )
+    dossier.mark_payment_link_sent(case["public_id"], "staff-241")
+    dossier.review_payment(case["public_id"], "verified", "staff-241")
+    dossier.generate_dossier(case["public_id"], "staff-241")
+    confirmed = reservations.confirm_reservation(
+        case["public_id"],
+        "staff-241",
+        output_root=str(configured["root"] / "confirmations"),
+        logo_path=str(configured["root"] / "no-logo.png"),
+    )
+
+    inspected_license = reservations.record_original_document_inspection(
+        case["public_id"],
+        "license",
+        "staff-241",
+        expected_revision=confirmed["revision"],
+    )
+    replay = reservations.record_original_document_inspection(
+        case["public_id"],
+        "license",
+        "staff-241",
+        expected_revision=inspected_license["revision"],
+    )
+    inspected_identity = reservations.record_original_document_inspection(
+        case["public_id"],
+        "identity",
+        "staff-241",
+        expected_revision=replay["revision"],
+    )
+
+    assert inspected_identity["pickup_checklist"] == {
+        "original_license_inspected": True,
+        "original_license_inspected_at": inspected_license["pickup_checklist"][
+            "original_license_inspected_at"
+        ],
+        "original_license_inspected_by": "staff-241",
+        "original_identity_inspected": True,
+        "original_identity_inspected_at": inspected_identity["pickup_checklist"][
+            "original_identity_inspected_at"
+        ],
+        "original_identity_inspected_by": "staff-241",
+    }
 
 
 @pytest.mark.parametrize(

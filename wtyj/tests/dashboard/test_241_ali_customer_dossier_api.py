@@ -92,6 +92,70 @@ def test_document_mutations_require_revision_and_auth(client, monkeypatch):
     }
 
 
+def test_replacement_request_delivers_fresh_link(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "request_document_replacement",
+        lambda public_id, document_id, actor, expected_revision=None: {
+            "links": [{"slot": "license_front", "url": "https://example.test/fresh"}],
+        },
+    )
+    monkeypatch.setattr(
+        api.ali_quote_delivery,
+        "send_customer_requirement_link",
+        lambda public_id, requirement, payload: captured.update({
+            "public_id": public_id,
+            "requirement": requirement,
+            "payload": payload,
+        }) or True,
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "get_customer_file",
+        lambda public_id: {"public_id": public_id, "revision": 8},
+    )
+
+    response = client.post(
+        "/dashboard/api/ali-reservations/res-241/documents/doc-1/request-replacement",
+        headers=_auth(),
+        json={"expectedRevision": 7},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivered"] is True
+    assert captured["requirement"] == "documents"
+    assert captured["payload"]["links"][0]["url"].endswith("/fresh")
+
+
+def test_pickup_inspection_is_revision_bound(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.ali_reservation_workflow,
+        "record_original_document_inspection",
+        lambda public_id, item, actor, expected_revision=None: captured.update({
+            "public_id": public_id,
+            "item": item,
+            "actor": actor,
+            "expected_revision": expected_revision,
+        }) or {"status": "confirmed"},
+    )
+
+    response = client.post(
+        "/dashboard/api/ali-reservations/res-241/pickup-inspection",
+        headers=_auth(),
+        json={"item": "identity", "expectedRevision": 12},
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "public_id": "res-241",
+        "item": "identity",
+        "actor": "dashboard",
+        "expected_revision": 12,
+    }
+
+
 def test_document_download_never_caches_private_bytes(client, monkeypatch):
     monkeypatch.setattr(
         api.ali_customer_dossier,

@@ -4618,6 +4618,10 @@ class AliDossierPrintRequest(AliDossierMutationRequest):
     pageSize: Literal["A4", "LETTER"] = "A4"
 
 
+class AliPickupInspectionRequest(AliDossierMutationRequest):
+    item: Literal["license", "identity"]
+
+
 class AliContractSignRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -5230,6 +5234,37 @@ async def review_ali_document_endpoint(
 
 
 @router.post(
+    "/ali-reservations/{public_id}/documents/{document_id}/request-replacement",
+    dependencies=[Depends(_check_auth)],
+)
+async def request_ali_document_replacement_endpoint(
+    public_id: str,
+    document_id: str,
+    req: AliDossierMutationRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        replacement = ali_customer_dossier.request_document_replacement(
+            public_id,
+            document_id,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+        delivered = await asyncio.to_thread(
+            ali_quote_delivery.send_customer_requirement_link,
+            public_id,
+            "documents",
+            replacement,
+        )
+        return {
+            "delivered": delivered,
+            "reservation": ali_customer_dossier.get_customer_file(public_id),
+        }
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_replacement_request")
+
+
+@router.post(
     "/ali-reservations/{public_id}/documents/not-required",
     dependencies=[Depends(_check_auth)],
 )
@@ -5369,14 +5404,14 @@ async def send_ali_payment_link_endpoint(public_id: str):
     _require_ali_quote_leads()
     try:
         customer_file = ali_customer_dossier.get_customer_file(public_id)
-        url = str((customer_file.get("payment") or {}).get("url") or "")
         if customer_file.get("payment_status") == "link_sent":
             return {"delivered": True, "reservation": customer_file}
+        payment_payload = ali_customer_dossier.payment_delivery_payload(public_id)
         delivered = await asyncio.to_thread(
             ali_quote_delivery.send_customer_requirement_link,
             public_id,
             "payment",
-            {"url": url},
+            payment_payload,
         )
         if delivered:
             ali_customer_dossier.mark_payment_link_sent(
@@ -5458,6 +5493,26 @@ async def print_ali_dossier_endpoint(
     response.headers["X-Ali-Dossier-Version"] = str(result["version"])
     response.headers["X-Ali-Dossier-Status"] = str(result["status"])
     return response
+
+
+@router.post(
+    "/ali-reservations/{public_id}/pickup-inspection",
+    dependencies=[Depends(_check_auth)],
+)
+async def record_ali_pickup_inspection_endpoint(
+    public_id: str,
+    req: AliPickupInspectionRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_reservation_workflow.record_original_document_inspection(
+            public_id,
+            req.item,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="pickup_inspection")
 
 
 def _public_ali_html(title: str, content: str) -> HTMLResponse:
