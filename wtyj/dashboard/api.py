@@ -147,6 +147,7 @@ def _process_upload(file_bytes: bytes, photo_id: int) -> tuple:
 
 
 router = APIRouter(prefix="/dashboard/api", tags=["dashboard"])
+public_router = APIRouter(prefix="/r", tags=["ali-public"])
 
 
 # --- Auth ---
@@ -5851,6 +5852,18 @@ async def public_ali_contract_sign(token: str, req: AliContractSignRequest):
         contract_status=str(result.get("status") or "")[:40],
     )
     return result
+
+
+# Compact first-party aliases for new customer contract links. The legacy
+# dashboard routes above stay available so already-issued links remain valid.
+@public_router.get("/{token}", include_in_schema=False)
+async def compact_public_ali_contract_page(token: str):
+    return await public_ali_contract_page(token)
+
+
+@public_router.post("/{token}/sign", include_in_schema=False)
+async def compact_public_ali_contract_sign(token: str, req: AliContractSignRequest):
+    return await public_ali_contract_sign(token, req)
 
 
 @router.get("/quote-leads", dependencies=[Depends(_check_auth)])

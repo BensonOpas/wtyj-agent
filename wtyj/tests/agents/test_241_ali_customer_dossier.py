@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
+import re
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -162,6 +165,10 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
 
     contract_link = dossier.issue_contract_link(case["public_id"], "staff-241")
     contract_token = contract_link["url"].rsplit("/", 1)[-1]
+    assert "/r/" in contract_link["url"]
+    assert "/dashboard/api/ali-reservations/public/contracts/" not in contract_link["url"]
+    assert len(contract_token) == 32
+    assert re.fullmatch(r"[A-Za-z0-9_-]{32}", contract_token)
     viewed = dossier.contract_review_context(contract_token)
     assert viewed["contract"]["status"] == "viewed"
     signature = "data:image/png;base64," + base64.b64encode(_png((1, 1, 1))).decode()
@@ -254,6 +261,31 @@ def test_security_gates_fail_closed_without_mutating_state(configured):
     ).fetchone()[0]
     conn.close()
     assert "Synthetic Customer" not in stored
+
+
+def test_unexpired_legacy_signed_contract_token_remains_compatible(configured):
+    case = _reservation(configured["raw"])
+    _upload_all(case)
+    link = dossier.issue_contract_link(case["public_id"], "staff-241")
+    compact_token = link["url"].rsplit("/", 1)[-1]
+    nonce = secrets.token_urlsafe(32)
+    legacy_token = f"{nonce}.{dossier._token_signature(nonce)}"
+
+    conn = sqlite3.connect(dossier.state_registry.DB_PATH)
+    conn.execute(
+        "UPDATE ali_reservation_tokens SET token_hash = ? "
+        "WHERE token_hash = ? AND purpose = 'contract_sign'",
+        (
+            hashlib.sha256(legacy_token.encode("ascii")).hexdigest(),
+            hashlib.sha256(compact_token.encode("ascii")).hexdigest(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    viewed = dossier.contract_review_context(legacy_token)
+
+    assert viewed["contract"]["status"] == "viewed"
 
 
 def test_replacement_link_is_fresh_and_pickup_checks_are_durable(configured):
