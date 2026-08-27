@@ -461,6 +461,37 @@ def _version_result(row: sqlite3.Row, *, current: bool = True) -> dict:
     }
 
 
+def _version_idempotency_key(action: str, key: str) -> str:
+    """Namespace new catalog-version operations without breaking old replays."""
+    # Slash is deliberately outside the accepted caller-key alphabet, so an
+    # older raw key can never masquerade as a newly scoped operation key.
+    return f"rental-version/v1/{action}/{key}"
+
+
+def _find_version_replay(
+    connection: sqlite3.Connection,
+    tenant: str,
+    action: str,
+    key: str,
+) -> sqlite3.Row | None:
+    scoped_key = _version_idempotency_key(action, key)
+    existing = connection.execute(
+        "SELECT * FROM rental_catalog_versions "
+        "WHERE tenant_slug = ? AND idempotency_key = ?",
+        (tenant, scoped_key),
+    ).fetchone()
+    if existing is not None:
+        return existing
+    legacy = connection.execute(
+        "SELECT * FROM rental_catalog_versions "
+        "WHERE tenant_slug = ? AND idempotency_key = ?",
+        (tenant, key),
+    ).fetchone()
+    if legacy is not None and legacy["action"] == action:
+        return legacy
+    return None
+
+
 def publish(
     tenant_slug: str,
     *,
@@ -477,10 +508,7 @@ def publish(
     connection.isolation_level = None
     try:
         connection.execute("BEGIN IMMEDIATE")
-        existing = connection.execute(
-            "SELECT * FROM rental_catalog_versions WHERE tenant_slug = ? AND idempotency_key = ?",
-            (tenant, key),
-        ).fetchone()
+        existing = _find_version_replay(connection, tenant, "publish", key)
         if existing is not None:
             connection.execute("COMMIT")
             return _version_result(existing, current=_published_version(connection, tenant) == int(existing["version"]))
@@ -508,7 +536,15 @@ def publish(
             "INSERT INTO rental_catalog_versions "
             "(tenant_slug, version, document_json, content_hash, action, actor, created_at, source_version, idempotency_key) "
             "VALUES (?, ?, ?, ?, 'publish', ?, ?, NULL, ?)",
-            (tenant, version, serialized, digest, actor, now, key),
+            (
+                tenant,
+                version,
+                serialized,
+                digest,
+                actor,
+                now,
+                _version_idempotency_key("publish", key),
+            ),
         )
         connection.execute(
             "INSERT INTO rental_catalog_current (tenant_slug, version) VALUES (?, ?) "
@@ -544,10 +580,7 @@ def rollback(
     connection.isolation_level = None
     try:
         connection.execute("BEGIN IMMEDIATE")
-        existing = connection.execute(
-            "SELECT * FROM rental_catalog_versions WHERE tenant_slug = ? AND idempotency_key = ?",
-            (tenant, key),
-        ).fetchone()
+        existing = _find_version_replay(connection, tenant, "rollback", key)
         if existing is not None:
             connection.execute("COMMIT")
             return _version_result(existing, current=_published_version(connection, tenant) == int(existing["version"]))
@@ -572,7 +605,16 @@ def rollback(
             "INSERT INTO rental_catalog_versions "
             "(tenant_slug, version, document_json, content_hash, action, actor, created_at, source_version, idempotency_key) "
             "VALUES (?, ?, ?, ?, 'rollback', ?, ?, ?, ?)",
-            (tenant, next_version, source["document_json"], source["content_hash"], actor, now, int(source["version"]), key),
+            (
+                tenant,
+                next_version,
+                source["document_json"],
+                source["content_hash"],
+                actor,
+                now,
+                int(source["version"]),
+                _version_idempotency_key("rollback", key),
+            ),
         )
         connection.execute(
             "UPDATE rental_catalog_current SET version = ? WHERE tenant_slug = ?",

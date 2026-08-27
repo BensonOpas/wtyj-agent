@@ -76,6 +76,29 @@ def test_capability_is_authenticated_tenant_owned_and_fail_closed(client, monkey
     assert disabled.json() == {"tenantSlug": "rental-test", "enabled": False}
 
 
+@pytest.mark.parametrize(
+    ("configured", "enabled"),
+    [
+        (None, False),
+        (False, False),
+        ("false", False),
+        ("true", False),
+        (0, False),
+        (1, False),
+        ([], False),
+        ({}, False),
+        (True, True),
+    ],
+)
+def test_rental_capability_requires_literal_true(monkeypatch, configured, enabled):
+    monkeypatch.setattr(
+        api.config_loader,
+        "get_raw",
+        lambda: {"features": {"rental_control_center_enabled": configured}},
+    )
+    assert api._rental_control_center_enabled() is enabled
+
+
 def test_draft_response_identifies_tenant_and_is_no_store(client):
     response = client.get("/dashboard/api/rental-catalog/draft", headers=auth())
     assert response.status_code == 200
@@ -251,3 +274,69 @@ def test_rental_media_delete_fails_closed_when_historical_version_uses_asset(
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "rental_media_in_use"
     assert deleted == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json"),
+    [
+        ("delete", "/dashboard/api/photos/42", None),
+        ("delete", "/dashboard/api/knowledge/media/42", None),
+        (
+            "put",
+            "/dashboard/api/photos/42",
+            {"service_key": "knowledge:other:moved"},
+        ),
+    ],
+)
+def test_generic_photo_routes_cannot_mutate_referenced_rental_media(
+    client, monkeypatch, method, path, json,
+):
+    photo = {
+        "id": 42,
+        "filename": "photo.jpg",
+        "service_key": "knowledge:rental_catalog:picanto",
+    }
+    monkeypatch.setattr(api.state_registry, "get_photo_by_id", lambda _id: photo)
+    monkeypatch.setattr(
+        api.rental_catalog,
+        "media_reference_count",
+        lambda tenant, asset_id: 1,
+    )
+    deleted = []
+    updated = []
+    monkeypatch.setattr(api.state_registry, "delete_photo", deleted.append)
+    monkeypatch.setattr(
+        api.state_registry,
+        "update_photo",
+        lambda *args, **kwargs: updated.append((args, kwargs)) or True,
+    )
+
+    response = client.request(method, path, headers=auth(), json=json)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "rental_media_in_use"
+    assert deleted == []
+    assert updated == []
+
+
+def test_generic_photo_delete_remains_unchanged_for_non_rental_media(
+    client, monkeypatch,
+):
+    photo = {
+        "id": 42,
+        "filename": "photo.jpg",
+        "service_key": "knowledge:info_update:menu",
+    }
+    monkeypatch.setattr(api.state_registry, "get_photo_by_id", lambda _id: photo)
+    monkeypatch.setattr(api.state_registry, "delete_photo", lambda _id: "photo.jpg")
+    monkeypatch.setattr(
+        api.rental_catalog,
+        "media_reference_count",
+        lambda *_args: pytest.fail("non-Rental media must not query Rental history"),
+    )
+    monkeypatch.setattr(api.os, "remove", lambda _path: None)
+
+    response = client.delete("/dashboard/api/photos/42", headers=auth())
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

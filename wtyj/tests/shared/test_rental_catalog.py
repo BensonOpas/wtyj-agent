@@ -1,5 +1,6 @@
 import copy
 from datetime import datetime, timezone
+import sqlite3
 
 import pytest
 
@@ -176,6 +177,86 @@ def test_publish_is_immutable_and_idempotent(tmp_path):
     assert first["version"] == replay["version"] == 1
     assert first["contentHash"] == replay["contentHash"]
     assert rental_catalog.get_published("tenant-a", db_path=db_path)["document"] == catalog_document()
+
+
+def test_legacy_publish_idempotency_key_still_replays(tmp_path):
+    db_path = str(tmp_path / "registry.db")
+    rental_catalog.save_draft(
+        "tenant-a",
+        catalog_document(),
+        expected_revision=0,
+        actor="operator",
+        db_path=db_path,
+    )
+    first = rental_catalog.publish(
+        "tenant-a",
+        expected_revision=1,
+        idempotency_key="legacy-key",
+        actor="operator",
+        db_path=db_path,
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE rental_catalog_versions SET idempotency_key = ? "
+            "WHERE tenant_slug = ? AND version = ?",
+            ("legacy-key", "tenant-a", first["version"]),
+        )
+
+    replay = rental_catalog.publish(
+        "tenant-a",
+        expected_revision=999,
+        idempotency_key="legacy-key",
+        actor="operator",
+        db_path=db_path,
+    )
+
+    assert replay["version"] == first["version"]
+
+
+def test_publish_and_rollback_idempotency_keys_are_action_scoped(tmp_path):
+    db_path = str(tmp_path / "registry.db")
+    original = catalog_document()
+    rental_catalog.save_draft(
+        "tenant-a", original, expected_revision=0, actor="operator", db_path=db_path
+    )
+    rental_catalog.publish(
+        "tenant-a",
+        expected_revision=1,
+        idempotency_key="same-operation-key",
+        actor="operator",
+        db_path=db_path,
+    )
+    changed = catalog_document()
+    changed["categories"][0]["dailyRateCents"] = 4_000
+    rental_catalog.save_draft(
+        "tenant-a", changed, expected_revision=1, actor="operator", db_path=db_path
+    )
+    rental_catalog.publish(
+        "tenant-a",
+        expected_revision=2,
+        idempotency_key="publish-2",
+        actor="operator",
+        db_path=db_path,
+    )
+
+    rollback = rental_catalog.rollback(
+        "tenant-a",
+        expected_current_version=2,
+        idempotency_key="same-operation-key",
+        actor="operator",
+        db_path=db_path,
+    )
+    replay = rental_catalog.rollback(
+        "tenant-a",
+        expected_current_version=999,
+        idempotency_key="same-operation-key",
+        actor="operator",
+        db_path=db_path,
+    )
+
+    assert rollback["action"] == "rollback"
+    assert rollback["version"] == replay["version"] == 3
+    assert rollback["document"] == original
 
 
 def test_consumer_projection_is_carlos_compatible_and_category_priced(tmp_path):
