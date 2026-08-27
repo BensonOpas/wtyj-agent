@@ -34,4 +34,12 @@ class WhatsAppZernioChannel(Channel):
             "_zernio_interactive_id": str(
                 zernio_msg.get("interactive_id") or ""
             ).strip(),
+            "_zernio_attachments": [
+                dict(item)
+                for item in zernio_msg.get("attachments") or []
+                if isinstance(item, dict)
+            ],
+            "_zernio_event_id": str(
+                zernio_msg.get("event_id") or zernio_msg.get("message_id") or ""
+            ).strip(),
         }

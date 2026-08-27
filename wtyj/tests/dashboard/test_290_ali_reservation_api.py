@@ -80,6 +80,40 @@ def test_get_reservation_returns_workflow_projection(client, monkeypatch):
     }
 
 
+def test_payment_review_forwards_audited_override_reason(client, monkeypatch):
+    captured = {}
+
+    def review_payment(public_id, decision, actor, expected_revision=None, reason=""):
+        captured.update({
+            "public_id": public_id,
+            "decision": decision,
+            "actor": actor,
+            "expected_revision": expected_revision,
+            "reason": reason,
+        })
+        return {"public_id": public_id, "payment_status": decision}
+
+    monkeypatch.setattr(api.ali_customer_dossier, "review_payment", review_payment)
+    response = client.post(
+        "/dashboard/api/ali-reservations/res-290/payment/review",
+        headers=_auth(),
+        json={
+            "decision": "verified",
+            "expectedRevision": 8,
+            "reason": "Bank receipt checked by owner.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "public_id": "res-290",
+        "decision": "verified",
+        "actor": "dashboard",
+        "expected_revision": 8,
+        "reason": "Bank receipt checked by owner.",
+    }
+
+
 def test_alternative_decision_normalizes_allowlisted_vehicle(client, monkeypatch):
     captured = {}
 
@@ -247,3 +281,150 @@ def test_confirm_forwards_revision_and_maps_safe_workflow_conflict(client, monke
         "Reservation state changed or this action is not allowed"
     )
     assert "stale_revision" not in failed.text
+
+
+def test_document_review_and_replacement_require_a_reason(client, monkeypatch):
+    reviews = []
+    replacements = []
+    monkeypatch.setattr(api.ali_reservation_v2, "enabled", lambda: True)
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "review_document",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or {"status": "rejected"},
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "request_document_replacement",
+        lambda *args, **kwargs: replacements.append((args, kwargs)) or {
+            "mode": "direct_whatsapp",
+            "links": [],
+            "replacementSlot": "license_front",
+        },
+    )
+    monkeypatch.setattr(
+        api.ali_quote_delivery,
+        "send_customer_requirement_link",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "get_customer_file",
+        lambda public_id: {"public_id": public_id},
+    )
+
+    missing = client.post(
+        "/dashboard/api/ali-reservations/res-290/documents/doc-1/request-replacement",
+        headers=_auth(),
+        json={"expectedRevision": 7},
+    )
+    reviewed = client.post(
+        "/dashboard/api/ali-reservations/res-290/documents/doc-1/review",
+        headers=_auth(),
+        json={
+            "expectedRevision": 7,
+            "decision": "rejected",
+            "reason": "Image is unreadable",
+        },
+    )
+    replaced = client.post(
+        "/dashboard/api/ali-reservations/res-290/documents/doc-1/request-replacement",
+        headers=_auth(),
+        json={
+            "expectedRevision": 7,
+            "reason": "Please resend in daylight",
+        },
+    )
+
+    assert missing.status_code == 422
+    assert reviewed.status_code == 200
+    assert reviews[0][1]["reason"] == "Image is unreadable"
+    assert replaced.status_code == 200
+    assert replacements[0][1]["reason"] == "Please resend in daylight"
+
+
+def test_reclassify_route_forwards_only_the_allowlisted_slot(client, monkeypatch):
+    captured = {}
+
+    def reclassify(public_id, document_id, slot, actor, **kwargs):
+        captured.update({
+            "public_id": public_id,
+            "document_id": document_id,
+            "slot": slot,
+            "actor": actor,
+            **kwargs,
+        })
+        return {"status": "received", "slot": slot}
+
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "reclassify_whatsapp_document",
+        reclassify,
+    )
+    response = client.post(
+        "/dashboard/api/ali-reservations/res-290/documents/doc-1/reclassify",
+        headers=_auth(),
+        json={"expectedRevision": 8, "slot": "passport"},
+    )
+    invalid = client.post(
+        "/dashboard/api/ali-reservations/res-290/documents/doc-1/reclassify",
+        headers=_auth(),
+        json={"expectedRevision": 8, "slot": "credit_card"},
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "public_id": "res-290",
+        "document_id": "doc-1",
+        "slot": "passport",
+        "actor": "dashboard",
+        "expected_revision": 8,
+    }
+    assert invalid.status_code == 422
+
+
+def test_v2_schedule_settings_are_tenant_authenticated_and_no_store(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.ali_reservation_v2,
+        "tenant_settings",
+        lambda: {
+            "holdActiveClientHours": 24,
+            "reminderActiveClientHours": [3, 12, 21],
+            "quietHoursStart": "20:30",
+            "quietHoursEnd": "08:30",
+            "defaultTimezone": "America/Curacao",
+            "reminderSendEnabled": False,
+        },
+    )
+
+    def save(**kwargs):
+        captured.update(kwargs)
+        return {"holdActiveClientHours": kwargs["hold_active_client_hours"]}
+
+    monkeypatch.setattr(api.ali_reservation_v2, "save_tenant_settings", save)
+    loaded = client.get(
+        "/dashboard/api/ali-reservation-v2/settings",
+        headers=_auth(),
+    )
+    saved = client.put(
+        "/dashboard/api/ali-reservation-v2/settings",
+        headers=_auth(),
+        json={
+            "holdActiveClientHours": 24,
+            "reminderActiveClientHours": [3, 12, 21],
+            "quietHoursStart": "20:30",
+            "quietHoursEnd": "08:30",
+            "defaultTimezone": "America/Curacao",
+        },
+    )
+
+    assert loaded.status_code == saved.status_code == 200
+    assert "no-store" in loaded.headers["cache-control"]
+    assert captured == {
+        "hold_active_client_hours": 24.0,
+        "reminder_active_client_hours": [3.0, 12.0, 21.0],
+        "quiet_hours_start": "20:30",
+        "quiet_hours_end": "08:30",
+        "default_timezone": "America/Curacao",
+        "actor": "dashboard",
+    }

@@ -30,6 +30,7 @@ from agents.social import (
     ali_quote_delivery,
     ali_quote_workflow,
     ali_customer_dossier,
+    ali_reservation_v2,
     ali_reservation_workflow,
 )
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
@@ -4627,8 +4628,30 @@ class AliDossierMutationRequest(BaseModel):
     expectedRevision: int = Field(ge=1, strict=True)
 
 
+class AliReservationV2SettingsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    holdActiveClientHours: float = Field(ge=1, le=720)
+    reminderActiveClientHours: list[float] = Field(min_length=1, max_length=3)
+    quietHoursStart: str = Field(pattern=r"^\d{2}:\d{2}$")
+    quietHoursEnd: str = Field(pattern=r"^\d{2}:\d{2}$")
+    defaultTimezone: str = Field(min_length=1, max_length=80)
+
+
 class AliDocumentReviewRequest(AliDossierMutationRequest):
     decision: Literal["verified", "rejected", "replacement_requested"]
+    reason: str = Field(default="", max_length=500)
+
+
+class AliDocumentReplacementRequest(AliDossierMutationRequest):
+    reason: str = Field(default="", max_length=500)
+
+
+class AliDocumentReclassifyRequest(AliDossierMutationRequest):
+    slot: Literal[
+        "license_front", "license_back", "passport",
+        "identity_front", "identity_back",
+    ]
 
 
 class AliDocumentSlotRequest(AliDossierMutationRequest):
@@ -4642,6 +4665,7 @@ class AliPaymentLinkRequest(AliDossierMutationRequest):
 
 class AliPaymentReviewRequest(AliDossierMutationRequest):
     decision: Literal["verified", "rejected", "not_required"]
+    reason: str = Field(default="", max_length=500)
 
 
 class AliFinalNotesRequest(AliDossierMutationRequest):
@@ -5227,6 +5251,44 @@ async def get_ali_dossier_settings_endpoint(response: Response):
     return ali_customer_dossier.tenant_settings()
 
 
+@router.get(
+    "/ali-reservation-v2/settings",
+    dependencies=[Depends(_check_auth)],
+)
+async def get_ali_reservation_v2_settings_endpoint(response: Response):
+    _require_ali_quote_leads()
+    try:
+        result = ali_reservation_v2.tenant_settings()
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="reservation_v2_settings_read")
+    _ali_no_store(response)
+    return result
+
+
+@router.put(
+    "/ali-reservation-v2/settings",
+    dependencies=[Depends(_check_auth)],
+)
+async def update_ali_reservation_v2_settings_endpoint(
+    req: AliReservationV2SettingsRequest,
+    response: Response,
+):
+    _require_ali_quote_leads()
+    try:
+        result = ali_reservation_v2.save_tenant_settings(
+            hold_active_client_hours=req.holdActiveClientHours,
+            reminder_active_client_hours=req.reminderActiveClientHours,
+            quiet_hours_start=req.quietHoursStart,
+            quiet_hours_end=req.quietHoursEnd,
+            default_timezone=req.defaultTimezone,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="reservation_v2_settings_update")
+    _ali_no_store(response)
+    return result
+
+
 @router.put(
     "/ali-dossier/settings",
     dependencies=[Depends(_check_auth)],
@@ -5351,13 +5413,18 @@ async def review_ali_document_endpoint(
     req: AliDocumentReviewRequest,
 ):
     _require_ali_quote_leads()
+    if (
+        ali_reservation_v2.enabled()
+        and req.decision in {"rejected", "replacement_requested"}
+        and not req.reason.strip()
+    ):
+        raise HTTPException(status_code=422, detail="Review reason is required")
     try:
+        kwargs = {"expected_revision": req.expectedRevision}
+        if req.reason:
+            kwargs["reason"] = req.reason
         return ali_customer_dossier.review_document(
-            public_id,
-            document_id,
-            req.decision,
-            "dashboard",
-            expected_revision=req.expectedRevision,
+            public_id, document_id, req.decision, "dashboard", **kwargs,
         )
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="document_review")
@@ -5370,15 +5437,17 @@ async def review_ali_document_endpoint(
 async def request_ali_document_replacement_endpoint(
     public_id: str,
     document_id: str,
-    req: AliDossierMutationRequest,
+    req: AliDocumentReplacementRequest,
 ):
     _require_ali_quote_leads()
+    if ali_reservation_v2.enabled() and not req.reason.strip():
+        raise HTTPException(status_code=422, detail="Replacement reason is required")
     try:
+        kwargs = {"expected_revision": req.expectedRevision}
+        if req.reason:
+            kwargs["reason"] = req.reason
         replacement = ali_customer_dossier.request_document_replacement(
-            public_id,
-            document_id,
-            "dashboard",
-            expected_revision=req.expectedRevision,
+            public_id, document_id, "dashboard", **kwargs,
         )
         delivered = await asyncio.to_thread(
             ali_quote_delivery.send_customer_requirement_link,
@@ -5392,6 +5461,28 @@ async def request_ali_document_replacement_endpoint(
         }
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="document_replacement_request")
+
+
+@router.post(
+    "/ali-reservations/{public_id}/documents/{document_id}/reclassify",
+    dependencies=[Depends(_check_auth)],
+)
+async def reclassify_ali_document_endpoint(
+    public_id: str,
+    document_id: str,
+    req: AliDocumentReclassifyRequest,
+):
+    _require_ali_quote_leads()
+    try:
+        return ali_customer_dossier.reclassify_whatsapp_document(
+            public_id,
+            document_id,
+            req.slot,
+            "dashboard",
+            expected_revision=req.expectedRevision,
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="document_reclassification")
 
 
 @router.post(
@@ -5571,6 +5662,7 @@ async def review_ali_payment_endpoint(
             req.decision,
             "dashboard",
             expected_revision=req.expectedRevision,
+            reason=req.reason,
         )
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="payment_review")

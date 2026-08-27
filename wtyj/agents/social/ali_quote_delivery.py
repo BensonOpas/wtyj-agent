@@ -56,22 +56,30 @@ _DOSSIER_MESSAGES = {
     "en": {
         "documents": "Your car is available. I’ll help you complete the last steps so our office can review and prepare your rental. Upload each document securely below:\n{links}\n\nOur team will check the copies manually.",
         "contract": "Your pre-contract is ready to review and sign:\n{url}\n\nOur office will complete the final approval after all requirements are checked.",
-        "payment": "Here is the secure link for the refundable deposit:\n{url}\n\nLet me know here after you have paid. Our team will verify it manually.",
+        "payment": "Here is your secure payment link for the reservation amount of USD {amount}:\n{url}\n\nLet me know here after you have paid. Our team will verify it manually.",
+        "documents_direct": "Your car is available. Will you use a passport or an ID card for your reservation?",
+        "documents_replacement": "Please resend {slot} here in WhatsApp as a clear JPG, PNG, or PDF under 10 MB.",
     },
     "nl": {
         "documents": "Je auto is beschikbaar. Ik help je met de laatste stappen zodat ons kantoor je huur kan beoordelen en voorbereiden. Upload elk document veilig hieronder:\n{links}\n\nOns team controleert de kopieën handmatig.",
         "contract": "Je voorcontract staat klaar om te bekijken en te ondertekenen:\n{url}\n\nOns kantoor geeft de definitieve goedkeuring nadat alles is gecontroleerd.",
-        "payment": "Hier is de beveiligde link voor de terugbetaalbare borg:\n{url}\n\nLaat het hier weten nadat je hebt betaald. Ons team controleert dit handmatig.",
+        "payment": "Hier is je beveiligde betaallink voor het reserveringsbedrag van USD {amount}:\n{url}\n\nLaat het hier weten nadat je hebt betaald. Ons team controleert dit handmatig.",
+        "documents_direct": "Je auto is beschikbaar. Gebruik je een paspoort of identiteitskaart voor je reservering?",
+        "documents_replacement": "Stuur {slot} opnieuw hier in WhatsApp als duidelijke JPG, PNG of PDF onder 10 MB.",
     },
     "pap": {
         "documents": "Bo outo ta disponibel. Mi ta yuda bo ku e último pasonan pa nos oficina por kontrolá i prepará bo huur. Carga kada dokumento sigur aki bou:\n{links}\n\nNos tim ta kontrolá e kopianan manualmente.",
         "contract": "Bo pre-kontrakto ta kla pa lesa i firma:\n{url}\n\nNos oficina ta hasi e aprobashon final despues ku tur rekisito ta kontrolá.",
-        "payment": "Aki ta e enlace sigur pa e depósito reembolsabel:\n{url}\n\nLaga mi sa aki despues ku bo paga. Nos tim ta verifik'é manualmente.",
+        "payment": "Aki ta bo enlace sigur pa paga e montante di reservashon di USD {amount}:\n{url}\n\nLaga mi sa aki despues ku bo paga. Nos tim ta verifik'é manualmente.",
+        "documents_direct": "Bo outo ta disponibel. Bo ta usa pasport òf karta di identidat pa bo reservashon?",
+        "documents_replacement": "Manda {slot} atrobe aki den WhatsApp komo un JPG, PNG òf PDF kla bou di 10 MB.",
     },
     "de": {
         "documents": "Ihr Auto ist verfügbar. Ich helfe Ihnen bei den letzten Schritten, damit unser Büro die Miete prüfen und vorbereiten kann. Laden Sie jedes Dokument sicher hoch:\n{links}\n\nUnser Team prüft die Kopien manuell.",
         "contract": "Ihr Vorvertrag ist bereit zum Prüfen und Unterschreiben:\n{url}\n\nUnser Büro erteilt die endgültige Freigabe, nachdem alles geprüft wurde.",
-        "payment": "Hier ist der sichere Link für die rückzahlbare Kaution:\n{url}\n\nSchreiben Sie mir hier nach der Zahlung. Unser Team prüft sie manuell.",
+        "payment": "Hier ist Ihr sicherer Zahlungslink für den Reservierungsbetrag von USD {amount}:\n{url}\n\nSchreiben Sie mir hier nach der Zahlung. Unser Team prüft sie manuell.",
+        "documents_direct": "Ihr Auto ist verfügbar. Verwenden Sie für Ihre Reservierung einen Reisepass oder Personalausweis?",
+        "documents_replacement": "Bitte senden Sie {slot} hier in WhatsApp erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
     },
 }
 
@@ -97,24 +105,46 @@ def send_customer_requirement_link(
     locale = context["locale"] if context["locale"] in _DOSSIER_MESSAGES else "en"
     if requirement == "documents":
         links = payload.get("links") if isinstance(payload, dict) else None
-        if not isinstance(links, list) or not links:
+        if isinstance(payload, dict) and payload.get("mode") == "direct_whatsapp":
+            links = []
+            replacement_slot = str(payload.get("replacementSlot") or "")
+            if replacement_slot:
+                message = _DOSSIER_MESSAGES[locale]["documents_replacement"].format(
+                    slot=_DOCUMENT_SLOT_LABELS[locale].get(
+                        replacement_slot, replacement_slot,
+                    )
+                )
+            else:
+                message = _DOSSIER_MESSAGES[locale]["documents_direct"]
+        elif not isinstance(links, list) or not links:
             raise AliReservationError("document_links_missing", 409)
-        labels = _DOCUMENT_SLOT_LABELS[locale]
-        rendered = "\n".join(
-            f"{labels.get(str(item.get('slot')), str(item.get('slot')))}: {item.get('url')}"
-            for item in links if isinstance(item, dict) and item.get("url")
-        )
-        message = _DOSSIER_MESSAGES[locale][requirement].format(links=rendered)
+        else:
+            labels = _DOCUMENT_SLOT_LABELS[locale]
+            rendered = "\n".join(
+                f"{labels.get(str(item.get('slot')), str(item.get('slot')))}: {item.get('url')}"
+                for item in links if isinstance(item, dict) and item.get("url")
+            )
+            message = _DOSSIER_MESSAGES[locale][requirement].format(links=rendered)
     else:
         url = str(payload.get("url") if isinstance(payload, dict) else "")
         if not url.startswith("https://"):
             raise AliReservationError("customer_requirement_url_missing", 409)
-        message = _DOSSIER_MESSAGES[locale][requirement].format(url=url)
+        amount = str(payload.get("amount") or "") if isinstance(payload, dict) else ""
+        if requirement == "payment" and not re.fullmatch(r"\d+(?:\.\d{2})", amount):
+            raise AliReservationError("customer_payment_amount_missing", 409)
+        message = _DOSSIER_MESSAGES[locale][requirement].format(
+            url=url, amount=amount,
+        )
     if requirement == "documents":
-        delivery_material = "\n".join(
-            str(item.get("url") or "")
-            for item in links
-            if isinstance(item, dict)
+        delivery_material = (
+            "direct_whatsapp_v2:"
+            + str(payload.get("replacementSlot") or "identity_type")
+            if isinstance(payload, dict) and payload.get("mode") == "direct_whatsapp"
+            else "\n".join(
+                str(item.get("url") or "")
+                for item in links
+                if isinstance(item, dict)
+            )
         )
     else:
         delivery_material = url
@@ -137,7 +167,77 @@ def send_customer_requirement_link(
         bool(delivered),
         "customer_requirement_delivery",
     )
+    if (
+        requirement == "documents"
+        and isinstance(payload, dict)
+        and payload.get("mode") == "direct_whatsapp"
+        and not payload.get("replacementSlot")
+    ):
+        from agents.social import ali_reservation_v2
+
+        if ali_reservation_v2.enabled():
+            ali_reservation_v2.record_customer_delivery_result(
+                reservation_public_id,
+                "documents_prompt",
+                sent=bool(delivered),
+            )
     return bool(delivered)
+
+
+_RESERVATION_REMINDERS = {
+    "en": "Just a reminder — your reservation is still on hold. {next}",
+    "nl": "Even een herinnering — je reservering staat nog in de wacht. {next}",
+    "pap": "Un rekordatorio — bo reservashon ta ainda warda. {next}",
+    "de": "Eine kurze Erinnerung — Ihre Reservierung wird noch vorgemerkt. {next}",
+}
+
+_RESERVATION_HOLD_EXPIRED = {
+    "en": "I’ve released the car-category hold for now. If you still need a car later, message me and I’ll check availability again.",
+    "nl": "Ik heb de reservering van de autocategorie voorlopig vrijgegeven. Als je later nog een auto nodig hebt, stuur me een bericht en ik controleer de beschikbaarheid opnieuw.",
+    "pap": "Mi a laga e reserva di kategoria di outo liber pa awor. Si bo tin mester di un outo despues, manda mi un mensahe i mi lo kontrolá disponibilidat atrobe.",
+    "de": "Ich habe die Vormerkung der Fahrzeugkategorie vorerst freigegeben. Wenn Sie später noch ein Auto benötigen, schreiben Sie mir und ich prüfe die Verfügbarkeit erneut.",
+}
+
+_RESERVATION_NEXT_STEPS = {
+    "en": {
+        "choose_identity_type": "Tell me whether you’ll use a passport or ID card.",
+        "send_expected_document": "Please send the requested document here in WhatsApp.",
+        "report_payment": "Please let me know here once the payment is complete.",
+    },
+    "nl": {
+        "choose_identity_type": "Laat weten of je een paspoort of identiteitskaart gebruikt.",
+        "send_expected_document": "Stuur het gevraagde document hier in WhatsApp.",
+        "report_payment": "Laat het hier weten zodra de betaling is voltooid.",
+    },
+    "pap": {
+        "choose_identity_type": "Laga mi sa si bo ta usa pasport òf karta di identidat.",
+        "send_expected_document": "Manda e dokumento pidi aki den WhatsApp.",
+        "report_payment": "Laga mi sa aki ora e pago ta kla.",
+    },
+    "de": {
+        "choose_identity_type": "Teilen Sie mir mit, ob Sie einen Reisepass oder Personalausweis verwenden.",
+        "send_expected_document": "Senden Sie das angeforderte Dokument bitte hier in WhatsApp.",
+        "report_payment": "Geben Sie mir hier Bescheid, sobald die Zahlung abgeschlossen ist.",
+    },
+}
+
+
+def reservation_reminder_text(locale: str, next_action: str) -> str:
+    """Return one concise reminder; pricing and customer data are never repeated."""
+    language = str(locale or "en").lower().split("-", 1)[0]
+    language = language if language in _RESERVATION_REMINDERS else "en"
+    next_step = _RESERVATION_NEXT_STEPS[language].get(
+        str(next_action or ""),
+        _RESERVATION_NEXT_STEPS[language]["send_expected_document"],
+    )
+    return _RESERVATION_REMINDERS[language].format(next=next_step)
+
+
+def reservation_hold_expired_text(locale: str) -> str:
+    language = str(locale or "en").lower().split("-", 1)[0]
+    return _RESERVATION_HOLD_EXPIRED.get(
+        language, _RESERVATION_HOLD_EXPIRED["en"],
+    )
 
 
 def _supplement_summary(pricing: dict, rental: dict, locale: str) -> str:
