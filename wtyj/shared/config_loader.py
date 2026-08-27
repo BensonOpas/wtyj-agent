@@ -244,6 +244,46 @@ def update_response_timing(value: dict) -> bool:
     return True
 
 
+def update_ali_customer_dossier_enabled(enabled: bool) -> bool:
+    """Persist the Ali tenant's reversible customer-dossier feature switch.
+
+    This intentionally exposes one exact flag rather than a generic feature
+    editor. The authenticated, tenant-scoped dashboard endpoint performs the
+    readiness check before calling this helper.
+    """
+    global _cache
+    if not isinstance(enabled, bool):
+        return False
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = json.load(f)
+    except Exception:
+        return False
+    features = current.get("features")
+    features = dict(features) if isinstance(features, dict) else {}
+    features["ali_customer_dossier_enabled"] = enabled
+    current["features"] = features
+    tmp_path = None
+    try:
+        dir_path = os.path.dirname(_CONFIG_PATH) or "."
+        with _tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False,
+            dir=dir_path, prefix=".client.", suffix=".tmp",
+        ) as tf:
+            json.dump(current, tf, indent=2, ensure_ascii=False)
+            tmp_path = tf.name
+        os.replace(tmp_path, _CONFIG_PATH)
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return False
+    _cache = {}
+    return True
+
+
 def get_agent_personality() -> dict:
     """Return tenant Agent Personality settings from client.json.
 

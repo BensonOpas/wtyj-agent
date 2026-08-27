@@ -425,6 +425,82 @@ def test_dashboard_settings_activate_immutable_template_and_hide_payment_url(con
     assert conflict.value.code == "contract_template_version_already_exists"
 
 
+def test_tenant_can_activate_only_after_configuration_is_complete(configured, monkeypatch):
+    raw = configured["raw"]
+    raw["features"]["ali_customer_dossier_enabled"] = False
+    writes: list[bool] = []
+
+    def update_flag(enabled: bool) -> bool:
+        writes.append(enabled)
+        raw["features"]["ali_customer_dossier_enabled"] = enabled
+        return True
+
+    monkeypatch.setattr(
+        dossier.config_loader,
+        "update_ali_customer_dossier_enabled",
+        update_flag,
+    )
+
+    activated = dossier.set_tenant_activation(True, "staff-241")
+
+    assert writes == [True]
+    assert activated["status"] == {
+        "enabled": True,
+        "ready": True,
+        "configurationReady": True,
+        "blockers": [],
+    }
+    conn = sqlite3.connect(dossier.state_registry.DB_PATH)
+    audit = conn.execute(
+        "SELECT action, actor_id FROM ali_customer_dossier_settings_audit "
+        "WHERE action = 'dossier_activated' ORDER BY created_at DESC LIMIT 1",
+    ).fetchone()
+    conn.close()
+    assert audit == ("dossier_activated", "staff-241")
+
+
+def test_tenant_activation_fails_closed_when_a_requirement_is_missing(configured, monkeypatch):
+    raw = configured["raw"]
+    raw["features"]["ali_customer_dossier_enabled"] = False
+    raw["ali_customer_dossier"]["payment_allowed_domains"] = []
+    updater = monkeypatch.setattr(
+        dossier.config_loader,
+        "update_ali_customer_dossier_enabled",
+        lambda enabled: pytest.fail("incomplete configuration must not be activated"),
+    )
+
+    with pytest.raises(reservations.AliReservationError) as blocked:
+        dossier.set_tenant_activation(True, "staff-241")
+
+    assert updater is None
+    assert blocked.value.code == "customer_dossier_activation_requirements_incomplete"
+    assert dossier.configuration_status()["blockers"] == [
+        "feature_disabled",
+        "payment_domain_allowlist_missing",
+    ]
+
+
+def test_feature_switch_is_persisted_without_overwriting_other_features(monkeypatch, tmp_path):
+    config_path = tmp_path / "client.json"
+    config_path.write_text(
+        json.dumps({
+            "slug": "ali-car-rental",
+            "features": {"ali_quote_automation": True},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dossier.config_loader, "_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr(dossier.config_loader, "_cache", {})
+
+    assert dossier.config_loader.update_ali_customer_dossier_enabled(True)
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["features"] == {
+        "ali_quote_automation": True,
+        "ali_customer_dossier_enabled": True,
+    }
+
+
 def test_fixed_tenant_payment_link_can_be_applied_without_browser_readback(configured):
     dossier.save_tenant_settings(
         payment_mode="fixed_link",

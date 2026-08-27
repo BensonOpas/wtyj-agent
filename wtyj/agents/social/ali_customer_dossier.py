@@ -866,6 +866,67 @@ def save_tenant_settings(
         conn.close()
 
 
+def set_tenant_activation(enabled: bool, actor: str) -> dict:
+    """Enable or disable the tenant-owned customer dossier workflow.
+
+    Enabling is fail-closed: every non-feature configuration gate must already
+    pass. Disabling remains available even if a later configuration problem is
+    detected, so the tenant always has a safe kill switch.
+    """
+    actor_id = reservation._validate_actor(actor)
+    if not isinstance(enabled, bool):
+        raise reservation.AliReservationError("invalid_dossier_activation", 422)
+    before = configuration_status()
+    if enabled and not before["configurationReady"]:
+        raise reservation.AliReservationError(
+            "customer_dossier_activation_requirements_incomplete", 409,
+        )
+    previous = bool(before["enabled"])
+    if previous == enabled:
+        return tenant_settings()
+    if not config_loader.update_ali_customer_dossier_enabled(enabled):
+        raise reservation.AliReservationError(
+            "customer_dossier_activation_write_failed", 500,
+        )
+    after = configuration_status()
+    if enabled and not after["ready"]:
+        config_loader.update_ali_customer_dossier_enabled(previous)
+        raise reservation.AliReservationError(
+            "customer_dossier_activation_requirements_incomplete", 409,
+        )
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO ali_customer_dossier_settings_audit "
+            "(public_id, tenant_slug, action, actor_id, metadata_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                TENANT_SLUG,
+                "dossier_activated" if enabled else "dossier_deactivated",
+                actor_id,
+                json.dumps(
+                    {
+                        "enabled": enabled,
+                        "configuration_ready": bool(after["configurationReady"]),
+                    },
+                    sort_keys=True,
+                ),
+                _iso(),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        config_loader.update_ali_customer_dossier_enabled(previous)
+        raise
+    finally:
+        conn.close()
+    return tenant_settings()
+
+
 def tenant_settings() -> dict:
     """Return tenant configuration without paths, secrets, or payment URLs."""
     settings = _runtime_config()
