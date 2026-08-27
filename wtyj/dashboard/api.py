@@ -4669,6 +4669,12 @@ class AliDossierSettingsUpdateRequest(BaseModel):
     paperShreddingPolicy: str = Field(min_length=10, max_length=500)
 
 
+class AliDossierActivationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    enabled: StrictBool
+
+
 class AliContractSignRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -5268,6 +5274,26 @@ async def upload_ali_contract_template_endpoint(
         )
     except Exception as exc:
         _raise_ali_reservation_error(exc, action="contract_template_upload")
+    _ali_no_store(response)
+    return result
+
+
+@router.put(
+    "/ali-dossier/settings/activation",
+    dependencies=[Depends(_check_auth)],
+)
+async def update_ali_dossier_activation_endpoint(
+    req: AliDossierActivationRequest,
+    response: Response,
+):
+    _require_ali_quote_leads()
+    try:
+        result = ali_customer_dossier.set_tenant_activation(
+            req.enabled,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="dossier_activation_update")
     _ali_no_store(response)
     return result
 

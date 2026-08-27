@@ -115,6 +115,47 @@ def test_tenant_settings_and_template_upload_are_authenticated_no_store(client, 
     assert captured["actor"] == "dashboard"
 
 
+def test_tenant_activation_is_authenticated_strict_and_no_store(client, monkeypatch):
+    captured = {}
+    settings = {
+        "status": {
+            "enabled": True,
+            "ready": True,
+            "configurationReady": True,
+            "blockers": [],
+        },
+        "contractTemplate": {"publicId": "template-241", "version": "owner-v1"},
+        "payment": {"mode": "per_reservation", "allowedDomains": ["pay.example.test"]},
+        "retention": {"documentRetentionDays": 90},
+    }
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "set_tenant_activation",
+        lambda enabled, actor: captured.update({
+            "enabled": enabled,
+            "actor": actor,
+        }) or settings,
+    )
+
+    path = "/dashboard/api/ali-dossier/settings/activation"
+    assert client.put(path, json={"enabled": True}).status_code == 401
+    assert client.put(
+        path,
+        headers=_auth(),
+        json={"enabled": "true"},
+    ).status_code == 422
+    activated = client.put(
+        path,
+        headers=_auth(),
+        json={"enabled": True},
+    )
+
+    assert activated.status_code == 200
+    assert activated.json()["status"]["ready"] is True
+    assert "no-store" in activated.headers["cache-control"]
+    assert captured == {"enabled": True, "actor": "dashboard"}
+
+
 def test_document_mutations_require_revision_and_auth(client, monkeypatch):
     captured = {}
     monkeypatch.setattr(
