@@ -293,6 +293,7 @@ def test_hold_expiry_closure_retries_until_provider_confirmed(configured):
         ("Keine Nachrichten mehr", "global_opt_out"),
         ("I already rented a car", "reservation_decline"),
         ("I don't want this car", "vehicle_rejection"),
+        ("I don’t want this car", "vehicle_rejection"),
         ("no", "ambiguous_negative"),
         ("book it", "typed_reserve"),
         ("I want this car", "typed_reserve"),
