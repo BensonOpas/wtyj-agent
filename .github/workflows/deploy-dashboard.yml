@@ -141,7 +141,7 @@ jobs:
               printf '%s\n' "$NGINX_DUMP" | grep -i 'conflicting server name' >&2
               exit 1
             fi
-            DASHBOARD_SERVER_COUNT=$(printf '%s\n' "$NGINX_DUMP" | awk '
+            DASHBOARD_HOST_DECLARATIONS=$(awk '
               $1 == "server_name" {
                 for (field_number = 2; field_number <= NF; field_number++) {
                   name = $field_number
@@ -150,17 +150,29 @@ jobs:
                 }
               }
               END { print count + 0 }
-            ')
-            ALI_LOCATION_COUNT=$(printf '%s\n' "$NGINX_DUMP" | awk '
+            ' "$NGINX_DASHBOARD_REAL")
+            DASHBOARD_APP_ROOT_COUNT=$(awk '
+              $1 == "root" {
+                root = $2
+                sub(/;$/, "", root)
+                if (root == "/var/www/unboks-dashboard/current") count++
+              }
+              END { print count + 0 }
+            ' "$NGINX_DASHBOARD_REAL")
+            ALI_LOCATION_COUNT=$(awk '
               {
                 line = $0
                 sub(/#.*/, "", line)
                 if (line ~ /^[[:space:]]*location[[:space:]]+(\^~[[:space:]]+)?\/api\/ali-car-rental\/[[:space:]]*\{[[:space:]]*$/) count++
               }
               END { print count + 0 }
-            ')
-            if [ "$DASHBOARD_SERVER_COUNT" -ne 1 ]; then
-              echo "Expected exactly one dashboard.unboks.org server, found $DASHBOARD_SERVER_COUNT"
+            ' "$NGINX_API_REAL")
+            if [ "$DASHBOARD_HOST_DECLARATIONS" -lt 1 ]; then
+              echo "Expected a dashboard.unboks.org host declaration, found none"
+              exit 1
+            fi
+            if [ "$DASHBOARD_APP_ROOT_COUNT" -ne 1 ]; then
+              echo "Expected exactly one dashboard app root, found $DASHBOARD_APP_ROOT_COUNT"
               exit 1
             fi
             if [ "$ALI_LOCATION_COUNT" -ne 1 ]; then

@@ -322,34 +322,75 @@ def test_deployment_workflow_tracks_enforcer_and_has_config_rollback_guard():
     assert "- 'wtyj/scripts/ensure_dashboard_nginx.py'" in workflow
     assert "trap restore_nginx_on_exit 0" in workflow
     assert 'NGINX_API_REAL=$(readlink -f "$NGINX_API_SITE")' in workflow
-    assert "DASHBOARD_SERVER_COUNT" in workflow
+    assert "DASHBOARD_HOST_DECLARATIONS" in workflow
+    assert "DASHBOARD_APP_ROOT_COUNT" in workflow
     assert "grep -qi 'conflicting server name'" in workflow
     assert "pnpm --filter @workspace/unboks test" in workflow
 
 
-def test_dashboard_server_count_uses_production_compatible_awk():
+def _workflow_awk_program(variable: str) -> str:
     workflow = WORKFLOW.read_text()
     match = re.search(
-        r"DASHBOARD_SERVER_COUNT=.*?\| awk '\n(?P<program>.*?)\n\s*'\)",
+        rf"{variable}=\$\(awk '\n(?P<program>.*?)\n\s*' \"\$[A-Z_]+\"\)",
         workflow,
         flags=re.DOTALL,
     )
-    assert match, "dashboard server-count awk program is missing"
+    assert match, f"{variable} awk program is missing"
+    return match.group("program")
 
-    completed = subprocess.run(
-        ["awk", match.group("program")],
-        input="""# configuration file /etc/nginx/sites-enabled/unboks-dashboard:
-server {
-    server_name dashboard.unboks.org;
-}
-server {
-    server_name api.unboks.org;
-}
-""",
+
+def _run_awk(program: str, contents: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["awk", program],
+        input=contents,
         text=True,
         capture_output=True,
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "1\n"
+
+def test_dashboard_layout_counts_support_https_and_certbot_redirect_servers():
+    config = """server {
+    server_name dashboard.unboks.org;
+    root /var/www/unboks-dashboard/current;
+}
+server {
+    listen 80;
+    server_name dashboard.unboks.org;
+    return 404;
+}
+"""
+
+    hosts = _run_awk(
+        _workflow_awk_program("DASHBOARD_HOST_DECLARATIONS"),
+        config,
+    )
+    roots = _run_awk(
+        _workflow_awk_program("DASHBOARD_APP_ROOT_COUNT"),
+        config,
+    )
+
+    assert hosts.returncode == 0, hosts.stderr
+    assert hosts.stdout == "2\n"
+    assert roots.returncode == 0, roots.stderr
+    assert roots.stdout == "1\n"
+
+
+def test_ali_location_count_is_scoped_to_api_config_file():
+    config = """server {
+    location ^~ /api/ali-car-rental/ {
+        proxy_pass http://ali;
+    }
+    location /api/another-tenant/ {
+        proxy_pass http://another;
+    }
+}
+"""
+
+    locations = _run_awk(
+        _workflow_awk_program("ALI_LOCATION_COUNT"),
+        config,
+    )
+
+    assert locations.returncode == 0, locations.stderr
+    assert locations.stdout == "1\n"
