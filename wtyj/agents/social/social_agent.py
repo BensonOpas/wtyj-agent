@@ -940,7 +940,9 @@ def _maybe_reset_stale_conversation(last_activity, fields, flags, completed_book
         flags.pop(fk, None)
     for fk in ("fully_escalated", "awaiting_relay", "relay_token",
                "relay_question", "reply_times", "returning_booking",
-               "ali_vehicle_recommendation_deliveries"):
+               "ali_vehicle_recommendation_deliveries",
+               "consulta_non_patient_service_contact",
+               "consulta_service_contact_escalated"):
         flags.pop(fk, None)
 
     return True
@@ -1032,6 +1034,87 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                       count=len(_reply_times))
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
+
+    # Consulta Despertares receives commercial proposals, supplier outreach,
+    # professional referrals, and job applications on the patient WhatsApp
+    # number. Route those contacts before Claude and before follow-up-card
+    # persistence so patient-intake keywords inside a sales pitch (for example
+    # "patients", "addictions", or "schedule a call") cannot start intake.
+    _service_contact_was_routed = bool(
+        flags.get("consulta_non_patient_service_contact")
+    )
+    _is_non_patient_service_contact = (
+        tenant_hard_rules.consulta_despertares_non_patient_service_contact(
+            text,
+            already_routed=_service_contact_was_routed,
+        )
+    )
+    if _service_contact_was_routed and not _is_non_patient_service_contact:
+        # An explicit request for care as a patient starts a normal new intake.
+        flags.pop("consulta_non_patient_service_contact", None)
+        flags.pop("consulta_service_contact_escalated", None)
+    elif _is_non_patient_service_contact:
+        flags["consulta_non_patient_service_contact"] = True
+        _short_acknowledgement = (
+            tenant_hard_rules.consulta_despertares_service_contact_acknowledgement(
+                text
+            )
+        )
+        _needs_service_escalation = bool(
+            _service_contact_was_routed and not _short_acknowledgement
+        )
+        if (
+            _needs_service_escalation
+            and not flags.get("consulta_service_contact_escalated")
+        ):
+            _contact_name = from_name or "Contacto comercial"
+            state_registry.create_pending_notification(
+                "escalation",
+                channel,
+                phone,
+                _contact_name,
+                f"[CONTACTO NO PACIENTE] {_contact_name}",
+                (
+                    "Un contacto comercial o profesional continuó escribiendo "
+                    "después de ser dirigido a info@consultadespertares.com.\n\n"
+                    f"Nombre: {_contact_name}\n"
+                    f"Canal: {_channel_label}\n"
+                    f"Mensaje más reciente: {text}"
+                ),
+                mode="soft",
+            )
+            flags["consulta_service_contact_escalated"] = True
+            state_registry.wa_store_message(
+                phone,
+                "system",
+                "Contacto no paciente escalado al equipo.",
+            )
+
+        _service_reply = (
+            tenant_hard_rules.consulta_despertares_service_contact_reply(
+                text,
+                escalated=_needs_service_escalation,
+            )
+        )
+        _reply_times.append(int(time.time()))
+        flags["reply_times"] = _reply_times
+        state_registry.wa_save_booking_state(
+            phone, fields, flags, completed_bookings
+        )
+        bm_logger.log(
+            "consulta_non_patient_service_contact_routed",
+            phone=phone,
+            escalated=_needs_service_escalation,
+        )
+        if include_media:
+            return {
+                "text": _service_reply,
+                "media": None,
+                "vehicle_recommendation": None,
+                "quote_confirmation": None,
+                "ali_turn_commit": None,
+            }
+        return _service_reply
 
     # Brief 290: post-quote controls are signed workflow commands. Resolve and
     # apply them before Claude so a tap can never be mistaken for prose or a

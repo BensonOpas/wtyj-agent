@@ -1244,3 +1244,150 @@ def test_no_clinic_preference_continues_to_appointment_schedule():
         tenant_hard_rules.CONSULTA_DESPERTARES_APPOINTMENT_PREFERENCE_QUESTION
         in enforced
     )
+
+
+JOSE_LUIS_COMMERCIAL_MESSAGE = (
+    "Buenos días. Soy José Luis Romero, le escribo en representación de "
+    "Asociación INSERTUM especialistas en adicciones en Cádiz. ¿Cuándo le "
+    "vendría bien agendar una llamada? Sería para un tema de colaboración "
+    "para derivación de posibles pacientes con adicciones, por los cuales "
+    "damos una bonificación al derivador."
+)
+
+
+def test_despertares_detects_roberto_commercial_contact_example():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        assert tenant_hard_rules.consulta_despertares_non_patient_service_contact(
+            JOSE_LUIS_COMMERCIAL_MESSAGE
+        )
+        reply = tenant_hard_rules.consulta_despertares_service_contact_reply(
+            JOSE_LUIS_COMMERCIAL_MESSAGE
+        )
+
+    assert "info@consultadespertares.com" in reply
+    assert "?" not in reply
+    assert "motivo" not in reply.lower()
+    assert "centro" not in reply.lower()
+
+
+def test_despertares_service_contact_bypasses_model_and_prospect_card():
+    saved_state = {}
+    with (
+        patch(
+            "shared.tenant_hard_rules.current_tenant_slug",
+            return_value="consulta-despertares",
+        ),
+        patch.object(state_registry, "match_ignored_contact", return_value=None),
+        patch.object(
+            social_agent.auto_block,
+            "evaluate_inbound",
+            return_value={"action": "none"},
+        ),
+        patch.object(
+            state_registry,
+            "wa_get_booking_state",
+            return_value={
+                "fields": {},
+                "flags": {},
+                "completed_bookings": [],
+                "last_activity": None,
+            },
+        ),
+        patch.object(
+            state_registry,
+            "wa_save_booking_state",
+            side_effect=lambda phone, fields, flags, completed: saved_state.update(
+                {"phone": phone, "fields": fields, "flags": dict(flags)}
+            ),
+        ) as save_state,
+        patch.object(state_registry, "create_pending_notification") as escalate,
+        patch.object(state_registry, "upsert_follow_up_request") as upsert_follow_up,
+        patch.object(social_agent.marina_agent, "process_message") as run_model,
+    ):
+        reply = social_agent.handle_incoming_whatsapp_message({
+            "from": "commercial-jose-luis",
+            "from_name": "José Luis Romero",
+            "text": JOSE_LUIS_COMMERCIAL_MESSAGE,
+        })
+
+    assert reply == tenant_hard_rules.CONSULTA_DESPERTARES_SERVICE_CONTACT_REPLY
+    assert "info@consultadespertares.com" in reply
+    assert "?" not in reply
+    assert saved_state["flags"]["consulta_non_patient_service_contact"] is True
+    save_state.assert_called_once()
+    run_model.assert_not_called()
+    upsert_follow_up.assert_not_called()
+    escalate.assert_not_called()
+
+
+def test_despertares_persistent_service_contact_escalates_without_intake():
+    with (
+        patch(
+            "shared.tenant_hard_rules.current_tenant_slug",
+            return_value="consulta-despertares",
+        ),
+        patch.object(state_registry, "match_ignored_contact", return_value=None),
+        patch.object(
+            social_agent.auto_block,
+            "evaluate_inbound",
+            return_value={"action": "none"},
+        ),
+        patch.object(
+            state_registry,
+            "wa_get_booking_state",
+            return_value={
+                "fields": {},
+                "flags": {"consulta_non_patient_service_contact": True},
+                "completed_bookings": [],
+                "last_activity": None,
+            },
+        ),
+        patch.object(state_registry, "wa_save_booking_state") as save_state,
+        patch.object(state_registry, "wa_store_message") as store_system,
+        patch.object(
+            state_registry,
+            "create_pending_notification",
+            return_value=501,
+        ) as escalate,
+        patch.object(state_registry, "upsert_follow_up_request") as upsert_follow_up,
+        patch.object(social_agent.marina_agent, "process_message") as run_model,
+    ):
+        reply = social_agent.handle_incoming_whatsapp_message({
+            "from": "commercial-jose-luis",
+            "from_name": "José Luis Romero",
+            "text": "Prefiero que alguien del equipo me responda por aquí.",
+        })
+
+    assert reply == (
+        tenant_hard_rules.CONSULTA_DESPERTARES_SERVICE_CONTACT_ESCALATED_REPLY
+    )
+    assert "?" not in reply
+    escalate.assert_called_once()
+    store_system.assert_called_once()
+    save_state.assert_called_once()
+    run_model.assert_not_called()
+    upsert_follow_up.assert_not_called()
+
+
+def test_despertares_service_route_allows_explicit_patient_reentry():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="consulta-despertares",
+    ):
+        assert not tenant_hard_rules.consulta_despertares_non_patient_service_contact(
+            "Ahora quiero pedir una cita para mí porque sufro ansiedad.",
+            already_routed=True,
+        )
+
+
+def test_service_contact_guard_is_tenant_scoped():
+    with patch(
+        "shared.tenant_hard_rules.current_tenant_slug",
+        return_value="another-tenant",
+    ):
+        assert not tenant_hard_rules.consulta_despertares_non_patient_service_contact(
+            JOSE_LUIS_COMMERCIAL_MESSAGE
+        )
