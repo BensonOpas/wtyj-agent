@@ -58,7 +58,7 @@ _BOUND_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _CONTROL_COPY = {
     "en": {
-        "text": "What would you like to do with this quote?",
+        "text": "How would you like to proceed?",
         "reserve": "Reserve this car",
         "change": "Change something",
         "question": "Ask a question",
@@ -69,7 +69,7 @@ _CONTROL_COPY = {
         "change_reply": "Of course. What would you like me to change in your quote?",
     },
     "nl": {
-        "text": "Wat wil je met deze offerte doen?",
+        "text": "Hoe wil je verdergaan?",
         "reserve": "Reserveer auto",
         "change": "Iets wijzigen",
         "question": "Stel een vraag",
@@ -80,7 +80,7 @@ _CONTROL_COPY = {
         "change_reply": "Natuurlijk. Wat wil je in je offerte wijzigen?",
     },
     "pap": {
-        "text": "Kiko bo ke hasi ku e oferta aki?",
+        "text": "Kon bo ke sigui?",
         "reserve": "Reserva e outo aki",
         "change": "Kambia algu",
         "question": "Hasi pregunta",
@@ -91,7 +91,7 @@ _CONTROL_COPY = {
         "change_reply": "Naturalmente. Kiko bo ke pa mi kambia den bo oferta?",
     },
     "de": {
-        "text": "Was mochten Sie mit diesem Angebot tun?",
+        "text": "Wie möchten Sie fortfahren?",
         "reserve": "Auto reservieren",
         "change": "Etwas ändern",
         "question": "Frage stellen",
