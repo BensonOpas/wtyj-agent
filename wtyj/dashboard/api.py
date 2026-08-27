@@ -4695,6 +4695,19 @@ def _raise_rental_catalog_error(exc: Exception, *, action: str) -> None:
     raise HTTPException(status_code=500, detail={"code": "rental_catalog_failed"}) from exc
 
 
+@router.get("/rental-catalog/capability", dependencies=[Depends(_check_auth)])
+async def get_rental_catalog_capability(response: Response):
+    """Return the authenticated tenant's server-owned rental capability."""
+    tenant_slug = _current_tenant_slug()
+    if not tenant_slug:
+        raise HTTPException(status_code=404, detail="Tenant not configured")
+    _rental_no_store(response, tenant_slug)
+    return {
+        "tenantSlug": tenant_slug,
+        "enabled": _rental_control_center_enabled(),
+    }
+
+
 @router.get("/rental-catalog/draft", dependencies=[Depends(_check_auth)])
 async def get_rental_catalog_draft(response: Response):
     tenant_slug = _require_rental_control_center()

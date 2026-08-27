@@ -64,6 +64,18 @@ def test_every_route_requires_auth_and_capability(client, monkeypatch):
     assert response.status_code == 404
 
 
+def test_capability_is_authenticated_tenant_owned_and_fail_closed(client, monkeypatch):
+    assert client.get("/dashboard/api/rental-catalog/capability").status_code == 401
+    enabled = client.get("/dashboard/api/rental-catalog/capability", headers=auth())
+    assert enabled.json() == {"tenantSlug": "rental-test", "enabled": True}
+    assert enabled.headers["x-unboks-tenant"] == "rental-test"
+    assert enabled.headers["cache-control"].startswith("no-store")
+    monkeypatch.setattr(api, "_rental_control_center_enabled", lambda: False)
+    disabled = client.get("/dashboard/api/rental-catalog/capability", headers=auth())
+    assert disabled.status_code == 200
+    assert disabled.json() == {"tenantSlug": "rental-test", "enabled": False}
+
+
 def test_draft_response_identifies_tenant_and_is_no_store(client):
     response = client.get("/dashboard/api/rental-catalog/draft", headers=auth())
     assert response.status_code == 200
