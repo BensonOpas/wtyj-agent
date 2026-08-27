@@ -56,6 +56,7 @@ async def lifespan(app):
         (config_loader.get_raw().get("workflow") or {}).get("type") or ""
     )
     if workflow_type == "ali_quote":
+        _run_ali_document_retention_cleanup()
         recovery_stop = threading.Event()
         recovery_thread = threading.Thread(
             target=_ali_inbound_recovery_loop,
@@ -294,6 +295,17 @@ def _mark_delivery_failed(channel: str, conversation_id: str, customer_name: str
             error=str(exc)[:200])
 
 
+def _run_ali_document_retention_cleanup() -> None:
+    try:
+        from agents.social import ali_customer_dossier
+
+        retention = ali_customer_dossier.purge_expired_documents()
+        if retention["documentsDeleted"]:
+            log("ali_document_retention_cleanup", **retention)
+    except Exception as exc:
+        log("ali_document_retention_cleanup_failed", error=type(exc).__name__)
+
+
 def _maybe_run_cleanup():
     """Run stale data cleanup at most once per hour."""
     global _last_cleanup_ts
@@ -307,6 +319,11 @@ def _maybe_run_cleanup():
     result = state_registry.wa_cleanup_stale_data()
     if result["threads_cleaned"] or result["processed_cleaned"]:
         log("whatsapp_cleanup", **result)
+    workflow_type = str(
+        ((config_loader.get_raw() or {}).get("workflow") or {}).get("type") or ""
+    )
+    if workflow_type == "ali_quote":
+        _run_ali_document_retention_cleanup()
 
 
 @app.get("/webhooks/meta/whatsapp")

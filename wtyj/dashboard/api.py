@@ -4601,7 +4601,7 @@ class AliDocumentSlotRequest(AliDossierMutationRequest):
 
 
 class AliPaymentLinkRequest(AliDossierMutationRequest):
-    url: str = Field(min_length=8, max_length=2048)
+    url: str = Field(default="", max_length=2048)
     reference: str = Field(default="", max_length=120)
 
 
@@ -4620,6 +4620,18 @@ class AliDossierPrintRequest(AliDossierMutationRequest):
 
 class AliPickupInspectionRequest(AliDossierMutationRequest):
     item: Literal["license", "identity"]
+
+
+class AliDossierSettingsUpdateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    paymentMode: Literal["fixed_link", "per_reservation"]
+    paymentProviderName: str = Field(default="", max_length=80)
+    paymentUrl: str | None = Field(default=None, max_length=2048)
+    clearPaymentUrl: StrictBool = False
+    paymentAllowedDomains: list[str] = Field(default_factory=list, max_length=20)
+    documentRetentionDays: int = Field(ge=1, le=3650, strict=True)
+    paperShreddingPolicy: str = Field(min_length=10, max_length=500)
 
 
 class AliContractSignRequest(BaseModel):
@@ -5166,6 +5178,67 @@ async def get_ali_dossier_configuration_endpoint(response: Response):
     _require_ali_quote_leads()
     _ali_no_store(response)
     return ali_customer_dossier.configuration_status()
+
+
+@router.get(
+    "/ali-dossier/settings",
+    dependencies=[Depends(_check_auth)],
+)
+async def get_ali_dossier_settings_endpoint(response: Response):
+    _require_ali_quote_leads()
+    _ali_no_store(response)
+    return ali_customer_dossier.tenant_settings()
+
+
+@router.put(
+    "/ali-dossier/settings",
+    dependencies=[Depends(_check_auth)],
+)
+async def update_ali_dossier_settings_endpoint(
+    req: AliDossierSettingsUpdateRequest,
+    response: Response,
+):
+    _require_ali_quote_leads()
+    try:
+        result = ali_customer_dossier.save_tenant_settings(
+            payment_mode=req.paymentMode,
+            payment_provider_name=req.paymentProviderName,
+            payment_url=req.paymentUrl,
+            clear_payment_url=req.clearPaymentUrl,
+            payment_allowed_domains=req.paymentAllowedDomains,
+            document_retention_days=req.documentRetentionDays,
+            paper_shredding_policy=req.paperShreddingPolicy,
+            actor="dashboard",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="dossier_settings_update")
+    _ali_no_store(response)
+    return result
+
+
+@router.post(
+    "/ali-dossier/settings/contract-template",
+    dependencies=[Depends(_check_auth)],
+)
+async def upload_ali_contract_template_endpoint(
+    response: Response,
+    version: str = Form(..., min_length=1, max_length=80),
+    file: UploadFile = File(...),
+):
+    _require_ali_quote_leads()
+    try:
+        payload = await file.read(ali_customer_dossier.MAX_TEMPLATE_BYTES + 1)
+        result = ali_customer_dossier.upload_contract_template(
+            version,
+            str(file.filename or "contract-template"),
+            str(file.content_type or "application/octet-stream"),
+            payload,
+            "dashboard",
+        )
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="contract_template_upload")
+    _ali_no_store(response)
+    return result
 
 
 @router.get(
