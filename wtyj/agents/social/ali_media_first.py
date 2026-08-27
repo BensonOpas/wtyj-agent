@@ -95,6 +95,12 @@ _NEGATED_SMALLER_REQUEST = re.compile(
     r"mas\s+chik[ií]|chik[ií]|kleinere|kompakt)\b",
     re.IGNORECASE,
 )
+_NO_PREFERENCE_REQUEST = re.compile(
+    r"^(?:whatever|anything|any(?:\s+car)?|no\s+preference|"
+    r"doesn['’]?t\s+matter|maakt\s+niet\s+uit|geen\s+voorkeur|"
+    r"kualke|no\s+tin\s+preferensia|egal|keine\s+präferenz)[.!?\s]*$",
+    re.IGNORECASE,
+)
 _PERSONAL_DETAIL_REQUEST = re.compile(
     r"(?:\b(?:what(?:'s|\s+is)|tell\s+me|may\s+i\s+have|can\s+i\s+have)\s+"
     r"(?:your\s+)?(?:full\s+)?name\b"
@@ -122,6 +128,7 @@ _COPY = {
         "lowest_price_many": "{vehicle} is the lowest-priced suitable option at USD {price} per day. I’ve included the closest alternatives so you can compare.",
         "lowest_price_one": "{vehicle} is the lowest-priced suitable option at USD {price} per day.",
         "browse_many": "Here are a few cars from our current fleet. Swipe through them and tell me which one you prefer.",
+        "browse_capacity": "Here are a few cars from our current fleet. Seat capacity is shown on each card; cars with fewer than {passengers} seats will not fit your full group. Which one would you like to compare?",
         "smaller_many": "Here are the smaller cars. Which one would you like to look at?",
         "smaller_capacity": "Here are the smaller cars. They seat up to {max_seats}, so if {passengers} people are travelling, you’ll need a larger option. Which one would you like to look at?",
     },
@@ -141,6 +148,7 @@ _COPY = {
         "lowest_price_many": "{vehicle} is de voordeligste passende optie voor USD {price} per dag. Ik heb de dichtstbijzijnde alternatieven toegevoegd zodat je kunt vergelijken.",
         "lowest_price_one": "{vehicle} is de voordeligste passende optie voor USD {price} per dag.",
         "browse_many": "Hier zijn een paar auto's uit ons huidige wagenpark. Bekijk ze en laat me weten welke je voorkeur heeft.",
+        "browse_capacity": "Hier zijn een paar auto's uit ons huidige wagenpark. Op elke kaart staat het aantal zitplaatsen; auto's met minder dan {passengers} zitplaatsen zijn te klein voor je hele groep. Welke wil je vergelijken?",
         "smaller_many": "Hier zijn de kleinere auto's. Welke wil je bekijken?",
         "smaller_capacity": "Hier zijn de kleinere auto's. Ze hebben maximaal {max_seats} zitplaatsen, dus als er {passengers} personen reizen, heb je een grotere optie nodig. Welke wil je bekijken?",
     },
@@ -160,6 +168,7 @@ _COPY = {
         "lowest_price_many": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia. Mi a agregá e alternativanan mas serka pa bo por kompará.",
         "lowest_price_one": "{vehicle} ta e opshon adekuá ku preis mas abou: USD {price} pa dia.",
         "browse_many": "Aki tin algun outo for di nos flota aktual. Mira nan i laga mi sa kua bo ta preferá.",
+        "browse_capacity": "Aki tin algun outo for di nos flota aktual. Kada karta ta mustra e kantidat di asiento; outonan ku ménos ku {passengers} asiento ta chikí pa henter bo grupo. Kua bo ke kompará?",
         "smaller_many": "Aki tin e outonan mas chikí. Kua bo ke mira?",
         "smaller_capacity": "Aki tin e outonan mas chikí. Nan tin te ku {max_seats} asiento, pues si {passengers} persona ta biaha, bo tin mester di un opshon mas grandi. Kua bo ke mira?",
     },
@@ -179,6 +188,7 @@ _COPY = {
         "lowest_price_many": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option. Ich habe die nächstgelegenen Alternativen zum Vergleichen hinzugefügt.",
         "lowest_price_one": "{vehicle} ist mit USD {price} pro Tag die günstigste passende Option.",
         "browse_many": "Hier sind einige Autos aus unserer aktuellen Flotte. Sehen Sie sie durch und sagen Sie mir, welches Sie bevorzugen.",
+        "browse_capacity": "Hier sind einige Autos aus unserer aktuellen Flotte. Die Sitzplatzanzahl steht auf jeder Karte; Fahrzeuge mit weniger als {passengers} Sitzen sind für Ihre gesamte Gruppe zu klein. Welches möchten Sie vergleichen?",
         "smaller_many": "Hier sind die kleineren Autos. Welches möchten Sie ansehen?",
         "smaller_capacity": "Hier sind die kleineren Autos. Sie haben bis zu {max_seats} Sitzplätze. Wenn {passengers} Personen mitfahren, benötigen Sie eine größere Option. Welches möchten Sie ansehen?",
     },
@@ -202,6 +212,11 @@ def explicit_smaller_vehicle_request(message_text: object) -> bool:
         _SMALLER_REQUEST.search(text)
         and not _NEGATED_SMALLER_REQUEST.search(text)
     )
+
+
+def explicit_no_preference_request(message_text: object) -> bool:
+    """Recognize a concise request to choose from any suitable current car."""
+    return bool(_NO_PREFERENCE_REQUEST.fullmatch(str(message_text or "").strip()))
 
 
 def enforce_vehicle_first_reply(reply_text: object, fields: dict) -> str:
@@ -339,6 +354,7 @@ def infer_media_first_intent(
     if (
         explicit_catalog_browse_request(customer_text)
         or explicit_smaller_vehicle_request(customer_text)
+        or explicit_no_preference_request(customer_text)
     ):
         return "request_recommendation"
     if (
@@ -670,10 +686,31 @@ def derive_media_first_action(
         vehicle_id = str(vehicle.get("id") or "").strip()
         if vehicle_id and vehicle_id not in excluded_ids:
             unique.setdefault(vehicle_id, vehicle)
-    candidates = sorted(
-        unique.values(),
-        key=_lowest_price_order if lowest_price_requested else _catalog_order,
-    )
+    if (
+        browse_requested
+        and isinstance(passenger_count, int)
+        and not isinstance(passenger_count, bool)
+        and passenger_count > 0
+    ):
+        candidates = sorted(
+            unique.values(),
+            key=lambda vehicle: (
+                0
+                if vehicle.get("seats") is None
+                or (
+                    isinstance(vehicle.get("seats"), int)
+                    and not isinstance(vehicle.get("seats"), bool)
+                    and vehicle["seats"] >= passenger_count
+                )
+                else 1,
+                _catalog_order(vehicle),
+            ),
+        )
+    else:
+        candidates = sorted(
+            unique.values(),
+            key=_lowest_price_order if lowest_price_requested else _catalog_order,
+        )
 
     if not explicit_names and intent == "reject_or_hesitate":
         unshown = [
@@ -720,6 +757,19 @@ def derive_media_first_action(
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
     if browse_requested:
         intro = copy["browse_many"]
+        if (
+            isinstance(passenger_count, int)
+            and not isinstance(passenger_count, bool)
+            and any(
+                isinstance(vehicle.get("seats"), int)
+                and not isinstance(vehicle.get("seats"), bool)
+                and vehicle["seats"] < passenger_count
+                for vehicle in candidates
+            )
+        ):
+            intro = copy["browse_capacity"].format(
+                passengers=passenger_count,
+            )
     if smaller_requested and not explicit_names:
         max_seats = max(
             (

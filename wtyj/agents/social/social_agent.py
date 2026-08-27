@@ -2220,6 +2220,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     reply_text,
                     turn_id=str(message.get("message_id") or ""),
                     allow_repeat=explicit_visual_request(text),
+                    capacity_advisory=media_first_reason in {
+                        "explicit_catalog_browse",
+                        "explicit_smaller_preference",
+                    },
                 )
             except AliVehicleRecommendationError as exc:
                 media_first_status = "invalid"
