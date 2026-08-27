@@ -51,6 +51,79 @@ SUPPLEMENT_LABELS = {
     "de": ("Extras", "pro Miettag", "pro Miete", "Tage"),
 }
 
+_DOSSIER_MESSAGES = {
+    "en": {
+        "documents": "Your car is available. I’ll help you complete the last steps so our office can review and prepare your rental. Upload each document securely below:\n{links}\n\nOur team will check the copies manually.",
+        "contract": "Your pre-contract is ready to review and sign:\n{url}\n\nOur office will complete the final approval after all requirements are checked.",
+        "payment": "Here is the secure link for the refundable deposit:\n{url}\n\nLet me know here after you have paid. Our team will verify it manually.",
+    },
+    "nl": {
+        "documents": "Je auto is beschikbaar. Ik help je met de laatste stappen zodat ons kantoor je huur kan beoordelen en voorbereiden. Upload elk document veilig hieronder:\n{links}\n\nOns team controleert de kopieën handmatig.",
+        "contract": "Je voorcontract staat klaar om te bekijken en te ondertekenen:\n{url}\n\nOns kantoor geeft de definitieve goedkeuring nadat alles is gecontroleerd.",
+        "payment": "Hier is de beveiligde link voor de terugbetaalbare borg:\n{url}\n\nLaat het hier weten nadat je hebt betaald. Ons team controleert dit handmatig.",
+    },
+    "pap": {
+        "documents": "Bo outo ta disponibel. Mi ta yuda bo ku e último pasonan pa nos oficina por kontrolá i prepará bo huur. Carga kada dokumento sigur aki bou:\n{links}\n\nNos tim ta kontrolá e kopianan manualmente.",
+        "contract": "Bo pre-kontrakto ta kla pa lesa i firma:\n{url}\n\nNos oficina ta hasi e aprobashon final despues ku tur rekisito ta kontrolá.",
+        "payment": "Aki ta e enlace sigur pa e depósito reembolsabel:\n{url}\n\nLaga mi sa aki despues ku bo paga. Nos tim ta verifik'é manualmente.",
+    },
+    "de": {
+        "documents": "Ihr Auto ist verfügbar. Ich helfe Ihnen bei den letzten Schritten, damit unser Büro die Miete prüfen und vorbereiten kann. Laden Sie jedes Dokument sicher hoch:\n{links}\n\nUnser Team prüft die Kopien manuell.",
+        "contract": "Ihr Vorvertrag ist bereit zum Prüfen und Unterschreiben:\n{url}\n\nUnser Büro erteilt die endgültige Freigabe, nachdem alles geprüft wurde.",
+        "payment": "Hier ist der sichere Link für die rückzahlbare Kaution:\n{url}\n\nSchreiben Sie mir hier nach der Zahlung. Unser Team prüft sie manuell.",
+    },
+}
+
+_DOCUMENT_SLOT_LABELS = {
+    "en": {"license_front": "Driver’s licence — front", "license_back": "Driver’s licence — back", "identity": "Passport or national ID"},
+    "nl": {"license_front": "Rijbewijs — voorkant", "license_back": "Rijbewijs — achterkant", "identity": "Paspoort of identiteitskaart"},
+    "pap": {"license_front": "Rijbewijs — parti dilanti", "license_back": "Rijbewijs — parti patras", "identity": "Pasport òf karta di identidat"},
+    "de": {"license_front": "Führerschein — Vorderseite", "license_back": "Führerschein — Rückseite", "identity": "Reisepass oder Personalausweis"},
+}
+
+
+def send_customer_requirement_link(
+    reservation_public_id: str,
+    requirement: str,
+    payload: dict,
+) -> bool:
+    """Send one provider-confirmed customer-file step without logging its URL."""
+    from agents.social import ali_customer_dossier
+
+    if requirement not in {"documents", "contract", "payment"}:
+        raise AliReservationError("invalid_requirement_delivery", 422)
+    context = ali_customer_dossier.customer_delivery_context(reservation_public_id)
+    locale = context["locale"] if context["locale"] in _DOSSIER_MESSAGES else "en"
+    if requirement == "documents":
+        links = payload.get("links") if isinstance(payload, dict) else None
+        if not isinstance(links, list) or not links:
+            raise AliReservationError("document_links_missing", 409)
+        labels = _DOCUMENT_SLOT_LABELS[locale]
+        rendered = "\n".join(
+            f"{labels.get(str(item.get('slot')), str(item.get('slot')))}: {item.get('url')}"
+            for item in links if isinstance(item, dict) and item.get("url")
+        )
+        message = _DOSSIER_MESSAGES[locale][requirement].format(links=rendered)
+    else:
+        url = str(payload.get("url") if isinstance(payload, dict) else "")
+        if not url.startswith("https://"):
+            raise AliReservationError("customer_requirement_url_missing", 409)
+        message = _DOSSIER_MESSAGES[locale][requirement].format(url=url)
+    delivered = send_dm_reply(
+        context["conversation_id"],
+        context["account_id"],
+        message,
+        confirm_delivery=True,
+        idempotency_key=f"ali-reservation-{requirement}-{reservation_public_id}",
+    )
+    ali_customer_dossier.record_requirement_delivery(
+        reservation_public_id,
+        requirement,
+        bool(delivered),
+        "customer_requirement_delivery",
+    )
+    return bool(delivered)
+
 
 def _supplement_summary(pricing: dict, rental: dict, locale: str) -> str:
     heading, per_day, per_rental, days_label = SUPPLEMENT_LABELS[locale]
