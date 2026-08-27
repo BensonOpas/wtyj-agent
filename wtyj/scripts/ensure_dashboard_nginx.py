@@ -33,7 +33,14 @@ def ensure_single_tenant_header(text: str) -> str:
 
 def ensure_dashboard_shell_no_store(text: str) -> str:
     """Keep SPA HTML fresh while leaving hashed assets long-cacheable."""
-    if DASHBOARD_CACHE_MARKER in text:
+    no_store = (
+        'add_header Cache-Control '
+        '"no-store, no-cache, must-revalidate, max-age=0" always;'
+    )
+    if DASHBOARD_CACHE_MARKER in text or (
+        "location = /index.html" in text
+        and text.count(no_store) >= 2
+    ):
         return text
     legacy = """    location / {
         try_files $uri $uri/ /index.html;
