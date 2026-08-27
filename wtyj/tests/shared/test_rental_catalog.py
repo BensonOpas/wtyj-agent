@@ -297,3 +297,23 @@ def test_tenants_never_share_drafts_or_versions(tmp_path):
     )
     assert rental_catalog.get_published("tenant-a", db_path=db_path)["document"] == tenant_a
     assert rental_catalog.get_published("tenant-b", db_path=db_path)["document"] == tenant_b
+
+
+def test_published_media_reference_survives_draft_replacement(tmp_path):
+    db_path = str(tmp_path / "registry.db")
+    with_image = catalog_document()
+    with_image["cars"][0]["primaryImageAssetId"] = "42"
+    rental_catalog.save_draft(
+        "tenant-a", with_image, expected_revision=0, actor="operator", db_path=db_path
+    )
+    assert rental_catalog.media_reference_count("tenant-a", "42", db_path=db_path) == 1
+    rental_catalog.publish(
+        "tenant-a", expected_revision=1, idempotency_key="publish-1",
+        actor="operator", media_exists=lambda _asset_id: True, db_path=db_path,
+    )
+    assert rental_catalog.media_reference_count("tenant-a", "42", db_path=db_path) == 2
+    without_image = catalog_document()
+    rental_catalog.save_draft(
+        "tenant-a", without_image, expected_revision=1, actor="operator", db_path=db_path
+    )
+    assert rental_catalog.media_reference_count("tenant-a", "42", db_path=db_path) == 1

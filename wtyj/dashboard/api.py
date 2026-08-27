@@ -4660,6 +4660,21 @@ def _rental_no_store(response: Response, tenant_slug: str) -> None:
     response.headers["X-Unboks-Tenant"] = tenant_slug
 
 
+def _rental_media_photo(asset_id: str) -> dict | None:
+    try:
+        photo = state_registry.get_photo_by_id(int(asset_id))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(photo, dict):
+        return None
+    service_key = str(photo.get("service_key") or "")
+    return photo if service_key.startswith("knowledge:rental_catalog:") else None
+
+
+def _rental_media_exists(asset_id: str) -> bool:
+    return _rental_media_photo(asset_id) is not None
+
+
 def _raise_rental_catalog_error(exc: Exception, *, action: str) -> None:
     if isinstance(exc, rental_catalog.RentalCatalogError):
         bm_logger.log(
@@ -4718,7 +4733,11 @@ async def update_rental_catalog_draft(
 @router.post("/rental-catalog/validate", dependencies=[Depends(_check_auth)])
 async def validate_rental_catalog(req: RentalValidateRequest, response: Response):
     tenant_slug = _require_rental_control_center()
-    validation = rental_catalog.validate_document(req.document, for_publish=True)
+    validation = rental_catalog.validate_document(
+        req.document,
+        for_publish=True,
+        media_exists=_rental_media_exists,
+    )
     result = {
         "tenantSlug": tenant_slug,
         "valid": validation.valid,
@@ -4784,6 +4803,7 @@ async def publish_rental_catalog(req: RentalPublishRequest, response: Response):
             expected_revision=req.expectedRevision,
             idempotency_key=req.idempotencyKey,
             actor="dashboard",
+            media_exists=_rental_media_exists,
         )
     except Exception as exc:
         _raise_rental_catalog_error(exc, action="publish")
@@ -4796,6 +4816,68 @@ async def publish_rental_catalog(req: RentalPublishRequest, response: Response):
     ali_quote_workflow.invalidate_catalog_cache()
     _rental_no_store(response, tenant_slug)
     return result
+
+
+@router.post("/rental-catalog/media", dependencies=[Depends(_check_auth)])
+async def upload_rental_catalog_media(
+    response: Response,
+    owner_id: str = Form(...),
+    caption: str = Form(""),
+    file: UploadFile = File(...),
+):
+    tenant_slug = _require_rental_control_center()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", owner_id):
+        raise HTTPException(status_code=422, detail={"code": "invalid_media_owner"})
+    media = await upload_knowledge_media(
+        knowledge_id=owner_id,
+        source="rental_catalog",
+        caption=caption,
+        file=file,
+    )
+    _rental_no_store(response, tenant_slug)
+    return {"tenantSlug": tenant_slug, "asset": media}
+
+
+@router.get(
+    "/rental-catalog/media/{asset_id}",
+    dependencies=[Depends(_check_auth)],
+)
+async def get_rental_catalog_media(asset_id: str, response: Response):
+    tenant_slug = _require_rental_control_center()
+    photo = _rental_media_photo(asset_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail={"code": "rental_media_not_found"})
+    source, owner_id = _knowledge_media_source_parts(photo)
+    _rental_no_store(response, tenant_slug)
+    return {
+        "tenantSlug": tenant_slug,
+        "asset": _knowledge_media_shape(photo, source, owner_id),
+    }
+
+
+@router.delete(
+    "/rental-catalog/media/{asset_id}",
+    dependencies=[Depends(_check_auth)],
+)
+async def delete_rental_catalog_media(asset_id: str, response: Response):
+    tenant_slug = _require_rental_control_center()
+    photo = _rental_media_photo(asset_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail={"code": "rental_media_not_found"})
+    if rental_catalog.media_reference_count(tenant_slug, asset_id) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "rental_media_in_use"},
+        )
+    filename = state_registry.delete_photo(int(asset_id))
+    if not filename:
+        raise HTTPException(status_code=404, detail={"code": "rental_media_not_found"})
+    try:
+        os.remove(os.path.join(_PHOTOS_DIR, filename))
+    except FileNotFoundError:
+        pass
+    _rental_no_store(response, tenant_slug)
+    return {"tenantSlug": tenant_slug, "deleted": True}
 
 
 @router.post("/rental-catalog/rollback", dependencies=[Depends(_check_auth)])

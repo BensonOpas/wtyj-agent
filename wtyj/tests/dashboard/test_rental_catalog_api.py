@@ -213,3 +213,29 @@ def test_published_consumer_requires_separate_service_token(client):
     assert response.json()["catalogVersion"] == 1
     assert response.headers["x-unboks-tenant"] == "rental-test"
     assert response.headers["cache-control"].startswith("no-store")
+
+
+def test_rental_media_delete_fails_closed_when_historical_version_uses_asset(
+    client, monkeypatch,
+):
+    monkeypatch.setattr(
+        api,
+        "_rental_media_photo",
+        lambda asset_id: {
+            "id": int(asset_id), "filename": "photo.jpg",
+            "service_key": "knowledge:rental_catalog:picanto",
+        },
+    )
+    monkeypatch.setattr(
+        api.rental_catalog,
+        "media_reference_count",
+        lambda tenant, asset_id: 1,
+    )
+    deleted = []
+    monkeypatch.setattr(api.state_registry, "delete_photo", deleted.append)
+    response = client.delete(
+        "/dashboard/api/rental-catalog/media/42", headers=auth()
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "rental_media_in_use"
+    assert deleted == []

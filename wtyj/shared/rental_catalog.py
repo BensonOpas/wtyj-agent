@@ -616,6 +616,38 @@ def get_published(tenant_slug: str, *, db_path: str | None = None) -> dict | Non
     return _version_result(row) if row is not None else None
 
 
+def media_reference_count(
+    tenant_slug: str,
+    asset_id: str,
+    *,
+    db_path: str | None = None,
+) -> int:
+    """Count draft/version references so immutable media cannot be deleted."""
+    tenant = _tenant(tenant_slug)
+    target = _validate_id(asset_id)
+    ensure_schema(db_path)
+    connection = _connect(db_path)
+    rows = connection.execute(
+        "SELECT document_json FROM rental_catalog_drafts WHERE tenant_slug = ? "
+        "UNION ALL SELECT document_json FROM rental_catalog_versions WHERE tenant_slug = ?",
+        (tenant, tenant),
+    ).fetchall()
+    connection.close()
+    count = 0
+    for row in rows:
+        try:
+            document = json.loads(row["document_json"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        settings = document.get("settings") if isinstance(document, dict) else {}
+        if isinstance(settings, dict) and settings.get("pdfLogoAssetId") == target:
+            count += 1
+        for car in document.get("cars") or [] if isinstance(document, dict) else []:
+            if isinstance(car, dict) and car.get("primaryImageAssetId") == target:
+                count += 1
+    return count
+
+
 def _money(cents: int, currency: str) -> dict:
     whole, fraction = divmod(cents, 100)
     return {"currency": currency, "amount": f"{whole}.{fraction:02d}"}
