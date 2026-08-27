@@ -42,4 +42,10 @@ class WhatsAppZernioChannel(Channel):
             "_zernio_event_id": str(
                 zernio_msg.get("event_id") or zernio_msg.get("message_id") or ""
             ).strip(),
+            "_zernio_provider_message_id": str(
+                zernio_msg.get("provider_message_id") or ""
+            ).strip(),
+            "_zernio_sent_at": str(
+                zernio_msg.get("sent_at") or ""
+            ).strip(),
         }

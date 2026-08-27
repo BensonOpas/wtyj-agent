@@ -757,6 +757,12 @@ def commit_ali_turn_delivery(
             "state_hash": str(recommendation_snapshot.get("state_hash") or "")[:64],
             "text": str(recommendation_snapshot.get("text") or "")[:1500],
             "vehicle_ids": recommendation_ids,
+            "trigger_message_id": str(
+                recommendation_snapshot.get("trigger_message_id") or ""
+            ).strip()[:240],
+            "trigger_sent_at": str(
+                recommendation_snapshot.get("trigger_sent_at") or ""
+            ).strip()[:80],
         }
         if (
             snapshot_candidate["kind"] in {"image", "carousel"}

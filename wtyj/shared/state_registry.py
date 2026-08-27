@@ -2312,6 +2312,12 @@ def wa_stage_vehicle_recommendation_delivery(
         "state_hash": state_hash,
         "text": str((recommendation or {}).get("text") or "")[:1500],
         "vehicle_ids": vehicle_ids[:5],
+        "trigger_message_id": str(
+            (recommendation or {}).get("trigger_message_id") or ""
+        ).strip()[:240],
+        "trigger_sent_at": str(
+            (recommendation or {}).get("trigger_sent_at") or ""
+        ).strip()[:80],
     }
     if snapshot["kind"] not in {"image", "carousel"} or not snapshot["text"]:
         return False
