@@ -776,6 +776,80 @@ def review_document(
         conn.close()
 
 
+def request_document_replacement(
+    public_id: str,
+    document_id: str,
+    actor: str,
+    expected_revision: int | None = None,
+) -> dict:
+    """Request a replacement and issue one fresh slot-bound upload link."""
+    actor_id = reservation._validate_actor(actor)
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        case = _available_case(conn, public_id)
+        reservation._check_revision(case, expected_revision)
+        document = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? AND public_id = ?",
+            (TENANT_SLUG, public_id, document_id),
+        ).fetchone()
+        if not document or document["status"] in {"deleted", "replaced", "not_required"}:
+            raise reservation.AliReservationError("document_not_found", 404)
+        timestamp = _iso()
+        conn.execute(
+            "UPDATE ali_reservation_documents SET status = 'replacement_requested', "
+            "updated_at = ?, verified_at = NULL, verified_by = NULL "
+            "WHERE tenant_slug = ? AND public_id = ?",
+            (timestamp, TENANT_SLUG, document_id),
+        )
+        conn.execute(
+            "UPDATE ali_reservations SET identity_status = 'replacement_requested', "
+            "status = 'requirements_pending', last_staff_actor = ?, "
+            "last_staff_action_at = ?, revision = revision + 1, updated_at = ? "
+            "WHERE tenant_slug = ? AND public_id = ?",
+            (actor_id, timestamp, timestamp, TENANT_SLUG, public_id),
+        )
+        token, expires = _new_token(
+            conn,
+            public_id,
+            "document_upload",
+            slot=str(document["slot"]),
+        )
+        reservation._event(
+            conn,
+            public_id,
+            "document_replacement_requested",
+            str(case["status"]),
+            "requirements_pending",
+            "staff",
+            actor_id,
+            {
+                "document_id": document_id,
+                "slot": document["slot"],
+                "version": document["version"],
+            },
+        )
+        conn.commit()
+        return {
+            "document": _safe_document(conn.execute(
+                "SELECT * FROM ali_reservation_documents WHERE public_id = ?",
+                (document_id,),
+            ).fetchone()),
+            "links": [{
+                "slot": document["slot"],
+                "url": f"{_public_base_url()}/dashboard/api/ali-reservations/public/documents/{token}",
+                "expiresAt": expires,
+            }],
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def mark_document_slot_not_required(
     public_id: str,
     slot: str,
@@ -1691,7 +1765,8 @@ def generate_dossier(
             f"Deposit: {case['payment_status']}",
             f"Payment reference: {payment['payment_reference'] if payment else ''}",
             f"Final notes: {case['final_notes']}", "Pickup checklist:",
-            "[ ] Original licence inspected", "[ ] Original ID inspected",
+            f"[{'x' if case['original_license_inspected_at'] else ' '}] Original licence inspected",
+            f"[{'x' if case['original_identity_inspected_at'] else ' '}] Original ID inspected",
         ]
         for data in (_section_pdf("Ali Car Rental — Customer dossier", lines, dimensions),):
             for page in PdfReader(io.BytesIO(data)).pages: writer.add_page(page)

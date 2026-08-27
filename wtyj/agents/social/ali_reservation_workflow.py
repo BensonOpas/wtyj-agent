@@ -198,6 +198,8 @@ def ensure_schema() -> None:
             "last_staff_actor TEXT, last_staff_action_at TEXT, "
             "final_notes TEXT NOT NULL DEFAULT '', "
             "dossier_version INTEGER NOT NULL DEFAULT 0, "
+            "original_license_inspected_at TEXT, original_license_inspected_by TEXT, "
+            "original_identity_inspected_at TEXT, original_identity_inspected_by TEXT, "
             "confirmed_at TEXT, revision INTEGER NOT NULL DEFAULT 1, "
             "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
         )
@@ -229,6 +231,10 @@ def ensure_schema() -> None:
         for name, definition in {
             "final_notes": "TEXT NOT NULL DEFAULT ''",
             "dossier_version": "INTEGER NOT NULL DEFAULT 0",
+            "original_license_inspected_at": "TEXT",
+            "original_license_inspected_by": "TEXT",
+            "original_identity_inspected_at": "TEXT",
+            "original_identity_inspected_by": "TEXT",
         }.items():
             if name not in columns:
                 conn.execute(
@@ -521,6 +527,14 @@ def _public_row(row: sqlite3.Row | dict | None) -> dict | None:
         if value.get("availability_status") == "approved" and value["checklist_complete"]
         else "incomplete"
     )
+    value["pickup_checklist"] = {
+        "original_license_inspected": bool(value.get("original_license_inspected_at")),
+        "original_license_inspected_at": value.get("original_license_inspected_at"),
+        "original_license_inspected_by": value.get("original_license_inspected_by"),
+        "original_identity_inspected": bool(value.get("original_identity_inspected_at")),
+        "original_identity_inspected_at": value.get("original_identity_inspected_at"),
+        "original_identity_inspected_by": value.get("original_identity_inspected_by"),
+    }
     value["next_action"] = _next_action(str(value.get("status") or ""))
     return value
 
@@ -1034,6 +1048,56 @@ def confirm_reservation(
             conn, public_id, "reservation_confirmed", str(row["status"]), "confirmed",
             "staff", actor_id,
             {"confirmation_reference": reference, "note_provided": note_provided},
+        )
+        updated = _require_case(conn, public_id)
+        conn.commit()
+        return _public_row(updated)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_original_document_inspection(
+    public_id: str,
+    item: str,
+    actor: str,
+    expected_revision: int | None = None,
+) -> dict:
+    """Record the irreversible pickup inspection of one original document."""
+    _tenant_slug()
+    if item not in {"license", "identity"}:
+        raise AliReservationError("invalid_pickup_inspection_item", 422)
+    actor_id = _validate_actor(actor)
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _require_case(conn, public_id)
+        if row["status"] != "confirmed":
+            raise AliReservationError("confirmed_reservation_required", 409)
+        timestamp_column = f"original_{item}_inspected_at"
+        actor_column = f"original_{item}_inspected_by"
+        if row[timestamp_column]:
+            conn.commit()
+            return _public_row(row)
+        _check_revision(row, expected_revision)
+        timestamp = _iso()
+        conn.execute(
+            f"UPDATE ali_reservations SET {timestamp_column} = ?, {actor_column} = ?, "
+            "revision = revision + 1, updated_at = ? WHERE tenant_slug = ? AND public_id = ?",
+            (timestamp, actor_id, timestamp, TENANT_SLUG, public_id),
+        )
+        _event(
+            conn,
+            public_id,
+            f"original_{item}_inspected",
+            "confirmed",
+            "confirmed",
+            "staff",
+            actor_id,
+            {"pickup_check": item},
         )
         updated = _require_case(conn, public_id)
         conn.commit()

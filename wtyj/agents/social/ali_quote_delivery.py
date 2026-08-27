@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from datetime import datetime
@@ -109,12 +110,26 @@ def send_customer_requirement_link(
         if not url.startswith("https://"):
             raise AliReservationError("customer_requirement_url_missing", 409)
         message = _DOSSIER_MESSAGES[locale][requirement].format(url=url)
+    if requirement == "documents":
+        delivery_material = "\n".join(
+            str(item.get("url") or "")
+            for item in links
+            if isinstance(item, dict)
+        )
+    else:
+        delivery_material = url
+    delivery_fingerprint = hashlib.sha256(
+        delivery_material.encode("utf-8")
+    ).hexdigest()[:16]
     delivered = send_dm_reply(
         context["conversation_id"],
         context["account_id"],
         message,
         confirm_delivery=True,
-        idempotency_key=f"ali-reservation-{requirement}-{reservation_public_id}",
+        idempotency_key=(
+            f"ali-reservation-{requirement}-{reservation_public_id}-"
+            f"{delivery_fingerprint}"
+        ),
     )
     ali_customer_dossier.record_requirement_delivery(
         reservation_public_id,
