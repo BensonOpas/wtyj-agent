@@ -1415,6 +1415,24 @@ def mark_payment_link_sent(public_id: str, actor: str) -> dict:
         conn.close()
 
 
+def payment_delivery_payload(public_id: str) -> dict:
+    """Return the configured URL only to the server-side delivery adapter."""
+    ensure_schema()
+    conn = _connection()
+    try:
+        _available_case(conn, public_id)
+        payment = conn.execute(
+            "SELECT payment_url FROM ali_reservation_payments WHERE tenant_slug = ? "
+            "AND reservation_public_id = ?",
+            (TENANT_SLUG, public_id),
+        ).fetchone()
+        if not payment or not payment["payment_url"]:
+            raise reservation.AliReservationError("payment_link_not_configured", 409)
+        return {"url": str(payment["payment_url"])}
+    finally:
+        conn.close()
+
+
 def record_customer_payment_report(conversation_id: str, account_id: str, action_id: str = "") -> dict:
     ensure_schema()
     conn = _connection()
@@ -1554,7 +1572,6 @@ def get_customer_file(public_id: str) -> dict:
         value["contract"] = _safe_contract(contract)
         value["payment"] = {
             "status": case["payment_status"],
-            "url": payment["payment_url"] if payment else None,
             "domain": payment["payment_domain"] if payment else None,
             "reference": payment["payment_reference"] if payment else None,
             "linkSentAt": payment["link_sent_at"] if payment else None,

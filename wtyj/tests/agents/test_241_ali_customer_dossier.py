@@ -197,6 +197,7 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
     customer_file = dossier.get_customer_file(case["public_id"])
     assert customer_file["dossier_status"] == "ready_for_review"
     assert customer_file["payment"]["status"] == "verified"
+    assert "url" not in customer_file["payment"]
     assert {item["slot"] for item in customer_file["documents"]} == {
         "license_front", "license_back", "identity",
     }

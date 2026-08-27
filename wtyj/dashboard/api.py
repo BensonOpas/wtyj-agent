@@ -5369,14 +5369,14 @@ async def send_ali_payment_link_endpoint(public_id: str):
     _require_ali_quote_leads()
     try:
         customer_file = ali_customer_dossier.get_customer_file(public_id)
-        url = str((customer_file.get("payment") or {}).get("url") or "")
         if customer_file.get("payment_status") == "link_sent":
             return {"delivered": True, "reservation": customer_file}
+        payment_payload = ali_customer_dossier.payment_delivery_payload(public_id)
         delivered = await asyncio.to_thread(
             ali_quote_delivery.send_customer_requirement_link,
             public_id,
             "payment",
-            {"url": url},
+            payment_payload,
         )
         if delivered:
             ali_customer_dossier.mark_payment_link_sent(
