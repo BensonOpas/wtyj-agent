@@ -229,7 +229,7 @@ def test_idempotent_attachment_reconciles_http_2xx_without_message_id(monkeypatc
         _Resp(200, {"messages": [{
             "id": "quote-pdf-reconciled",
             "direction": "outgoing",
-            "status": "sent",
+            "status": "delivered",
             "message": "Your official quote is ready.",
             "attachmentUrl": attachment_url,
         }, _incoming()]}),
@@ -251,6 +251,94 @@ def test_idempotent_attachment_reconciles_http_2xx_without_message_id(monkeypatc
         attachment_type="file",
         idempotency_key="ali-quote-pdf-quote-1",
     ) is True
+
+
+def test_idempotent_file_attachment_does_not_accept_temporary_sent_status(
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(zernio_dm_client.time, "sleep", lambda _seconds: None)
+    get_count = 0
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal get_count
+        get_count += 1
+        if get_count == 1:
+            return _Resp(200, {"messages": [_incoming()]})
+        return _Resp(200, {"messages": [{
+            "id": "quote-pdf-pending",
+            "direction": "outgoing",
+            "status": "sent",
+            "message": "Your official quote is ready.",
+            "attachmentUrl": (
+                "https://api.unboks.org/api/public/ali-quote/"
+                "quote-1?signature=safe"
+            ),
+        }]})
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", fake_get)
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *_args, **_kwargs: _Resp(
+            201, {"data": {"id": "quote-pdf-pending"}},
+        ),
+    )
+
+    assert zernio_dm_client.send_dm_reply_with_attachment(
+        "conv_123", "account_123", "Your official quote is ready.",
+        "https://api.unboks.org/api/public/ali-quote/quote-1?signature=safe",
+        attachment_type="file",
+        idempotency_key="ali-quote-pdf-quote-1",
+    ) is False
+
+
+def test_idempotent_file_attachment_retries_terminal_failure_with_fresh_key(
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(zernio_dm_client.time, "sleep", lambda _seconds: None)
+    attachment_url = (
+        "https://api.unboks.org/api/public/ali-quote/quote-1?signature=safe"
+    )
+    get_count = 0
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal get_count
+        get_count += 1
+        if get_count == 1:
+            return _Resp(200, {"messages": [{
+                "id": "quote-pdf-failed",
+                "direction": "outgoing",
+                "status": "failed",
+                "message": "Your official quote is ready.",
+                "attachmentUrl": attachment_url,
+            }, _incoming()]})
+        return _Resp(200, {"messages": [{
+            "id": "quote-pdf-retry",
+            "direction": "outgoing",
+            "status": "delivered",
+        }]})
+
+    posts = []
+
+    def fake_post(url, headers, json, timeout):
+        posts.append({"headers": headers, "json": json})
+        return _Resp(201, {"data": {"id": "quote-pdf-retry"}})
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", fake_get)
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+
+    assert zernio_dm_client.send_dm_reply_with_attachment(
+        "conv_123", "account_123", "Your official quote is ready.",
+        attachment_url,
+        attachment_type="file",
+        idempotency_key="ali-quote-pdf-quote-1",
+    ) is True
+    assert len(posts) == 1
+    assert posts[0]["headers"]["Idempotency-Key"] == (
+        "ali-quote-pdf-quote-1-retry-1"
+    )
 
 
 def test_idempotent_attachment_reports_terminal_provider_failure(monkeypatch):

@@ -2071,13 +2071,19 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                 status = str(
                     item.get("status") or item.get("deliveryStatus") or ""
                 ).lower()
-                if provider_id and status in {"sent", "delivered", "read"}:
+                terminal_success = (
+                    {"delivered", "read"}
+                    if attachment_type == "file"
+                    else {"sent", "delivered", "read"}
+                )
+                if provider_id and status in terminal_success:
                     return "sent"
                 if status in {"failed", "rejected", "undeliverable"}:
                     return "rejected"
                 if provider_id:
                     return _confirm_recommendation_status(
                         url, headers, account_id, provider_id,
+                        require_delivered=attachment_type == "file",
                     )
                 return "ambiguous"
 
@@ -2091,13 +2097,35 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                         attachment_type=attachment_type,
                     )
                     return True
-                bm_logger.log(
-                    "zernio_dm_attachment_delivery_unconfirmed",
-                    conversation_id=conversation_id[:20],
-                    attachment_type=attachment_type,
-                    outcome=existing_outcome,
-                )
-                return False
+                if existing_outcome == "rejected" and attachment_type == "file":
+                    failed_matches = sum(
+                        1
+                        for item in existing_messages
+                        if matching_attachment([item]) is not None
+                        and str(
+                            item.get("status")
+                            or item.get("deliveryStatus")
+                            or ""
+                        ).lower() in {"failed", "rejected", "undeliverable"}
+                    )
+                    retry_number = max(1, failed_matches)
+                    headers["Idempotency-Key"] = (
+                        f"{idempotency_key}-retry-{retry_number}"
+                    )[:255]
+                    bm_logger.log(
+                        "zernio_dm_file_attachment_retrying",
+                        conversation_id=conversation_id[:20],
+                        failed_attempts=failed_matches,
+                        retry_number=retry_number,
+                    )
+                else:
+                    bm_logger.log(
+                        "zernio_dm_attachment_delivery_unconfirmed",
+                        conversation_id=conversation_id[:20],
+                        attachment_type=attachment_type,
+                        outcome=existing_outcome,
+                    )
+                    return False
 
             outcome, status, provider_id = _post_recommendation_message(
                 url, headers, body,
@@ -2105,6 +2133,7 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
             if outcome == "sent" and provider_id:
                 outcome = _confirm_recommendation_status(
                     url, headers, account_id, provider_id,
+                    require_delivered=attachment_type == "file",
                 )
             if outcome == "sent" and provider_id:
                 bm_logger.log(
