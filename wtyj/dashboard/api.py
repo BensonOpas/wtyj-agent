@@ -5747,14 +5747,27 @@ def _public_ali_html(
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>{html.escape(title)}</title>
-<style>body{{margin:0;background:#f5f8fa;color:#08243c;font:16px system-ui,sans-serif}}
-main{{max-width:680px;margin:32px auto;padding:28px;background:white;border-radius:20px;box-shadow:0 12px 40px #08243c1c}}
-h1{{margin:0 0 20px}}label{{display:block;margin:14px 0 6px;font-weight:650}}
+<style>:root{{--navy:#08243c;--teal:#0e8b7e;--teal-dark:#087268;--gold:#f2b51d}}
+*{{box-sizing:border-box}}body{{margin:0;background:linear-gradient(155deg,#eef8f7 0%,#f5f8fa 45%,#eef3f7 100%);color:var(--navy);font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+main{{max-width:680px;margin:32px auto;padding:28px;background:white;border:1px solid #e3eaee;border-radius:20px;box-shadow:0 18px 55px #08243c1c}}
+h1{{margin:0 0 20px;line-height:1.14;letter-spacing:-.025em}}label{{display:block;margin:14px 0 6px;font-weight:650}}
 input,button{{font:inherit}}input[type=text],input[type=file]{{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cbd5df;border-radius:10px}}
-button{{margin-top:18px;width:100%;padding:14px;border:0;border-radius:12px;background:#0e8b7e;color:white;font-weight:750}}
+button{{margin-top:18px;width:100%;padding:15px 18px;border:0;border-radius:12px;background:var(--teal);color:white;font-weight:780;box-shadow:0 8px 20px #0e8b7e2b;cursor:pointer}}
+button:hover{{background:var(--teal-dark)}}button:focus-visible{{outline:3px solid #f2b51d80;outline-offset:3px}}
 button:disabled{{cursor:wait;opacity:.65}}
 canvas{{width:100%;height:160px;border:1px solid #cbd5df;border-radius:10px;touch-action:none}}
-iframe{{width:100%;height:60vh;border:1px solid #d8e0e6;border-radius:10px}}</style></head>
+iframe{{width:100%;height:60vh;border:1px solid #d8e0e6;border-radius:10px}}
+[hidden]{{display:none!important}}.completion-card{{position:relative;overflow:hidden;padding:34px 30px 30px;border:1px solid #cae9e4;border-radius:20px;background:linear-gradient(160deg,#fff 0%,#f4fbfa 100%);text-align:center;box-shadow:0 18px 45px #08243c14}}
+.completion-card:before{{content:"";position:absolute;inset:0 0 auto;height:5px;background:linear-gradient(90deg,var(--gold),#ffd563,var(--teal))}}
+.success-mark{{display:grid;place-items:center;width:68px;height:68px;margin:2px auto 18px;border-radius:50%;background:var(--teal);color:white;font-size:36px;font-weight:850;box-shadow:0 10px 28px #0e8b7e3d}}
+.completion-card .eyebrow{{margin:0 0 9px;color:var(--teal-dark);font-size:13px;font-weight:850;letter-spacing:.12em;text-transform:uppercase}}
+.completion-card h1{{max-width:520px;margin:0 auto 14px;font-size:clamp(28px,6vw,40px)}}
+.completion-card>.lead{{max-width:510px;margin:0 auto 24px;color:#465b6d;font-size:18px}}
+.next-step{{padding:18px 20px;border:1px solid #dce8eb;border-radius:14px;background:#fff;text-align:left}}
+.next-step strong{{display:block;margin-bottom:5px;color:var(--navy)}}.next-step p{{margin:0;color:#536779}}
+.close-note{{margin:24px 0 0;font-weight:700}}.close-fallback{{margin:12px 0 0;color:#5e6f7d;font-size:14px}}
+#complete-title:focus{{outline:none}}
+@media(max-width:700px){{body{{background:#f5f8fa}}main{{min-height:100vh;margin:0;padding:22px 18px;border:0;border-radius:0;box-shadow:none}}.completion-card{{margin-top:18px;padding:31px 20px 24px}}}}</style></head>
 <body><main><div style="font-weight:800;color:#08243c;margin-bottom:16px">ALI CAR RENTAL · CURAÇAO</div>{content}</main></body></html>"""
     response = HTMLResponse(page)
     _ali_no_store(response)
@@ -5806,16 +5819,27 @@ async def public_ali_contract_page(token: str):
     try:
         context = ali_customer_dossier.contract_review_context(token)
         pdf = context["pdfBase64"]
-        content = f"""<h1>Review and sign pre-contract</h1>
+        content = f"""<section id="signing"><h1>Review and sign pre-contract</h1>
 <p>Read the complete document before signing. Final approval is completed by our office.</p>
 <iframe title="Ali pre-contract" src="data:application/pdf;base64,{pdf}"></iframe>
 <label><input id="consent" type="checkbox"> I have read the complete pre-contract and agree to sign it.</label>
 <label for="legal">Full legal name</label><input id="legal" type="text" autocomplete="name" maxlength="120">
 <label>Signature</label><canvas id="signature" width="620" height="160"></canvas>
-<button id="sign" type="button">Sign pre-contract</button><p id="status" role="status" aria-live="polite"></p>
-<script>const c=document.getElementById('signature'),x=c.getContext('2d'),b=document.getElementById('sign'),s=document.getElementById('status');let d=false,submitting=false,signed=false;
+<button id="sign" type="button">Sign pre-contract</button><p id="status" role="status" aria-live="polite"></p></section>
+<section id="complete" class="completion-card" aria-labelledby="complete-title" hidden>
+<div class="success-mark" aria-hidden="true">✓</div>
+<p class="eyebrow">Pre-contract signed</p>
+<h1 id="complete-title" tabindex="-1">Thank you — your pre-contract is signed.</h1>
+<p class="lead">We’ve securely received your signature and saved your signed pre-contract.</p>
+<div class="next-step"><strong>What happens next</strong><p>Our office will complete the final review and verify the remaining reservation details. We’ll contact you in WhatsApp as soon as the next step is ready.</p></div>
+<p class="close-note">You can close this window now and return to WhatsApp.</p>
+<button id="close-window" type="button">Close this window</button>
+<p id="close-fallback" class="close-fallback" role="status" aria-live="polite" hidden>If this page stays open, close this browser tab and return to WhatsApp.</p>
+</section>
+<script>const c=document.getElementById('signature'),x=c.getContext('2d'),b=document.getElementById('sign'),s=document.getElementById('status'),signing=document.getElementById('signing'),completion=document.getElementById('complete'),completionTitle=document.getElementById('complete-title'),closeButton=document.getElementById('close-window'),closeFallback=document.getElementById('close-fallback');let d=false,submitting=false,signed=false;
 for(const a of ['pointerdown','pointermove','pointerup','pointerleave'])c.addEventListener(a,e=>{{e.preventDefault();if(a==='pointerdown')d=true;if(a==='pointerup'||a==='pointerleave')d=false;if(a==='pointermove'&&d){{const r=c.getBoundingClientRect();x.lineWidth=2;x.lineTo((e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height);x.stroke();}}}});
-b.onclick=async()=>{{if(submitting||signed)return;submitting=true;b.disabled=true;s.textContent='Submitting…';const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);try{{const endpoint=location.pathname.replace(/[/]$/,'')+'/sign';const r=await fetch(endpoint,{{method:'POST',headers:{{'content-type':'application/json'}},cache:'no-store',credentials:'same-origin',signal:controller.signal,body:JSON.stringify({{consent:document.getElementById('consent').checked,legalName:document.getElementById('legal').value,signatureData:c.toDataURL('image/png')}})}});if(!r.ok)throw new Error('sign_request_rejected');signed=true;s.textContent='Signed. Thank you — our office will complete the final review.';}}catch(error){{s.textContent='Unable to sign. Please check your connection and try again.';}}finally{{clearTimeout(timeout);submitting=false;if(!signed)b.disabled=false;}}}};</script>"""
+b.onclick=async()=>{{if(submitting||signed)return;submitting=true;b.disabled=true;s.textContent='Submitting…';const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);try{{const endpoint=location.pathname.replace(/[/]$/,'')+'/sign';const r=await fetch(endpoint,{{method:'POST',headers:{{'content-type':'application/json'}},cache:'no-store',credentials:'same-origin',signal:controller.signal,body:JSON.stringify({{consent:document.getElementById('consent').checked,legalName:document.getElementById('legal').value,signatureData:c.toDataURL('image/png')}})}});if(!r.ok)throw new Error('sign_request_rejected');signed=true;signing.hidden=true;completion.hidden=false;window.scrollTo({{top:0,behavior:'smooth'}});completionTitle.focus();}}catch(error){{s.textContent='Unable to sign. Please check your connection and try again.';}}finally{{clearTimeout(timeout);submitting=false;if(!signed)b.disabled=false;}}}};
+closeButton.onclick=()=>{{window.close();setTimeout(()=>{{closeFallback.hidden=false;}},250);}};</script>"""
         return _public_ali_html(
             "Review and sign pre-contract",
             content,

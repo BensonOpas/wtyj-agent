@@ -349,6 +349,17 @@ def test_contract_signature_page_allows_same_origin_submit_and_recovers(
     assert "catch(error)" in page.text
     assert "if(!signed)b.disabled=false" in page.text
     assert "Unable to sign. Please check your connection and try again." in page.text
+    assert 'id="complete" class="completion-card"' in page.text
+    assert "Thank you — your pre-contract is signed." in page.text
+    assert "We’ve securely received your signature" in page.text
+    assert "Our office will complete the final review" in page.text
+    assert "You can close this window now and return to WhatsApp." in page.text
+    assert '<button id="close-window" type="button">Close this window</button>' in page.text
+    assert "signing.hidden=true;completion.hidden=false" in page.text
+    assert "completionTitle.focus()" in page.text
+    assert "window.close()" in page.text
+    assert "If this page stays open, close this browser tab and return to WhatsApp." in page.text
+    assert "location.href" not in page.text
 
     upload_page = api._public_ali_html("Upload", "<p>Upload</p>")
     assert "connect-src" not in upload_page.headers["content-security-policy"]
