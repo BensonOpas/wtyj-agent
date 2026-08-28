@@ -196,10 +196,10 @@ def test_confirmation_variants_and_corrections_change_the_summary_hash():
 
 def test_nick_confirmation_copy_is_first_person_and_human_in_all_locales():
     expected = {
-        "en": ("I have these details from you:", "If everything is correct, tap below and I’ll prepare your official quote."),
-        "nl": ("Ik heb deze gegevens van je:", "Als alles klopt, tik hieronder en dan maak ik je officiële offerte klaar."),
-        "pap": ("Mi tin e detayanan aki di bo:", "Si tur kos ta korekto, primi aki bou i mi lo prepara bo oferta ofisial."),
-        "de": ("Ich habe diese Angaben von Ihnen:", "Wenn alles stimmt, tippen Sie unten und ich bereite Ihr offizielles Angebot vor."),
+        "en": ("I have these details from you:", "Does everything look right? Choose an option below."),
+        "nl": ("Ik heb deze gegevens van je:", "Klopt alles? Kies hieronder een optie."),
+        "pap": ("Mi tin e detayanan aki di bo:", "Tur kos ta bon? Skohe un opshon aki bou."),
+        "de": ("Ich habe diese Angaben von Ihnen:", "Stimmt alles? Wählen Sie unten eine Option."),
     }
     banned = (
         "reply yes", "please confirm", "antwoord ja", "konfirmá e det",
@@ -237,11 +237,16 @@ def test_send_my_quote_control_is_signed_opaque_current_and_stale(monkeypatch):
         "conversation-synthetic", plan,
     )
     payload = control["button"]["payload"]
+    change_payload = control["buttons"][1]["payload"]
     assert control["button"]["title"] == "Send my quote"
+    assert [button["title"] for button in control["buttons"]] == [
+        "Send my quote", "Change something",
+    ]
     assert control["fallback_text"].endswith(
-        "Reply SEND QUOTE to continue."
+        "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
     )
     assert payload.startswith("ali_quote_confirm:v1:")
+    assert change_payload.startswith("ali_quote_change:v1:")
     assert "Synthetic" not in payload
     flags = {
         "awaiting_quote_confirmation": True,
@@ -251,10 +256,30 @@ def test_send_my_quote_control_is_signed_opaque_current_and_stale(monkeypatch):
     assert workflow.resolve_quote_confirmation_interaction(
         "button_reply", payload, "conversation-synthetic", flags,
     ) == "current"
+    assert workflow.resolve_quote_confirmation_interaction(
+        "button_reply", change_payload, "conversation-synthetic", flags,
+    ) == "change"
     flags["ali_summary_version"] = 2
     assert workflow.resolve_quote_confirmation_interaction(
         "button_reply", payload, "conversation-synthetic", flags,
     ) == "stale"
+
+
+def test_existing_send_my_quote_signature_remains_valid_after_two_action_release():
+    secret = "synthetic-confirmation-secret-32-bytes"
+    conversation_id = "conversation-synthetic"
+    summary_hash = "c" * 64
+    version = 7
+    legacy_material = f"{conversation_id}\x1f{summary_hash}\x1f{version}"
+    legacy_signature = workflow.hmac.new(
+        secret.encode("utf-8"),
+        legacy_material.encode("utf-8"),
+        workflow.hashlib.sha256,
+    ).hexdigest()
+
+    assert workflow.quote_confirmation_payload(
+        conversation_id, summary_hash, version, secret=secret,
+    ) == f"ali_quote_confirm:v1:{legacy_signature}"
 
 
 def test_nick_progress_copy_is_direct_and_quote_led_in_all_locales():

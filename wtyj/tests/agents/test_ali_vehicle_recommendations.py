@@ -602,7 +602,7 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
         "text": "Synthetic current rental summary",
         "fallback_text": (
             "Synthetic current rental summary\n\n"
-            "Reply SEND QUOTE to continue."
+            "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
         ),
         "button": {
             "type": "postback",
@@ -610,13 +610,21 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
             "payload": "ali_quote_confirm:v1:" + "b" * 64,
         },
     }
+    confirmation["buttons"] = [
+        confirmation["button"],
+        {
+            "type": "postback",
+            "title": "Change something",
+            "payload": "ali_quote_change:v1:" + "c" * 64,
+        },
+    ]
 
     result = zernio_dm_client.send_dm_quote_confirmation(
         "conversation-1", "account-1", confirmation,
     )
 
     assert result == {"success": True, "delivery": "text_fallback"}
-    assert posts[0]["json"]["buttons"] == [confirmation["button"]]
+    assert posts[0]["json"]["buttons"] == confirmation["buttons"]
     assert posts[1]["json"] == {
         "accountId": "account-1",
         "message": confirmation["fallback_text"],

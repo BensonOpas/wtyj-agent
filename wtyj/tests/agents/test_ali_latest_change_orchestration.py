@@ -304,6 +304,89 @@ def test_send_my_quote_tap_bypasses_model_and_duplicate_tap_creates_one_quote(
     assert count == 1
 
 
+def test_change_something_tap_is_localized_preserves_details_and_closes_summary(
+    monkeypatch,
+    tmp_path,
+):
+    _configure(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("structured change tap must bypass the model")
+        ),
+    )
+    expected = {
+        "en": (["Send my quote", "Change something"], "Of course—what would you like to change?"),
+        "nl": (["Stuur mijn offerte", "Iets wijzigen"], "Natuurlijk—wat wil je wijzigen?"),
+        "pap": (["Manda mi oferta", "Kambia algu"], "Sigur—kiko bo ke kambia?"),
+        "de": (["Angebot senden", "Etwas ändern"], "Natürlich—was möchten Sie ändern?"),
+    }
+
+    for index, (locale, (titles, prompt)) in enumerate(expected.items(), 1):
+        phone = f"synthetic-change-summary-{locale}"
+        fields = _stored_fields(locale)
+        original_fields = dict(fields)
+        flags = {}
+        state_registry.wa_save_booking_state(phone, fields, flags)
+        summary_plan = workflow.plan_ali_quote_turn(
+            phone,
+            "synthetic-account",
+            "+351000000000",
+            "complete details",
+            fields,
+            flags,
+            "Thanks.",
+            raw_config=raw_config(),
+            primary_intent="continue_intake",
+            supplied_action_id=f"{index:064x}",
+        )
+        state_registry.wa_save_booking_state(phone, fields, flags)
+        control = workflow.build_quote_confirmation_control(
+            phone, summary_plan, locale=locale,
+        )
+        assert [button["title"] for button in control["buttons"]] == titles
+        workflow.commit_ali_turn_delivery(
+            phone,
+            summary_plan.delivery_commit(),
+            summary_plan.text,
+            [f"summary-{locale}"],
+            confirmation_delivery="interactive",
+            confirmation_payload=control["button"]["payload"],
+            confirmation_provider_message_ids=[f"provider-summary-{locale}"],
+        )
+
+        result = social_agent.handle_incoming_whatsapp_message({
+            "from": phone,
+            "text": titles[1],
+            "from_name": "Synthetic Customer",
+            "message_id": f"change-tap-{locale}",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+            "_zernio_interactive_type": "button_reply",
+            "_zernio_interactive_id": control["buttons"][1]["payload"],
+        }, include_media=True)
+
+        assert result["text"] == prompt
+        assert result["quote_confirmation"] is None
+        assert result["ali_turn_commit"]["outbound_kind"] == "agent_reply"
+        assert result["ali_turn_commit"]["phase"] == "DISCOVERY"
+        workflow.commit_ali_turn_delivery(
+            phone,
+            result["ali_turn_commit"],
+            result["text"],
+            [f"change-tap-{locale}"],
+        )
+        saved = state_registry.wa_get_booking_state(phone)
+        assert {
+            key: saved["fields"].get(key)
+            for key in original_fields
+        } == original_fields
+        assert saved["flags"]["ali_phase"] == "DISCOVERY"
+        assert "awaiting_quote_confirmation" not in saved["flags"]
+        assert "ali_presented_summary_hash" not in saved["flags"]
+
+
 def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeypatch, tmp_path):
     phone = "synthetic-issue-190"
     fields = _stored_fields()

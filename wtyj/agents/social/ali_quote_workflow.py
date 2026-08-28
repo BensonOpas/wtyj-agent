@@ -73,8 +73,22 @@ QUOTE_LEAD_FIELD_LABELS = {
 }
 ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", "chargeSelections"}
 QUOTE_CONFIRMATION_PREFIX = "ali_quote_confirm:v1:"
-QUOTE_CONFIRMATION_BUTTON_TITLE = "Send my quote"
-QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = "Reply SEND QUOTE to continue."
+QUOTE_CHANGE_PREFIX = "ali_quote_change:v1:"
+QUOTE_CONFIRMATION_ACTIONS = {
+    "en": ("Send my quote", "Change something"),
+    "nl": ("Stuur mijn offerte", "Iets wijzigen"),
+    "pap": ("Manda mi oferta", "Kambia algu"),
+    "de": ("Angebot senden", "Etwas ändern"),
+}
+QUOTE_CHANGE_PROMPTS = {
+    "en": "Of course—what would you like to change?",
+    "nl": "Natuurlijk—wat wil je wijzigen?",
+    "pap": "Sigur—kiko bo ke kambia?",
+    "de": "Natürlich—was möchten Sie ändern?",
+}
+QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = (
+    "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
+)
 _QUOTE_CONFIRMATION_INTERACTIVE_TYPES = {"buttonreply", "listreply"}
 AFFIRMATIVE = {
     # English
@@ -334,14 +348,21 @@ def _confirmation_secret(secret: str | None = None) -> str:
     return value
 
 
-def quote_confirmation_payload(
+def _quote_summary_action_payload(
+    action: str,
     conversation_id: str,
     summary_hash: str,
     summary_version: int,
     *,
     secret: str | None = None,
 ) -> str:
-    """Return an opaque signed postback for one immutable summary version."""
+    """Return an opaque signed action for one immutable summary version."""
+    prefixes = {
+        "confirm": QUOTE_CONFIRMATION_PREFIX,
+        "change": QUOTE_CHANGE_PREFIX,
+    }
+    if action not in prefixes:
+        raise AliQuoteError("invalid_quote_summary_action")
     if (
         not conversation_id
         or not re.fullmatch(r"[0-9a-f]{64}", str(summary_hash or ""))
@@ -349,42 +370,102 @@ def quote_confirmation_payload(
         or int(summary_version) < 1
     ):
         raise AliQuoteError("invalid_quote_confirmation_anchor")
-    material = f"{conversation_id}\x1f{summary_hash}\x1f{int(summary_version)}"
+    # Preserve the already-deployed confirmation signature so summary buttons
+    # sent before this release remain valid.  The new change action is domain-
+    # separated and cannot be replayed as quote consent.
+    material = (
+        f"{conversation_id}\x1f{summary_hash}\x1f{int(summary_version)}"
+        if action == "confirm"
+        else (
+            f"change\x1f{conversation_id}\x1f{summary_hash}\x1f"
+            f"{int(summary_version)}"
+        )
+    )
     signature = hmac.new(
         _confirmation_secret(secret).encode("utf-8"),
         material.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    return f"{QUOTE_CONFIRMATION_PREFIX}{signature}"
+    return f"{prefixes[action]}{signature}"
+
+
+def quote_confirmation_payload(
+    conversation_id: str,
+    summary_hash: str,
+    summary_version: int,
+    *,
+    secret: str | None = None,
+) -> str:
+    """Return the signed confirmation postback for one summary version."""
+    return _quote_summary_action_payload(
+        "confirm", conversation_id, summary_hash, summary_version,
+        secret=secret,
+    )
+
+
+def quote_change_payload(
+    conversation_id: str,
+    summary_hash: str,
+    summary_version: int,
+    *,
+    secret: str | None = None,
+) -> str:
+    """Return the signed correction postback for one summary version."""
+    return _quote_summary_action_payload(
+        "change", conversation_id, summary_hash, summary_version,
+        secret=secret,
+    )
 
 
 def build_quote_confirmation_control(
     conversation_id: str,
     plan: AliTurnPlan,
     *,
+    locale: str = "en",
     secret: str | None = None,
 ) -> dict:
     """Build the structured control attached to one deterministic summary."""
     if plan.outbound_kind != "summary":
         raise AliQuoteError("quote_confirmation_requires_summary")
-    payload = quote_confirmation_payload(
+    locale = str(locale or "en").lower()
+    if locale not in QUOTE_CONFIRMATION_ACTIONS:
+        locale = "en"
+    confirm_payload = quote_confirmation_payload(
+        conversation_id,
+        plan.summary_hash,
+        plan.summary_version,
+        secret=secret,
+    )
+    change_payload = quote_change_payload(
         conversation_id,
         plan.summary_hash,
         plan.summary_version,
         secret=secret,
     )
     state_hash = hashlib.sha256(
-        f"{plan.action_id}\x1f{payload}".encode("utf-8")
+        f"{plan.action_id}\x1f{confirm_payload}\x1f{change_payload}".encode("utf-8")
     ).hexdigest()
+    confirm_title, change_title = QUOTE_CONFIRMATION_ACTIONS[locale]
+    buttons = [
+        {
+            "type": "postback",
+            "title": confirm_title,
+            "payload": confirm_payload,
+        },
+        {
+            "type": "postback",
+            "title": change_title,
+            "payload": change_payload,
+        },
+    ]
     return {
         "state_hash": state_hash,
         "idempotency_key": f"ali-quote-confirm-{state_hash}",
         "text": plan.text,
-        "button": {
-            "type": "postback",
-            "title": QUOTE_CONFIRMATION_BUTTON_TITLE,
-            "payload": payload,
-        },
+        # Keep the singular key for older internal consumers while the
+        # provider adapter sends the complete two-action control.
+        "button": buttons[0],
+        "buttons": buttons,
         "fallback_text": (
             f"{plan.text.rstrip()}\n\n{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
         ),
@@ -405,9 +486,9 @@ def resolve_quote_confirmation_interaction(
     *,
     secret: str | None = None,
 ) -> str | None:
-    """Return ``current``, ``repeated``, ``stale``, or None for a postback."""
+    """Resolve a signed summary action without trusting its display text."""
     payload = str(interactive_id or "").strip()
-    if not payload.startswith(QUOTE_CONFIRMATION_PREFIX):
+    if not payload.startswith((QUOTE_CONFIRMATION_PREFIX, QUOTE_CHANGE_PREFIX)):
         return None
     if _normalized_interactive_type(interactive_type) not in _QUOTE_CONFIRMATION_INTERACTIVE_TYPES:
         return "stale"
@@ -419,13 +500,25 @@ def resolve_quote_confirmation_interaction(
         and current_version > 0
     ):
         try:
-            expected = quote_confirmation_payload(
-                conversation_id, current_hash, current_version, secret=secret,
+            expected = (
+                quote_change_payload(
+                    conversation_id, current_hash, current_version,
+                    secret=secret,
+                )
+                if payload.startswith(QUOTE_CHANGE_PREFIX)
+                else quote_confirmation_payload(
+                    conversation_id, current_hash, current_version,
+                    secret=secret,
+                )
             )
         except AliQuoteError:
             expected = ""
         if expected and hmac.compare_digest(payload, expected):
-            return "current"
+            return (
+                "change"
+                if payload.startswith(QUOTE_CHANGE_PREFIX)
+                else "current"
+            )
     previous = str(flags.get("ali_last_confirmed_summary_payload") or "")
     if previous and hmac.compare_digest(payload, previous):
         return "repeated"
@@ -2089,10 +2182,10 @@ def process_quote(
 
 
 SUMMARY_LABELS = {
-    "en": ("I have these details from you:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "If everything is correct, tap below and I’ll prepare your official quote."),
-    "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Als alles klopt, tik hieronder en dan maak ik je officiële offerte klaar."),
-    "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Si tur kos ta korekto, primi aki bou i mi lo prepara bo oferta ofisial."),
-    "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Wenn alles stimmt, tippen Sie unten und ich bereite Ihr offizielles Angebot vor."),
+    "en": ("I have these details from you:", "Name", "WhatsApp", "Rental period", "Pickup", "Return", "Car", "Does everything look right? Choose an option below."),
+    "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt alles? Kies hieronder een optie."),
+    "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon? Skohe un opshon aki bou."),
+    "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Stimmt alles? Wählen Sie unten eine Option."),
 }
 
 SUPPLEMENT_LABELS = {
