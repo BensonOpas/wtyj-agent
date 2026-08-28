@@ -621,6 +621,78 @@ def test_retention_deletes_private_bytes_after_rental_window(configured):
     assert row == ("deleted", None, None, 0)
 
 
+def test_pre_contract_pdf_preserves_agreement_hierarchy_and_all_source_text():
+    clauses = "\n".join(
+        f"{number}. Clause {number}\n"
+        f"This is the complete approved wording for clause {number}. "
+        "It must remain readable and must not be collapsed into adjacent sections."
+        for number in range(1, 15)
+    )
+    template = f"""VEHICLE RENTAL PRE-CONTRACT
+Reservation summary and customer acknowledgment
+ALI
+CAR RENTAL
+Ali Car Rental Curaçao  |  info@alicarrental.com  |  WhatsApp +599 9 677 7145
+DRAFT V1  |  PAGE 1
+DRAFT TEMPLATE - REQUIRES ALI APPROVAL AND LOCAL LEGAL REVIEW BEFORE ACTIVATION
+
+This pre-contract records the accepted quote without changing its legal wording.
+01
+References and customer
+RESERVATION REFERENCE
+reservation-synthetic
+OFFICIAL QUOTE
+ALI-SYNTHETIC
+PRIMARY RENTER
+Synthetic Customer & Co
+02
+Rental details
+RENTAL START
+2099-09-01
+RENTAL END
+2099-09-08
+03
+Financial summary
+All values are in United States dollars (USD).
+DESCRIPTION
+AMOUNT
+Rental and approved extras
+USD 280.00
+Refundable security deposit
+USD 200.00
+GRAND TOTAL
+USD 480.00
+04
+Pre-contract terms
+{clauses}
+"""
+
+    rendered = dossier._contract_pdf(
+        "Ali Car Rental pre-contract",
+        template,
+        ["Contract version: synthetic-v1", "Snapshot hash: " + "a" * 64],
+    )
+    reader = PdfReader(io.BytesIO(rendered))
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    assert len(reader.pages) >= 2
+    assert extracted.count("Reservation summary and customer acknowledgment") == 1
+    assert "References and customer" in extracted
+    assert "Rental details" in extracted
+    assert "Financial summary" in extracted
+    assert "Pre-contract terms" in extracted
+    assert "Synthetic Customer & Co" in extracted
+    assert "USD 480.00" in extracted
+    assert "1. Clause 1" in extracted
+    assert "14. Clause 14" in extracted
+    assert "DRAFT V1" in extracted
+    assert "PAGE 1" not in extracted
+    assert all(
+        f"complete approved wording for clause {number}" in extracted
+        for number in range(1, 15)
+    )
+
+
 def _create_minimal_delivered_quote(raw: dict) -> tuple[str, str]:
     customer = {"name": "Synthetic Customer", "whatsapp": "+59990000000"}
     rental = {
