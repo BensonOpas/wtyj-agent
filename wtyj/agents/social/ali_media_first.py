@@ -129,6 +129,7 @@ _PERSONAL_DETAIL_REQUEST = re.compile(
 )
 _COPY = {
     "en": {
+        "welcome": "Welcome to Ali Car Rental! I’m Nick ☀️ I’ll help you find a car that fits your Curaçao trip.",
         "intro_one": "Here is a car that matches what you asked for. Does this one feel right for your trip?",
         "intro_many": "Here are a few options that may suit your trip. Which one do you prefer?",
         "availability": "Final vehicle availability still needs confirmation.",
@@ -152,6 +153,7 @@ _COPY = {
         "largest_one": "This is the largest option in our current fleet. Does this one work for your trip?",
     },
     "nl": {
+        "welcome": "Welkom bij Ali Car Rental! Ik ben Nick ☀️ Ik help je graag een auto te vinden die bij je Curaçao-reis past.",
         "intro_one": "Hier is een auto die past bij wat je zoekt. Past deze bij je reis?",
         "intro_many": "Hier zijn een paar opties die bij je reis kunnen passen. Welke heeft je voorkeur?",
         "availability": "De definitieve voertuigbeschikbaarheid moet nog worden bevestigd.",
@@ -175,6 +177,7 @@ _COPY = {
         "largest_one": "Dit is de grootste optie in ons huidige wagenpark. Past deze bij je reis?",
     },
     "pap": {
+        "welcome": "Bon biní na Ali Car Rental! Mi ta Nick ☀️ Mi ta yuda bo haña un outo ku ta pas ku bo biahe na Kòrsou.",
         "intro_one": "Aki tin un outo ku ta pas ku loke bo ta buska. E ta pas ku bo biahe?",
         "intro_many": "Aki tin algun opshon ku por pas ku bo biahe. Kua bo ta preferá?",
         "availability": "Disponibilidat final di e outo mester wordu konfirmá ainda.",
@@ -198,6 +201,7 @@ _COPY = {
         "largest_one": "Esaki ta e opshon di mas grandi den nos flota aktual. E ta pas ku bo biahe?",
     },
     "de": {
+        "welcome": "Willkommen bei Ali Car Rental! Ich bin Nick ☀️ Ich helfe Ihnen gern, das passende Auto für Ihre Curaçao-Reise zu finden.",
         "intro_one": "Hier ist ein Auto, das zu Ihrer Anfrage passt. Passt es zu Ihrer Reise?",
         "intro_many": "Hier sind einige passende Optionen. Welches Auto bevorzugen Sie?",
         "availability": "Die endgültige Fahrzeugverfügbarkeit muss noch bestätigt werden.",
@@ -303,6 +307,14 @@ def conversation_repair_reply(
 def _locale(fields: dict) -> str:
     value = str(fields.get("conversation_language") or "en").strip().lower()
     return value if value in _COPY else "en"
+
+
+def add_first_turn_welcome(reply_text: str, fields: dict) -> str:
+    """Add Ali's warm introduction once without replacing the live intake reply."""
+    reply = str(reply_text or "").strip()
+    if not reply:
+        return reply
+    return f"{_COPY[_locale(fields)]['welcome']}\n\n{reply}"
 
 
 def media_first_clarification(fields: dict) -> str:

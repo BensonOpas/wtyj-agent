@@ -57,6 +57,7 @@ from agents.social.ali_media_first import (
     explicit_visual_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
+    add_first_turn_welcome,
     media_first_clarification,
 )
 from agents.social.ali_vehicle_selection import (
@@ -1457,6 +1458,19 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 history.pop(idx)
                 break
 
+    # A first Ali WhatsApp turn should feel like a welcome, while keeping the
+    # deterministic reply's one useful next question.  Do not infer this from
+    # the inbound alone: a prior customer message without an assistant reply
+    # needs recovery, not a repeated greeting.
+    _ali_first_customer_turn = bool(
+        channel == "whatsapp"
+        and ali_quote_tenant_enabled()
+        and not fields
+        and not completed_bookings
+        and not flags.get("ali_welcome_sent")
+        and not history
+    )
+
     # Build from identifier with name if available
     display_name = fields.get("customer_name") or from_name
     from_id = f"{phone} ({display_name})" if display_name else phone
@@ -2812,6 +2826,13 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 if isinstance(message, dict)
             ),
         )
+
+    if _ali_first_customer_turn and reply_text:
+        reply_text = add_first_turn_welcome(reply_text, fields)
+        flags["ali_welcome_sent"] = True
+        if _ali_turn_plan is not None:
+            _ali_turn_plan = replace(_ali_turn_plan, text=reply_text)
+        bm_logger.log("ali_first_turn_welcome_added")
 
     selected_media = None
     if (

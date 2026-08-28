@@ -14,6 +14,7 @@ from agents.social.ali_media_first import (
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
+    add_first_turn_welcome,
 )
 
 
@@ -67,6 +68,26 @@ def test_non_discovery_after_exact_choice_does_not_repeat_visuals():
     )
 
     assert decision == {"status": "not_discovery", "action": None}
+
+
+@pytest.mark.parametrize(
+    ("locale", "opening"),
+    [
+        ("en", "Welcome to Ali Car Rental! I’m Nick"),
+        ("nl", "Welkom bij Ali Car Rental! Ik ben Nick"),
+        ("pap", "Bon biní na Ali Car Rental! Mi ta Nick"),
+        ("de", "Willkommen bei Ali Car Rental! Ich bin Nick"),
+    ],
+)
+def test_first_turn_welcome_is_localized_and_preserves_one_next_question(locale, opening):
+    reply = add_first_turn_welcome(
+        "How many people will be travelling in the car?",
+        {"conversation_language": locale},
+    )
+
+    assert reply.startswith(opening)
+    assert reply.endswith("How many people will be travelling in the car?")
+    assert reply.count("How many people") == 1
 
 
 def test_fallback_intent_detects_text_dump_and_explicit_picture_request():
