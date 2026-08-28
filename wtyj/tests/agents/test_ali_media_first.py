@@ -141,8 +141,10 @@ def test_first_turn_welcome_removes_generated_intro_but_keeps_question(
 
     assert "Nick" in reply
     assert reply.count("Nick") == 1
+    assert len(reply.split("\n\n")) == 2
     assert question in reply
     assert generated_intro not in reply
+    assert generated_intro.split(". ", 1)[-1] not in reply
 
 
 def test_first_turn_deduplication_preserves_substantive_price_answer():

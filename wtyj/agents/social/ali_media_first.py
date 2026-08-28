@@ -363,22 +363,23 @@ _FIRST_TURN_SELF_INTRO = {
 _FIRST_TURN_GENERIC_HELP = {
     "en": re.compile(
         r"^\s*(?:(?:i['’]?m|i\s+am)\s+)?(?:happy|glad)\s+to\s+help\b"
-        r"[^.!?]*(?:car|quote)[.!]\s*",
+        r"[^.!?]*(?:car|quote)[^.!?]*[.!]\s*",
         re.IGNORECASE,
     ),
     "nl": re.compile(
         r"^\s*(?:ik\s+help\s+je\s+graag|graag\s+help\s+ik\s+je)\b"
-        r"[^.!?]*(?:auto|offerte)[.!]\s*",
+        r"[^.!?]*(?:auto|offerte)[^.!?]*[.!]\s*",
         re.IGNORECASE,
     ),
     "pap": re.compile(
         r"^\s*(?:mi\s+ta\s+(?:kontentu|felis)\s+pa\s+yuda\s+bo|"
-        r"mi\s+ta\s+aki\s+pa\s+yuda\s+bo)\b[^.!?]*(?:outo|oferta)[.!]\s*",
+        r"mi\s+ta\s+aki\s+pa\s+yuda\s+bo)\b"
+        r"[^.!?]*(?:outo|oferta)[^.!?]*[.!]\s*",
         re.IGNORECASE,
     ),
     "de": re.compile(
         r"^\s*(?:gerne\s+helfe\s+ich\s+ihnen|ich\s+helfe\s+ihnen\s+gerne)\b"
-        r"[^.!?]*(?:auto|angebot)[.!]\s*",
+        r"[^.!?]*(?:auto|angebot)[^.!?]*[.!]\s*",
         re.IGNORECASE,
     ),
 }
