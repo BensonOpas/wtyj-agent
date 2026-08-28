@@ -31,6 +31,7 @@ from agents.social import (
     ali_quote_workflow,
     ali_customer_dossier,
     ali_reservation_v2,
+    ali_reservation_v2_automation,
     ali_reservation_workflow,
 )
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
@@ -4664,6 +4665,13 @@ class AliPaymentLinkRequest(AliDossierMutationRequest):
     reference: str = Field(default="", max_length=120)
 
 
+class AliPrepaymentApprovalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    decision: Literal["approve"]
+    expectedWorkflowRevision: int = Field(ge=1, strict=True)
+
+
 class AliPaymentReviewRequest(AliDossierMutationRequest):
     decision: Literal["verified", "rejected", "not_required"]
     reason: str = Field(default="", max_length=500)
@@ -5619,6 +5627,34 @@ async def set_ali_payment_link_endpoint(
 
 
 @router.post(
+    "/ali-reservations/{public_id}/prepayment-review",
+    dependencies=[Depends(_check_auth)],
+)
+async def approve_ali_prepayment_file_endpoint(
+    public_id: str,
+    req: AliPrepaymentApprovalRequest,
+):
+    """Approve the complete file once; successful approval sends payment."""
+    _require_ali_quote_leads()
+    if not ali_reservation_v2.enabled():
+        raise HTTPException(status_code=409, detail="Reservation V2 is not enabled")
+    try:
+        result = await asyncio.to_thread(
+            ali_reservation_v2_automation.approve_prepayment_file,
+            public_id,
+            actor_id="dashboard",
+            expected_revision=req.expectedWorkflowRevision,
+        )
+        return {
+            "approved": True,
+            "delivered": bool(result.get("delivered")),
+            "reservation": ali_customer_dossier.get_customer_file(public_id),
+        }
+    except Exception as exc:
+        _raise_ali_reservation_error(exc, action="prepayment_review")
+
+
+@router.post(
     "/ali-reservations/{public_id}/payment-link/send",
     dependencies=[Depends(_check_auth)],
 )
@@ -5628,6 +5664,15 @@ async def send_ali_payment_link_endpoint(public_id: str):
         customer_file = ali_customer_dossier.get_customer_file(public_id)
         if customer_file.get("payment_status") == "link_sent":
             return {"delivered": True, "reservation": customer_file}
+        if ali_reservation_v2.enabled():
+            result = await asyncio.to_thread(
+                ali_reservation_v2_automation.send_approved_payment_link,
+                public_id,
+            )
+            return {
+                "delivered": bool(result.get("delivered")),
+                "reservation": ali_customer_dossier.get_customer_file(public_id),
+            }
         payment_payload = ali_customer_dossier.payment_delivery_payload(public_id)
         delivered = await asyncio.to_thread(
             ali_quote_delivery.send_customer_requirement_link,

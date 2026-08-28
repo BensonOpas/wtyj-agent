@@ -238,7 +238,7 @@ def test_multiple_media_stores_extras_unclassified_before_expected(
     }
     store.side_effect = [
         {"workflowV2": {"state": "documents_collecting", "expectedDocumentSlot": "passport"}},
-        {"workflowV2": {"state": "document_review_pending", "expectedDocumentSlot": None}},
+        {"workflowV2": {"state": "documents_collected", "expectedDocumentSlot": None}},
     ]
     booking.return_value = {"fields": {"conversation_language": "en"}}
 
@@ -253,7 +253,8 @@ def test_multiple_media_stores_extras_unclassified_before_expected(
     })
 
     assert result["success"] is True
-    assert "review" in result["reply"]
+    assert "pre-contract" in result["reply"]
+    assert "team will review" not in result["reply"]
     assert [call.kwargs["slot"] for call in store.call_args_list] == [
         "unclassified", "passport",
     ]
