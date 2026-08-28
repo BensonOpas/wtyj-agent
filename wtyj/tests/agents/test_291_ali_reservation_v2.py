@@ -208,6 +208,52 @@ def test_active_client_clock_pauses_and_resumes_without_charging_staff_time(conf
     assert resumed["clock"]["remainingSeconds"] == 75600
 
 
+def test_provider_confirmed_payment_link_starts_a_fresh_24_hour_clock(configured):
+    workflow.initialize_reservation("reservation-291", now=BASE)
+    transitions = [
+        ("documents_collecting", BASE),
+        ("document_review_pending", BASE + timedelta(hours=5)),
+        ("documents_approved", BASE + timedelta(hours=5)),
+        ("contract_sent", BASE + timedelta(hours=5)),
+        ("contract_signed", BASE + timedelta(hours=8)),
+    ]
+    for index, (state, at) in enumerate(transitions):
+        workflow.transition(
+            "reservation-291", state, actor_type="system",
+            actor_id="payment-window-test",
+            idempotency_key=f"before-payment-{index}", now=at,
+        )
+    conn = sqlite3.connect(workflow.state_registry.DB_PATH)
+    conn.execute(
+        "INSERT INTO ali_reservation_v2_reminders "
+        "(reservation_public_id, tenant_slug, milestone_seconds, status, "
+        "idempotency_key, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            "reservation-291", "ali-car-rental", 10800, "sent",
+            "old-document-reminder", BASE.isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    payment = workflow.transition(
+        "reservation-291", "payment_link_sent", actor_type="system",
+        actor_id="payment-window-test", idempotency_key="payment-link-sent",
+        now=BASE + timedelta(hours=8),
+    )
+
+    assert payment["clock"]["activeClientSeconds"] == 0
+    assert payment["clock"]["remainingSeconds"] == 24 * 60 * 60
+    assert payment["clock"]["state"] == "running"
+    conn = sqlite3.connect(workflow.state_registry.DB_PATH)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM ali_reservation_v2_reminders WHERE "
+        "reservation_public_id = 'reservation-291'",
+    ).fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
 def test_reminders_use_active_time_coalesce_and_never_send_while_paused(configured):
     workflow.initialize_reservation(
         "reservation-291", now=BASE, client_timezone="America/Curacao",

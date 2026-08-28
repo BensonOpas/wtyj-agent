@@ -68,6 +68,7 @@ TOKEN_PURPOSES = {"document_upload", "contract_sign"}
 COMPACT_TOKEN_BYTES = 24
 PAYMENT_MODES = {"fixed_link", "per_reservation"}
 DEFAULT_DOCUMENT_RETENTION_DAYS = 90
+PAYMENT_WINDOW_HOURS = 24
 DEFAULT_PAPER_SHREDDING_POLICY = (
     "Securely shred paper copies after the 90-day retention period."
 )
@@ -350,6 +351,7 @@ def ensure_schema() -> None:
                 payment_domain TEXT,
                 payment_reference TEXT,
                 link_sent_at TEXT,
+                expires_at TEXT,
                 customer_reported_at TEXT,
                 verified_at TEXT,
                 verified_by TEXT,
@@ -460,6 +462,15 @@ def ensure_schema() -> None:
         if "review_reason" not in payment_columns:
             conn.execute(
                 "ALTER TABLE ali_reservation_payments ADD COLUMN review_reason TEXT"
+            )
+        if "expires_at" not in payment_columns:
+            conn.execute(
+                "ALTER TABLE ali_reservation_payments ADD COLUMN expires_at TEXT"
+            )
+            conn.execute(
+                "UPDATE ali_reservation_payments SET expires_at = "
+                "strftime('%Y-%m-%dT%H:%M:%fZ', link_sent_at, '+24 hours') "
+                "WHERE link_sent_at IS NOT NULL AND expires_at IS NULL"
             )
         conn.commit()
     finally:
@@ -3048,7 +3059,7 @@ def set_payment_link(
             "payment_url, payment_domain, payment_reference, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(reservation_public_id) DO UPDATE SET payment_url=excluded.payment_url, "
             "payment_domain=excluded.payment_domain, payment_reference=excluded.payment_reference, "
-            "link_sent_at=NULL, customer_reported_at=NULL, verified_at=NULL, "
+            "link_sent_at=NULL, expires_at=NULL, customer_reported_at=NULL, verified_at=NULL, "
             "verified_by=NULL, review_reason=NULL, updated_at=excluded.updated_at",
             (public_id, TENANT_SLUG, payment_url, domain, payment_reference, timestamp),
         )
@@ -3087,11 +3098,18 @@ def mark_payment_link_sent(public_id: str, actor: str) -> dict:
             raise reservation.AliReservationError("payment_link_not_configured", 409)
         if case["payment_status"] == "link_sent":
             conn.commit()
-            return {"url": payment["payment_url"], "status": "link_sent"}
-        timestamp = _iso()
+            return {
+                "url": payment["payment_url"],
+                "status": "link_sent",
+                "expiresAt": payment["expires_at"],
+            }
+        timestamp_dt = _now()
+        timestamp = _iso(timestamp_dt)
+        expires_at = _iso(timestamp_dt + timedelta(hours=PAYMENT_WINDOW_HOURS))
         conn.execute(
-            "UPDATE ali_reservation_payments SET link_sent_at = ?, updated_at = ? WHERE reservation_public_id = ?",
-            (timestamp, timestamp, public_id),
+            "UPDATE ali_reservation_payments SET link_sent_at = ?, expires_at = ?, "
+            "updated_at = ? WHERE reservation_public_id = ?",
+            (timestamp, expires_at, timestamp, public_id),
         )
         conn.execute(
             "UPDATE ali_reservations SET payment_status = 'link_sent', revision = revision + 1, updated_at = ? "
@@ -3101,15 +3119,58 @@ def mark_payment_link_sent(public_id: str, actor: str) -> dict:
         reservation._event(
             conn, public_id, "payment_link_sent", str(case["status"]),
             "requirements_pending", "staff", actor_id,
-            {"payment_domain": payment["payment_domain"]},
+            {
+                "payment_domain": payment["payment_domain"],
+                "validity_hours": PAYMENT_WINDOW_HOURS,
+            },
         )
         conn.commit()
-        return {"url": payment["payment_url"], "status": "link_sent"}
+        return {
+            "url": payment["payment_url"],
+            "status": "link_sent",
+            "expiresAt": expires_at,
+        }
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+
+
+def _money_cents(value: object) -> int:
+    amount = str(value or "")
+    if not re.fullmatch(r"\d+(?:\.\d{2})", amount):
+        raise reservation.AliReservationError(
+            "reservation_payment_amount_missing", 409,
+        )
+    major, minor = amount.split(".", 1)
+    return int(major) * 100 + int(minor)
+
+
+def _reservation_deposit_percent(pricing: dict) -> int:
+    raw = pricing.get("reservationDepositPercent")
+    if (
+        isinstance(raw, int)
+        and not isinstance(raw, bool)
+        and 1 <= raw <= 100
+    ):
+        return raw
+    rental_cents = _money_cents(
+        (pricing.get("rentalTotal") or {}).get("amount"),
+    )
+    deposit_cents = _money_cents(
+        (pricing.get("reservationDeposit") or {}).get("amount"),
+    )
+    matches = [
+        percent
+        for percent in range(1, 101)
+        if (rental_cents * percent + 50) // 100 == deposit_cents
+    ]
+    if len(matches) != 1:
+        raise reservation.AliReservationError(
+            "reservation_payment_percent_missing", 409,
+        )
+    return matches[0]
 
 
 def payment_delivery_payload(public_id: str) -> dict:
@@ -3132,7 +3193,12 @@ def payment_delivery_payload(public_id: str) -> dict:
         )
         if not re.fullmatch(r"\d+(?:\.\d{2})", amount):
             raise reservation.AliReservationError("reservation_payment_amount_missing", 409)
-        return {"url": str(payment["payment_url"]), "amount": amount}
+        return {
+            "url": str(payment["payment_url"]),
+            "amount": amount,
+            "percent": _reservation_deposit_percent(snapshot["pricing"]),
+            "validityHours": PAYMENT_WINDOW_HOURS,
+        }
     finally:
         conn.close()
 
@@ -3153,6 +3219,34 @@ def record_customer_payment_report(conversation_id: str, account_id: str, action
             conn.commit()
             return reservation._public_row(row)
         timestamp = _iso()
+        payment = conn.execute(
+            "SELECT expires_at FROM ali_reservation_payments WHERE tenant_slug = ? "
+            "AND reservation_public_id = ?",
+            (TENANT_SLUG, row["public_id"]),
+        ).fetchone()
+        expires_at = str(payment["expires_at"] or "") if payment else ""
+        try:
+            expired = bool(expires_at) and _now() >= datetime.fromisoformat(
+                expires_at.replace("Z", "+00:00")
+            ).astimezone(timezone.utc)
+        except ValueError:
+            expired = True
+        if expired:
+            conn.execute(
+                "UPDATE ali_reservations SET payment_status = 'expired', "
+                "revision = revision + 1, updated_at = ? WHERE tenant_slug = ? "
+                "AND public_id = ?",
+                (timestamp, TENANT_SLUG, row["public_id"]),
+            )
+            reservation._event(
+                conn, row["public_id"], "payment_window_expired",
+                str(row["status"]), "requirements_pending", "system",
+                "payment_window", {"validity_hours": PAYMENT_WINDOW_HOURS},
+            )
+            conn.commit()
+            raise reservation.AliReservationError(
+                "payment_window_expired", 409,
+            )
         conn.execute(
             "UPDATE ali_reservations SET payment_status = 'customer_reports_paid', revision = revision + 1, updated_at = ? "
             "WHERE tenant_slug = ? AND public_id = ?",
@@ -3325,6 +3419,7 @@ def get_customer_file(public_id: str) -> dict:
             "domain": payment["payment_domain"] if payment else None,
             "reference": payment["payment_reference"] if payment else None,
             "linkSentAt": payment["link_sent_at"] if payment else None,
+            "expiresAt": payment["expires_at"] if payment else None,
             "customerReportedAt": payment["customer_reported_at"] if payment else None,
             "verifiedAt": payment["verified_at"] if payment else None,
             "verifiedBy": payment["verified_by"] if payment else None,

@@ -88,6 +88,7 @@ def _pricing() -> dict:
         "rentalTotal": {"currency": "USD", "amount": "280.00"},
         "refundableSecurityDeposit": {"currency": "USD", "amount": "200.00"},
         "reservationDeposit": {"currency": "USD", "amount": "70.00"},
+        "reservationDepositPercent": 25,
         "total": {"currency": "USD", "amount": "480.00"},
         "createdAt": created.isoformat().replace("+00:00", "Z"),
         "expiresAt": (created + timedelta(days=3650)).isoformat().replace("+00:00", "Z"),
@@ -231,6 +232,43 @@ def test_complete_customer_file_is_human_gated_and_printable(configured):
     assert len([event for event in reservations.list_reservation_events(case["public_id"])
                 if event["event_type"] == "reservation_confirmed"]) == 1
     assert len(documents) == 3
+
+
+def test_payment_link_has_snapshot_percent_and_exact_24_hour_window(
+    configured, monkeypatch,
+):
+    case = _reservation(configured["raw"])
+    sent_at = datetime(2099, 9, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(dossier, "_now", lambda: sent_at)
+    dossier.set_payment_link(
+        case["public_id"],
+        "https://pay.example.test/deposit/window-241",
+        "SYNTH-WINDOW-241",
+        "staff-241",
+    )
+
+    payload = dossier.payment_delivery_payload(case["public_id"])
+    sent = dossier.mark_payment_link_sent(case["public_id"], "staff-241")
+    customer_file = dossier.get_customer_file(case["public_id"])
+
+    assert payload == {
+        "url": "https://pay.example.test/deposit/window-241",
+        "amount": "70.00",
+        "percent": 25,
+        "validityHours": 24,
+    }
+    assert sent["expiresAt"] == "2099-09-02T12:00:00Z"
+    assert customer_file["payment"]["expiresAt"] == sent["expiresAt"]
+
+    monkeypatch.setattr(
+        dossier, "_now", lambda: sent_at + timedelta(hours=24, seconds=1),
+    )
+    with pytest.raises(reservations.AliReservationError) as expired:
+        dossier.record_customer_payment_report(
+            "conversation-241", "account-241", "late-payment-241",
+        )
+    assert expired.value.code == "payment_window_expired"
+    assert reservations.get_reservation(case["public_id"])["payment_status"] == "expired"
 
 
 def test_security_gates_fail_closed_without_mutating_state(configured):

@@ -992,6 +992,7 @@ def _calculate_quote_response(
         "rentalTotal": _money(rental_total, contract["currency"]),
         "refundableSecurityDeposit": _money(refundable_deposit, contract["currency"]),
         "reservationDeposit": _money(reservation_deposit, contract["currency"]),
+        "reservationDepositPercent": int(contract["reservationDepositPercent"]),
         "createdAt": created.isoformat().replace("+00:00", "Z"),
         "expiresAt": (
             created + timedelta(hours=int(contract["quoteValidityHours"]))

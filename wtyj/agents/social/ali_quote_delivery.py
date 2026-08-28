@@ -30,6 +30,7 @@ from agents.social.zernio_dm_client import (
 from shared import config_loader, state_registry
 
 CURACAO = ZoneInfo("America/Curacao")
+PAYMENT_WINDOW_HOURS = 24
 
 MESSAGES = {
     "en": ("Your official Ali Car Rental quote is ready.", "Choose what you'd like to do below."),
@@ -56,28 +57,28 @@ _DOSSIER_MESSAGES = {
     "en": {
         "documents": "Your car is available. I’ll help you complete the last steps so our office can review and prepare your rental. Upload each document securely below:\n{links}\n\nOur team will check the copies manually.",
         "contract": "Your pre-contract is ready to review and sign:\n{url}\n\nOur office will complete the final approval after all requirements are checked.",
-        "payment": "Here is your secure payment link for the reservation amount of USD {amount}:\n{url}\n\nLet me know here after you have paid. Our team will verify it manually.",
+        "payment": "To secure your car, please pay the {percent}% reservation payment of USD {amount} within {hours} hours using this secure link:\n{url}\n\nYour car is not reserved until our team has verified the payment. If payment is not verified within {hours} hours, this reservation request expires and the vehicle will not be held.\n\nAfter paying, reply ‘Paid’ here so our team can verify it.",
         "documents_direct": "Your car is available. Will you use a passport or an ID card for your reservation?",
         "documents_replacement": "Please resend {slot} here in WhatsApp as a clear JPG, PNG, or PDF under 10 MB.",
     },
     "nl": {
         "documents": "Je auto is beschikbaar. Ik help je met de laatste stappen zodat ons kantoor je huur kan beoordelen en voorbereiden. Upload elk document veilig hieronder:\n{links}\n\nOns team controleert de kopieën handmatig.",
         "contract": "Je voorcontract staat klaar om te bekijken en te ondertekenen:\n{url}\n\nOns kantoor geeft de definitieve goedkeuring nadat alles is gecontroleerd.",
-        "payment": "Hier is je beveiligde betaallink voor het reserveringsbedrag van USD {amount}:\n{url}\n\nLaat het hier weten nadat je hebt betaald. Ons team controleert dit handmatig.",
+        "payment": "Om je auto vast te leggen, betaal je binnen {hours} uur de reserveringsaanbetaling van {percent}% (USD {amount}) via deze beveiligde link:\n{url}\n\nDe auto is pas voor jou gereserveerd nadat ons team de betaling heeft gecontroleerd. Als de betaling niet binnen {hours} uur is gecontroleerd, vervalt deze reserveringsaanvraag en wordt de auto niet vastgehouden.\n\nAntwoord na betaling hier met ‘Betaald’, zodat ons team dit kan controleren.",
         "documents_direct": "Je auto is beschikbaar. Gebruik je een paspoort of identiteitskaart voor je reservering?",
         "documents_replacement": "Stuur {slot} opnieuw hier in WhatsApp als duidelijke JPG, PNG of PDF onder 10 MB.",
     },
     "pap": {
         "documents": "Bo outo ta disponibel. Mi ta yuda bo ku e último pasonan pa nos oficina por kontrolá i prepará bo huur. Carga kada dokumento sigur aki bou:\n{links}\n\nNos tim ta kontrolá e kopianan manualmente.",
         "contract": "Bo pre-kontrakto ta kla pa lesa i firma:\n{url}\n\nNos oficina ta hasi e aprobashon final despues ku tur rekisito ta kontrolá.",
-        "payment": "Aki ta bo enlace sigur pa paga e montante di reservashon di USD {amount}:\n{url}\n\nLaga mi sa aki despues ku bo paga. Nos tim ta verifik'é manualmente.",
+        "payment": "Pa sigurá bo outo, paga e pago di reservashon di {percent}% (USD {amount}) denter di {hours} ora via e enlace sigur aki:\n{url}\n\nE outo ta reservá pa bo solamente despues ku nos tim a verifiká e pago. Si nos no por verifiká e pago denter di {hours} ora, e petishon di reservashon ta kaduká i e outo no ta wordu tené.\n\nDespues di paga, kontestá ‘Mi a paga’ aki pa nos tim por verifik'é.",
         "documents_direct": "Bo outo ta disponibel. Bo ta usa pasport òf karta di identidat pa bo reservashon?",
         "documents_replacement": "Manda {slot} atrobe aki den WhatsApp komo un JPG, PNG òf PDF kla bou di 10 MB.",
     },
     "de": {
         "documents": "Ihr Auto ist verfügbar. Ich helfe Ihnen bei den letzten Schritten, damit unser Büro die Miete prüfen und vorbereiten kann. Laden Sie jedes Dokument sicher hoch:\n{links}\n\nUnser Team prüft die Kopien manuell.",
         "contract": "Ihr Vorvertrag ist bereit zum Prüfen und Unterschreiben:\n{url}\n\nUnser Büro erteilt die endgültige Freigabe, nachdem alles geprüft wurde.",
-        "payment": "Hier ist Ihr sicherer Zahlungslink für den Reservierungsbetrag von USD {amount}:\n{url}\n\nSchreiben Sie mir hier nach der Zahlung. Unser Team prüft sie manuell.",
+        "payment": "Um Ihr Fahrzeug zu sichern, zahlen Sie bitte innerhalb von {hours} Stunden die Reservierungsanzahlung von {percent}% (USD {amount}) über diesen sicheren Link:\n{url}\n\nDas Fahrzeug ist erst für Sie reserviert, nachdem unser Team die Zahlung geprüft hat. Wird die Zahlung nicht innerhalb von {hours} Stunden bestätigt, verfällt die Reservierungsanfrage und das Fahrzeug wird nicht freigehalten.\n\nAntworten Sie nach der Zahlung hier mit ‘Bezahlt’, damit unser Team sie prüfen kann.",
         "documents_direct": "Ihr Auto ist verfügbar. Verwenden Sie für Ihre Reservierung einen Reisepass oder Personalausweis?",
         "documents_replacement": "Bitte senden Sie {slot} hier in WhatsApp erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
     },
@@ -132,8 +133,18 @@ def send_customer_requirement_link(
         amount = str(payload.get("amount") or "") if isinstance(payload, dict) else ""
         if requirement == "payment" and not re.fullmatch(r"\d+(?:\.\d{2})", amount):
             raise AliReservationError("customer_payment_amount_missing", 409)
+        percent = payload.get("percent") if isinstance(payload, dict) else None
+        if requirement == "payment" and (
+            isinstance(percent, bool)
+            or not isinstance(percent, int)
+            or not 1 <= percent <= 100
+        ):
+            raise AliReservationError("customer_payment_percent_missing", 409)
         message = _DOSSIER_MESSAGES[locale][requirement].format(
-            url=url, amount=amount,
+            url=url,
+            amount=amount,
+            percent=percent,
+            hours=PAYMENT_WINDOW_HOURS,
         )
     if requirement == "documents":
         delivery_material = (

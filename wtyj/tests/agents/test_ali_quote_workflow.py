@@ -87,7 +87,8 @@ def pricing():
         "refundableSecurityDeposit": {"currency": "USD", "amount": "150.00"},
         "reservationDeposit": {"currency": "USD", "amount": "70.00"},
         "createdAt": created.isoformat().replace("+00:00", "Z"),
-        "expiresAt": (created + timedelta(hours=72)).isoformat().replace("+00:00", "Z"),
+        "reservationDepositPercent": 15,
+        "expiresAt": (created + timedelta(hours=24)).isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -585,7 +586,7 @@ def test_summary_versions_make_a_to_b_to_a_three_immutable_quotes(monkeypatch, t
     assert len({row["summary_hash"] for row in rows}) == 3
 
 
-def test_ali_client_retries_one_transient_failure_and_validates_72_hours():
+def test_ali_client_retries_one_transient_failure_and_validates_24_hours():
     calls = []
 
     def handler(request):
@@ -758,7 +759,7 @@ def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
         "Ali-Car-Rental-Quote-Synthetic-Customer-2026-09-01-ABCD1234.pdf"
     )
     assert captured["args"][3].startswith("https://unboks.example/api/public/ali-quote/")
-    assert "4 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
+    assert "2 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
     assert "T" not in captured["args"][2].split("Valid until:", 1)[1].split("\n", 1)[0]
     assert "Subject to final vehicle availability confirmation." not in captured["args"][2]
 

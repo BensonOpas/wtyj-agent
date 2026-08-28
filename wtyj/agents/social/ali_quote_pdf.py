@@ -317,7 +317,7 @@ def render_quote_pdf(
     if usd_cents(deposit):
         total_styles.append(("SPAN", (0, 1), (1, 1)))
     totals.setStyle(TableStyle(total_styles))
-    resolved_validity_hours = validity_hours or int(pricing.get("quoteValidityHours") or 72)
+    resolved_validity_hours = validity_hours or int(pricing.get("quoteValidityHours") or 24)
     resolved_availability = availability_copy or pricing.get("availabilityCopy") or labels["availability"]
     resolved_footer = quote_footer if quote_footer is not None else pricing.get("quoteFooter")
     closing = (
