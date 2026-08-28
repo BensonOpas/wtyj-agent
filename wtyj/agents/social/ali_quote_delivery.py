@@ -27,7 +27,7 @@ from agents.social.zernio_dm_client import (
     send_dm_reply,
     send_dm_reply_with_attachment,
 )
-from shared import config_loader, state_registry
+from shared import bm_logger, config_loader, state_registry
 
 CURACAO = ZoneInfo("America/Curacao")
 PAYMENT_WINDOW_HOURS = 24
@@ -351,11 +351,18 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         customer.get("name", ""), quote["quote_reference"],
         pricing.get("createdAt", ""),
     )
-    return send_dm_reply_with_attachment(
+    delivered = send_dm_reply_with_attachment(
         quote["conversation_id"], quote["zernio_account_id"], text,
         url, attachment_type="file", attachment_name=filename,
         idempotency_key=f"ali-quote-pdf-{quote['public_id']}",
     )
+    bm_logger.log(
+        "ali_quote_pdf_terminal_delivery",
+        quote_public_id_prefix=str(quote.get("public_id") or "")[:12],
+        quote_reference=str(quote.get("quote_reference") or "")[:40],
+        delivered=delivered,
+    )
+    return delivered
 
 
 def build_customer_quote_text(quote: dict) -> str:
