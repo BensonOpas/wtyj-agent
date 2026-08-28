@@ -11,46 +11,55 @@ retryability only after applying its SQL limit. A backlog of old terminal
 newer confirmed replacement quote from ever being examined.
 
 The previous outer quote processor also historically collapsed every
-`AliQuoteError` into `processor_unconfigured`. Existing rows with that legacy
-code may actually represent a temporary provider or delivery failure and were
-excluded from recovery even though the tenant is currently configured and its
-first quote was generated successfully.
+`AliQuoteError` into `processor_unconfigured`. Existing replacement rows with
+that legacy code may actually represent a temporary provider or delivery
+failure and were excluded from recovery even though the same conversation has
+an earlier provider-accepted quote.
 
 ## Why This Approach
 
 Keep the durable lease/recovery architecture and correct only candidate
-selection and legacy compatibility. Newest-first scanning makes the most recent
-customer promise the first recovery candidate without weakening idempotency or
-supersession. Treat the legacy collapsed error as retryable only under the
-existing attempt cap and exponential backoff.
+selection and narrow legacy compatibility. Newest-first scanning makes the most
+recent customer promise the first recovery candidate without weakening
+idempotency or supersession. A `processor_unconfigured` row is eligible only
+when it is a later summary version in a conversation with an earlier accepted
+quote, and it remains subject to the existing attempt cap and exponential
+backoff.
 
-Rejected alternative: unbounded scanning of every historical quote on each
-five-second poll. That would create unnecessary SQLite load and still would not
-repair the incorrectly classified legacy row.
+Rejected alternative: mark `processor_unconfigured` generally retryable. That
+would loop genuine configuration failures and weaken the fail-closed behavior
+for first quotes and unrelated conversations. Also rejected: unbounded scanning
+of all historical quotes on every five-second poll.
 
 ## Instructions
 
 1. Order bounded candidate scans by descending quote ID so recent confirmed
    replacement quotes cannot be starved by historical terminal rows.
 2. Document the newest-first invariant in the recovery module.
-3. Add the legacy `processor_unconfigured` code to the bounded retry set. Keep
-   the existing maximum attempts and backoff; do not make retries unlimited.
-4. Preserve current exclusions for superseded rows, integrity failures, and all
-   other non-retryable terminal errors.
-5. Preserve customer and rental privacy in logs and tests.
+3. Recognize legacy `processor_unconfigured` only when the row is summary
+   version 2 or later and the same conversation has an earlier quote whose
+   WhatsApp PDF was provider-accepted.
+4. Keep the existing maximum attempts and backoff; do not make retries
+   unlimited.
+5. Preserve current exclusions for first-quote configuration failures,
+   superseded rows, integrity failures, and all other non-retryable errors.
+6. Preserve customer and rental privacy in logs and tests.
 
 ## Tests
 
 1. Create more old non-retryable attention rows than the scan limit, then a
    newer stale confirmed replacement. The scan must return the replacement.
-2. Prove a legacy `processor_unconfigured` row is recoverable below the attempt
-   cap and blocked at the cap.
-3. Run the full repository suite and the normal canary/production pipeline.
+2. Prove a versioned legacy replacement with an accepted predecessor is
+   recoverable below the attempt cap and blocked at the cap.
+3. Preserve the existing regression that an ordinary first-quote
+   `processor_unconfigured` row is non-retryable.
+4. Run the full repository suite and the normal canary/production pipeline.
 
 ## Success Condition
 
 A newly confirmed replacement quote is always visible to the bounded recovery
-scanner and a legacy misclassified row receives a bounded recovery attempt.
+scanner, while only the narrowly proven legacy replacement case receives a
+bounded compatibility retry.
 
 ## Rollback
 
