@@ -18,6 +18,15 @@ from shared import bm_logger, state_registry
 
 _VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
 _MAX_VEHICLE_MEDIA_BYTES = 10 * 1024 * 1024
+_QUOTE_CONFIRMATION_ACTION_TITLES = {
+    ("Send my quote", "Change something"),
+    ("Stuur mijn offerte", "Iets wijzigen"),
+    ("Manda mi oferta", "Kambia algu"),
+    ("Angebot senden", "Etwas ändern"),
+}
+_QUOTE_CONFIRMATION_FALLBACK_SUFFIX = (
+    "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
+)
 
 
 def _get_client():
@@ -988,17 +997,32 @@ def send_dm_quote_confirmation(
     idempotency_key = str((confirmation or {}).get("idempotency_key") or "")
     text = str((confirmation or {}).get("text") or "")
     fallback_text = str((confirmation or {}).get("fallback_text") or "")
-    button = (confirmation or {}).get("button")
-    button = button if isinstance(button, dict) else {}
+    buttons = (confirmation or {}).get("buttons")
+    buttons = buttons if isinstance(buttons, list) else []
+    button_titles = tuple(
+        str(button.get("title") or "")
+        for button in buttons
+        if isinstance(button, dict)
+    )
     if (
         not api_key
         or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
         or not idempotency_key
         or not text
-        or not fallback_text.endswith("Reply SEND QUOTE to continue.")
-        or button.get("type") != "postback"
-        or button.get("title") != "Send my quote"
-        or not str(button.get("payload") or "").startswith("ali_quote_confirm:v1:")
+        or not fallback_text.endswith(_QUOTE_CONFIRMATION_FALLBACK_SUFFIX)
+        or len(buttons) != 2
+        or button_titles not in _QUOTE_CONFIRMATION_ACTION_TITLES
+        or any(
+            not isinstance(button, dict)
+            or button.get("type") != "postback"
+            for button in buttons
+        )
+        or not str(buttons[0].get("payload") or "").startswith(
+            "ali_quote_confirm:v1:"
+        )
+        or not str(buttons[1].get("payload") or "").startswith(
+            "ali_quote_change:v1:"
+        )
     ):
         return {"success": False, "delivery": "invalid"}
     base_url = (
@@ -1027,7 +1051,7 @@ def send_dm_quote_confirmation(
         body={
             "accountId": account_id,
             "message": text,
-            "buttons": [button],
+            "buttons": buttons,
         },
         idempotency_key=f"{idempotency_key}-interactive",
         visible_text=text,

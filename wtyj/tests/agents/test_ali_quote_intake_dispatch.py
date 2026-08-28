@@ -395,7 +395,7 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
 
     assert reply.startswith("I have these details from you:")
     assert reply.endswith(
-        "If everything is correct, tap below and I’ll prepare your official quote."
+        "Does everything look right? Choose an option below."
     )
     assert "Economy" in reply
     assert "WhatsApp: +351000000000" in reply

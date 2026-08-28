@@ -28,6 +28,7 @@ from agents.social.ali_quote_workflow import (
     apply_recommendation_selection_context,
     confirmation_decision,
     build_quote_confirmation_control,
+    QUOTE_CHANGE_PROMPTS,
     fail_closed_turn_plan,
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
@@ -1290,7 +1291,30 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             or message.get("message_id")
             or ""
         )
-        if _ali_quote_interaction == "repeated":
+        if _ali_quote_interaction == "change":
+            _change_locale = str(
+                fields.get("conversation_language") or "en"
+            ).lower()
+            if _change_locale not in QUOTE_CHANGE_PROMPTS:
+                _change_locale = "en"
+            _quote_plan = plan_ali_quote_turn(
+                conversation_id=phone,
+                zernio_account_id=str(
+                    message.get("_zernio_account_id") or ""
+                ),
+                whatsapp_number=str(
+                    message.get("_zernio_sender_id") or phone
+                ),
+                message_text="CHANGE DETAILS",
+                fields=fields,
+                flags=flags,
+                model_reply=QUOTE_CHANGE_PROMPTS[_change_locale],
+                from_name=from_name,
+                primary_intent="reject_or_hesitate",
+                change_outcome="clarify",
+                supplied_action_id=_action_id,
+            )
+        elif _ali_quote_interaction == "repeated":
             _quote_plan = plan_repeated_quote_confirmation(
                 phone, fields, flags, _action_id,
             )
@@ -1329,6 +1353,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         if _quote_plan.outbound_kind == "summary":
             confirmation_control = build_quote_confirmation_control(
                 phone, _quote_plan,
+                locale=fields.get("conversation_language") or "en",
             )
         if include_media:
             return {
@@ -2874,6 +2899,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         ):
             quote_confirmation = build_quote_confirmation_control(
                 phone, _ali_turn_plan,
+                locale=fields.get("conversation_language") or "en",
             )
         return {
             "text": reply_text,
