@@ -819,6 +819,17 @@ def transition(
         active = _effective_active_seconds(row, timestamp_dt)
         responsibility, clock_state, pause_reason = _responsibility(to_state)
         clock_started_at = timestamp if clock_state == "running" else None
+        hold_started_at = str(row["hold_started_at"])
+        if to_state == "payment_link_sent":
+            # The provider-confirmed payment link starts a fresh, full 24-hour
+            # customer window. Earlier document/contract time must not reduce it.
+            active = 0
+            hold_started_at = timestamp
+            conn.execute(
+                "DELETE FROM ali_reservation_v2_reminders WHERE tenant_slug = ? "
+                "AND reservation_public_id = ?",
+                (TENANT_SLUG, public_id),
+            )
         cancellation_reason = str(row["cancellation_reason"] or "")
         if to_state in {"cancelled", "hold_expired", "client_opted_out", "availability_declined"}:
             cancellation_reason = str(reason or to_state)[:240]
@@ -826,12 +837,13 @@ def transition(
         conn.execute(
             "UPDATE ali_reservation_v2_cases SET state = ?, responsibility = ?, "
             "clock_state = ?, clock_pause_reason = ?, client_active_seconds = ?, "
-            "clock_started_at = ?, do_not_contact = ?, cancellation_reason = ?, "
+            "clock_started_at = ?, hold_started_at = ?, do_not_contact = ?, cancellation_reason = ?, "
             "revision = revision + 1, updated_at = ? WHERE tenant_slug = ? "
             "AND reservation_public_id = ?",
             (
                 to_state, responsibility, clock_state, pause_reason, active,
-                clock_started_at, dnc, cancellation_reason, timestamp,
+                clock_started_at, hold_started_at, dnc, cancellation_reason,
+                timestamp,
                 TENANT_SLUG, public_id,
             ),
         )

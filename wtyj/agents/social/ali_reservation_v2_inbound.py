@@ -8,6 +8,7 @@ sent to Nick/Claude and no provider URL is retained.
 from __future__ import annotations
 
 from agents.social import ali_customer_dossier, ali_reservation_v2
+from agents.social.ali_reservation_workflow import AliReservationError
 from agents.social.zernio_whatsapp_media import download_whatsapp_media
 from shared import bm_logger, state_registry
 
@@ -56,6 +57,7 @@ _COPY = {
         "ambiguous": "Would you like me to stop this reservation, or would you like more time?",
         "more_time": "No problem. I’ll keep the reservation on hold while you continue.",
         "payment": "Thanks — our team will verify the payment now.",
+        "payment_expired": "The 24-hour payment window has expired, so the car was not secured. I’ve asked our team to review current availability before we continue.",
     },
     "nl": {
         "next": "Ontvangen — {stored} is veilig opgeslagen. Stuur nu {next}.",
@@ -69,6 +71,7 @@ _COPY = {
         "ambiguous": "Wil je dat ik deze reservering stop, of wil je meer tijd?",
         "more_time": "Geen probleem. Ik houd de reservering vast terwijl je verdergaat.",
         "payment": "Bedankt — ons team controleert de betaling nu.",
+        "payment_expired": "De betalingstermijn van 24 uur is verstreken, dus de auto is niet vastgelegd. Ik heb ons team gevraagd de actuele beschikbaarheid te controleren voordat we verdergaan.",
     },
     "pap": {
         "next": "Risibí — {stored} ta warda sigur. Awor manda {next}.",
@@ -82,6 +85,7 @@ _COPY = {
         "ambiguous": "Bo ke pa mi stòp e reservashon aki, òf bo ke mas tempu?",
         "more_time": "No tin problema. Mi ta tene e reservashon mientras bo ta sigui.",
         "payment": "Danki — nos team lo verifiká e pago awor.",
+        "payment_expired": "E periodo di 24 ora pa paga a kaduká, pues e outo no a keda reservá. Mi a pidi nos tim pa kontrolá disponibilidat aktual promé ku nos sigui.",
     },
     "de": {
         "next": "Erhalten — {stored} wurde sicher gespeichert. Bitte senden Sie jetzt {next}.",
@@ -95,6 +99,7 @@ _COPY = {
         "ambiguous": "Soll ich diese Reservierung beenden, oder möchten Sie mehr Zeit?",
         "more_time": "Kein Problem. Ich halte die Reservierung, während Sie fortfahren.",
         "payment": "Danke — unser Team prüft die Zahlung jetzt.",
+        "payment_expired": "Das 24-stündige Zahlungsfenster ist abgelaufen, daher wurde das Fahrzeug nicht gesichert. Ich habe unser Team gebeten, die aktuelle Verfügbarkeit zu prüfen, bevor wir fortfahren.",
     },
 }
 
@@ -232,11 +237,30 @@ def process_structural_text(message: dict) -> dict:
     if workflow_case["state"] == "payment_link_sent":
         from agents.social.ali_customer_dossier import is_customer_payment_report
         if is_customer_payment_report(text):
-            ali_customer_dossier.record_customer_payment_report(
-                conversation_id,
-                account_id,
-                action_id=message_id,
-            )
+            try:
+                ali_customer_dossier.record_customer_payment_report(
+                    conversation_id,
+                    account_id,
+                    action_id=message_id,
+                )
+            except AliReservationError as exc:
+                if exc.code != "payment_window_expired":
+                    raise
+                updated = ali_reservation_v2.transition(
+                    workflow_case["reservationPublicId"],
+                    "hold_expired",
+                    actor_type="system",
+                    actor_id="payment-window",
+                    idempotency_key=f"payment-expired:{message_id}",
+                    reason="payment_window_expired",
+                    expected_revision=workflow_case["revision"],
+                )
+                return {
+                    "handled": True,
+                    "success": True,
+                    "reply": _COPY[locale]["payment_expired"],
+                    "workflow_v2": updated,
+                }
             updated = ali_reservation_v2.transition(
                 workflow_case["reservationPublicId"],
                 "customer_reports_paid",

@@ -1541,8 +1541,15 @@ class AliQuoteClient:
                     raise AliQuoteError("ali_response_invalid")
                 created = datetime.fromisoformat(payload["createdAt"].replace("Z", "+00:00"))
                 expires = datetime.fromisoformat(payload["expiresAt"].replace("Z", "+00:00"))
-                if expires - created != timedelta(hours=72):
+                if expires - created != timedelta(hours=24):
                     raise AliQuoteError("ali_expiry_invalid")
+                percent = payload.get("reservationDepositPercent")
+                if percent is not None and (
+                    isinstance(percent, bool)
+                    or not isinstance(percent, int)
+                    or not 0 <= percent <= 100
+                ):
+                    raise AliQuoteError("ali_response_invalid")
                 return payload
             if response.status_code in (429,) or response.status_code >= 500:
                 if attempt == 0:
