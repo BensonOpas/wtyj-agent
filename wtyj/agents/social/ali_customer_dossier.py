@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import io
 import json
 import os
@@ -27,9 +28,22 @@ from xml.etree import ElementTree
 
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader, PdfWriter
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, LETTER
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    CondPageBreak,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from agents.social import ali_reservation_workflow as reservation
 from shared import config_loader, state_registry
@@ -57,6 +71,7 @@ DEFAULT_DOCUMENT_RETENTION_DAYS = 90
 DEFAULT_PAPER_SHREDDING_POLICY = (
     "Securely shred paper copies after the 90-day retention period."
 )
+CONTRACT_RENDER_VERSION = 2
 CONTRACT_PLACEHOLDERS = {
     "reservation_reference",
     "quote_reference",
@@ -2154,6 +2169,496 @@ def _contract_text(template: str, values: dict[str, str]) -> str:
     return result
 
 
+_CONTRACT_REPEAT_HEADERS = {
+    "VEHICLE RENTAL PRE-CONTRACT",
+    "Reservation summary and customer acknowledgment",
+    "ALI",
+    "CAR RENTAL",
+}
+
+
+def _contract_pdf_text(value: object) -> str:
+    """Escape tenant/customer values before ReportLab parses inline markup."""
+    return html.escape(str(value or ""), quote=False)
+
+
+def _contract_is_label(value: str) -> bool:
+    letters = [character for character in value if character.isalpha()]
+    return (
+        bool(letters)
+        and len(value) <= 48
+        and value.upper() == value
+        and not value.startswith("DRAFT TEMPLATE")
+    )
+
+
+def _contract_pdf(title: str, contract_text: str, audit_lines: list[str]) -> bytes:
+    """Render approved template text as a legible agreement.
+
+    Uploaded templates are canonicalized to text for deterministic snapshots.
+    The old renderer passed the complete template to ``textwrap.wrap`` as one
+    value, erasing every paragraph and section boundary. This renderer changes
+    presentation only: source lines and substituted values remain unchanged.
+    """
+    navy = colors.HexColor("#08243C")
+    blue_gray = colors.HexColor("#5F7180")
+    gold = colors.HexColor("#F4B400")
+    pale_gold = colors.HexColor("#FFF8DC")
+    pale_blue = colors.HexColor("#F3F7FA")
+    rule = colors.HexColor("#D9E3EA")
+
+    styles = {
+        "title": ParagraphStyle(
+            "AliContractTitle", fontName="Helvetica-Bold", fontSize=20,
+            leading=24, textColor=navy, spaceAfter=5 * mm,
+        ),
+        "subtitle": ParagraphStyle(
+            "AliContractSubtitle", fontName="Helvetica", fontSize=10,
+            leading=14, textColor=blue_gray, spaceAfter=5 * mm,
+        ),
+        "section_number": ParagraphStyle(
+            "AliContractSectionNumber", fontName="Helvetica-Bold", fontSize=9,
+            leading=11, textColor=navy, alignment=TA_CENTER,
+        ),
+        "section_title": ParagraphStyle(
+            "AliContractSectionTitle", fontName="Helvetica-Bold", fontSize=13,
+            leading=16, textColor=navy,
+        ),
+        "body": ParagraphStyle(
+            "AliContractBody", fontName="Helvetica", fontSize=9.4,
+            leading=13.5, textColor=colors.HexColor("#203341"),
+            spaceAfter=3.2 * mm,
+        ),
+        "clause": ParagraphStyle(
+            "AliContractClause", fontName="Helvetica-Bold", fontSize=10.2,
+            leading=13, textColor=navy, spaceBefore=2.2 * mm,
+            spaceAfter=1.2 * mm,
+        ),
+        "label": ParagraphStyle(
+            "AliContractLabel", fontName="Helvetica-Bold", fontSize=7.7,
+            leading=10, textColor=blue_gray,
+        ),
+        "label_light": ParagraphStyle(
+            "AliContractLabelLight", fontName="Helvetica-Bold", fontSize=7.7,
+            leading=10, textColor=colors.white,
+        ),
+        "value": ParagraphStyle(
+            "AliContractValue", fontName="Helvetica-Bold", fontSize=9.6,
+            leading=12, textColor=navy,
+        ),
+        "notice": ParagraphStyle(
+            "AliContractNotice", fontName="Helvetica-Bold", fontSize=8.5,
+            leading=12, textColor=colors.HexColor("#6B4E00"),
+        ),
+        "contact": ParagraphStyle(
+            "AliContractContact", fontName="Helvetica", fontSize=8.5,
+            leading=11, textColor=navy,
+        ),
+        "audit": ParagraphStyle(
+            "AliContractAudit", fontName="Helvetica", fontSize=7.1,
+            leading=10, textColor=blue_gray, wordWrap="CJK",
+        ),
+        "bullet": ParagraphStyle(
+            "AliContractBullet", fontName="Helvetica", fontSize=9.2,
+            leading=13, textColor=colors.HexColor("#203341"),
+            leftIndent=5 * mm, firstLineIndent=-3.5 * mm, bulletIndent=0,
+            spaceAfter=2 * mm,
+        ),
+    }
+
+    output = io.BytesIO()
+    document = SimpleDocTemplate(
+        output, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+        topMargin=24 * mm, bottomMargin=18 * mm, title=title,
+        author="Ali Car Rental Curacao", subject="Vehicle rental pre-contract",
+    )
+    usable_width = A4[0] - document.leftMargin - document.rightMargin
+    story: list[object] = [
+        Paragraph(_contract_pdf_text(title), styles["title"]),
+        Paragraph(
+            "Reservation summary and customer acknowledgment",
+            styles["subtitle"],
+        ),
+    ]
+    lines = [line.strip() for line in str(contract_text or "").splitlines()]
+    body_buffer: list[str] = []
+    summary_rows: list[tuple[str, str]] = []
+    current_section = ""
+    contact_rendered = False
+    draft_rendered = False
+    checklist_intro_rendered = False
+
+    def flush_body() -> None:
+        if body_buffer:
+            story.append(Paragraph(
+                _contract_pdf_text(" ".join(body_buffer)), styles["body"],
+            ))
+            body_buffer.clear()
+
+    def flush_summary() -> None:
+        if not summary_rows:
+            return
+        rows = [
+            [
+                Paragraph(_contract_pdf_text(label), styles["label"]),
+                Paragraph(_contract_pdf_text(value), styles["value"]),
+            ]
+            for label, value in summary_rows
+        ]
+        table = Table(
+            rows, colWidths=[54 * mm, usable_width - 54 * mm], hAlign="LEFT",
+        )
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), pale_blue),
+            ("BOX", (0, 0), (-1, -1), 0.6, rule),
+            ("INNERGRID", (0, 0), (-1, -1), 0.35, rule),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.extend([table, Spacer(1, 4 * mm)])
+        summary_rows.clear()
+
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line:
+            flush_body()
+            flush_summary()
+            index += 1
+            continue
+        if line in _CONTRACT_REPEAT_HEADERS:
+            index += 1
+            continue
+        if line.startswith("Ali Car Rental Cura") and "WhatsApp" in line:
+            if not contact_rendered:
+                flush_body()
+                contact = Table(
+                    [[Paragraph(_contract_pdf_text(line), styles["contact"])]],
+                    colWidths=[usable_width],
+                )
+                contact.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), pale_blue),
+                    ("BOX", (0, 0), (-1, -1), 0.6, rule),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 9),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]))
+                story.extend([contact, Spacer(1, 4 * mm)])
+                contact_rendered = True
+            index += 1
+            continue
+        if re.fullmatch(r"DRAFT V\d+\s*\|\s*PAGE\s+\d+", line):
+            if not draft_rendered:
+                version = line.split("|", 1)[0].strip()
+                story.extend([
+                    Paragraph(_contract_pdf_text(version), styles["label"]),
+                    Spacer(1, 2 * mm),
+                ])
+                draft_rendered = True
+            index += 1
+            continue
+        if line.startswith("DRAFT TEMPLATE"):
+            flush_body()
+            notice = Table(
+                [[Paragraph(_contract_pdf_text(line), styles["notice"])]],
+                colWidths=[usable_width],
+            )
+            notice.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), pale_gold),
+                ("BOX", (0, 0), (-1, -1), 0.8, gold),
+                ("LEFTPADDING", (0, 0), (-1, -1), 9),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([notice, Spacer(1, 4 * mm)])
+            index += 1
+            continue
+        if re.fullmatch(r"\d{2}", line) and index + 1 < len(lines):
+            flush_body()
+            flush_summary()
+            current_section = line
+            checklist_intro_rendered = False
+            section_title = lines[index + 1]
+            section = Table(
+                [[
+                    Paragraph(_contract_pdf_text(line), styles["section_number"]),
+                    Paragraph(
+                        _contract_pdf_text(section_title), styles["section_title"],
+                    ),
+                ]],
+                colWidths=[13 * mm, usable_width - 13 * mm],
+            )
+            section.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (0, 0), gold),
+                ("BACKGROUND", (1, 0), (1, 0), pale_blue),
+                ("BOX", (0, 0), (-1, -1), 0.6, rule),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([
+                Spacer(1, 2 * mm),
+                CondPageBreak(22 * mm),
+                section,
+                Spacer(1, 3 * mm),
+            ])
+            index += 2
+            continue
+        if (
+            current_section == "03"
+            and line == "DESCRIPTION"
+            and index + 1 < len(lines)
+            and lines[index + 1] == "AMOUNT"
+        ):
+            flush_body()
+            financial_rows: list[list[Paragraph]] = [[
+                Paragraph("DESCRIPTION", styles["label_light"]),
+                Paragraph("AMOUNT", styles["label_light"]),
+            ]]
+            index += 2
+            while (
+                index + 1 < len(lines)
+                and lines[index + 1].startswith("USD ")
+            ):
+                financial_rows.append([
+                    Paragraph(_contract_pdf_text(lines[index]), styles["body"]),
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 1]), styles["value"],
+                    ),
+                ])
+                index += 2
+            table = Table(
+                financial_rows,
+                colWidths=[usable_width - 42 * mm, 42 * mm],
+                repeatRows=1,
+            )
+            commands = [
+                ("BACKGROUND", (0, 0), (-1, 0), navy),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("BOX", (0, 0), (-1, -1), 0.7, rule),
+                ("INNERGRID", (0, 0), (-1, -1), 0.35, rule),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]
+            if len(financial_rows) > 1:
+                commands.append(("BACKGROUND", (0, -1), (-1, -1), pale_gold))
+            table.setStyle(TableStyle(commands))
+            story.extend([
+                CondPageBreak(50 * mm),
+                table,
+                Spacer(1, 4 * mm),
+            ])
+            continue
+        if (
+            current_section == "06"
+            and line == "CUSTOMER ELECTRONIC SIGNATURE"
+            and index + 7 < len(lines)
+            and lines[index + 1] == "ALI AUTHORIZED APPROVAL"
+        ):
+            flush_body()
+            flush_summary()
+            signature_rows = [
+                [
+                    Paragraph(
+                        _contract_pdf_text(lines[index]), styles["label_light"],
+                    ),
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 1]),
+                        styles["label_light"],
+                    ),
+                ],
+                [
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 2]), styles["body"],
+                    ),
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 3]), styles["body"],
+                    ),
+                ],
+                [
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 4]), styles["body"],
+                    ),
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 5]), styles["body"],
+                    ),
+                ],
+                [
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 6]), styles["body"],
+                    ),
+                    Paragraph(
+                        _contract_pdf_text(lines[index + 7]), styles["body"],
+                    ),
+                ],
+            ]
+            signature_table = Table(
+                signature_rows,
+                colWidths=[usable_width / 2, usable_width / 2],
+            )
+            signature_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), navy),
+                ("BOX", (0, 0), (-1, -1), 0.7, rule),
+                ("INNERGRID", (0, 0), (-1, -1), 0.35, rule),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([
+                PageBreak(),
+                Spacer(1, 20 * mm),
+                signature_table,
+                Spacer(1, 4 * mm),
+            ])
+            index += 8
+            continue
+        if (
+            current_section == "07"
+            and line == "VEHICLE ASSIGNED"
+            and index + 11 < len(lines)
+            and lines[index + 1] == "REGISTRATION"
+            and lines[index + 2] == "HANDOVER DATE/TIME"
+            and lines[index + 6] == "FINAL AGREEMENT / FILE NO."
+            and lines[index + 7] == "APPROVED BY"
+            and lines[index + 8] == "STATUS"
+        ):
+            flush_body()
+            flush_summary()
+            office_rows: list[list[Paragraph]] = []
+            for row_index in (0, 3, 6, 9):
+                row_style = "label" if row_index in {0, 6} else "body"
+                office_rows.append([
+                    Paragraph(
+                        _contract_pdf_text(lines[index + row_index + column]),
+                        styles[row_style],
+                    )
+                    for column in range(3)
+                ])
+            office_table = Table(
+                office_rows,
+                colWidths=[usable_width / 3] * 3,
+            )
+            office_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), pale_blue),
+                ("BACKGROUND", (0, 2), (-1, 2), pale_blue),
+                ("BOX", (0, 0), (-1, -1), 0.7, rule),
+                ("INNERGRID", (0, 0), (-1, -1), 0.35, rule),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([
+                CondPageBreak(48 * mm),
+                office_table,
+                Spacer(1, 4 * mm),
+            ])
+            index += 12
+            continue
+        if current_section in {"01", "02"} and _contract_is_label(line):
+            flush_body()
+            if index + 1 < len(lines):
+                summary_rows.append((line, lines[index + 1]))
+                index += 2
+                continue
+        if re.match(r"^\d+\.\s+\S", line):
+            flush_body()
+            flush_summary()
+            story.append(Paragraph(_contract_pdf_text(line), styles["clause"]))
+            index += 1
+            continue
+        if _contract_is_label(line):
+            flush_body()
+            flush_summary()
+            story.extend([
+                Paragraph(_contract_pdf_text(line), styles["label"]),
+                Spacer(1, 1.2 * mm),
+            ])
+            index += 1
+            continue
+        if current_section == "05":
+            flush_body()
+            flush_summary()
+            if not checklist_intro_rendered:
+                story.append(Paragraph(_contract_pdf_text(line), styles["body"]))
+                checklist_intro_rendered = True
+            else:
+                story.append(Paragraph(
+                    _contract_pdf_text(line), styles["bullet"], bulletText="•",
+                ))
+            index += 1
+            continue
+        body_buffer.append(line)
+        index += 1
+
+    flush_body()
+    flush_summary()
+    if audit_lines:
+        audit_content = [
+            Paragraph("Document audit", styles["label"]),
+            *[
+                Paragraph(_contract_pdf_text(line), styles["audit"])
+                for line in audit_lines
+            ],
+        ]
+        audit = Table([[audit_content]], colWidths=[usable_width])
+        audit.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), pale_blue),
+            ("BOX", (0, 0), (-1, -1), 0.5, rule),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.extend([Spacer(1, 4 * mm), audit])
+
+    def decorate(page_canvas, doc) -> None:
+        page_canvas.saveState()
+        width, height = A4
+        page_canvas.setStrokeColor(gold)
+        page_canvas.setLineWidth(2)
+        page_canvas.line(18 * mm, height - 15 * mm, 42 * mm, height - 15 * mm)
+        page_canvas.setFillColor(navy)
+        page_canvas.setFont("Helvetica-Bold", 8)
+        page_canvas.drawString(
+            18 * mm, height - 11.5 * mm, "ALI CAR RENTAL · CURAÇAO",
+        )
+        page_canvas.setFillColor(blue_gray)
+        page_canvas.setFont("Helvetica", 7.5)
+        page_canvas.drawRightString(
+            width - 18 * mm, height - 11.5 * mm,
+            "VEHICLE RENTAL PRE-CONTRACT",
+        )
+        page_canvas.setStrokeColor(rule)
+        page_canvas.setLineWidth(0.5)
+        page_canvas.line(18 * mm, 13 * mm, width - 18 * mm, 13 * mm)
+        page_canvas.setFillColor(blue_gray)
+        page_canvas.drawString(
+            18 * mm, 8.5 * mm, "Confidential customer document",
+        )
+        page_canvas.drawRightString(
+            width - 18 * mm, 8.5 * mm, f"Page {doc.page}",
+        )
+        page_canvas.restoreState()
+
+    document.build(story, onFirstPage=decorate, onLaterPages=decorate)
+    return output.getvalue()
+
+
 def _text_pdf(title: str, paragraphs: list[str], *, signature: bytes | None = None) -> bytes:
     output = io.BytesIO()
     page = canvas.Canvas(output, pagesize=A4)
@@ -2216,7 +2721,11 @@ def issue_contract_link(
         contract_text = _contract_text(template, _template_values(case, snapshot))
         snapshot_hash = hashlib.sha256(
             json.dumps(
-                {"quote_snapshot_id": case["quote_snapshot_id"], "text": contract_text},
+                {
+                    "quote_snapshot_id": case["quote_snapshot_id"],
+                    "text": contract_text,
+                    "render_version": CONTRACT_RENDER_VERSION,
+                },
                 ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
@@ -2232,9 +2741,13 @@ def issue_contract_link(
                 )
             contract_id = str(uuid.uuid4())
             version = int(current["version"]) + 1 if current else 1
-            unsigned = _text_pdf(
+            unsigned = _contract_pdf(
                 "Ali Car Rental pre-contract",
-                [contract_text, f"Contract version: {settings['contract_template_version']}", f"Snapshot hash: {snapshot_hash}"],
+                contract_text,
+                [
+                    f"Contract version: {settings['contract_template_version']}",
+                    f"Snapshot hash: {snapshot_hash}",
+                ],
             )
             storage = _write_private(unsigned, ".pdf", public_id)
             timestamp = _iso()
