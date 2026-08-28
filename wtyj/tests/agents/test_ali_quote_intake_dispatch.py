@@ -370,6 +370,87 @@ def test_bad_canary_contact_redirect_is_replaced_by_safe_same_chat_fallback():
     assert "@" not in reply
 
 
+def test_combined_rental_dates_are_rewritten_to_pickup_date_only():
+    reply = workflow.sanitize_intake_reply(
+        "The Toyota Agya it is.\n\n"
+        "I'll ask a few questions to prepare your official quote. "
+        "What are your rental dates, when would you like to pick up and return the car?",
+        "en",
+        {"conversation_language": "en"},
+    )
+
+    assert reply == (
+        "The Toyota Agya it is.\n\n"
+        "I'll ask a few questions to prepare your official quote.\n\n"
+        "What date would you like to pick up the car?"
+    )
+    assert reply.count("?") == 1
+    assert "return the car" not in reply
+
+
+def test_return_date_is_asked_only_after_pickup_date_is_known():
+    reply = workflow.sanitize_intake_reply(
+        "What are your rental dates, when would you like to pick up and return the car?",
+        "en",
+        {
+            "conversation_language": "en",
+            "rental_start": "2026-09-01",
+        },
+    )
+
+    assert reply == "What date would you like to return the car?"
+
+
+def test_combined_rental_dates_are_sequential_in_every_supported_language():
+    cases = (
+        (
+            "nl",
+            "Wat zijn je huurdatums, wanneer wil je de auto ophalen en terugbrengen?",
+            "Op welke datum wil je de auto ophalen?",
+        ),
+        (
+            "pap",
+            "Pa kua fechanan bo ke tuma i entregá e outo?",
+            "Ki dia bo ke tuma e outo?",
+        ),
+        (
+            "de",
+            "Für welche Mietdaten möchten Sie das Auto abholen und zurückgeben?",
+            "An welchem Datum möchten Sie das Auto abholen?",
+        ),
+    )
+
+    for locale, combined, expected in cases:
+        assert workflow.sanitize_intake_reply(
+            combined,
+            locale,
+            {"conversation_language": locale},
+        ) == expected
+
+
+def test_ali_intake_keeps_only_the_first_question_in_a_reply():
+    reply = workflow.sanitize_intake_reply(
+        "What date would you like to pick up the car? "
+        "Where would you like to collect it?",
+        "en",
+        {"conversation_language": "en"},
+    )
+
+    assert reply == "What date would you like to pick up the car?"
+
+
+def test_prompt_defines_pickup_and_return_as_separate_turns(monkeypatch):
+    monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw_config())
+    monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: catalog())
+
+    prompt = " ".join(marina_agent._build_ali_quote_block().split())
+
+    assert "They are two separate facts and therefore two separate turns" in prompt
+    assert "ask only for the pickup date" in prompt
+    assert "only then ask for the return date" in prompt
+    assert "One question means exactly one requested field" in prompt
+
+
 
 def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
