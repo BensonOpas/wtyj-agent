@@ -337,12 +337,78 @@ def _locale(fields: dict) -> str:
     return value if value in _COPY else "en"
 
 
+_FIRST_TURN_SELF_INTRO = {
+    "en": re.compile(
+        r"^\s*(?:(?:hi|hello|hey)[,!]?\s+)?(?:i['’]?m|i\s+am)\s+nick"
+        r"(?:\s+from\s+ali\s+car\s+rental)?[.!]?\s*",
+        re.IGNORECASE,
+    ),
+    "nl": re.compile(
+        r"^\s*(?:(?:hoi|hallo)[,!]?\s+)?ik\s+ben\s+nick"
+        r"(?:\s+van\s+ali\s+car\s+rental)?[.!]?\s*",
+        re.IGNORECASE,
+    ),
+    "pap": re.compile(
+        r"^\s*(?:(?:halo|bon\s+dia|bon\s+bin[ií])[,!]?\s+)?mi\s+ta\s+nick"
+        r"(?:\s+di\s+ali\s+car\s+rental)?[.!]?\s*",
+        re.IGNORECASE,
+    ),
+    "de": re.compile(
+        r"^\s*(?:(?:hallo|guten\s+tag)[,!]?\s+)?ich\s+bin\s+nick"
+        r"(?:\s+von\s+ali\s+car\s+rental)?[.!]?\s*",
+        re.IGNORECASE,
+    ),
+}
+
+_FIRST_TURN_GENERIC_HELP = {
+    "en": re.compile(
+        r"^\s*(?:(?:i['’]?m|i\s+am)\s+)?(?:happy|glad)\s+to\s+help\b"
+        r"[^.!?]*(?:car|quote)[.!]\s*",
+        re.IGNORECASE,
+    ),
+    "nl": re.compile(
+        r"^\s*(?:ik\s+help\s+je\s+graag|graag\s+help\s+ik\s+je)\b"
+        r"[^.!?]*(?:auto|offerte)[.!]\s*",
+        re.IGNORECASE,
+    ),
+    "pap": re.compile(
+        r"^\s*(?:mi\s+ta\s+(?:kontentu|felis)\s+pa\s+yuda\s+bo|"
+        r"mi\s+ta\s+aki\s+pa\s+yuda\s+bo)\b[^.!?]*(?:outo|oferta)[.!]\s*",
+        re.IGNORECASE,
+    ),
+    "de": re.compile(
+        r"^\s*(?:gerne\s+helfe\s+ich\s+ihnen|ich\s+helfe\s+ihnen\s+gerne)\b"
+        r"[^.!?]*(?:auto|angebot)[.!]\s*",
+        re.IGNORECASE,
+    ),
+}
+
+
+def _without_duplicate_first_turn_intro(reply: str, locale: str) -> str:
+    """Remove only a leading generated identity/help preamble.
+
+    Catalog facts, prices, dates, and the next question are left intact. The
+    deterministic welcome remains the sole owner of Ali/Nick's introduction.
+    """
+    cleaned = _FIRST_TURN_SELF_INTRO[locale].sub("", reply, count=1).lstrip()
+    if cleaned != reply.lstrip():
+        cleaned = _FIRST_TURN_GENERIC_HELP[locale].sub(
+            "", cleaned, count=1,
+        ).lstrip()
+    return cleaned
+
+
 def add_first_turn_welcome(reply_text: str, fields: dict) -> str:
-    """Add Ali's warm introduction once without replacing the live intake reply."""
+    """Compose exactly one warm introduction with the live intake reply."""
     reply = str(reply_text or "").strip()
     if not reply:
         return reply
-    return f"{_COPY[_locale(fields)]['welcome']}\n\n{reply}"
+    locale = _locale(fields)
+    welcome = _COPY[locale]["welcome"]
+    if _normalized_label(reply).startswith(_normalized_label(welcome)):
+        return reply
+    reply = _without_duplicate_first_turn_intro(reply, locale)
+    return welcome if not reply else f"{welcome}\n\n{reply}"
 
 
 def _normalized_label(value: object) -> str:

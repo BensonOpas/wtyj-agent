@@ -288,7 +288,10 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
 
     assert "DISCOVERY BEFORE PERSONAL DETAILS is mandatory" in normalized
     assert "QUOTE-LED CUSTOMER GUIDANCE is mandatory" in normalized
-    assert "Hi, I’m Nick from Ali Car Rental." in normalized
+    assert "Delivery code prepends the single localized Ali/Nick welcome" in normalized
+    assert "Do not greet the customer, introduce Nick" in normalized
+    assert "Start directly with the useful answer or the one next question" in normalized
+    assert "Hi, I’m Nick from Ali Car Rental." not in normalized
     assert "help you find the right car and prepare an official quote" in normalized
     assert "Speak in the first person and take conversational ownership" in normalized
     assert "I need a few more details so I can prepare and send you an official quote" in normalized
