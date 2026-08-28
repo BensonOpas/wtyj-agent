@@ -2269,6 +2269,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         reply_text = sanitize_ali_intake_reply(
             reply_text,
             fields.get("conversation_language"),
+            fields,
         )
         try:
             _ali_turn_plan = plan_ali_quote_turn(

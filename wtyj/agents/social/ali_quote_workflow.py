@@ -150,6 +150,74 @@ _INTAKE_SAFETY_FALLBACK = {
     "pap": "Mi no por a kompletá e paso ei na un manera sigur. Purba atrobe aki den un momentu.",
     "de": "Ich konnte diesen Schritt nicht sicher abschließen. Bitte versuchen Sie es gleich hier erneut.",
 }
+_SEQUENTIAL_INTAKE_QUESTIONS = {
+    "en": {
+        "rental_start": "What date would you like to pick up the car?",
+        "rental_end": "What date would you like to return the car?",
+        "pickup_location": "Where would you like to pick up the car?",
+        "return_location": "Where would you like to return the car?",
+        "customer_name": "What full name should I put on the official quote?",
+        "driver_age": "What is the driver's age?",
+    },
+    "nl": {
+        "rental_start": "Op welke datum wil je de auto ophalen?",
+        "rental_end": "Op welke datum wil je de auto terugbrengen?",
+        "pickup_location": "Waar wil je de auto ophalen?",
+        "return_location": "Waar wil je de auto terugbrengen?",
+        "customer_name": "Welke volledige naam mag ik op de officiële offerte zetten?",
+        "driver_age": "Wat is de leeftijd van de bestuurder?",
+    },
+    "pap": {
+        "rental_start": "Ki dia bo ke tuma e outo?",
+        "rental_end": "Ki dia bo ke entregá e outo?",
+        "pickup_location": "Unda bo ke tuma e outo?",
+        "return_location": "Unda bo ke entregá e outo?",
+        "customer_name": "Kua nòmber kompleto mi por pone riba e oferta ofisial?",
+        "driver_age": "Kuantu aña e chauffeur tin?",
+    },
+    "de": {
+        "rental_start": "An welchem Datum möchten Sie das Auto abholen?",
+        "rental_end": "An welchem Datum möchten Sie das Auto zurückgeben?",
+        "pickup_location": "Wo möchten Sie das Auto abholen?",
+        "return_location": "Wo möchten Sie das Auto zurückgeben?",
+        "customer_name": "Welchen vollständigen Namen soll ich in das offizielle Angebot eintragen?",
+        "driver_age": "Wie alt ist der Fahrer?",
+    },
+}
+_COMBINED_RENTAL_DATE_QUESTION = {
+    "en": re.compile(
+        r"(?:what|which|when)[^?]*(?:rental\s+dates|"
+        r"(?:pick\s*up|pickup)[^?]{0,160}\breturn\b|"
+        r"\bstart\b[^?]{0,120}\b(?:end|until)\b)[^?]*\?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "nl": re.compile(
+        r"(?:wat|welke|wanneer|op\s+welke)[^?]*(?:huurdatums?|"
+        r"(?:ophalen|ophaaldatum)[^?]{0,160}(?:terugbrengen|inleveren|retour)|"
+        r"begindatum[^?]{0,120}einddatum)[^?]*\?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "pap": re.compile(
+        r"(?:pa\s+kua|ki|kua)[^?]*(?:fechanan|"
+        r"(?:tuma|buska)[^?]{0,160}(?:entreg[aá]|debolb[eé])|"
+        r"fecha\s+di\s+kuminsamentu[^?]{0,120}fecha\s+di\s+fin)[^?]*\?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "de": re.compile(
+        r"(?:welche|wann|f[uü]r\s+welche|an\s+welchem)[^?]*(?:mietdaten|"
+        r"(?:abholen|abholdatum)[^?]{0,160}(?:zur[uü]ckgeben|r[uü]ckgabe)|"
+        r"startdatum[^?]{0,120}enddatum)[^?]*\?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+}
+_SEQUENTIAL_FIELD_ORDER = (
+    "rental_start",
+    "rental_end",
+    "pickup_location",
+    "return_location",
+    "customer_name",
+    "driver_age",
+)
 
 
 class AliQuoteError(RuntimeError):
@@ -1686,13 +1754,43 @@ def catalog_prompt_context(catalog: dict) -> dict:
     }
 
 
-def sanitize_intake_reply(reply: str, locale: str | None = None) -> str:
-    """Fail closed if Marina tries to redirect an Ali WhatsApp customer."""
+def sanitize_intake_reply(
+    reply: str,
+    locale: str | None = None,
+    fields: dict | None = None,
+) -> str:
+    """Enforce Ali's same-chat and one-question intake contracts."""
     text = str(reply or "").strip()
-    if not _FORBIDDEN_CONTACT_REDIRECT.search(text):
-        return text
     selected_locale = str(locale or "en").lower()
-    return _INTAKE_SAFETY_FALLBACK.get(selected_locale, _INTAKE_SAFETY_FALLBACK["en"])
+    if selected_locale not in LOCALES:
+        selected_locale = "en"
+    if _FORBIDDEN_CONTACT_REDIRECT.search(text):
+        return _INTAKE_SAFETY_FALLBACK[selected_locale]
+
+    rental_date_question = _COMBINED_RENTAL_DATE_QUESTION[selected_locale]
+    if isinstance(fields, dict) and rental_date_question.search(text):
+        next_field = next(
+            (
+                field
+                for field in _SEQUENTIAL_FIELD_ORDER
+                if fields.get(field) in (None, "")
+            ),
+            "",
+        )
+        match = rental_date_question.search(text)
+        if match and next_field:
+            text = (
+                text[:match.start()].rstrip()
+                + "\n\n"
+                + _SEQUENTIAL_INTAKE_QUESTIONS[selected_locale][next_field]
+            ).strip()
+        elif match:
+            text = text[:match.start()].rstrip()
+
+    first_question_end = text.find("?")
+    if first_question_end >= 0 and text.find("?", first_question_end + 1) >= 0:
+        text = text[:first_question_end + 1].strip()
+    return text
 
 
 def _normalize_catalog_label(value: object) -> str:
