@@ -54,6 +54,10 @@ _RETRYABLE_ERROR_CODES = {
     "brand_image_delivery_failed",
     "whatsapp_delivery_failed",
     "unexpected_processor_failure",
+    # Before issue #288 the outer processor collapsed every AliQuoteError into
+    # this code.  Bounded recovery must reclaim those legacy rows once so a
+    # confirmed replacement quote is not stranded forever.
+    "processor_unconfigured",
 }
 
 
@@ -172,14 +176,19 @@ def list_recoverable_quotes(
     now: datetime | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """List stale or retryable rows without exposing customer or rental data."""
+    """List newest stale/retryable rows without exposing customer data.
+
+    Newest-first is deliberate.  Old, terminal ``attention_required`` rows must
+    never fill the bounded scan window and starve a newly confirmed replacement
+    quote behind them.
+    """
     ensure_schema()
     conn = _connection()
     try:
         rows = conn.execute(
             "SELECT * FROM ali_quotes WHERE customer_delivery_superseded_at IS NULL "
             "AND status IN ('confirmed','pricing','quoted','pdf_ready','delivering',"
-            "'attention_required') ORDER BY id LIMIT ?",
+            "'attention_required') ORDER BY id DESC LIMIT ?",
             (max(1, min(int(limit), 500)),),
         ).fetchall()
     finally:
