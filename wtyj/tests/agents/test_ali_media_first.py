@@ -105,6 +105,73 @@ def test_first_turn_welcome_is_localized_and_preserves_one_next_question(locale,
 
 
 @pytest.mark.parametrize(
+    ("locale", "generated_intro", "question"),
+    [
+        (
+            "en",
+            "Hi, I'm Nick from Ali Car Rental. Happy to help you find the right car and put together an official quote.",
+            "Do you have a specific car in mind, or should I suggest some options?",
+        ),
+        (
+            "nl",
+            "Hallo, ik ben Nick van Ali Car Rental. Ik help je graag de juiste auto en offerte te vinden.",
+            "Heb je een specifieke auto in gedachten, of zal ik opties voorstellen?",
+        ),
+        (
+            "pap",
+            "Bon dia, mi ta Nick di Ali Car Rental. Mi ta aki pa yuda bo haña e outo i oferta korekto.",
+            "Bo tin un outo spesífiko na mente, òf bo ke ku mi sugerí algun opshon?",
+        ),
+        (
+            "de",
+            "Hallo, ich bin Nick von Ali Car Rental. Gerne helfe ich Ihnen, das richtige Auto und Angebot zu finden.",
+            "Haben Sie ein bestimmtes Auto im Sinn, oder soll ich Optionen vorschlagen?",
+        ),
+    ],
+)
+def test_first_turn_welcome_removes_generated_intro_but_keeps_question(
+    locale,
+    generated_intro,
+    question,
+):
+    reply = add_first_turn_welcome(
+        f"{generated_intro}\n\n{question}",
+        {"conversation_language": locale},
+    )
+
+    assert "Nick" in reply
+    assert reply.count("Nick") == 1
+    assert question in reply
+    assert generated_intro not in reply
+
+
+def test_first_turn_deduplication_preserves_substantive_price_answer():
+    reply = add_first_turn_welcome(
+        (
+            "Hi, I'm Nick from Ali Car Rental. "
+            "The Kia Picanto is USD 35.00 per day. Which rental dates do you need?"
+        ),
+        {"conversation_language": "en"},
+    )
+
+    assert reply.count("Nick") == 1
+    assert "The Kia Picanto is USD 35.00 per day." in reply
+    assert reply.endswith("Which rental dates do you need?")
+
+
+def test_first_turn_welcome_is_idempotent_when_already_composed():
+    composed = (
+        "Welcome to Ali Car Rental! I’m Nick ☀️ I’ll help you find a car "
+        "that fits your Curaçao trip.\n\nWhich kind of car do you need?"
+    )
+
+    assert add_first_turn_welcome(
+        composed,
+        {"conversation_language": "en"},
+    ) == composed
+
+
+@pytest.mark.parametrize(
     ("locale", "message", "expected"),
     [
         (
