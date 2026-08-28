@@ -64,9 +64,9 @@ def configured(monkeypatch, tmp_path):
     return raw
 
 
-def _png() -> bytes:
+def _png(color=(9, 37, 60)) -> bytes:
     output = io.BytesIO()
-    Image.new("RGB", (32, 32), (9, 37, 60)).save(output, format="PNG")
+    Image.new("RGB", (32, 32), color).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -212,10 +212,11 @@ def test_provider_confirmed_payment_link_starts_a_fresh_24_hour_clock(configured
     workflow.initialize_reservation("reservation-291", now=BASE)
     transitions = [
         ("documents_collecting", BASE),
-        ("document_review_pending", BASE + timedelta(hours=5)),
-        ("documents_approved", BASE + timedelta(hours=5)),
+        ("documents_collected", BASE + timedelta(hours=5)),
         ("contract_sent", BASE + timedelta(hours=5)),
         ("contract_signed", BASE + timedelta(hours=8)),
+        ("prepayment_approval_pending", BASE + timedelta(hours=8)),
+        ("prepayment_approved", BASE + timedelta(hours=8)),
     ]
     for index, (state, at) in enumerate(transitions):
         workflow.transition(
@@ -252,6 +253,56 @@ def test_provider_confirmed_payment_link_starts_a_fresh_24_hour_clock(configured
     ).fetchone()[0]
     conn.close()
     assert count == 0
+
+
+def test_contract_signature_cannot_skip_the_staff_prepayment_gate(configured):
+    workflow.initialize_reservation("reservation-291", now=BASE)
+    for index, state in enumerate((
+        "documents_collecting",
+        "documents_collected",
+        "contract_sent",
+        "contract_signed",
+    )):
+        workflow.transition(
+            "reservation-291",
+            state,
+            actor_type="system",
+            actor_id="gate-test",
+            idempotency_key=f"gate-before-{index}",
+            now=BASE,
+        )
+
+    with pytest.raises(legacy.AliReservationError) as skipped:
+        workflow.transition(
+            "reservation-291",
+            "payment_link_sent",
+            actor_type="system",
+            actor_id="gate-test",
+            idempotency_key="skip-staff-approval",
+            now=BASE,
+        )
+
+    assert skipped.value.code == "invalid_v2_transition"
+    pending = workflow.transition(
+        "reservation-291",
+        "prepayment_approval_pending",
+        actor_type="system",
+        actor_id="gate-test",
+        idempotency_key="open-staff-review",
+        now=BASE,
+    )
+    approved = workflow.transition(
+        "reservation-291",
+        "prepayment_approved",
+        actor_type="staff",
+        actor_id="dashboard",
+        idempotency_key="approve-complete-file",
+        expected_revision=pending["revision"],
+        now=BASE,
+    )
+    assert pending["responsibleParty"] == "Staff"
+    assert pending["nextAction"] == "approve_prepayment_file"
+    assert approved["state"] == "prepayment_approved"
 
 
 def test_reminders_use_active_time_coalesce_and_never_send_while_paused(configured):
@@ -577,6 +628,41 @@ def test_identity_choice_is_required_before_first_document(configured):
     assert workflow.required_document_slots("id_card") == (
         "identity_front", "identity_back", "license_front", "license_back",
     )
+
+
+def test_single_file_approval_advances_only_the_legacy_identity_rollup(configured):
+    workflow.initialize_reservation("reservation-291", now=BASE)
+    legacy.apply_staff_decision(
+        "reservation-291", "approve", "staff-291",
+    )
+    workflow.set_identity_type(
+        "reservation-291", "passport", message_id="identity-choice-291",
+    )
+    for index in range(3):
+        slot = workflow.get_case("reservation-291")["expectedDocumentSlot"]
+        assert slot in {"passport", "license_front", "license_back"}
+        dossier.store_whatsapp_document(
+            "reservation-291",
+            slot=slot,
+            payload=_png((9 + index, 37, 60)),
+            claimed_mime="image/png",
+            provider_message_id=f"provider-message-{index}",
+            provider_attachment_id=f"provider-attachment-{index}",
+            filename=f"synthetic-{index}.png",
+            classification_source="expected_slot",
+        )
+
+    before = legacy.get_reservation("reservation-291")
+    assert before["identity_status"] == "received"
+    approved = dossier.record_prepayment_file_approval(
+        "reservation-291", "dashboard",
+    )
+
+    assert approved["identity_status"] == "verified"
+    assert {
+        document["status"]
+        for document in dossier.list_documents("reservation-291")
+    } == {"received"}
 
 
 def test_replayed_identity_choice_does_not_reset_document_progress(configured):

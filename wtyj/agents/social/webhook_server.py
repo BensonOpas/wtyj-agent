@@ -737,6 +737,25 @@ def _flush_buffer(phone):
                                 else "reservation_document_rejected"
                             ),
                         )
+                        workflow_after_upload = (
+                            document_result.get("workflow_v2") or {}
+                        )
+                        if (
+                            document_result.get("success")
+                            and workflow_after_upload.get("state") in {
+                                "documents_collected",
+                                "prepayment_approval_pending",
+                            }
+                        ):
+                            # Preserve the customer-facing order: acknowledge
+                            # secure receipt first, then send the next automatic
+                            # step. This path never waits for per-file staff
+                            # verification.
+                            from agents.social import ali_reservation_v2_automation
+
+                            ali_reservation_v2_automation.after_documents_collected(
+                                str(document_result["reservation_public_id"]),
+                            )
                         return
                 # Brief 213: ai_muted check for Zernio WhatsApp (debounce-buffered path).
                 if state_registry.get_ai_muted(_zernio_conv):

@@ -12,7 +12,7 @@ from agents.social import ali_quote_delivery
 @patch.object(automation.workflow, "transition")
 @patch.object(automation.workflow, "get_case")
 @patch.object(automation.workflow, "enabled")
-def test_document_approval_runs_contract_work_before_client_wait(
+def test_document_collection_runs_contract_work_before_client_wait(
     enabled, get_case, transition, required, documents,
     issue_contract, mark_sent, deliver,
 ):
@@ -28,7 +28,7 @@ def test_document_approval_runs_contract_work_before_client_wait(
         for index, slot in enumerate(required.return_value)
     ]
     transition.side_effect = [
-        {"state": "documents_approved", "revision": 5},
+        {"state": "documents_collected", "revision": 5},
         {"state": "contract_sent", "revision": 6},
     ]
     issue_contract.return_value = {
@@ -40,7 +40,7 @@ def test_document_approval_runs_contract_work_before_client_wait(
     result = automation.after_document_review("reservation-1")
 
     assert result["workflowV2"]["state"] == "contract_sent"
-    assert transition.call_args_list[0].args[1] == "documents_approved"
+    assert transition.call_args_list[0].args[1] == "documents_collected"
     issue_contract.assert_called_once_with("reservation-1", actor=automation.SYSTEM_ACTOR)
     deliver.assert_called_once_with(
         "reservation-1", "contract", issue_contract.return_value,
@@ -51,35 +51,119 @@ def test_document_approval_runs_contract_work_before_client_wait(
     assert transition.call_args_list[1].args[1] == "contract_sent"
 
 
+@patch.object(automation.state_registry, "create_pending_notification")
+@patch.object(automation.state_registry, "get_pending_notifications")
+@patch.object(automation.dossier, "customer_delivery_context")
 @patch.object(automation.ali_quote_delivery, "send_customer_requirement_link")
-@patch.object(automation.dossier, "mark_payment_link_sent")
-@patch.object(automation.dossier, "payment_delivery_payload")
-@patch.object(automation.dossier, "set_payment_link")
-@patch.object(automation.dossier, "tenant_settings")
 @patch.object(automation.workflow, "transition")
 @patch.object(automation.workflow, "get_case")
 @patch.object(automation.workflow, "enabled")
-def test_signature_automatically_sends_fixed_payment_link(
-    enabled, get_case, transition, settings, set_link, payment_payload,
-    mark_sent, deliver,
+def test_signature_opens_one_staff_gate_and_does_not_send_payment(
+    enabled, get_case, transition, deliver, delivery_context,
+    pending_notifications, notify,
 ):
     enabled.return_value = True
     get_case.return_value = {"state": "contract_sent", "revision": 6}
     transition.side_effect = [
         {"state": "contract_signed", "revision": 7},
-        {"state": "payment_link_sent", "revision": 8},
+        {"state": "prepayment_approval_pending", "revision": 8},
     ]
+    delivery_context.return_value = {"conversation_id": "conversation-1"}
+    pending_notifications.side_effect = [[], []]
+    notify.return_value = 41
+
+    result = automation.after_contract_signed("reservation-1")
+
+    assert result["workflowV2"]["state"] == "prepayment_approval_pending"
+    assert result["notificationId"] == 41
+    assert result["paymentDelivered"] is False
+    assert [item.args[1] for item in transition.call_args_list] == [
+        "contract_signed", "prepayment_approval_pending",
+    ]
+    deliver.assert_not_called()
+    assert notify.call_count == 1
+
+
+@patch.object(automation.state_registry, "create_pending_notification")
+@patch.object(automation.state_registry, "get_pending_notifications")
+@patch.object(automation.dossier, "customer_delivery_context")
+@patch.object(automation.workflow, "get_case")
+@patch.object(automation.workflow, "enabled")
+def test_signature_replay_reuses_the_existing_staff_review(
+    enabled, get_case, delivery_context, pending_notifications, notify,
+):
+    enabled.return_value = True
+    get_case.return_value = {
+        "state": "prepayment_approval_pending",
+        "revision": 8,
+    }
+    delivery_context.return_value = {"conversation_id": "conversation-1"}
+    pending_notifications.side_effect = [
+        [{
+            "id": 41,
+            "customer_id": "conversation-1",
+            "subject": "[ALI PRE-PAYMENT REVIEW] reservation-1",
+        }],
+    ]
+
+    result = automation.after_contract_signed("reservation-1")
+
+    assert result["notificationId"] == 41
+    notify.assert_not_called()
+
+
+@patch.object(automation.ali_quote_delivery, "send_customer_requirement_link")
+@patch.object(automation.dossier, "mark_payment_link_sent")
+@patch.object(automation.dossier, "payment_delivery_payload")
+@patch.object(automation.dossier, "set_payment_link")
+@patch.object(automation.dossier, "tenant_settings")
+@patch.object(automation.dossier, "record_prepayment_file_approval")
+@patch.object(automation.dossier, "prepayment_review_summary")
+@patch.object(automation.dossier, "customer_delivery_context")
+@patch.object(automation.state_registry, "get_pending_notifications")
+@patch.object(automation.workflow, "transition")
+@patch.object(automation.workflow, "get_case")
+@patch.object(automation.workflow, "enabled")
+def test_complete_file_approval_is_the_only_path_that_sends_payment(
+    enabled, get_case, transition, pending_notifications, delivery_context,
+    review_summary, record_approval, settings, set_link, payment_payload,
+    mark_sent, deliver,
+):
+    enabled.return_value = True
+    get_case.side_effect = [
+        {"state": "prepayment_approval_pending", "revision": 8},
+        {"state": "prepayment_approved", "revision": 9},
+    ]
+    transition.side_effect = [
+        {"state": "prepayment_approved", "revision": 9},
+        {"state": "payment_link_sent", "revision": 10},
+    ]
+    pending_notifications.return_value = []
+    delivery_context.return_value = {"conversation_id": "conversation-1"}
+    review_summary.return_value = {
+        "readyForApproval": True,
+        "paymentReady": True,
+    }
     settings.return_value = {"payment": {"mode": "fixed_link"}}
     payment_payload.return_value = {
         "url": "https://pay.example.test/rental",
         "amount": "42.00",
+        "percent": 15,
+        "validityHours": 24,
     }
     deliver.return_value = True
 
-    result = automation.after_contract_signed("reservation-1")
+    result = automation.approve_prepayment_file(
+        "reservation-1",
+        actor_id="dashboard",
+        expected_revision=8,
+    )
 
-    assert result["workflowV2"]["state"] == "payment_link_sent"
-    assert transition.call_args_list[0].args[1] == "contract_signed"
+    assert result["delivered"] is True
+    assert [item.args[1] for item in transition.call_args_list] == [
+        "prepayment_approved", "payment_link_sent",
+    ]
+    record_approval.assert_called_once_with("reservation-1", "dashboard")
     set_link.assert_called_once_with(
         "reservation-1", "", reference="reservation-1",
         actor=automation.SYSTEM_ACTOR,
@@ -87,8 +171,61 @@ def test_signature_automatically_sends_fixed_payment_link(
     deliver.assert_called_once_with(
         "reservation-1", "payment", payment_payload.return_value,
     )
-    mark_sent.assert_called_once_with("reservation-1", actor=automation.SYSTEM_ACTOR)
-    assert transition.call_args_list[1].args[1] == "payment_link_sent"
+    mark_sent.assert_called_once_with(
+        "reservation-1", actor=automation.SYSTEM_ACTOR,
+    )
+
+
+@patch.object(automation.ali_quote_delivery, "send_customer_requirement_link")
+@patch.object(automation.workflow, "get_case")
+@patch.object(automation.workflow, "enabled")
+def test_payment_send_fails_closed_before_complete_file_approval(
+    enabled, get_case, deliver,
+):
+    enabled.return_value = True
+    get_case.return_value = {
+        "state": "prepayment_approval_pending",
+        "revision": 8,
+    }
+
+    try:
+        automation.send_approved_payment_link("reservation-1")
+    except Exception as exc:
+        assert getattr(exc, "code", "") == "prepayment_approval_required"
+    else:
+        raise AssertionError("payment delivery bypassed prepayment approval")
+    deliver.assert_not_called()
+
+
+@patch.object(automation, "_payment_delivery_attention")
+@patch.object(automation.ali_quote_delivery, "send_customer_requirement_link")
+@patch.object(automation.dossier, "payment_delivery_payload")
+@patch.object(automation.dossier, "tenant_settings")
+@patch.object(automation.workflow, "transition")
+@patch.object(automation.workflow, "get_case")
+@patch.object(automation.workflow, "enabled")
+def test_failed_payment_delivery_preserves_approval_for_retry(
+    enabled, get_case, transition, settings, payment_payload, deliver, attention,
+):
+    enabled.return_value = True
+    get_case.return_value = {"state": "prepayment_approved", "revision": 9}
+    settings.return_value = {"payment": {"mode": "per_reservation"}}
+    payment_payload.return_value = {
+        "url": "https://pay.example.test/rental",
+        "amount": "42.00",
+        "percent": 15,
+        "validityHours": 24,
+    }
+    deliver.return_value = False
+
+    result = automation.send_approved_payment_link("reservation-1")
+
+    assert result["delivered"] is False
+    assert result["workflowV2"]["state"] == "prepayment_approved"
+    attention.assert_called_once_with(
+        "reservation-1", "payment_link_delivery_failed",
+    )
+    transition.assert_not_called()
 
 
 @patch.object(automation.dossier, "generate_dossier")

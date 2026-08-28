@@ -34,11 +34,14 @@ STATES = {
     "availability_pending",
     "availability_declined",
     "documents_collecting",
+    "documents_collected",
     "document_review_pending",
     "document_replacement_required",
     "documents_approved",
     "contract_sent",
     "contract_signed",
+    "prepayment_approval_pending",
+    "prepayment_approved",
     "payment_link_sent",
     "customer_reports_paid",
     "payment_verified",
@@ -66,11 +69,15 @@ _ALLOWED_TRANSITIONS = {
     },
     "availability_declined": set(),
     "documents_collecting": {
-        "document_review_pending", "cancelled", "client_opted_out",
+        "documents_collected", "document_review_pending", "cancelled", "client_opted_out",
         "hold_expired", "technical_attention_required",
     },
+    "documents_collected": {
+        "contract_sent", "prepayment_approval_pending", "cancelled",
+        "client_opted_out", "technical_attention_required",
+    },
     "document_review_pending": {
-        "document_replacement_required", "documents_approved", "cancelled",
+        "documents_collected", "document_replacement_required", "documents_approved", "cancelled",
         "client_opted_out", "technical_attention_required",
     },
     "document_replacement_required": {
@@ -82,7 +89,16 @@ _ALLOWED_TRANSITIONS = {
         "contract_signed", "cancelled", "client_opted_out", "hold_expired",
         "technical_attention_required",
     },
-    "contract_signed": {"payment_link_sent", "technical_attention_required"},
+    "contract_signed": {
+        "prepayment_approval_pending", "technical_attention_required",
+    },
+    "prepayment_approval_pending": {
+        "prepayment_approved", "document_replacement_required", "cancelled",
+        "client_opted_out", "technical_attention_required",
+    },
+    "prepayment_approved": {
+        "payment_link_sent", "technical_attention_required",
+    },
     "payment_link_sent": {
         "customer_reports_paid", "cancelled", "client_opted_out",
         "hold_expired", "technical_attention_required",
@@ -98,8 +114,10 @@ _ALLOWED_TRANSITIONS = {
     },
     "technical_attention_required": {
         "availability_pending", "documents_collecting",
-        "document_review_pending", "document_replacement_required",
-        "documents_approved", "contract_sent", "contract_signed",
+        "documents_collected", "document_review_pending",
+        "document_replacement_required", "documents_approved",
+        "contract_sent", "contract_signed", "prepayment_approval_pending",
+        "prepayment_approved",
         "payment_link_sent", "customer_reports_paid", "payment_verified",
         "dossier_ready", "final_approval_pending", "cancelled",
         "client_opted_out",
@@ -114,11 +132,14 @@ _STATE_RESPONSIBILITY = {
     "availability_pending": ("Staff", "paused", "availability_approval"),
     "availability_declined": ("Staff", "stopped", "availability_declined"),
     "documents_collecting": ("Client", "running", ""),
+    "documents_collected": ("System", "paused", "contract_generation"),
     "document_review_pending": ("Staff", "paused", "document_review"),
     "document_replacement_required": ("Client", "running", ""),
     "documents_approved": ("System", "paused", "contract_generation"),
     "contract_sent": ("Client", "running", ""),
-    "contract_signed": ("System", "paused", "payment_link_generation"),
+    "contract_signed": ("System", "paused", "prepayment_review_creation"),
+    "prepayment_approval_pending": ("Staff", "paused", "prepayment_file_review"),
+    "prepayment_approved": ("System", "paused", "payment_link_delivery"),
     "payment_link_sent": ("Client", "running", ""),
     "customer_reports_paid": ("Staff", "paused", "payment_verification"),
     "payment_verified": ("System", "paused", "dossier_generation"),
@@ -135,11 +156,14 @@ _NEXT_ACTION = {
     "availability_pending": "approve_or_decline_availability",
     "availability_declined": "none",
     "documents_collecting": "send_next_document",
+    "documents_collected": "generate_and_send_contract",
     "document_review_pending": "review_next_document",
     "document_replacement_required": "send_replacement_document",
     "documents_approved": "generate_and_send_contract",
     "contract_sent": "sign_contract",
-    "contract_signed": "generate_and_send_payment_link",
+    "contract_signed": "create_prepayment_review",
+    "prepayment_approval_pending": "approve_prepayment_file",
+    "prepayment_approved": "send_payment_link",
     "payment_link_sent": "report_payment",
     "customer_reports_paid": "verify_payment",
     "payment_verified": "generate_dossier",
@@ -1010,7 +1034,21 @@ def record_document_received(
             responsibility, clock_state, pause_reason = _responsibility(next_state)
             clock_started_at = timestamp if clock_state == "running" else None
         else:
-            next_state = "document_review_pending"
+            reservation_row = conn.execute(
+                "SELECT agreement_status FROM ali_reservations "
+                "WHERE tenant_slug = ? AND public_id = ?",
+                (TENANT_SLUG, public_id),
+            ).fetchone()
+            # A replacement requested during the consolidated review does not
+            # invalidate an already signed immutable pre-contract. Once the
+            # replacement is stored, return the complete file to the single
+            # staff gate instead of sending or signing another contract.
+            next_state = (
+                "prepayment_approval_pending"
+                if reservation_row
+                and str(reservation_row["agreement_status"] or "") == "signed"
+                else "documents_collected"
+            )
             responsibility, clock_state, pause_reason = _responsibility(next_state)
             clock_started_at = None
         conn.execute(

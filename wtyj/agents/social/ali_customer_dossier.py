@@ -1548,6 +1548,17 @@ def store_whatsapp_document(
                 classification_source, unclassified_expiry,
             ),
         )
+        if status != "unclassified":
+            # V2 treats a securely stored and validated upload as sufficient
+            # to continue the customer checklist. Human review is performed
+            # once on the complete pre-payment file, so the legacy roll-up
+            # must reflect receipt without pretending an individual document
+            # was verified.
+            conn.execute(
+                "UPDATE ali_reservations SET identity_status = ?, updated_at = ? "
+                "WHERE tenant_slug = ? AND public_id = ?",
+                (_document_rollup(conn, public_id), timestamp, TENANT_SLUG, public_id),
+            )
         case = _case(conn, public_id)
         reservation._event(
             conn, public_id,
@@ -1605,6 +1616,125 @@ def list_documents(public_id: str) -> list[dict]:
             (TENANT_SLUG, public_id),
         ).fetchall()
         return [_safe_document(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def prepayment_review_summary(public_id: str) -> dict:
+    """Return the server-derived readiness for the one pre-payment review.
+
+    Secure receipt is enough to include a document in this bundle. Individual
+    verification remains available as an exception tool, but it is not a gate
+    in the normal customer journey.
+    """
+    from agents.social import ali_reservation_v2
+
+    ensure_schema()
+    settings = _runtime_config()
+    conn = _connection()
+    try:
+        case = _case(conn, public_id)
+        workflow_case = ali_reservation_v2.get_case(public_id)
+        rows = conn.execute(
+            "SELECT * FROM ali_reservation_documents WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? ORDER BY slot, version DESC",
+            (TENANT_SLUG, public_id),
+        ).fetchall()
+        latest: dict[str, sqlite3.Row] = {}
+        for row in rows:
+            slot = str(row["slot"] or "")
+            if slot and slot not in latest:
+                latest[slot] = row
+        required = ali_reservation_v2.required_document_slots(
+            str(workflow_case.get("identityType") or ""),
+        )
+        accepted = {"received", "verified", "not_required"}
+        missing_documents = [
+            slot
+            for slot in required
+            if slot not in latest or str(latest[slot]["status"] or "") not in accepted
+        ]
+        contract = conn.execute(
+            "SELECT status FROM ali_reservation_contracts WHERE tenant_slug = ? "
+            "AND reservation_public_id = ? ORDER BY version DESC LIMIT 1",
+            (TENANT_SLUG, public_id),
+        ).fetchone()
+        signed = bool(contract and str(contract["status"] or "") == "signed")
+        payment = conn.execute(
+            "SELECT payment_url FROM ali_reservation_payments WHERE tenant_slug = ? "
+            "AND reservation_public_id = ?",
+            (TENANT_SLUG, public_id),
+        ).fetchone()
+        fixed_payment = (
+            str(settings.get("payment_mode") or "per_reservation") == "fixed_link"
+            and bool(settings.get("default_payment_url"))
+        )
+        payment_ready = fixed_payment or bool(payment and payment["payment_url"])
+        missing = [f"document:{slot}" for slot in missing_documents]
+        if not signed:
+            missing.append("signed_pre_contract")
+        if str(case["availability_status"] or "") != "approved":
+            missing.append("availability_approval")
+        return {
+            "status": str(workflow_case.get("state") or ""),
+            "approvalRequired": workflow_case.get("state") == "prepayment_approval_pending",
+            "approved": workflow_case.get("state") in {
+                "prepayment_approved", "payment_link_sent", "customer_reports_paid",
+                "payment_verified", "dossier_ready", "final_approval_pending", "confirmed",
+            },
+            "readyForApproval": not missing,
+            "paymentReady": payment_ready,
+            "canApproveAndSend": not missing and payment_ready,
+            "requiredDocumentCount": len(required),
+            "receivedDocumentCount": len(required) - len(missing_documents),
+            "missingRequirements": missing,
+        }
+    finally:
+        conn.close()
+
+
+def record_prepayment_file_approval(public_id: str, actor: str) -> dict:
+    """Project the one file approval into the legacy checklist roll-up.
+
+    Individual V2 documents intentionally remain ``received``. The legacy
+    reservation and dossier code still needs one checklist value after staff
+    approves the complete bundle, so only that aggregate value is advanced.
+    """
+    actor_id = reservation._validate_actor(actor)
+    ensure_schema()
+    conn = _connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        case = _available_case(conn, public_id)
+        if str(case["identity_status"] or "") == "verified":
+            conn.commit()
+            return reservation._public_row(case)
+        if str(case["identity_status"] or "") != "received":
+            raise reservation.AliReservationError(
+                "prepayment_documents_incomplete", 409,
+            )
+        from_status = str(case["status"] or "")
+        conn.execute(
+            "UPDATE ali_reservations SET identity_status = 'verified' "
+            "WHERE tenant_slug = ? AND public_id = ?",
+            (TENANT_SLUG, public_id),
+        )
+        updated = _refresh_case(conn, public_id, actor_id)
+        reservation._event(
+            conn,
+            public_id,
+            "prepayment_file_approved",
+            from_status,
+            str(updated["status"]),
+            "staff",
+            actor_id,
+            {"document_statuses_changed": False},
+        )
+        conn.commit()
+        return reservation._public_row(updated)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -3444,6 +3574,7 @@ def get_customer_file(public_id: str) -> dict:
         from agents.social import ali_reservation_v2
         if ali_reservation_v2.enabled():
             value["workflow_v2"] = ali_reservation_v2.get_case(public_id)
+            value["prepayment_review"] = prepayment_review_summary(public_id)
         return value
     finally:
         conn.close()

@@ -47,7 +47,7 @@ _SLOT_LABELS = {
 _COPY = {
     "en": {
         "next": "Got it — {stored} is stored securely. Please send {next} next.",
-        "review": "Got it — your documents are stored securely. Our team will review them now.",
+        "review": "Got it — all required documents are stored securely. I’ll send your pre-contract next so you can review and sign it.",
         "failed": "I couldn't store that file safely. Please resend it as a clear JPG, PNG, or PDF under 10 MB.",
         "unclassified": "I stored the file securely, but I’m not expecting a document at this step. What document is it?",
         "extras": " I also stored {count} extra file(s) securely. Please tell me what they are.",
@@ -61,7 +61,7 @@ _COPY = {
     },
     "nl": {
         "next": "Ontvangen — {stored} is veilig opgeslagen. Stuur nu {next}.",
-        "review": "Ontvangen — je documenten zijn veilig opgeslagen. Ons team beoordeelt ze nu.",
+        "review": "Ontvangen — alle vereiste documenten zijn veilig opgeslagen. Ik stuur nu je pre-contract zodat je het kunt bekijken en ondertekenen.",
         "failed": "Ik kon dat bestand niet veilig opslaan. Stuur het opnieuw als duidelijke JPG, PNG of PDF onder 10 MB.",
         "unclassified": "Ik heb het bestand veilig opgeslagen, maar verwacht nu geen document. Welk document is het?",
         "extras": " Ik heb ook {count} extra bestand(en) veilig opgeslagen. Laat weten wat ze zijn.",
@@ -75,7 +75,7 @@ _COPY = {
     },
     "pap": {
         "next": "Risibí — {stored} ta warda sigur. Awor manda {next}.",
-        "review": "Risibí — bo dokumentonan ta warda sigur. Nos team lo kontrolá nan awor.",
+        "review": "Risibí — tur dokumento rekerí ta warda sigur. Awor mi ta manda bo pre-kontrato pa bo lesa i firma.",
         "failed": "Mi no por a warda e file ei sigur. Manda'é atrobe komo un JPG, PNG òf PDF kla bou di 10 MB.",
         "unclassified": "Mi a warda e file sigur, pero mi no ta spera un dokumento den e paso aki. Kua dokumento e ta?",
         "extras": " Mi a warda tambe {count} file extra sigur. Laga mi sa kiko nan ta.",
@@ -89,7 +89,7 @@ _COPY = {
     },
     "de": {
         "next": "Erhalten — {stored} wurde sicher gespeichert. Bitte senden Sie jetzt {next}.",
-        "review": "Erhalten — Ihre Dokumente wurden sicher gespeichert. Unser Team prüft sie jetzt.",
+        "review": "Erhalten — alle erforderlichen Dokumente wurden sicher gespeichert. Als Nächstes sende ich Ihnen den Vorvertrag zur Prüfung und Unterschrift.",
         "failed": "Ich konnte diese Datei nicht sicher speichern. Bitte senden Sie sie erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
         "unclassified": "Ich habe die Datei sicher gespeichert, erwarte in diesem Schritt aber kein Dokument. Um welches Dokument handelt es sich?",
         "extras": " Ich habe außerdem {count} zusätzliche Datei(en) sicher gespeichert. Bitte teilen Sie mir mit, was sie sind.",

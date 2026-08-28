@@ -265,6 +265,82 @@ def test_pickup_inspection_is_revision_bound(client, monkeypatch):
     }
 
 
+def test_single_prepayment_approval_is_revision_bound_and_sends_payment(
+    client, monkeypatch,
+):
+    captured = {}
+    monkeypatch.setattr(api.ali_reservation_v2, "enabled", lambda: True)
+    monkeypatch.setattr(
+        api.ali_reservation_v2_automation,
+        "approve_prepayment_file",
+        lambda public_id, actor_id, expected_revision: captured.update({
+            "public_id": public_id,
+            "actor_id": actor_id,
+            "expected_revision": expected_revision,
+        }) or {"delivered": True},
+    )
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "get_customer_file",
+        lambda public_id: {
+            "public_id": public_id,
+            "payment_status": "link_sent",
+        },
+    )
+
+    path = "/dashboard/api/ali-reservations/res-241/prepayment-review"
+    assert client.post(
+        path,
+        headers=_auth(),
+        json={"decision": "approve"},
+    ).status_code == 422
+    response = client.post(
+        path,
+        headers=_auth(),
+        json={"decision": "approve", "expectedWorkflowRevision": 8},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approved"] is True
+    assert response.json()["delivered"] is True
+    assert captured == {
+        "public_id": "res-241",
+        "actor_id": "dashboard",
+        "expected_revision": 8,
+    }
+
+
+def test_v2_payment_send_cannot_bypass_prepayment_approval(client, monkeypatch):
+    monkeypatch.setattr(api.ali_reservation_v2, "enabled", lambda: True)
+    monkeypatch.setattr(
+        api.ali_customer_dossier,
+        "get_customer_file",
+        lambda public_id: {
+            "public_id": public_id,
+            "payment_status": "configured",
+        },
+    )
+    monkeypatch.setattr(
+        api.ali_reservation_v2_automation,
+        "send_approved_payment_link",
+        lambda public_id: (_ for _ in ()).throw(
+            api.ali_reservation_workflow.AliReservationError(
+                "prepayment_approval_required", 409,
+            )
+        ),
+    )
+
+    response = client.post(
+        "/dashboard/api/ali-reservations/res-241/payment-link/send",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Reservation state changed or this action is not allowed"
+    )
+
+
 def test_document_download_never_caches_private_bytes(client, monkeypatch):
     monkeypatch.setattr(
         api.ali_customer_dossier,
