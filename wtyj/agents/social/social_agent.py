@@ -60,6 +60,7 @@ from agents.social.ali_media_first import (
     infer_media_first_intent,
     add_first_turn_welcome,
     media_first_clarification,
+    proactive_child_seat_offer,
 )
 from agents.social.ali_vehicle_selection import (
     AliVehicleSelectionError,
@@ -2163,10 +2164,31 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 "ali_media_first_policy_failed",
                 reason=media_first_reason[:80],
             )
+    _ali_child_seat_offer = ""
     if _ali_workflow_on:
+        try:
+            _ali_child_seat_offer = proactive_child_seat_offer(
+                text,
+                fields,
+                flags,
+                _ali_catalog_for_media or get_ali_intake_catalog(),
+            )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_child_seat_offer_failed",
+                reason=type(exc).__name__,
+            )
+        if _ali_child_seat_offer:
+            reply_text = _ali_child_seat_offer
+            recommendation_action = None
+            media_first_intent = "ask_question"
+            flags["ali_child_seat_prompted"] = True
+            bm_logger.log("ali_child_seat_offer_added")
         reply_text = enforce_vehicle_first_reply(reply_text, fields)
     _ali_effective_primary_intent = (
-        "confirm_summary"
+        "ask_question"
+        if _ali_child_seat_offer
+        else "confirm_summary"
         if _ali_pure_confirmation and not _ali_selected_this_turn
         else (
             "continue_intake"

@@ -127,6 +127,26 @@ _PERSONAL_DETAIL_REQUEST = re.compile(
     r"|\bwie\s+alt\s+sind\s+sie\b)",
     re.IGNORECASE,
 )
+_CHILD_TRAVELER_CUE = re.compile(
+    r"\b(?:baby|babies|infant|infants|toddler|toddlers|child|children|kid|kids|"
+    r"peuter|peuters|kind|kinderen|beibi|mucha(?:\s+chik[ií])?|"
+    r"kleinkind|kleinkinder)\b",
+    re.IGNORECASE,
+)
+_NO_CHILD_TRAVELER = re.compile(
+    r"\b(?:no\s+(?:baby|babies|infants?|toddlers?|children|kids)|"
+    r"geen\s+(?:baby|peuters?|kinderen)|sin\s+(?:beibi|mucha)|"
+    r"kein(?:e|en)?\s+(?:baby|kleinkind|kinder))\b",
+    re.IGNORECASE,
+)
+_CHILD_SEAT_ALREADY_ADDRESSED = re.compile(
+    r"\b(?:child\s*seat|car\s*seat|baby\s*seat|booster\s*seat|"
+    r"kinderzitje|autostoel|stul\s+pa\s+mucha|kindersitz)\b",
+    re.IGNORECASE,
+)
+_CHILD_SEAT_CATALOG_NAMES = {
+    "child seat", "kinderzitje", "stul pa mucha", "kindersitz",
+}
 _COPY = {
     "en": {
         "welcome": "Welcome to Ali Car Rental! I’m Nick ☀️ I’ll help you find a car that fits your Curaçao trip.",
@@ -151,6 +171,8 @@ _COPY = {
         "larger_one": "This is the larger option that fits your group. Does this one work for your trip?",
         "larger_many": "Here are the larger options that fit your group. Which one do you prefer?",
         "largest_one": "This is the largest option in our current fleet. Does this one work for your trip?",
+        "child_seat_per_day": "You mentioned a child. Will you bring your own child seat, or would you like to rent one for USD {price} per rental day?",
+        "child_seat_per_rental": "You mentioned a child. Will you bring your own child seat, or would you like to rent one for USD {price} per rental?",
     },
     "nl": {
         "welcome": "Welkom bij Ali Car Rental! Ik ben Nick ☀️ Ik help je graag een auto te vinden die bij je Curaçao-reis past.",
@@ -175,6 +197,8 @@ _COPY = {
         "larger_one": "Dit is de grotere optie die bij je groep past. Past deze bij je reis?",
         "larger_many": "Hier zijn de grotere opties die bij je groep passen. Welke heeft je voorkeur?",
         "largest_one": "Dit is de grootste optie in ons huidige wagenpark. Past deze bij je reis?",
+        "child_seat_per_day": "Je noemde een kind. Neem je je eigen kinderzitje mee, of wil je er een huren voor USD {price} per huurdag?",
+        "child_seat_per_rental": "Je noemde een kind. Neem je je eigen kinderzitje mee, of wil je er een huren voor USD {price} per huur?",
     },
     "pap": {
         "welcome": "Bon biní na Ali Car Rental! Mi ta Nick ☀️ Mi ta yuda bo haña un outo ku ta pas ku bo biahe na Kòrsou.",
@@ -199,6 +223,8 @@ _COPY = {
         "larger_one": "Esaki ta e opshon mas grandi ku ta pas ku bo grupo. E ta pas ku bo biahe?",
         "larger_many": "Aki tin e opshonnan mas grandi ku ta pas ku bo grupo. Kua bo ta preferá?",
         "largest_one": "Esaki ta e opshon di mas grandi den nos flota aktual. E ta pas ku bo biahe?",
+        "child_seat_per_day": "Bo a menshoná un mucha. Bo ta trese bo mes stul pa mucha, òf bo ke huur un pa USD {price} pa dia di huur?",
+        "child_seat_per_rental": "Bo a menshoná un mucha. Bo ta trese bo mes stul pa mucha, òf bo ke huur un pa USD {price} pa huur?",
     },
     "de": {
         "welcome": "Willkommen bei Ali Car Rental! Ich bin Nick ☀️ Ich helfe Ihnen gern, das passende Auto für Ihre Curaçao-Reise zu finden.",
@@ -223,6 +249,8 @@ _COPY = {
         "larger_one": "Dies ist die größere Option, die zu Ihrer Gruppe passt. Passt sie zu Ihrer Reise?",
         "larger_many": "Hier sind die größeren Optionen, die zu Ihrer Gruppe passen. Welches Auto bevorzugen Sie?",
         "largest_one": "Dies ist die größte Option in unserer aktuellen Flotte. Passt sie zu Ihrer Reise?",
+        "child_seat_per_day": "Sie haben ein Kind erwähnt. Bringen Sie einen eigenen Kindersitz mit, oder möchten Sie einen für USD {price} pro Miettag mieten?",
+        "child_seat_per_rental": "Sie haben ein Kind erwähnt. Bringen Sie einen eigenen Kindersitz mit, oder möchten Sie einen für USD {price} pro Miete mieten?",
     },
 }
 
@@ -315,6 +343,82 @@ def add_first_turn_welcome(reply_text: str, fields: dict) -> str:
     if not reply:
         return reply
     return f"{_COPY[_locale(fields)]['welcome']}\n\n{reply}"
+
+
+def _normalized_label(value: object) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return " ".join(
+        "".join(char for char in normalized if not unicodedata.combining(char))
+        .split()
+    )
+
+
+def _child_seat_extra(catalog: dict) -> dict | None:
+    for extra in catalog.get("extras") or []:
+        if not isinstance(extra, dict) or extra.get("active", True) is False:
+            continue
+        names = extra.get("names") if isinstance(extra.get("names"), dict) else {}
+        labels = {
+            _normalized_label(extra.get("name")),
+            *(_normalized_label(value) for value in names.values()),
+        }
+        if labels.intersection(_CHILD_SEAT_CATALOG_NAMES):
+            return extra
+    return None
+
+
+def proactive_child_seat_offer(
+    message_text: object,
+    fields: dict,
+    flags: dict,
+    catalog: dict,
+) -> str:
+    """Offer the current child-seat supplement once after a child cue."""
+    text = str(message_text or "").strip()
+    if (
+        not text
+        or flags.get("ali_child_seat_prompted")
+        or not _CHILD_TRAVELER_CUE.search(text)
+        or _NO_CHILD_TRAVELER.search(text)
+        or _CHILD_SEAT_ALREADY_ADDRESSED.search(text)
+    ):
+        return ""
+    extra = _child_seat_extra(catalog)
+    if not extra:
+        return ""
+    extra_id = str(extra.get("id") or "").strip()
+    localized_names = (
+        extra.get("names") if isinstance(extra.get("names"), dict) else {}
+    )
+    extra_labels = {
+        _normalized_label(extra.get("name")),
+        *(
+            _normalized_label(value)
+            for value in localized_names.values()
+        ),
+    }
+    for selected in fields.get("supplements") or []:
+        if not isinstance(selected, dict):
+            continue
+        if (
+            extra_id
+            and str(selected.get("id") or "").strip() == extra_id
+        ) or _normalized_label(selected.get("name")) in extra_labels:
+            return ""
+    price = extra.get("price") if isinstance(extra.get("price"), dict) else {}
+    amount = str(price.get("amount") or "")
+    if price.get("currency") != "USD" or not re.fullmatch(r"\d+\.\d{2}", amount):
+        return ""
+    billing_basis = str(
+        extra.get("billingBasis")
+        or extra.get("billing_basis")
+        or ""
+    )
+    if billing_basis not in {"per_day", "per_rental"}:
+        return ""
+    return _COPY[_locale(fields)][f"child_seat_{billing_basis}"].format(
+        price=amount,
+    )
 
 
 def media_first_clarification(fields: dict) -> str:

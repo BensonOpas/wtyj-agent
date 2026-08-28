@@ -15,6 +15,7 @@ from agents.social.ali_media_first import (
     infer_media_first_intent,
     media_first_clarification,
     add_first_turn_welcome,
+    proactive_child_seat_offer,
 )
 
 
@@ -45,6 +46,19 @@ def _catalog():
             _vehicle(5, "Toyota Corolla or similar", "compact", 5, "55.00"),
             _vehicle(6, "Kia Seltos or similar", "suv", 5, "65.00"),
         ],
+        "extras": [{
+            "id": "child-seat",
+            "name": "Child seat",
+            "names": {
+                "en": "Child seat",
+                "nl": "Kinderzitje",
+                "pap": "Stul pa mucha",
+                "de": "Kindersitz",
+            },
+            "active": True,
+            "billingBasis": "per_day",
+            "price": {"currency": "USD", "amount": "5.00"},
+        }],
     }
 
 
@@ -88,6 +102,62 @@ def test_first_turn_welcome_is_localized_and_preserves_one_next_question(locale,
     assert reply.startswith(opening)
     assert reply.endswith("How many people will be travelling in the car?")
     assert reply.count("How many people") == 1
+
+
+@pytest.mark.parametrize(
+    ("locale", "message", "expected"),
+    [
+        (
+            "en",
+            "There are 4 of us: 3 adults and 1 toddler.",
+            "You mentioned a child. Will you bring your own child seat, or would you like to rent one for USD 5.00 per rental day?",
+        ),
+        (
+            "nl",
+            "We zijn met 3 volwassenen en 1 peuter.",
+            "Je noemde een kind. Neem je je eigen kinderzitje mee, of wil je er een huren voor USD 5.00 per huurdag?",
+        ),
+        (
+            "pap",
+            "Nos ta 3 adulto ku 1 mucha chikí.",
+            "Bo a menshoná un mucha. Bo ta trese bo mes stul pa mucha, òf bo ke huur un pa USD 5.00 pa dia di huur?",
+        ),
+        (
+            "de",
+            "Wir sind 3 Erwachsene und 1 Kleinkind.",
+            "Sie haben ein Kind erwähnt. Bringen Sie einen eigenen Kindersitz mit, oder möchten Sie einen für USD 5.00 pro Miettag mieten?",
+        ),
+    ],
+)
+def test_child_traveler_gets_one_catalog_priced_seat_offer(locale, message, expected):
+    assert proactive_child_seat_offer(
+        message,
+        {"conversation_language": locale, "supplements": []},
+        {},
+        _catalog(),
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "fields", "flags"),
+    [
+        ("We have no children.", {"supplements": []}, {}),
+        ("One toddler; we have our own child seat.", {"supplements": []}, {}),
+        ("One toddler.", {"supplements": []}, {"ali_child_seat_prompted": True}),
+        (
+            "One toddler.",
+            {"supplements": [{"id": "child-seat", "name": "Child seat", "quantity": 1}]},
+            {},
+        ),
+    ],
+)
+def test_child_seat_offer_is_not_repeated_or_invented(message, fields, flags):
+    assert proactive_child_seat_offer(
+        message,
+        {"conversation_language": "en", **fields},
+        flags,
+        _catalog(),
+    ) == ""
 
 
 def test_fallback_intent_detects_text_dump_and_explicit_picture_request():
