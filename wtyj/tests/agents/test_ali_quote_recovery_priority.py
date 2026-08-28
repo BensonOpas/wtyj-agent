@@ -23,10 +23,10 @@ def raw_config():
     }
 
 
-def rental():
+def rental(end="2026-09-23"):
     return {
         "rental_start": "2026-09-01",
-        "rental_end": "2026-09-23",
+        "rental_end": end,
         "pickup_location": "Synthetic pickup",
         "return_location": "Synthetic return",
         "vehicle_class_id": CLASS_ID,
@@ -45,20 +45,24 @@ def configure(monkeypatch, tmp_path):
     recovery.ensure_schema()
 
 
-def create_quote(conversation_id):
+def create_quote(conversation_id, *, version=1, end="2026-09-23"):
     customer = {
         "name": "Synthetic Customer",
         "whatsapp": "+59990000000",
     }
-    _, summary_hash = workflow.normalized_summary(customer, rental())
+    selected = rental(end)
+    _, summary_hash = workflow.normalized_summary(
+        customer, selected, version=version,
+    )
     quote, created = workflow.create_confirmed_quote(
         conversation_id,
         "synthetic-account",
         customer,
-        rental(),
+        selected,
         summary_hash,
         "yes",
         DEPOSIT_ID,
+        summary_version=version,
         raw_config=raw_config(),
     )
     assert created
@@ -103,32 +107,43 @@ def test_new_replacement_quote_cannot_be_starved_by_old_attention_rows(
     ]
 
 
-def test_legacy_processor_unconfigured_row_is_bounded_recoverable(
+def test_only_legacy_versioned_replacement_is_bounded_recoverable(
     monkeypatch, tmp_path,
 ):
     configure(monkeypatch, tmp_path)
     current = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
-    quote = create_quote("legacy-misclassified-replacement")
+    conversation = "legacy-misclassified-replacement"
+
+    original = create_quote(conversation, version=1, end="2026-09-08")
     workflow.update_quote(
-        quote["public_id"],
+        original["public_id"],
+        status="complete",
+        whatsapp_status="accepted",
+        staff_email_status="sent",
+        brand_image_status="accepted",
+    )
+
+    replacement = create_quote(conversation, version=2, end="2026-09-23")
+    workflow.update_quote(
+        replacement["public_id"],
         status="attention_required",
         attempt_count=1,
         last_error_code="processor_unconfigured",
     )
-    set_updated(quote["public_id"], current - timedelta(hours=1))
+    set_updated(replacement["public_id"], current - timedelta(hours=1))
 
     assert recovery.quote_is_recoverable(
-        workflow.get_quote(quote["public_id"]),
+        workflow.get_quote(replacement["public_id"]),
         now=current,
     )
 
     workflow.update_quote(
-        quote["public_id"],
+        replacement["public_id"],
         status="attention_required",
         attempt_count=recovery.MAX_ATTEMPTS,
         last_error_code="processor_unconfigured",
     )
     assert not recovery.quote_is_recoverable(
-        workflow.get_quote(quote["public_id"]),
+        workflow.get_quote(replacement["public_id"]),
         now=current,
     )
