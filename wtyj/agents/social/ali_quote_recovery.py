@@ -127,6 +127,37 @@ def _retryable_error(code: object) -> bool:
     )
 
 
+def _legacy_replacement_failure(quote: dict) -> bool:
+    """Identify only the old collapsed error on a real replacement quote.
+
+    Before issue #288 the outer processor could label an arbitrary
+    ``AliQuoteError`` as ``processor_unconfigured``.  It remains unsafe to retry
+    that code generally.  A versioned replacement whose same conversation
+    already has a provider-accepted earlier quote is the narrow legacy case that
+    must receive bounded recovery.
+    """
+    if str(quote.get("last_error_code") or "") != "processor_unconfigured":
+        return False
+    try:
+        quote_id = int(quote.get("id") or 0)
+        version = int(quote.get("summary_version") or 0)
+    except (TypeError, ValueError):
+        return False
+    conversation_id = str(quote.get("conversation_id") or "")
+    if not conversation_id or quote_id < 2 or version < 2:
+        return False
+    conn = _connection()
+    try:
+        predecessor = conn.execute(
+            "SELECT 1 FROM ali_quotes WHERE conversation_id = ? AND id < ? "
+            "AND whatsapp_status = 'accepted' ORDER BY id DESC LIMIT 1",
+            (conversation_id, quote_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return predecessor is not None
+
+
 def _attention_backoff_seconds(attempt_count: object) -> int:
     try:
         attempts = max(1, int(attempt_count or 1))
@@ -162,7 +193,10 @@ def quote_is_recoverable(
         attempts = int(quote.get("attempt_count") or 0)
     except (TypeError, ValueError):
         return False
-    if attempts >= max_attempts or not _retryable_error(quote.get("last_error_code")):
+    retryable = _retryable_error(quote.get("last_error_code"))
+    if not retryable and str(quote.get("last_error_code") or "") == "processor_unconfigured":
+        retryable = _legacy_replacement_failure(quote)
+    if attempts >= max_attempts or not retryable:
         return False
     return (current - updated).total_seconds() >= _attention_backoff_seconds(attempts)
 
@@ -172,14 +206,19 @@ def list_recoverable_quotes(
     now: datetime | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """List stale or retryable rows without exposing customer or rental data."""
+    """List newest stale/retryable rows without exposing customer data.
+
+    Newest-first is deliberate.  Old, terminal ``attention_required`` rows must
+    never fill the bounded scan window and starve a newly confirmed replacement
+    quote behind them.
+    """
     ensure_schema()
     conn = _connection()
     try:
         rows = conn.execute(
             "SELECT * FROM ali_quotes WHERE customer_delivery_superseded_at IS NULL "
             "AND status IN ('confirmed','pricing','quoted','pdf_ready','delivering',"
-            "'attention_required') ORDER BY id LIMIT ?",
+            "'attention_required') ORDER BY id DESC LIMIT ?",
             (max(1, min(int(limit), 500)),),
         ).fetchall()
     finally:
