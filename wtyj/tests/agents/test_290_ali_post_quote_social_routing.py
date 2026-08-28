@@ -158,3 +158,46 @@ def test_question_tap_prompts_for_question_without_creating_case(monkeypatch):
     assert result == "What would you like to know about your quote?"
     assert len(saved) == 1
     assert alerts == []
+
+
+def test_change_tap_durably_opens_post_quote_correction_context(monkeypatch):
+    saved, alerts = _configure_early_route(monkeypatch)
+    monkeypatch.setattr(
+        social_agent,
+        "resolve_ali_post_quote_interaction",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "status": "current",
+            "action": "change",
+            "quote_public_id": "quote-public-290",
+        },
+    )
+    monkeypatch.setattr(
+        social_agent,
+        "handle_ali_post_quote_action",
+        lambda *_args, **_kwargs: {
+            "text": "Of course. What would you like me to change in your quote?",
+            "status": "change_requested",
+            "action": "change",
+            "reservation": None,
+        },
+    )
+
+    result = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": "conversation-290",
+            "text": "Change Something",
+            "message_id": "message-change-290",
+            "_zernio_account_id": "account-290",
+            "_zernio_interactive_type": "buttonReply",
+            "_zernio_interactive_id": "ali_post_quote:v1:signed",
+        },
+    )
+
+    assert result == "Of course. What would you like me to change in your quote?"
+    assert len(saved) == 1
+    assert saved[0][2]["ali_post_quote_change_requested"]["quote_public_id"] == (
+        "quote-public-290"
+    )
+    assert saved[0][2]["ali_post_quote_change_requested"]["requested_at"]
+    assert alerts == []
