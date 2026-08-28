@@ -59,9 +59,9 @@ _BOUND_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _CONTROL_COPY = {
     "en": {
         "text": "How would you like to proceed?",
-        "reserve": "Reserve this car",
-        "change": "Change something",
-        "question": "Ask a question",
+        "reserve": "Reserve This Car",
+        "change": "Change Something",
+        "question": "Ask A Question",
         "reserve_reply": (
             "I have your reservation request. I am asking our team to check "
             "the vehicle availability now. I will update you when they have reviewed it."
@@ -70,9 +70,9 @@ _CONTROL_COPY = {
     },
     "nl": {
         "text": "Hoe wil je verdergaan?",
-        "reserve": "Reserveer auto",
-        "change": "Iets wijzigen",
-        "question": "Stel een vraag",
+        "reserve": "Reserveer Auto",
+        "change": "Iets Wijzigen",
+        "question": "Stel Een Vraag",
         "reserve_reply": (
             "Ik heb je reserveringsaanvraag. Ik vraag ons team nu om de "
             "beschikbaarheid van de auto te controleren. Daarna laat ik je het weten."
@@ -81,9 +81,9 @@ _CONTROL_COPY = {
     },
     "pap": {
         "text": "Kon bo ke sigui?",
-        "reserve": "Reserva e outo aki",
-        "change": "Kambia algu",
-        "question": "Hasi pregunta",
+        "reserve": "Reserva E Outo Aki",
+        "change": "Kambia Algu",
+        "question": "Hasi Pregunta",
         "reserve_reply": (
             "Mi tin bo petishon di reservashon. Mi ta pidi nos tim pa kontrola "
             "disponibilidat di e outo awor. Mi ta laga bo sa despues di nan revision."
@@ -92,9 +92,9 @@ _CONTROL_COPY = {
     },
     "de": {
         "text": "Wie möchten Sie fortfahren?",
-        "reserve": "Auto reservieren",
-        "change": "Etwas ändern",
-        "question": "Frage stellen",
+        "reserve": "Auto Reservieren",
+        "change": "Etwas Ändern",
+        "question": "Frage Stellen",
         "reserve_reply": (
             "Ich habe Ihre Reservierungsanfrage. Unser Team pruft jetzt die "
             "Fahrzeugverfugbarkeit. Danach melde ich mich bei Ihnen."

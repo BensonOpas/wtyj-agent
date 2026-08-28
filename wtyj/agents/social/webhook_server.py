@@ -879,7 +879,7 @@ def _flush_buffer(phone):
                                 "escalation", "whatsapp", _zernio_conv,
                                 _zernio_sender or "Ali quote customer",
                                 "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
-                                "The rental summary and Send my quote control could not be delivered. Open the conversation in Unboks.",
+                                "The rental summary and Send My Quote control could not be delivered. Open the conversation in Unboks.",
                                 mode="hard",
                             )
                         return
@@ -1315,7 +1315,7 @@ def _process_zernio_event(payload: dict):
                             failed["conversation_id"],
                             "Ali quote customer",
                             "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
-                            "The Send my quote control failed and its text fallback could not be delivered. Open the conversation in Unboks.",
+                            "The Send My Quote control failed and its text fallback could not be delivered. Open the conversation in Unboks.",
                             mode="hard",
                         )
                     log(

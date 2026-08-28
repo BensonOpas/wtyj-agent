@@ -136,7 +136,7 @@ def test_signed_controls_bind_every_quote_anchor_and_reject_tampering(configured
     control = workflow.build_post_quote_control(quote, secret=SECRET)
 
     assert [button["title"] for button in control["buttons"]] == [
-        "Reserve this car", "Change something", "Ask a question",
+        "Reserve This Car", "Change Something", "Ask A Question",
     ]
     assert control["idempotency_key"].endswith(control["state_hash"])
     reserve_payload = control["buttons"][0]["payload"]

@@ -75,10 +75,10 @@ ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", 
 QUOTE_CONFIRMATION_PREFIX = "ali_quote_confirm:v1:"
 QUOTE_CHANGE_PREFIX = "ali_quote_change:v1:"
 QUOTE_CONFIRMATION_ACTIONS = {
-    "en": ("Send my quote", "Change something"),
-    "nl": ("Stuur mijn offerte", "Iets wijzigen"),
-    "pap": ("Manda mi oferta", "Kambia algu"),
-    "de": ("Angebot senden", "Etwas ändern"),
+    "en": ("Send My Quote", "Change Something"),
+    "nl": ("Stuur Mijn Offerte", "Iets Wijzigen"),
+    "pap": ("Manda Mi Oferta", "Kambia Algu"),
+    "de": ("Angebot Senden", "Etwas Ändern"),
 }
 QUOTE_CHANGE_PROMPTS = {
     "en": "Of course—what would you like to change?",

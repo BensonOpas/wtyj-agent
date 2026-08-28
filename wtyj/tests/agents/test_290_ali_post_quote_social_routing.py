@@ -72,7 +72,7 @@ def test_signed_reserve_creates_staff_alert_without_model_call(monkeypatch):
     result = social_agent.handle_incoming_whatsapp_message(
         {
             "from": "conversation-290",
-            "text": "Reserve this car",
+            "text": "Reserve This Car",
             "from_name": "Synthetic Customer",
             "message_id": "message-290",
             "_zernio_account_id": "account-290",
@@ -147,7 +147,7 @@ def test_question_tap_prompts_for_question_without_creating_case(monkeypatch):
     result = social_agent.handle_incoming_whatsapp_message(
         {
             "from": "conversation-290",
-            "text": "Ask a question",
+            "text": "Ask A Question",
             "message_id": "message-question-290",
             "_zernio_account_id": "account-290",
             "_zernio_interactive_type": "buttonReply",
