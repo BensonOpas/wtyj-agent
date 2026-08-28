@@ -86,6 +86,22 @@ def correction_catalog():
     }
 
 
+def child_seat_catalog():
+    catalog = correction_catalog()
+    catalog["extras"] = [{
+        "id": "c5b7e180-5eaa-4f5d-8a41-180000000001",
+        "name": "Child seat",
+        "names": {
+            "en": "Child seat", "nl": "Kinderzitje",
+            "pap": "Stul pa mucha", "de": "Kindersitz",
+        },
+        "active": True,
+        "billingBasis": "per_day",
+        "price": {"currency": "USD", "amount": "5.00"},
+    }]
+    return catalog
+
+
 def media_catalog():
     catalog = correction_catalog()
     catalog["vehicles"].extend([
@@ -385,6 +401,56 @@ def test_change_something_tap_is_localized_preserves_details_and_closes_summary(
         assert saved["flags"]["ali_phase"] == "DISCOVERY"
         assert "awaiting_quote_confirmation" not in saved["flags"]
         assert "ali_presented_summary_hash" not in saved["flags"]
+
+
+def test_toddler_cue_prioritizes_catalog_priced_child_seat_question(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-proactive-child-seat"
+    fields = {
+        "vehicle_class_name": "Compact SUV",
+        "conversation_language": "en",
+    }
+    result = {
+        "intents": ["inquiry"],
+        "fields": {
+            "vehicle_class_name": "Compact SUV",
+            "passenger_count": 4,
+            "conversation_language": "en",
+        },
+        "confidence": "high",
+        "reply": "How much luggage will you be bringing?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "continue_intake",
+    }
+    _configure(monkeypatch, tmp_path, result)
+    monkeypatch.setattr(
+        social_agent, "get_ali_intake_catalog", child_seat_catalog,
+    )
+    monkeypatch.setattr(workflow, "get_intake_catalog", child_seat_catalog)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "4 in total: 3 adults and 1 toddler",
+        "from_name": "Synthetic Customer",
+        "message_id": "child-cue-1",
+        "_zernio_sender_id": "+351000000000",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert response["text"] == (
+        "You mentioned a child. Will you bring your own child seat, or would "
+        "you like to rent one for USD 5.00 per rental day?"
+    )
+    assert response["vehicle_recommendation"] is None
+    assert response["quote_confirmation"] is None
+    assert response["ali_turn_commit"]["outbound_kind"] == "agent_reply"
+    assert saved["fields"]["passenger_count"] == 4
+    assert saved["flags"]["ali_child_seat_prompted"] is True
 
 
 def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeypatch, tmp_path):
