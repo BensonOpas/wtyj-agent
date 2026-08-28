@@ -283,7 +283,7 @@ def test_send_my_quote_tap_bypasses_model_and_duplicate_tap_creates_one_quote(
 
     tap = {
         "from": phone,
-        "text": "Send my quote",
+        "text": "Send My Quote",
         "from_name": "Synthetic Customer",
         "message_id": "quote-tap-1",
         "_zernio_sender_id": "+351000000000",
@@ -333,10 +333,10 @@ def test_change_something_tap_is_localized_preserves_details_and_closes_summary(
         ),
     )
     expected = {
-        "en": (["Send my quote", "Change something"], "Of course—what would you like to change?"),
-        "nl": (["Stuur mijn offerte", "Iets wijzigen"], "Natuurlijk—wat wil je wijzigen?"),
-        "pap": (["Manda mi oferta", "Kambia algu"], "Sigur—kiko bo ke kambia?"),
-        "de": (["Angebot senden", "Etwas ändern"], "Natürlich—was möchten Sie ändern?"),
+        "en": (["Send My Quote", "Change Something"], "Of course—what would you like to change?"),
+        "nl": (["Stuur Mijn Offerte", "Iets Wijzigen"], "Natuurlijk—wat wil je wijzigen?"),
+        "pap": (["Manda Mi Oferta", "Kambia Algu"], "Sigur—kiko bo ke kambia?"),
+        "de": (["Angebot Senden", "Etwas Ändern"], "Natürlich—was möchten Sie ändern?"),
     }
 
     for index, (locale, (titles, prompt)) in enumerate(expected.items(), 1):
@@ -674,7 +674,7 @@ def test_ertiga_summary_to_suv_visual_rejection_and_corrected_quote(
             "mode": "specific",
             "vehicle_names": ["Kia Seltos or similar"],
             "availability_note": "Synthetic note",
-            "cta_label": "Car details",
+            "cta_label": "Car Details",
         },
     }
     monkeypatch.setattr(
@@ -997,7 +997,7 @@ def test_bare_small_car_proposes_car_but_never_assumes_it_or_repeats_on_repair(
             "mode": "specific",
             "vehicle_names": ["Toyota Agya"],
             "availability_note": "Final availability needs confirmation.",
-            "cta_label": "Car details",
+            "cta_label": "Car Details",
         },
     }
     _configure(monkeypatch, tmp_path, model_result)
@@ -1354,7 +1354,7 @@ def _live_discovery_model_result():
             "availability_note": (
                 "Final vehicle availability still needs confirmation."
             ),
-            "cta_label": "Car details",
+            "cta_label": "Car Details",
         },
     }
 
@@ -1774,7 +1774,7 @@ def test_live_no_preference_reopens_a_previously_delivered_suitable_car(
             "availability_note": (
                 "Final vehicle availability still needs confirmation."
             ),
-            "cta_label": "Car details",
+            "cta_label": "Car Details",
         },
         catalog,
         fields,

@@ -19,10 +19,10 @@ from shared import bm_logger, state_registry
 _VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
 _MAX_VEHICLE_MEDIA_BYTES = 10 * 1024 * 1024
 _QUOTE_CONFIRMATION_ACTION_TITLES = {
-    ("Send my quote", "Change something"),
-    ("Stuur mijn offerte", "Iets wijzigen"),
-    ("Manda mi oferta", "Kambia algu"),
-    ("Angebot senden", "Etwas ändern"),
+    ("Send My Quote", "Change Something"),
+    ("Stuur Mijn Offerte", "Iets Wijzigen"),
+    ("Manda Mi Oferta", "Kambia Algu"),
+    ("Angebot Senden", "Etwas Ändern"),
 }
 _QUOTE_CONFIRMATION_FALLBACK_SUFFIX = (
     "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
@@ -1107,10 +1107,10 @@ def send_dm_post_quote_actions(
     text = str(actions.get("text") or "")
     buttons = actions.get("buttons")
     allowed_title_sets = {
-        ("Reserve this car", "Change something", "Ask a question"),
-        ("Reserveer auto", "Iets wijzigen", "Stel een vraag"),
-        ("Reserva e outo aki", "Kambia algu", "Hasi pregunta"),
-        ("Auto reservieren", "Etwas ändern", "Frage stellen"),
+        ("Reserve This Car", "Change Something", "Ask A Question"),
+        ("Reserveer Auto", "Iets Wijzigen", "Stel Een Vraag"),
+        ("Reserva E Outo Aki", "Kambia Algu", "Hasi Pregunta"),
+        ("Auto Reservieren", "Etwas Ändern", "Frage Stellen"),
     }
     button_titles = tuple(
         str(button.get("title") or "")

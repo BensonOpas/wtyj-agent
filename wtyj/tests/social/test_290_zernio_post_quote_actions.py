@@ -38,17 +38,17 @@ def _actions():
         "buttons": [
             {
                 "type": "postback",
-                "title": "Reserve this car",
+                "title": "Reserve This Car",
                 "payload": "ali_post_quote:v1:reserve:signed-token",
             },
             {
                 "type": "postback",
-                "title": "Change something",
+                "title": "Change Something",
                 "payload": "ali_post_quote:v1:change:signed-token",
             },
             {
                 "type": "postback",
-                "title": "Ask a question",
+                "title": "Ask A Question",
                 "payload": "ali_post_quote:v1:question:signed-token",
             },
         ],

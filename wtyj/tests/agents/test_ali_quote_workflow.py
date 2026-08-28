@@ -238,9 +238,9 @@ def test_send_my_quote_control_is_signed_opaque_current_and_stale(monkeypatch):
     )
     payload = control["button"]["payload"]
     change_payload = control["buttons"][1]["payload"]
-    assert control["button"]["title"] == "Send my quote"
+    assert control["button"]["title"] == "Send My Quote"
     assert [button["title"] for button in control["buttons"]] == [
-        "Send my quote", "Change something",
+        "Send My Quote", "Change Something",
     ]
     assert control["fallback_text"].endswith(
         "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."

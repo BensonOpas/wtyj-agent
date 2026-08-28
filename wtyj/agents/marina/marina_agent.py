@@ -259,7 +259,7 @@ MARINA_TOOL = {
                         "type": "string",
                         "description": (
                             "A natural label of at most 24 characters in the customer's language "
-                            "for opening a vehicle details page, such as Car details. This URL "
+                            "for opening a vehicle details page, such as Car Details. This URL "
                             "label must never claim that clicking it selects the car."
                         ),
                     },
@@ -1123,7 +1123,7 @@ Current published catalog, supplied digitally by Ali and containing no customer 
     those options naturally and ask which feels right for the trip.
   - Put one concise localized request-only availability sentence in `availability_note`, not
     in `reply` and not on each card. Use a truthful localized details-page label such as
-    "Car details" in `cta_label`; never label a URL as a car choice. Python sends the native
+    "Car Details" in `cta_label`; never label a URL as a car choice. Python sends the native
     selection control immediately after the visual recommendation.
   - Do not restate card facts in `reply`; the catalog renderer adds them without invention.
     Ordinary typed vehicle choices remain valid; never force the customer to use a button.

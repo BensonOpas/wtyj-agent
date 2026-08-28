@@ -101,10 +101,10 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
 @pytest.mark.parametrize(
     ("locale", "capacity_label", "cta", "picker_text", "picker_button"),
     [
-        ("en", "seats", "Car details", "Choose your car below.", "Choose a car"),
-        ("nl", "zitplaatsen", "Autodetails", "Kies hieronder je auto.", "Kies een auto"),
-        ("pap", "lugá", "Detayenan di outo", "Skoge bo outo aki bou.", "Skoge un outo"),
-        ("de", "Sitzplätze", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto auswählen"),
+        ("en", "seats", "Car Details", "Choose your car below.", "Choose A Car"),
+        ("nl", "zitplaatsen", "Autodetails", "Kies hieronder je auto.", "Kies Een Auto"),
+        ("pap", "lugá", "Detayenan Di Outo", "Skoge bo outo aki bou.", "Skoge Un Outo"),
+        ("de", "Sitzplätze", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto Auswählen"),
     ],
 )
 def test_curated_carousel_is_two_to_five_suitable_localized_cards(
@@ -257,7 +257,7 @@ def test_curated_four_carousel_options_have_matching_native_picker_rows():
         option["selection_id"] for option in plan["options"]
     ]
     assert rows[-1]["description"] == "Economy · 4 seats · USD 30/day"
-    assert plan["picker"]["button"] == "Choose a car"
+    assert plan["picker"]["button"] == "Choose A Car"
 
 
 def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
@@ -606,7 +606,7 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
         ),
         "button": {
             "type": "postback",
-            "title": "Send my quote",
+            "title": "Send My Quote",
             "payload": "ali_quote_confirm:v1:" + "b" * 64,
         },
     }
@@ -614,7 +614,7 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
         confirmation["button"],
         {
             "type": "postback",
-            "title": "Change something",
+            "title": "Change Something",
             "payload": "ali_quote_change:v1:" + "c" * 64,
         },
     ]
@@ -1117,7 +1117,7 @@ def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
         "carousel", "list",
     ]
     assert posts[1]["json"]["interactive"]["action"]["button"] == (
-        "Choose a car"
+        "Choose A Car"
     )
 
 
