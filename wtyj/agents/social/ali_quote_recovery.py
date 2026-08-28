@@ -54,10 +54,6 @@ _RETRYABLE_ERROR_CODES = {
     "brand_image_delivery_failed",
     "whatsapp_delivery_failed",
     "unexpected_processor_failure",
-    # Before issue #288 the outer processor collapsed every AliQuoteError into
-    # this code.  Bounded recovery must reclaim those legacy rows once so a
-    # confirmed replacement quote is not stranded forever.
-    "processor_unconfigured",
 }
 
 
@@ -131,6 +127,37 @@ def _retryable_error(code: object) -> bool:
     )
 
 
+def _legacy_replacement_failure(quote: dict) -> bool:
+    """Identify only the old collapsed error on a real replacement quote.
+
+    Before issue #288 the outer processor could label an arbitrary
+    ``AliQuoteError`` as ``processor_unconfigured``.  It remains unsafe to retry
+    that code generally.  A versioned replacement whose same conversation
+    already has a provider-accepted earlier quote is the narrow legacy case that
+    must receive bounded recovery.
+    """
+    if str(quote.get("last_error_code") or "") != "processor_unconfigured":
+        return False
+    try:
+        quote_id = int(quote.get("id") or 0)
+        version = int(quote.get("summary_version") or 0)
+    except (TypeError, ValueError):
+        return False
+    conversation_id = str(quote.get("conversation_id") or "")
+    if not conversation_id or quote_id < 2 or version < 2:
+        return False
+    conn = _connection()
+    try:
+        predecessor = conn.execute(
+            "SELECT 1 FROM ali_quotes WHERE conversation_id = ? AND id < ? "
+            "AND whatsapp_status = 'accepted' ORDER BY id DESC LIMIT 1",
+            (conversation_id, quote_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return predecessor is not None
+
+
 def _attention_backoff_seconds(attempt_count: object) -> int:
     try:
         attempts = max(1, int(attempt_count or 1))
@@ -166,7 +193,10 @@ def quote_is_recoverable(
         attempts = int(quote.get("attempt_count") or 0)
     except (TypeError, ValueError):
         return False
-    if attempts >= max_attempts or not _retryable_error(quote.get("last_error_code")):
+    retryable = _retryable_error(quote.get("last_error_code"))
+    if not retryable and str(quote.get("last_error_code") or "") == "processor_unconfigured":
+        retryable = _legacy_replacement_failure(quote)
+    if attempts >= max_attempts or not retryable:
         return False
     return (current - updated).total_seconds() >= _attention_backoff_seconds(attempts)
 
