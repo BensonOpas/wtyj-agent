@@ -1309,6 +1309,188 @@ def test_four_language_vehicle_change_actions_use_same_canonical_state():
         assert "vehicle_id" not in changed
 
 
+def test_relative_post_quote_extensions_are_catalog_state_changes_in_all_locales():
+    cases = {
+        "en": "15 days more, we decided to stay longer",
+        "nl": "15 dagen langer, we hebben besloten langer te blijven",
+        "pap": "15 dia mas, nos a disidí keda mas largu",
+        "de": "15 Tage länger, wir haben beschlossen länger zu bleiben",
+    }
+    for locale, phrase in cases.items():
+        fields = _stored_fields(locale)
+        fields["rental_start"] = "2026-08-30"
+        fields["rental_end"] = "2026-09-14"
+        assert workflow.infer_relative_rental_end_change(
+            phrase,
+            fields,
+            change_requested=True,
+        ) == "2026-09-29"
+
+
+def test_relative_extension_fails_closed_without_context_or_with_uncertainty():
+    fields = _stored_fields("en")
+    fields["rental_start"] = "2026-08-30"
+    fields["rental_end"] = "2026-09-14"
+    assert workflow.infer_relative_rental_end_change(
+        "15 days more, we decided to stay longer",
+        fields,
+        change_requested=False,
+    ) is None
+    assert workflow.infer_relative_rental_end_change(
+        "Could we maybe stay 15 days more?",
+        fields,
+        change_requested=True,
+    ) is None
+    assert workflow.infer_relative_rental_end_change(
+        "Not 15 days more",
+        fields,
+        change_requested=True,
+    ) is None
+
+
+def test_live_relative_extension_sequence_creates_one_immutable_replacement_quote(
+    monkeypatch,
+    tmp_path,
+):
+    phone = "synthetic-relative-replacement"
+    fields = _stored_fields("en")
+    fields["rental_start"] = "2026-08-30"
+    fields["rental_end"] = "2026-09-14"
+    customer = {
+        "name": fields["customer_name"],
+        "whatsapp": "+351000000000",
+    }
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": (
+            "Nice! So 15 extra days on top of 14 September would put the "
+            "return on 29 September—is that right?"
+        ),
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "ask_question",
+        "ali_rental_change": {"mode": "clarify", "changed_fields": []},
+    }
+    _configure(monkeypatch, tmp_path, model_result)
+    rental = {
+        key: fields.get(key)
+        for key in (
+            "rental_start", "rental_end", "pickup_location", "return_location",
+            "vehicle_id", "vehicle_name", "vehicle_class_id", "vehicle_class_name",
+            "driver_age", "passenger_count", "luggage_count", "supplements",
+            "comments", "conversation_language",
+        )
+    }
+    _, old_summary_hash = workflow.normalized_summary(customer, rental, version=1)
+    old_quote, created = workflow.create_confirmed_quote(
+        phone,
+        "synthetic-account",
+        customer,
+        rental,
+        old_summary_hash,
+        "yes",
+        raw_config()["workflow"]["required_deposit_charge_id"],
+        summary_version=1,
+        raw_config=raw_config(),
+    )
+    assert created is True
+    workflow.update_quote(
+        old_quote["public_id"],
+        status="complete",
+        quote_reference="ALI-SYNTHETIC-OLD",
+        whatsapp_status="accepted",
+    )
+    _, old_state_hash = workflow.normalized_summary(customer, rental, version=0)
+    flags = {
+        "ali_phase": "QUOTED",
+        "ali_draft_hash": old_state_hash,
+        "ali_draft_summary_hash": old_summary_hash,
+        "ali_draft_version": 1,
+        "ali_active_quote_public_id": old_quote["public_id"],
+        "ali_quote_public_id": old_quote["public_id"],
+        "ali_post_quote_change_requested": {
+            "quote_public_id": old_quote["public_id"],
+            "requested_at": "2026-08-28T13:47:10Z",
+        },
+    }
+    monkeypatch.setattr(workflow, "_process_production", lambda _public_id: None)
+    state_registry.wa_save_booking_state(phone, fields, flags)
+
+    corrected = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "15 days more, we decided to stay longer",
+            "from_name": "Synthetic Customer",
+            "message_id": "relative-change-1",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+        },
+        include_media=True,
+    )
+    saved = state_registry.wa_get_booking_state(phone)
+
+    assert corrected["ali_turn_commit"]["outbound_kind"] == "summary"
+    assert "30 August 2026 – 29 September 2026" in corrected["text"]
+    assert "14 September 2026" not in corrected["text"]
+    assert saved["fields"]["rental_end"] == "2026-09-29"
+    assert "ali_post_quote_change_requested" not in saved["flags"]
+    assert saved["flags"]["ali_replaces_quote_public_id"] == old_quote["public_id"]
+
+    corrected_commit = corrected["ali_turn_commit"]
+    corrected_plan = workflow.AliTurnPlan(
+        outbound_kind=corrected_commit["outbound_kind"],
+        text=corrected["text"],
+        phase=corrected_commit["phase"],
+        primary_intent=corrected_commit["primary_intent"],
+        reason_code=corrected_commit["reason_code"],
+        action_id=corrected_commit["action_id"],
+        draft_hash=corrected_commit["draft_hash"],
+        summary_hash=corrected_commit["summary_hash"],
+        summary_version=corrected_commit["summary_version"],
+        quote_public_id=corrected_commit["quote_public_id"],
+    )
+    control = workflow.build_quote_confirmation_control(phone, corrected_plan)
+    workflow.commit_ali_turn_delivery(
+        phone,
+        corrected["ali_turn_commit"],
+        corrected["text"],
+        ["relative-summary-inbound"],
+        confirmation_delivery="interactive",
+        confirmation_payload=control["button"]["payload"],
+        confirmation_provider_message_ids=["relative-summary-provider"],
+    )
+    tap = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": phone,
+            "text": "Send My Quote",
+            "from_name": "Synthetic Customer",
+            "message_id": "relative-quote-tap",
+            "_zernio_sender_id": "+351000000000",
+            "_zernio_account_id": "synthetic-account",
+            "_zernio_interactive_type": "button_reply",
+            "_zernio_interactive_id": control["button"]["payload"],
+        },
+        include_media=True,
+    )
+
+    assert tap["ali_turn_commit"]["outbound_kind"] == "quote_preparing"
+    connection = workflow._connection()
+    try:
+        rows = connection.execute(
+            "SELECT public_id, rental_json FROM ali_quotes "
+            "WHERE conversation_id = ? ORDER BY id",
+            (phone,),
+        ).fetchall()
+    finally:
+        connection.close()
+    assert len(rows) == 2
+    assert rows[0]["public_id"] == old_quote["public_id"]
+    assert json.loads(rows[0]["rental_json"])["rental_end"] == "2026-09-14"
+    assert json.loads(rows[1]["rental_json"])["rental_end"] == "2026-09-29"
+
+
 def test_orchestration_source_does_not_log_customer_change_values():
     source = open(social_agent.__file__, encoding="utf-8").read()
     assert "log_rental_change_decision(_ali_change_outcome, _ali_change_fields)" in source

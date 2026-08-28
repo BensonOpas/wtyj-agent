@@ -29,9 +29,11 @@ from agents.social.ali_quote_workflow import (
     confirmation_decision,
     build_quote_confirmation_control,
     QUOTE_CHANGE_PROMPTS,
+    QUOTE_CHANGE_VALUE_PROMPTS,
     fail_closed_turn_plan,
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
+    infer_relative_rental_end_change,
     log_rental_change_decision,
     plan_repeated_quote_confirmation,
     plan_ali_quote_turn,
@@ -1129,6 +1131,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # generic confirmation. The exact RESERVE token is the sole text fallback.
     _ali_account_id = str(message.get("_zernio_account_id") or "").strip()
     _ali_post_quote_result = None
+    _ali_post_quote_interaction = None
     if channel == "whatsapp" and ali_quote_tenant_enabled() and _ali_account_id:
         try:
             _ali_post_quote_interaction = resolve_ali_post_quote_interaction(
@@ -1194,6 +1197,17 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             }
 
     if _ali_post_quote_result is not None:
+        if (
+            _ali_post_quote_result.get("status") == "change_requested"
+            and _ali_post_quote_result.get("action") == "change"
+        ):
+            flags["ali_post_quote_change_requested"] = {
+                "quote_public_id": str(
+                    (_ali_post_quote_interaction or {}).get("quote_public_id")
+                    or ""
+                ),
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            }
         _reservation = _ali_post_quote_result.get("reservation")
         if (
             _ali_post_quote_result.get("status") == "created"
@@ -1815,17 +1829,50 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_structured_primary_intent = str(
         result.get("ali_primary_intent") or ""
     ).strip().lower()
+    _ali_post_quote_change_pending = isinstance(
+        flags.get("ali_post_quote_change_requested"), dict,
+    )
+    _ali_relative_rental_end = (
+        infer_relative_rental_end_change(
+            text,
+            fields,
+            change_requested=_ali_post_quote_change_pending,
+        )
+        if _ali_change_configured
+        else None
+    )
+    _ali_forced_change_action = None
+    if _ali_relative_rental_end:
+        new_fields = dict(new_fields)
+        new_fields["rental_end"] = _ali_relative_rental_end
+        _ali_forced_change_action = {
+            "mode": "apply",
+            "changed_fields": ["rental_end"],
+        }
     _ali_pure_confirmation = (
         _ali_change_configured
         and confirmation_decision(text)[0]
     )
     # A deterministic pure affirmative contains no correction details. Do not
     # let opportunistic model extraction mutate the provider-delivered draft.
-    _ali_change_action = (
+    _ali_change_action = _ali_forced_change_action or (
         None
         if _ali_pure_confirmation or _ali_repair_reply
         else result.get("ali_rental_change")
     )
+    if (
+        _ali_pure_confirmation
+        and _ali_post_quote_change_pending
+        and _ali_forced_change_action is None
+    ):
+        _change_locale = str(
+            fields.get("conversation_language") or "en"
+        ).lower()
+        if _change_locale not in QUOTE_CHANGE_VALUE_PROMPTS:
+            _change_locale = "en"
+        reply = QUOTE_CHANGE_VALUE_PROMPTS[_change_locale]
+        _ali_structured_primary_intent = "reject_or_hesitate"
+        _ali_change_action = {"mode": "clarify", "changed_fields": []}
     _ali_summary_anchor_active = bool(
         flags.get("ali_phase") == "SUMMARY_PRESENTED"
         or (
@@ -1916,6 +1963,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             fields.clear()
             fields.update(changed_state)
             invalidate_active_quote_summary(flags)
+            flags.pop("ali_post_quote_change_requested", None)
         # Merge only non-quote fields. Quote fields are exclusively owned by
         # the validated newest-change action on correction turns.
         for k, v in new_fields.items():
@@ -1998,6 +2046,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     _ali_change_outcome,
                     _ali_change_fields,
                 )
+
+    if _ali_change_outcome == "changed":
+        flags.pop("ali_post_quote_change_requested", None)
 
     # Callback-follow-up tenants persist one evolving, tenant-local request.
     # The normal booking fields remain untouched so this capability is isolated

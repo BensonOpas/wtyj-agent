@@ -86,6 +86,12 @@ QUOTE_CHANGE_PROMPTS = {
     "pap": "Sigur—kiko bo ke kambia?",
     "de": "Natürlich—was möchten Sie ändern?",
 }
+QUOTE_CHANGE_VALUE_PROMPTS = {
+    "en": "Please send the exact new return date or other detail you want changed.",
+    "nl": "Stuur de exacte nieuwe retourdatum of het andere gegeven dat je wilt wijzigen.",
+    "pap": "Manda e fecha eksakto nobo di entrega òf e otro detaye ku bo ke kambia.",
+    "de": "Bitte senden Sie das genaue neue Rückgabedatum oder die andere Angabe, die Sie ändern möchten.",
+}
 QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = (
     "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
 )
@@ -1753,6 +1759,91 @@ QUOTE_CHANGE_FIELDS = frozenset({
     "luggage_count", "supplements", "comments",
 })
 
+_RELATIVE_RENTAL_EXTENSION_PATTERNS = {
+    "en": (
+        r"\b(?P<days>\d{1,3})\s+(?:extra|additional|more)\s+days?\b",
+        r"\b(?P<days>\d{1,3})\s+days?\s+(?:extra|more|longer)\b",
+    ),
+    "nl": (
+        r"\b(?P<days>\d{1,3})\s+(?:extra|meer)\s+dagen?\b",
+        r"\b(?P<days>\d{1,3})\s+dagen?\s+(?:extra|langer)\b",
+    ),
+    "pap": (
+        r"\b(?P<days>\d{1,3})\s+(?:dia|dianan)\s+(?:mas|más|extra|èkstra)\b",
+        r"\b(?P<days>\d{1,3})\s+(?:mas|más|extra|èkstra)\s+(?:dia|dianan)\b",
+    ),
+    "de": (
+        r"\b(?P<days>\d{1,3})\s+(?:weitere|zusätzliche|zusaetzliche|extra)\s+tage?\b",
+        r"\b(?P<days>\d{1,3})\s+tage?\s+(?:mehr|länger|laenger)\b",
+    ),
+}
+
+_RELATIVE_RENTAL_EXTENSION_UNCERTAIN = {
+    "en": r"\b(?:maybe|might|possibly|perhaps|can|could|would)\b",
+    "nl": r"\b(?:misschien|mogelijk|kunnen|zou)\b",
+    "pap": r"\b(?:kisas|por|lo por)\b",
+    "de": r"\b(?:vielleicht|eventuell|können|koennen|würden|wuerden)\b",
+}
+
+
+def infer_relative_rental_end_change(
+    message_text: object,
+    stored_fields: dict,
+    *,
+    change_requested: bool,
+) -> str | None:
+    """Resolve an explicit post-quote rental extension against stored truth.
+
+    This intentionally runs only after the customer has chosen the signed
+    ``Change Something`` action. It accepts a bounded, affirmative number of
+    additional days and never relies on model prose or display text. Questions,
+    uncertainty, negations, malformed dates, and implausible durations fail
+    closed without mutating state.
+    """
+    if not change_requested or not isinstance(stored_fields, dict):
+        return None
+    text = " ".join(str(message_text or "").strip().split())
+    if not text or "?" in text:
+        return None
+    locale = str(stored_fields.get("conversation_language") or "en").lower()
+    if locale not in _RELATIVE_RENTAL_EXTENSION_PATTERNS:
+        locale = "en"
+    if re.search(_RELATIVE_RENTAL_EXTENSION_UNCERTAIN[locale], text, re.IGNORECASE):
+        return None
+    if re.search(
+        r"\b(?:no|not|don['’]?t|geen|niet|no\s+ke|kein|nicht)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return None
+
+    match = next(
+        (
+            found
+            for pattern in _RELATIVE_RENTAL_EXTENSION_PATTERNS[locale]
+            if (found := re.search(pattern, text, re.IGNORECASE))
+        ),
+        None,
+    )
+    if match is None:
+        return None
+    days = int(match.group("days"))
+    if days < 1 or days > 365:
+        return None
+    try:
+        current_end = datetime.strptime(
+            str(stored_fields.get("rental_end") or ""), "%Y-%m-%d",
+        ).date()
+        rental_start = datetime.strptime(
+            str(stored_fields.get("rental_start") or ""), "%Y-%m-%d",
+        ).date()
+    except (TypeError, ValueError):
+        return None
+    replacement = current_end + timedelta(days=days)
+    if replacement <= rental_start:
+        return None
+    return replacement.isoformat()
+
 
 def apply_latest_rental_change(
     stored_fields: dict,
@@ -2720,6 +2811,16 @@ def plan_ali_quote_turn(
                     target=processor or _process_production,
                     args=(quote["public_id"],), daemon=True,
                 ).start()
+            elif quote.get("whatsapp_status") == "accepted":
+                flags["ali_phase"] = "QUOTED"
+                plan = AliTurnPlan(
+                    "agent_reply", QUOTE_ALREADY_SENT[rental["conversation_language"]],
+                    "QUOTED", intent, "quote_already_delivered",
+                    action_id, state_hash, summary_hash, summary_version,
+                    quote["public_id"],
+                )
+                _log_turn_plan(plan, changed_fields)
+                return plan
             plan = AliTurnPlan(
                 "quote_preparing", PREPARING[rental["conversation_language"]],
                 "QUOTE_PROCESSING", intent, "current_summary_confirmed",
