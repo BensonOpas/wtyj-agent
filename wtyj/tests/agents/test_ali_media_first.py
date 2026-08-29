@@ -703,6 +703,24 @@ def test_passenger_count_immediately_unlocks_options_without_luggage_question():
     assert "luggage" not in decision.get("reply_text", "").casefold()
 
 
+def test_lowest_price_question_is_answered_before_missing_passenger_count():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "How many people will be travelling in the car?",
+        {"conversation_language": "en"},
+        {},
+        _catalog(),
+        message_text="Which car is the cheapest?",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "lowest_price_catalog"
+    assert decision["action"]["vehicle_names"][0] == "Volkswagen Up or similar"
+    assert "USD 30.00 per day" in decision["reply_text"]
+    assert "How many people" not in decision["reply_text"]
+
+
 def test_model_luggage_question_is_repaired_into_catalog_options():
     fields = {
         "conversation_language": "en",
@@ -808,6 +826,24 @@ def test_calvin_browse_replay_returns_visual_options_instead_of_looping():
     assert "Would you prefer" not in decision["reply_text"]
 
 
+def test_calvin_browse_without_passenger_count_honors_latest_request():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "How many people will be travelling in the car?",
+        {"conversation_language": "en", "vehicle_class_name": "Compact Car"},
+        {},
+        _catalog(),
+        message_text="doesnt matter a normal car is fine .. which cars do you have ?",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "explicit_catalog_browse"
+    assert len(decision["action"]["vehicle_names"]) == 5
+    assert "current fleet" in decision["reply_text"]
+    assert "How many people" not in decision["reply_text"]
+
+
 def test_explicit_browse_overrides_simultaneous_model_candidates():
     decision = derive_media_first_action(
         "request_recommendation",
@@ -837,7 +873,14 @@ def test_explicit_browse_overrides_simultaneous_model_candidates():
 
 @pytest.mark.parametrize(
     "message_text",
-    ["Whatever", "no preference", "maakt niet uit", "egal"],
+    [
+        "Whatever",
+        "no preference",
+        "maakt niet uit",
+        "egal",
+        "It doesn't matter, you choose",
+        "Any car is fine, show me some options",
+    ],
 )
 def test_no_preference_is_a_suitable_recommendation_request(message_text):
     assert explicit_no_preference_request(message_text) is True
@@ -881,6 +924,24 @@ def test_no_preference_reopens_the_only_suitable_previously_rejected_car():
     assert decision["action"]["mode"] == "specific"
     assert decision["action"]["vehicle_names"] == ["Suzuki Ertiga"]
     assert "Would you prefer" not in decision["reply_text"]
+
+
+def test_no_preference_without_passenger_count_shows_options_before_retrying_question():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "How many people will be travelling in the car?",
+        {"conversation_language": "en"},
+        {"ali_last_recommendation_ids": ["vehicle-1"]},
+        _catalog(),
+        message_text="It doesn't matter, you choose",
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["reason"] == "latest_intent_catalog"
+    assert decision["action"]["mode"] == "curated"
+    assert "current fleet" in decision["reply_text"]
+    assert "How many people" not in decision["reply_text"]
 
 
 def test_no_preference_overrides_simultaneous_model_candidates():
