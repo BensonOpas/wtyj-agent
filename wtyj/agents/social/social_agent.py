@@ -1212,6 +1212,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         if (
             _ali_post_quote_result.get("status") == "created"
             and isinstance(_reservation, dict)
+            and _reservation.get("availability_status") == "pending"
         ):
             state_registry.create_pending_notification(
                 "escalation",

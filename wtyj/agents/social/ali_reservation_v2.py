@@ -632,26 +632,39 @@ def initialize_reservation(
             (TENANT_SLUG, str(public_id)),
         ).fetchone()
         if not existing:
-            responsibility, clock_state, pause_reason = _responsibility(
-                "availability_pending"
+            initial_state = (
+                "documents_collecting"
+                if str(reservation_row["availability_status"] or "") == "approved"
+                else "availability_pending"
             )
+            responsibility, clock_state, pause_reason = _responsibility(initial_state)
+            clock_started_at = timestamp if clock_state == "running" else None
             conn.execute(
                 "INSERT INTO ali_reservation_v2_cases (reservation_public_id, "
                 "tenant_slug, state, responsibility, clock_state, "
                 "clock_pause_reason, hold_started_at, client_timezone, "
                 "reminder_milestones_json, next_reminder_active_seconds, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "clock_started_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    public_id, TENANT_SLUG, "availability_pending", responsibility,
+                    public_id, TENANT_SLUG, initial_state, responsibility,
                     clock_state, pause_reason, timestamp, timezone_name,
                     json.dumps(settings["reminder_milestones"]),
-                    settings["reminder_milestones"][0], timestamp, timestamp,
+                    settings["reminder_milestones"][0], clock_started_at,
+                    timestamp, timestamp,
                 ),
             )
             legacy._event(
                 conn, public_id, "reservation_v2_initialized",
-                "availability_pending", "availability_pending", "system",
-                "brief_291", {"workflow_version": WORKFLOW_VERSION},
+                initial_state, initial_state, "system",
+                "reservation_v2_system",
+                {
+                    "workflow_version": WORKFLOW_VERSION,
+                    "availability_gate": (
+                        "skipped" if initial_state == "documents_collecting"
+                        else "manual"
+                    ),
+                },
             )
         conn.commit()
         return get_case(public_id, now=now)
