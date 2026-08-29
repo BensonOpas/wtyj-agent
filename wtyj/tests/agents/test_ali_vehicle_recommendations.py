@@ -336,9 +336,52 @@ def test_five_card_carousel_and_picker_preserve_exact_catalog_order():
     assert [row["id"] for row in rows] == [
         option["selection_id"] for option in plan["options"]
     ]
-    assert [row["title"] for row in rows] == names
+    assert [row["title"] for row in rows] == [
+        "Kia Picanto",
+        "Toyota Yaris",
+        "Kia Seltos",
+        "Volkswagen Up",
+        "Suzuki Swift",
+    ]
+    assert all(len(row["title"]) <= 24 for row in rows)
     assert all("seats" in row["description"] for row in rows)
     assert all("USD " in row["description"] for row in rows)
+    assert plan["picker"]["fallback_text"].splitlines()[1:] == [
+        f"{index}. {name}" for index, name in enumerate(names, start=1)
+    ]
+
+
+def test_picker_titles_never_expose_truncated_or_similar_fragments():
+    catalog = _catalog()
+    catalog["vehicles"] = [
+        _vehicle(1, "Volkswagen up! or similar", "economy", 4, "30.00"),
+        _vehicle(2, "Kia Picanto 2024 or similar", "economy", 4, "35.00"),
+        _vehicle(3, "Kia Picanto 2026 or similar", "economy", 4, "40.00"),
+        _vehicle(4, "Mercedes Benz Passenger Van", "compact", 8, "95.00"),
+    ]
+    names = [vehicle["name"] for vehicle in catalog["vehicles"]]
+
+    plan = recommendations.build_vehicle_recommendation(
+        _action("curated", names),
+        catalog,
+        {"conversation_language": "en"},
+        {},
+        "Here are a few options from our current fleet.",
+    )
+
+    rows = plan["picker"]["sections"][0]["rows"]
+    assert [row["title"] for row in rows] == [
+        "Volkswagen up!",
+        "Kia Picanto 2024",
+        "Kia Picanto 2026",
+        "Mercedes Benz Passenger…",
+    ]
+    assert all(len(row["title"]) <= 24 for row in rows)
+    assert all(
+        not row["title"].casefold().endswith(("simi", "simila"))
+        for row in rows
+    )
+    assert [option["name"] for option in plan["options"]] == names
     assert plan["picker"]["fallback_text"].splitlines()[1:] == [
         f"{index}. {name}" for index, name in enumerate(names, start=1)
     ]

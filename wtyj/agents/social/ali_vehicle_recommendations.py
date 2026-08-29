@@ -19,6 +19,8 @@ from shared import bm_logger
 
 SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
 _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
+_OR_SIMILAR_SUFFIX = re.compile(r"\s+or\s+similar\s*$", re.IGNORECASE)
+_PICKER_TITLE_LIMIT = 24
 _CARD_LABELS = {
     "en": {
         "seats": "seats",
@@ -264,6 +266,34 @@ def _picker_description(option: dict, locale: str) -> str:
     return " · ".join(details)[:72]
 
 
+def _picker_title(value: object) -> str:
+    """Return a complete, bounded vehicle label for a WhatsApp picker row.
+
+    WhatsApp limits list-row titles to 24 characters. The full catalog name is
+    retained everywhere else; only the redundant trailing category disclaimer
+    is omitted in this compact control. Longer names are shortened at a word
+    boundary instead of exposing a misleading fragment such as "simi".
+    """
+    name = " ".join(str(value or "").split())
+    preferred = _OR_SIMILAR_SUFFIX.sub("", name).strip() or name
+    if len(preferred) <= _PICKER_TITLE_LIMIT:
+        return preferred
+
+    ellipsis = "…"
+    candidate = preferred[:_PICKER_TITLE_LIMIT - len(ellipsis)].rstrip()
+    cut_index = _PICKER_TITLE_LIMIT - len(ellipsis)
+    split_word = (
+        candidate
+        and not preferred[cut_index].isspace()
+        and not preferred[:cut_index].endswith(" ")
+    )
+    if split_word and " " in candidate:
+        candidate = candidate.rsplit(" ", 1)[0].rstrip()
+    if not candidate:
+        candidate = preferred[:_PICKER_TITLE_LIMIT - len(ellipsis)].rstrip()
+    return f"{candidate}{ellipsis}"
+
+
 def _picker_plan(options: list[dict], locale: str) -> dict:
     labels = _CARD_LABELS[locale]
     numbered_options = "\n".join(
@@ -277,7 +307,7 @@ def _picker_plan(options: list[dict], locale: str) -> dict:
             "title": labels["picker_section"],
             "rows": [{
                 "id": option["selection_id"],
-                "title": option["name"][:24],
+                "title": _picker_title(option["name"]),
                 "description": _picker_description(option, locale),
             } for option in options],
         }],
