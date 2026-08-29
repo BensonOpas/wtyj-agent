@@ -90,6 +90,7 @@ class RentalCar(_StrictModel):
     displayName: str = Field(min_length=1, max_length=120)
     categoryId: str
     seats: int = Field(ge=1, le=20)
+    luggageCapacity: int = Field(default=0, ge=0, le=20)
     transmission: Literal["automatic", "manual"]
     primaryImageAssetId: str | None = None
     active: bool
@@ -780,6 +781,7 @@ def _consumer_catalog_from_published(
             "name": item["displayName"],
             "slug": _public_slug(item["displayName"], item["id"]),
             "seats": item["seats"],
+            "luggageCapacity": item["luggageCapacity"],
             "transmission": item["transmission"],
             "dailyRate": _money(daily, currency),
             "weeklyRate": _money(daily * 7, currency),

@@ -669,11 +669,6 @@ def test_explicit_selected_vehicle_picture_is_one_specific_action():
             "missing_passenger_count",
             "How many people",
         ),
-        (
-            {"conversation_language": "en", "passenger_count": 4},
-            "missing_luggage_count",
-            "How much luggage",
-        ),
     ],
 )
 def test_missing_trip_context_asks_one_useful_question(fields, reason, question):
@@ -691,6 +686,54 @@ def test_missing_trip_context_asks_one_useful_question(fields, reason, question)
     assert decision["reason"] == reason
     assert question in decision["reply_text"]
     assert decision["reply_text"].count("?") == 1
+
+
+def test_passenger_count_immediately_unlocks_options_without_luggage_question():
+    decision = derive_media_first_action(
+        "request_recommendation",
+        None,
+        "What cars do you recommend?",
+        {"conversation_language": "en", "passenger_count": 4},
+        {},
+        _catalog(),
+    )
+
+    assert decision["status"] == "planned"
+    assert decision["action"]["mode"] == "curated"
+    assert "luggage" not in decision.get("reply_text", "").casefold()
+
+
+def test_model_luggage_question_is_repaired_into_catalog_options():
+    fields = {
+        "conversation_language": "en",
+        "vehicle_class_id": "compact",
+        "vehicle_class_name": "Compact Car",
+        "passenger_count": 4,
+    }
+    intent = infer_media_first_intent(
+        "4 people",
+        "How much luggage will you be bringing?",
+        None,
+        fields,
+        {},
+        _catalog(),
+    )
+    decision = derive_media_first_action(
+        intent,
+        None,
+        "How much luggage will you be bringing?",
+        fields,
+        {},
+        _catalog(),
+    )
+
+    assert intent == "request_recommendation"
+    assert decision["status"] == "planned"
+    assert decision["action"]["vehicle_names"] == [
+        "Toyota Yaris or similar",
+        "Toyota Corolla or similar",
+    ]
+    assert "luggage" not in decision.get("reply_text", "").casefold()
 
 
 @pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])

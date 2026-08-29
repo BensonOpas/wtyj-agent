@@ -19,6 +19,7 @@ def _vehicle(
     *,
     image=True,
     transmission="automatic",
+    luggage_capacity=2,
 ):
     return {
         "id": f"vehicle-{index}",
@@ -26,6 +27,7 @@ def _vehicle(
         "name": name,
         "classId": category_id,
         "seats": seats,
+        "luggageCapacity": luggage_capacity,
         "transmission": transmission,
         "dailyRate": {"currency": "USD", "amount": amount},
         "images": ([{
@@ -49,7 +51,10 @@ def _catalog():
             _vehicle(1, "Kia Picanto or similar", "economy", 4, "35.00"),
             _vehicle(2, "Toyota Yaris or similar", "compact", 5, "45.00"),
             _vehicle(3, "Kia Seltos or similar", "suv", 5, "65.00"),
-            _vehicle(4, "Capacity pending", "suv", None, "75.50"),
+            _vehicle(
+                4, "Capacity pending", "suv", None, "75.50",
+                luggage_capacity=None,
+            ),
         ],
         "extras": [],
     }
@@ -77,7 +82,7 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
         _catalog(),
         {"conversation_language": "en", "passenger_count": 2},
         {},
-        "This one is a practical fit. How many bags are you bringing?",
+        "This one is a practical fit. Would you like to compare it?",
         public_base_url="https://alicarrental.com",
     )
 
@@ -94,22 +99,28 @@ def test_specific_vehicle_builds_one_image_from_current_catalog():
     assert option["detail_url"] == "https://alicarrental.com/en/fleet/vehicle-1"
     assert "Economy" in plan["text"]
     assert "4 seats" in plan["text"]
+    assert "Cargo: approx. 2 medium suitcases" in plan["text"]
     assert "USD $35/day" in plan["text"]
     assert plan["text"].count("availability") == 1
 
 
 @pytest.mark.parametrize(
-    ("locale", "capacity_label", "cta", "picker_text", "picker_button"),
+    (
+        "locale", "capacity_label", "luggage_label", "picker_luggage",
+        "cta", "picker_text", "picker_button",
+    ),
     [
-        ("en", "seats", "Car Details", "Choose your car below.", "Choose A Car"),
-        ("nl", "zitplaatsen", "Autodetails", "Kies hieronder je auto.", "Kies Een Auto"),
-        ("pap", "lugá", "Detayenan Di Outo", "Skoge bo outo aki bou.", "Skoge Un Outo"),
-        ("de", "Sitzplätze", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto Auswählen"),
+        ("en", "seats", "Cargo: approx. 2 medium suitcases", "2 suitcases", "Car Details", "Choose your car below.", "Choose A Car"),
+        ("nl", "zitplaatsen", "Bagageruimte: ca. 2 middelgrote koffers", "2 koffers", "Autodetails", "Kies hieronder je auto.", "Kies Een Auto"),
+        ("pap", "lugá", "Espasio di ekipahe: aprox. 2 maleta mediano", "2 maleta", "Detayenan Di Outo", "Skoge bo outo aki bou.", "Skoge Un Outo"),
+        ("de", "Sitzplätze", "Gepäckraum: ca. 2 mittelgroße Koffer", "2 Koffer", "Fahrzeugdetails", "Wählen Sie unten Ihr Auto aus.", "Auto Auswählen"),
     ],
 )
 def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     locale,
     capacity_label,
+    luggage_label,
+    picker_luggage,
     cta,
     picker_text,
     picker_button,
@@ -135,7 +146,9 @@ def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     assert len(plan["cards"]) == 3
     assert [card["card_index"] for card in plan["cards"]] == [0, 1, 2]
     assert capacity_label in plan["cards"][0]["body"]["text"]
+    assert luggage_label in plan["cards"][0]["body"]["text"]
     assert capacity_label not in plan["cards"][2]["body"]["text"]
+    assert luggage_label not in plan["cards"][2]["body"]["text"]
     assert "USD $75.50/day" in plan["cards"][2]["body"]["text"]
     assert "Automatic" in plan["cards"][0]["body"]["text"] if locale == "en" else True
     assert all(
@@ -145,6 +158,7 @@ def test_curated_carousel_is_two_to_five_suitable_localized_cards(
     assert all(card["type"] == "cta_url" for card in plan["cards"])
     assert plan["picker"]["text"] == picker_text
     assert plan["picker"]["button"] == picker_button
+    assert picker_luggage in plan["picker"]["sections"][0]["rows"][0]["description"]
     assert all(
         "choose" not in card["action"]["parameters"]["display_text"].casefold()
         and "kies" not in card["action"]["parameters"]["display_text"].casefold()
@@ -256,7 +270,9 @@ def test_curated_four_carousel_options_have_matching_native_picker_rows():
     assert [row["id"] for row in rows] == [
         option["selection_id"] for option in plan["options"]
     ]
-    assert rows[-1]["description"] == "Economy · 4 seats · USD 30/day"
+    assert rows[-1]["description"] == (
+        "Economy · 4 seats · 2 suitcases · USD 30/day"
+    )
     assert plan["picker"]["button"] == "Choose A Car"
 
 

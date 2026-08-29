@@ -35,6 +35,7 @@ def catalog_document():
             "displayName": "Kia Picanto or similar",
             "categoryId": "economy",
             "seats": 4,
+            "luggageCapacity": 2,
             "transmission": "automatic",
             "primaryImageAssetId": None,
             "active": True,
@@ -275,6 +276,7 @@ def test_consumer_projection_is_carlos_compatible_and_category_priced(tmp_path):
     assert contract["vehicleClasses"][0]["dailyRate"]["amount"] == "35.00"
     assert contract["vehicles"][0]["dailyRate"]["amount"] == "35.00"
     assert contract["vehicles"][0]["weeklyRate"]["amount"] == "245.00"
+    assert contract["vehicles"][0]["luggageCapacity"] == 2
     assert contract["extras"][0]["billingBasis"] == "per_day"
     assert contract["charges"] == [{
         "id": "deposit",

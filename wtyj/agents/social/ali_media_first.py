@@ -127,6 +127,14 @@ _PERSONAL_DETAIL_REQUEST = re.compile(
     r"|\bwie\s+alt\s+sind\s+sie\b)",
     re.IGNORECASE,
 )
+_LUGGAGE_QUESTION = re.compile(
+    r"(?:\bhow\s+(?:much\s+luggage|many\s+(?:bags?|suitcases?))\b"
+    r"|\bhoeveel\s+(?:bagage|koffers?|tassen?)\b"
+    r"|\bkuantu\s+(?:ekipahe|maleta)\b"
+    r"|\bwie\s+viel\s+gep[äa]ck\b"
+    r"|\bwie\s+viele\s+(?:koffer|taschen)\b)",
+    re.IGNORECASE,
+)
 _CHILD_TRAVELER_CUE = re.compile(
     r"\b(?:baby|babies|infant|infants|toddler|toddlers|child|children|kid|kids|"
     r"peuter|peuters|kind|kinderen|beibi|mucha(?:\s+chik[ií])?|"
@@ -155,7 +163,6 @@ _COPY = {
         "availability": "Final vehicle availability still needs confirmation.",
         "cta": "Car Details",
         "needs_passengers": "How many people will be travelling in the car?",
-        "needs_luggage": "How much luggage will you be bringing?",
         "clarify_preference": "Would you prefer a smaller car, an SUV, or a van?",
         "repair_category": "Sorry, I wasn't clear. I have {category} as your preferred category, but you haven't selected a specific car yet. How many people will be travelling in the car?",
         "resume_category": "Hi! I have {category} as your preferred category. How many people will be travelling in the car?",
@@ -181,7 +188,6 @@ _COPY = {
         "availability": "De definitieve voertuigbeschikbaarheid moet nog worden bevestigd.",
         "cta": "Autodetails",
         "needs_passengers": "Met hoeveel personen reizen jullie in de auto?",
-        "needs_luggage": "Hoeveel bagage nemen jullie mee?",
         "clarify_preference": "Heb je liever een kleinere auto, een SUV of een busje?",
         "repair_category": "Sorry, ik was niet duidelijk. Ik heb {category} als je voorkeurscategorie, maar je hebt nog geen specifieke auto gekozen. Met hoeveel personen reizen jullie?",
         "resume_category": "Hallo! Ik heb {category} als je voorkeurscategorie. Met hoeveel personen reizen jullie?",
@@ -207,7 +213,6 @@ _COPY = {
         "availability": "Disponibilidat final di e outo mester wordu konfirmá ainda.",
         "cta": "Detayenan Di Outo",
         "needs_passengers": "Kuantu persona lo biaha den e outo?",
-        "needs_luggage": "Kuantu ekipahe boso lo hiba?",
         "clarify_preference": "Bo ta preferá un outo mas chikí, un SUV òf un van?",
         "repair_category": "Pordon, mi no tabata kla. Mi tin {category} komo bo preferensia, pero bo no a skohe un outo spesífiko ainda. Kuantu persona lo biaha den e outo?",
         "resume_category": "Bon dia! Mi tin {category} komo bo preferensia. Kuantu persona lo biaha den e outo?",
@@ -233,7 +238,6 @@ _COPY = {
         "availability": "Die endgültige Fahrzeugverfügbarkeit muss noch bestätigt werden.",
         "cta": "Fahrzeugdetails",
         "needs_passengers": "Wie viele Personen fahren im Auto mit?",
-        "needs_luggage": "Wie viel Gepäck bringen Sie mit?",
         "clarify_preference": "Bevorzugen Sie einen kleineren Wagen, einen SUV oder einen Van?",
         "repair_category": "Entschuldigung, ich war nicht klar. Ich habe {category} als Ihre bevorzugte Kategorie, aber noch kein bestimmtes Auto. Wie viele Personen fahren mit?",
         "resume_category": "Hallo! Ich habe {category} als Ihre bevorzugte Kategorie. Wie viele Personen fahren mit?",
@@ -498,13 +502,6 @@ def media_first_clarification(fields: dict) -> str:
         or passenger_count < 1
     ):
         return copy["needs_passengers"]
-    luggage_count = fields.get("luggage_count")
-    if (
-        isinstance(luggage_count, bool)
-        or not isinstance(luggage_count, int)
-        or luggage_count < 0
-    ):
-        return copy["needs_luggage"]
     return copy["clarify_preference"]
 
 
@@ -560,6 +557,13 @@ def infer_media_first_intent(
 ) -> str:
     """Provide a deterministic fallback until #195 supplies primary intent."""
     customer_text = str(message_text or "")
+    has_exact_vehicle = bool(fields.get("vehicle_id") or fields.get("vehicle_name"))
+    if _LUGGAGE_QUESTION.search(str(reply_text or "")) and not has_exact_vehicle:
+        # Ali never interrogates customers about luggage. Once passenger count
+        # is known, the deterministic planner presents suitable cars and each
+        # catalog card states its approximate luggage capacity. If passenger
+        # count is still missing, that same planner asks only for passengers.
+        return "request_recommendation"
     has_vehicle_context = bool(
         _VEHICLE_CONTEXT.search(customer_text)
         or fields.get("vehicle_id")
@@ -919,7 +923,6 @@ def derive_media_first_action(
         reason = ""
 
     passenger_count = fields.get("passenger_count")
-    luggage_count = fields.get("luggage_count")
     if larger_requested:
         selected_vehicle = next(
             (
@@ -1019,17 +1022,6 @@ def derive_media_first_action(
                 "reply_text": copy["needs_passengers"],
                 "reason": "missing_passenger_count",
             }
-        if (
-            isinstance(luggage_count, bool)
-            or not isinstance(luggage_count, int)
-            or luggage_count < 0
-        ):
-            return {
-                "status": "needs_context",
-                "action": None,
-                "reply_text": copy["needs_luggage"],
-                "reason": "missing_luggage_count",
-            }
         candidates = [
             vehicle
             for vehicle in vehicles
@@ -1105,18 +1097,6 @@ def derive_media_first_action(
                 "reply_text": copy["needs_passengers"],
                 "reason": "missing_passenger_count",
             }
-        if (
-            isinstance(luggage_count, bool)
-            or not isinstance(luggage_count, int)
-            or luggage_count < 0
-        ):
-            return {
-                "status": "needs_context",
-                "action": None,
-                "reply_text": copy["needs_luggage"],
-                "reason": "missing_luggage_count",
-            }
-
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
     if browse_requested:
