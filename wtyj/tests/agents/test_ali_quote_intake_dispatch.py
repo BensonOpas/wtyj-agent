@@ -321,6 +321,10 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "Do not ask for name, age, email, identity documents" in normalized
     assert "Never ask the customer to type" in normalized
     assert "Email is optional" in normalized
+    assert "CONFIRMED RESERVATION AFTER-SALES SUPPORT IS MANDATORY" in normalized
+    assert "extract it into `fields.email`" in normalized
+    assert "Never ask for the email again once it is known" in normalized
+    assert "never claim the email has already been sent" in normalized
     assert "never ask for any of those facts again" in normalized
     assert "Never join two requested facts" in normalized
     assert "never ask a conditional second question" in normalized

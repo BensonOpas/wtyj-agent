@@ -46,6 +46,68 @@ VALID_UNTIL = {
     "de": "Gültig bis",
 }
 
+_ALI_SUPPORT_EMAIL = "info@alicarrental.com"
+_ALI_SUPPORT_WHATSAPP = "+599 9 677 7145"
+
+_RESERVATION_CONFIRMATION_COPY = {
+    "en": {
+        "confirmed": "Your Ali Car Rental reservation is confirmed ✅",
+        "reference": "Reservation",
+        "document": "Your confirmation document is attached.",
+        "next": "What happens next",
+        "contact": "Our team will contact you before pickup to confirm the handover and arrival details.",
+        "arrival": "When you arrive, please have your original driver’s licence and the passport or ID used for the reservation ready.",
+        "changes": "If your flight, arrival time, hotel, or pickup details change, tell us here as soon as possible.",
+        "ready": "Everything is arranged—there is nothing else you need to do right now.",
+        "help": "Need help?",
+        "help_text": "Reply in this WhatsApp chat ({whatsapp}) or email {email}. We’re always happy to help.",
+        "email_heading": "Would you like email copies too?",
+        "email_offer": "If you’d like your reservation documents and agreements by email, reply with the email address you’d like us to use.",
+    },
+    "nl": {
+        "confirmed": "Je reservering bij Ali Car Rental is bevestigd ✅",
+        "reference": "Reservering",
+        "document": "Je bevestigingsdocument is bijgevoegd.",
+        "next": "Wat gebeurt er nu?",
+        "contact": "Ons team neemt vóór het ophalen contact met je op om de overdracht en aankomstgegevens te bevestigen.",
+        "arrival": "Houd bij aankomst je originele rijbewijs en het paspoort of identiteitsbewijs dat je voor de reservering hebt gebruikt bij de hand.",
+        "changes": "Veranderen je vlucht, aankomsttijd, hotel of ophaalgegevens? Laat het ons dan zo snel mogelijk hier weten.",
+        "ready": "Alles is geregeld—je hoeft op dit moment niets meer te doen.",
+        "help": "Hulp nodig?",
+        "help_text": "Antwoord in deze WhatsApp-chat ({whatsapp}) of mail naar {email}. We helpen je graag.",
+        "email_heading": "Wil je ook kopieën per e-mail?",
+        "email_offer": "Wil je je reserveringsdocumenten en overeenkomsten ook per e-mail ontvangen? Stuur dan het e-mailadres dat we mogen gebruiken.",
+    },
+    "pap": {
+        "confirmed": "Bo reservashon serka Ali Car Rental ta konfirmá ✅",
+        "reference": "Reservashon",
+        "document": "Bo dokumento di konfirmashon ta inkluí.",
+        "next": "Kiko ta sigui awor?",
+        "contact": "Nos tim lo tuma kontakto ku bo promé ku pickup pa konfirmá e entrega i detayanan di bo yegada.",
+        "arrival": "Ora bo yega, tene bo rijbewijs original i e pasport òf karta di identidat ku bo a usa pa e reservashon kla.",
+        "changes": "Si bo vuelo, ora di yegada, hotel òf detayanan di pickup ta cambia, laga nos sa aki mas lihé posibel.",
+        "ready": "Tur kos ta reglá—pa awor bo no mester hasi nada mas.",
+        "help": "Mester yudansa?",
+        "help_text": "Kontestá den e chat di WhatsApp aki ({whatsapp}) òf manda un e-mail na {email}. Nos ta kla pa yuda bo.",
+        "email_heading": "Bo ke kopianan via e-mail tambe?",
+        "email_offer": "Si bo ke risibí bo dokumentonan di reservashon i akuerdonan via e-mail, kontestá ku e adres di e-mail ku bo ke nos usa.",
+    },
+    "de": {
+        "confirmed": "Ihre Reservierung bei Ali Car Rental ist bestätigt ✅",
+        "reference": "Reservierung",
+        "document": "Ihre Reservierungsbestätigung ist beigefügt.",
+        "next": "Wie geht es weiter?",
+        "contact": "Unser Team meldet sich vor der Abholung bei Ihnen, um die Übergabe und Ihre Ankunftsdetails zu bestätigen.",
+        "arrival": "Bitte halten Sie bei Ihrer Ankunft den Originalführerschein und den für die Reservierung verwendeten Reisepass oder Ausweis bereit.",
+        "changes": "Falls sich Flug, Ankunftszeit, Hotel oder Abholdetails ändern, teilen Sie uns dies bitte so früh wie möglich hier mit.",
+        "ready": "Alles ist organisiert—im Moment müssen Sie nichts weiter tun.",
+        "help": "Brauchen Sie Hilfe?",
+        "help_text": "Antworten Sie in diesem WhatsApp-Chat ({whatsapp}) oder schreiben Sie an {email}. Wir helfen Ihnen gerne.",
+        "email_heading": "Möchten Sie auch Kopien per E-Mail?",
+        "email_offer": "Wenn Sie Ihre Reservierungsunterlagen und Vereinbarungen auch per E-Mail erhalten möchten, senden Sie uns bitte die gewünschte E-Mail-Adresse.",
+    },
+}
+
 SUPPLEMENT_LABELS = {
     "en": ("Supplements", "per rental day", "per rental", "days"),
     "nl": ("Extra's", "per huurdag", "per huur", "dagen"),
@@ -420,6 +482,53 @@ def send_customer_post_quote_actions(quote: dict) -> bool:
     return bool(result.get("success"))
 
 
+def _support_contacts() -> tuple[str, str]:
+    business = config_loader.get_business() or {}
+    email = _valid_email(
+        business.get("support_email") or business.get("email")
+    ) or _ALI_SUPPORT_EMAIL
+    raw_whatsapp = str(
+        business.get("whatsapp") or business.get("phone") or ""
+    ).strip()
+    digits = re.sub(r"\D", "", raw_whatsapp)
+    if len(digits) == 8:
+        digits = f"599{digits}"
+    if len(digits) == 11 and digits.startswith("599"):
+        local = digits[3:]
+        whatsapp = f"+599 {local[0]} {local[1:4]} {local[4:]}"
+    else:
+        whatsapp = _ALI_SUPPORT_WHATSAPP
+    return email, whatsapp
+
+
+def build_customer_reservation_confirmation_text(
+    reservation: dict,
+    quote: dict | None = None,
+) -> str:
+    """Build Ali's warm, actionable post-booking WhatsApp handoff."""
+    quote = quote or {}
+    locale = str(quote.get("locale") or "en").lower()
+    copy = _RESERVATION_CONFIRMATION_COPY.get(
+        locale, _RESERVATION_CONFIRMATION_COPY["en"],
+    )
+    email, whatsapp = _support_contacts()
+    reference = str(reservation.get("confirmation_reference") or "").strip()
+    return (
+        f"{copy['confirmed']}\n\n"
+        f"{copy['reference']}: {reference}\n"
+        f"{copy['document']}\n\n"
+        f"*{copy['next']}*\n"
+        f"• {copy['contact']}\n"
+        f"• {copy['arrival']}\n"
+        f"• {copy['changes']}\n\n"
+        f"{copy['ready']}\n\n"
+        f"*{copy['help']}*\n"
+        f"{copy['help_text'].format(whatsapp=whatsapp, email=email)}\n\n"
+        f"*{copy['email_heading']}*\n"
+        f"{copy['email_offer']}"
+    )
+
+
 def send_customer_reservation_confirmation(reservation: dict) -> dict:
     """Deliver a confirmed informational PDF without rolling back confirmation."""
     if (
@@ -430,6 +539,7 @@ def send_customer_reservation_confirmation(reservation: dict) -> dict:
         raise AliReservationError("reservation_not_confirmed", 409)
     if reservation.get("confirmation_delivery_status") in {"accepted", "confirmed"}:
         return reservation
+    quote = get_quote(str(reservation.get("quote_public_id") or "")) or {}
     base_url = os.environ.get("UNBOKS_PUBLIC_BASE_URL", "")
     secret = os.environ.get("ALI_QUOTE_DOWNLOAD_SECRET", "")
     if not base_url.startswith("https://") or not secret:
@@ -443,10 +553,8 @@ def send_customer_reservation_confirmation(reservation: dict) -> dict:
         )
         reference = str(reservation.get("confirmation_reference") or "")
         filename = f"Ali-Car-Rental-Reservation-{reference}.pdf"
-        text = (
-            "Your Ali Car Rental reservation is confirmed.\n\n"
-            f"Reservation: {reference}\n"
-            "Your confirmation document is attached."
+        text = build_customer_reservation_confirmation_text(
+            reservation, quote,
         )
         ok = send_dm_reply_with_attachment(
             reservation["conversation_id"],
@@ -466,7 +574,6 @@ def send_customer_reservation_confirmation(reservation: dict) -> dict:
         error_code=None if ok else "customer_confirmation_delivery_failed",
     )
     if not ok:
-        quote = get_quote(str(reservation.get("quote_public_id") or "")) or {}
         try:
             customer = json.loads(quote.get("customer_json") or "{}")
         except (TypeError, ValueError):

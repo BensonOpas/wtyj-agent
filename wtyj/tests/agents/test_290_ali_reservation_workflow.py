@@ -454,3 +454,89 @@ def test_confirmation_send_failure_is_recorded_without_rollback(configured, monk
     assert result["confirmation_delivery_status"] == "failed"
     assert result["confirmation_delivery_error_code"] == "customer_confirmation_delivery_failed"
     assert len(alerts) == 1
+
+
+def test_confirmation_delivery_includes_premium_after_sales_support(configured, monkeypatch):
+    quote = _delivered_quote()
+    reservation = _reserve(quote)["reservation"]
+    approved = workflow.apply_staff_decision(
+        reservation["public_id"], "approve", "staff",
+    )
+    ready = workflow.update_checklist(
+        reservation["public_id"], actor="staff",
+        identity="not_required", agreement="not_required", payment="not_required",
+        expected_revision=approved["revision"],
+    )
+    confirmed = workflow.confirm_reservation(
+        reservation["public_id"], actor="staff",
+        expected_revision=ready["revision"],
+        output_root=str(configured / "confirmations"),
+        logo_path=str(configured / "no-logo.png"),
+    )
+    delivered = []
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://example.test")
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", SECRET)
+    monkeypatch.setattr(
+        ali_quote_delivery.config_loader,
+        "get_business",
+        lambda: {
+            "support_email": "info@alicarrental.com",
+            "whatsapp": "96777145",
+        },
+    )
+    monkeypatch.setattr(
+        ali_quote_delivery,
+        "send_dm_reply_with_attachment",
+        lambda *args, **kwargs: delivered.append((args, kwargs)) or True,
+    )
+
+    result = ali_quote_delivery.send_customer_reservation_confirmation(confirmed)
+
+    assert result["confirmation_delivery_status"] == "accepted"
+    assert len(delivered) == 1
+    args, kwargs = delivered[0]
+    message = args[2]
+    assert "reservation is confirmed ✅" in message
+    assert "Our team will contact you before pickup" in message
+    assert "original driver’s licence" in message
+    assert "flight, arrival time, hotel, or pickup details" in message
+    assert "+599 9 677 7145" in message
+    assert "info@alicarrental.com" in message
+    assert "Would you like email copies too?" in message
+    assert "reply with the email address" in message
+    assert kwargs["attachment_name"].startswith("Ali-Car-Rental-Reservation-")
+    assert kwargs["idempotency_key"] == (
+        f"ali-reservation-confirmation-{confirmed['public_id']}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("locale", "localized_heading"),
+    [
+        ("en", "What happens next"),
+        ("nl", "Wat gebeurt er nu?"),
+        ("pap", "Kiko ta sigui awor?"),
+        ("de", "Wie geht es weiter?"),
+    ],
+)
+def test_confirmation_after_sales_copy_is_localized_and_bounded(
+    monkeypatch, locale, localized_heading,
+):
+    monkeypatch.setattr(
+        ali_quote_delivery.config_loader,
+        "get_business",
+        lambda: {
+            "support_email": "info@alicarrental.com",
+            "whatsapp": "+59996777145",
+        },
+    )
+
+    message = ali_quote_delivery.build_customer_reservation_confirmation_text(
+        {"confirmation_reference": "ALI-RSV-20990101-TEST"},
+        {"locale": locale},
+    )
+
+    assert localized_heading in message
+    assert "+599 9 677 7145" in message
+    assert "info@alicarrental.com" in message
+    assert len(message) <= 1024
