@@ -65,7 +65,10 @@ def test_signed_reserve_creates_staff_alert_without_model_call(monkeypatch):
             "text": "I am asking our team to check availability now.",
             "status": "created",
             "action": "reserve",
-            "reservation": {"public_id": "reservation-290"},
+            "reservation": {
+                "public_id": "reservation-290",
+                "availability_status": "pending",
+            },
         },
     )
 
@@ -104,7 +107,10 @@ def test_exact_reserve_fallback_uses_same_route_without_model_call(monkeypatch):
             "text": "I am checking availability now.",
             "status": "created",
             "action": "reserve",
-            "reservation": {"public_id": "reservation-fallback-290"},
+            "reservation": {
+                "public_id": "reservation-fallback-290",
+                "availability_status": "pending",
+            },
         },
     )
 
@@ -120,6 +126,50 @@ def test_exact_reserve_fallback_uses_same_route_without_model_call(monkeypatch):
     assert result == "I am checking availability now."
     assert len(saved) == 1
     assert len(alerts) == 1
+
+
+def test_v2_auto_approved_reserve_creates_no_availability_alert(monkeypatch):
+    saved, alerts = _configure_early_route(monkeypatch)
+    monkeypatch.setattr(
+        social_agent,
+        "resolve_ali_post_quote_interaction",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "status": "current",
+            "action": "reserve",
+        },
+    )
+    monkeypatch.setattr(
+        social_agent,
+        "handle_ali_post_quote_action",
+        lambda *_args, **_kwargs: {
+            "text": "Will you use a passport or an ID card?",
+            "status": "created",
+            "action": "reserve",
+            "reservation": {
+                "public_id": "reservation-auto-290",
+                "availability_status": "approved",
+                "workflow_v2": {"state": "documents_collecting"},
+            },
+        },
+    )
+
+    result = social_agent.handle_incoming_whatsapp_message(
+        {
+            "from": "conversation-290",
+            "text": "Reserve This Car",
+            "from_name": "Synthetic Customer",
+            "message_id": "message-auto-290",
+            "_zernio_account_id": "account-290",
+            "_zernio_interactive_type": "buttonReply",
+            "_zernio_interactive_id": "ali_post_quote:v1:signed",
+        },
+        include_media=True,
+    )
+
+    assert result["text"] == "Will you use a passport or an ID card?"
+    assert len(saved) == 1
+    assert alerts == []
 
 
 def test_question_tap_prompts_for_question_without_creating_case(monkeypatch):

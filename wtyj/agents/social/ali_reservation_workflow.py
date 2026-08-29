@@ -1,8 +1,9 @@
 """Durable, tenant-bound Ali post-quote reservation workflow.
 
-The customer can request an availability check, but only staff can approve
-availability and complete the manual verification checklist. No documents,
-payment evidence, signatures, URLs, or customer message content are stored.
+Ali Reservation V2 starts customer document collection immediately after the
+customer chooses to reserve. Legacy workflows retain their manual availability
+decision. No documents, payment evidence, signatures, URLs, or customer
+message content are stored here.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 from agents.social.ali_reservation_confirmation_pdf import (
     render_reservation_confirmation_pdf,
 )
-from shared import config_loader, state_registry
+from shared import bm_logger, config_loader, state_registry
 
 
 TENANT_SLUG = "ali-car-rental"
@@ -66,6 +67,14 @@ _CONTROL_COPY = {
             "I have your reservation request. I am asking our team to check "
             "the vehicle availability now. I will update you when they have reviewed it."
         ),
+        "reserve_reply_auto": (
+            "Great — I’ll guide you through the remaining steps one at a time. "
+            "Will you use a passport or an ID card for your reservation?"
+        ),
+        "reserve_reply_in_progress": (
+            "Your reservation request is already in progress. Please continue "
+            "with the latest step I sent."
+        ),
         "change_reply": "Of course. What would you like me to change in your quote?",
     },
     "nl": {
@@ -76,6 +85,14 @@ _CONTROL_COPY = {
         "reserve_reply": (
             "Ik heb je reserveringsaanvraag. Ik vraag ons team nu om de "
             "beschikbaarheid van de auto te controleren. Daarna laat ik je het weten."
+        ),
+        "reserve_reply_auto": (
+            "Prima — ik begeleid je stap voor stap door het vervolg. Gebruik je "
+            "een paspoort of identiteitskaart voor je reservering?"
+        ),
+        "reserve_reply_in_progress": (
+            "Je reserveringsaanvraag loopt al. Ga verder met de laatste stap die "
+            "ik heb gestuurd."
         ),
         "change_reply": "Natuurlijk. Wat wil je in je offerte wijzigen?",
     },
@@ -88,6 +105,14 @@ _CONTROL_COPY = {
             "Mi tin bo petishon di reservashon. Mi ta pidi nos tim pa kontrola "
             "disponibilidat di e outo awor. Mi ta laga bo sa despues di nan revision."
         ),
+        "reserve_reply_auto": (
+            "Hopi bon — mi ta guia bo paso pa paso. Bo ta usa pasport òf karta "
+            "di identidat pa bo reservashon?"
+        ),
+        "reserve_reply_in_progress": (
+            "Bo petishon di reservashon ta andando kaba. Sigui ku e último paso "
+            "ku mi a manda bo."
+        ),
         "change_reply": "Naturalmente. Kiko bo ke pa mi kambia den bo oferta?",
     },
     "de": {
@@ -98,6 +123,14 @@ _CONTROL_COPY = {
         "reserve_reply": (
             "Ich habe Ihre Reservierungsanfrage. Unser Team pruft jetzt die "
             "Fahrzeugverfugbarkeit. Danach melde ich mich bei Ihnen."
+        ),
+        "reserve_reply_auto": (
+            "Sehr gut — ich begleite Sie Schritt für Schritt. Verwenden Sie für "
+            "Ihre Reservierung einen Reisepass oder Personalausweis?"
+        ),
+        "reserve_reply_in_progress": (
+            "Ihre Reservierungsanfrage wird bereits bearbeitet. Fahren Sie bitte "
+            "mit dem zuletzt gesendeten Schritt fort."
         ),
         "change_reply": "Gerne. Was mochten Sie in Ihrem Angebot andern?",
     },
@@ -562,6 +595,24 @@ def _create_reservation_for_quote(
     action_id: str = "",
 ) -> tuple[dict, bool]:
     identity, agreement, payment = _checklist_defaults()
+    from agents.social import ali_reservation_v2
+
+    automatic_document_collection = (
+        customer_dossier_enabled() and ali_reservation_v2.enabled()
+    )
+    initial_status = (
+        "requirements_pending"
+        if automatic_document_collection
+        else "availability_pending"
+    )
+    initial_availability = (
+        "approved" if automatic_document_collection else "pending"
+    )
+    initial_identity = (
+        "requested"
+        if automatic_document_collection and identity == "not_requested"
+        else identity
+    )
     created_at = _iso()
     public_id = str(uuid.uuid4())
     conn = _connection()
@@ -589,7 +640,6 @@ def _create_reservation_for_quote(
                 raise AliReservationError("stale_or_superseded_quote", 409)
             conn.commit()
             public = _public_row(existing)
-            from agents.social import ali_reservation_v2
             if ali_reservation_v2.enabled():
                 ali_reservation_v2.initialize_reservation(str(existing["public_id"]))
                 public["workflow_v2"] = ali_reservation_v2.get_case(
@@ -601,29 +651,52 @@ def _create_reservation_for_quote(
             "public_id, tenant_slug, quote_public_id, quote_snapshot_id, quote_reference, "
             "conversation_id, zernio_account_id, status, availability_status, "
             "identity_status, agreement_status, payment_status, created_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, 'availability_pending', 'pending', ?, ?, ?, ?, ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 public_id, TENANT_SLUG, quote["public_id"], quote["quote_snapshot_id"],
                 quote["quote_reference"], quote["conversation_id"], quote["zernio_account_id"],
-                identity, agreement, payment, created_at, created_at,
+                initial_status, initial_availability, initial_identity,
+                agreement, payment, created_at, created_at,
             ),
         )
-        metadata = {"action": "reserve"}
+        metadata = {
+            "action": "reserve",
+            "availability_mode": (
+                "automatic" if automatic_document_collection else "manual"
+            ),
+        }
         if action_id:
             metadata["action_id_hash"] = hashlib.sha256(str(action_id).encode("utf-8")).hexdigest()
         _event(
             conn, public_id, "reservation_requested", "none", "availability_pending",
             actor_type, actor_id, metadata,
         )
+        if automatic_document_collection:
+            _event(
+                conn, public_id, "availability_auto_approved",
+                "availability_pending", "requirements_pending", "system",
+                "reservation_v2_system", {"workflow_version": 2},
+            )
+            _event(
+                conn, public_id, "direct_whatsapp_document_intake_requested",
+                "requirements_pending", "requirements_pending", "system",
+                "reservation_v2_system",
+                {"workflow_version": 2, "public_upload_links": 0},
+            )
         row = conn.execute(
             "SELECT * FROM ali_reservations WHERE public_id = ?", (public_id,),
         ).fetchone()
         conn.commit()
         public = _public_row(row)
-        from agents.social import ali_reservation_v2
         if ali_reservation_v2.enabled():
             public["workflow_v2"] = ali_reservation_v2.initialize_reservation(
                 public_id
+            )
+        if automatic_document_collection:
+            bm_logger.log(
+                "ali_reservation_automatic_document_collection_started",
+                reservation_public_id_prefix=public_id[:12],
+                quote_reference=str(quote["quote_reference"] or "")[:40],
             )
         return public, True
     except Exception:
@@ -631,6 +704,18 @@ def _create_reservation_for_quote(
         raise
     finally:
         conn.close()
+
+
+def _reserve_reply(copy: dict, reservation: dict, created: bool) -> str:
+    workflow_case = reservation.get("workflow_v2") or {}
+    if reservation.get("availability_status") != "approved":
+        return str(copy["reserve_reply"])
+    if created or (
+        workflow_case.get("state") == "documents_collecting"
+        and not workflow_case.get("identityType")
+    ):
+        return str(copy["reserve_reply_auto"])
+    return str(copy["reserve_reply_in_progress"])
 
 
 def handle_post_quote_action(interaction: dict, action_id: str = "") -> dict:
@@ -664,7 +749,7 @@ def handle_post_quote_action(interaction: dict, action_id: str = "") -> dict:
             action_id=action_id,
         )
         return {
-            "text": copy["reserve_reply"],
+            "text": _reserve_reply(copy, reservation, created),
             "action": action,
             "status": "created" if created else "repeated",
             "reservation": reservation,
@@ -699,7 +784,7 @@ def handle_exact_reserve(
     )
     copy = _CONTROL_COPY.get(str(quote["locale"] or "en").lower(), _CONTROL_COPY["en"])
     return {
-        "text": copy["reserve_reply"],
+        "text": _reserve_reply(copy, reservation, created),
         "action": "reserve",
         "status": "created" if created else "repeated",
         "reservation": reservation,

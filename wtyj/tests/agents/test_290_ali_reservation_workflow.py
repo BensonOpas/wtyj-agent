@@ -9,6 +9,7 @@ from pypdf import PdfReader
 from agents.social import ali_quote_workflow as quote_workflow
 from agents.social import ali_quote_download
 from agents.social import ali_quote_delivery
+from agents.social import ali_reservation_v2
 from agents.social import ali_reservation_workflow as workflow
 
 
@@ -206,6 +207,43 @@ def test_reserve_is_exactly_once_and_never_claims_booking_confirmation(configure
     assert repeated["status"] == "repeated"
     assert repeated["reservation"]["public_id"] == first["reservation"]["public_id"]
     assert len(workflow.list_reservation_events(first["reservation"]["public_id"])) == 1
+
+
+def test_v2_reserve_skips_availability_gate_and_starts_documents(
+    configured,
+    monkeypatch,
+):
+    raw = raw_config()
+    raw["features"].update({
+        "ali_customer_dossier_enabled": True,
+        "ali_post_quote_reservation_v2_enabled": True,
+        "ali_reservation_v2_reminders_enabled": False,
+    })
+    monkeypatch.setattr(workflow.config_loader, "get_raw", lambda: raw)
+    monkeypatch.setattr(ali_reservation_v2.config_loader, "get_raw", lambda: raw)
+    quote = _delivered_quote()
+
+    result = _reserve(quote)
+    reservation = result["reservation"]
+
+    assert result["status"] == "created"
+    assert reservation["status"] == "requirements_pending"
+    assert reservation["availability_status"] == "approved"
+    assert reservation["identity_status"] == "requested"
+    assert reservation["workflow_v2"]["state"] == "documents_collecting"
+    assert reservation["workflow_v2"]["responsibleParty"] == "Client"
+    assert reservation["workflow_v2"]["nextAction"] == "send_next_document"
+    assert "passport or an ID card" in result["text"]
+    event_types = [
+        item["event_type"]
+        for item in workflow.list_reservation_events(reservation["public_id"])
+    ]
+    assert event_types == [
+        "reservation_requested",
+        "availability_auto_approved",
+        "direct_whatsapp_document_intake_requested",
+        "reservation_v2_initialized",
+    ]
 
 
 def test_change_question_and_non_exact_fallback_do_not_create_cases(configured):

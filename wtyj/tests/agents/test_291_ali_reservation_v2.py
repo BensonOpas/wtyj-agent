@@ -91,6 +91,35 @@ def test_initial_case_is_staff_paused_and_one_next_action(configured):
     assert created["reminders"]["sendEnabled"] is False
 
 
+def test_approved_reservation_starts_with_client_document_collection(configured):
+    conn = sqlite3.connect(workflow.state_registry.DB_PATH)
+    conn.execute(
+        "INSERT INTO ali_reservations (public_id, tenant_slug, quote_public_id, "
+        "quote_snapshot_id, quote_reference, conversation_id, zernio_account_id, "
+        "status, availability_status, identity_status, agreement_status, "
+        "payment_status, created_at, updated_at) VALUES "
+        "('reservation-auto-291', 'ali-car-rental', 'quote-auto-291', "
+        "'snapshot-auto-291', 'ALI-20990901-AUTO', 'conversation-auto-291', "
+        "'account-auto-291', 'requirements_pending', 'approved', 'requested', "
+        "'not_sent', 'not_sent', ?, ?)",
+        (BASE.isoformat(), BASE.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    created = workflow.initialize_reservation(
+        "reservation-auto-291",
+        now=BASE,
+        client_timezone="America/Curacao",
+    )
+
+    assert created["state"] == "documents_collecting"
+    assert created["responsibleParty"] == "Client"
+    assert created["clock"]["state"] == "running"
+    assert created["clock"]["pauseReason"] is None
+    assert created["nextAction"] == "send_next_document"
+
+
 def test_tenant_schedule_settings_are_validated_and_apply_to_active_case(configured):
     workflow.initialize_reservation("reservation-291", now=BASE)
     updated = workflow.save_tenant_settings(
