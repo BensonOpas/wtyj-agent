@@ -872,6 +872,7 @@ def test_calvin_browse_without_passenger_count_honors_latest_request():
     assert len(decision["action"]["vehicle_names"]) == 5
     assert "current fleet" in decision["reply_text"]
     assert "How many people" not in decision["reply_text"]
+    assert decision["capacity_advisory"] is True
 
 
 def test_explicit_browse_overrides_simultaneous_model_candidates():

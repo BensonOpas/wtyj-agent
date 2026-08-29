@@ -2260,6 +2260,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     media_first_status = "not_evaluated"
     media_first_reason = ""
     media_first_intent = ""
+    _ali_capacity_advisory = False
     _ali_catalog_for_media = None
     if (
         channel == "whatsapp"
@@ -2335,6 +2336,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 if media_first_status == "planned":
                     recommendation_action = media_first["action"]
                     reply_text = str(media_first.get("reply_text") or reply_text)
+                    _ali_capacity_advisory = bool(
+                        media_first.get("capacity_advisory")
+                    )
                 elif media_first_status == "needs_context":
                     recommendation_action = None
                     reply_text = str(media_first.get("reply_text") or reply_text)
@@ -2470,14 +2474,10 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             reply_text = ""
             _ali_turn_plan = None
         else:
-            capacity_advisory = bool(
-                explicit_catalog_browse_request(text)
-                or explicit_smaller_vehicle_request(text)
-            )
             bm_logger.log(
                 "ali_vehicle_recommendation_build_decision",
                 deterministic_reason=media_first_reason[:80],
-                capacity_advisory=capacity_advisory,
+                capacity_advisory=_ali_capacity_advisory,
                 recommendation_mode=str(
                     recommendation_action.get("mode") or ""
                 )[:20],
@@ -2504,7 +2504,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                         or explicit_larger_vehicle_request(text)
                         or _ali_explicit_class_this_turn is not None
                     ),
-                    capacity_advisory=capacity_advisory,
+                    capacity_advisory=_ali_capacity_advisory,
                 )
             except AliVehicleRecommendationError as exc:
                 media_first_status = "invalid"

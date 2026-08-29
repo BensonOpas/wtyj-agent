@@ -1599,6 +1599,44 @@ def test_live_browse_turn_overrides_model_candidates_and_builds_carousel(
     assert "Would you prefer" not in response["text"]
 
 
+def test_live_customer_question_overrides_pending_passenger_question(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-answer-newest-customer-question"
+    stale_model_result = {
+        "intents": ["inquiry"],
+        "fields": {"rental_start": "2026-08-30"},
+        "confidence": "high",
+        "reply": "How many people will be travelling in the car?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+    }
+    _configure(monkeypatch, tmp_path, stale_model_result)
+    _use_media_catalog(monkeypatch)
+    state_registry.wa_save_booking_state(
+        phone,
+        {"conversation_language": "en"},
+        {"ali_phase": "DISCOVERY"},
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "what do you have available right now ? i want topick it up tomorrow",
+        "from_name": "Synthetic Customer",
+        "message_id": "answer-newest-question-replay",
+    }, include_media=True)
+    stored = state_registry.wa_get_booking_state(phone)
+
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "carousel"
+    assert len(recommendation["options"]) == 4
+    assert "current fleet" in response["text"]
+    assert "How many people" not in response["text"]
+    assert stored["fields"]["rental_start"] == "2026-08-30"
+    assert "passenger_count" not in stored["fields"]
+
+
 def test_live_browse_turn_reaches_ordered_carousel_and_picker_transport(
     monkeypatch, tmp_path,
 ):
@@ -2070,7 +2108,7 @@ def test_rejected_car_text_dump_becomes_carousel_picker_without_summary(
     assert "awaiting_quote_confirmation" not in saved["flags"]
 
 
-def test_text_dump_without_trip_context_asks_one_discovery_question(
+def test_direct_smaller_car_question_is_answered_before_trip_context(
     monkeypatch, tmp_path,
 ):
     phone = "synthetic-issue-198-context"
@@ -2094,9 +2132,13 @@ def test_text_dump_without_trip_context_asks_one_discovery_question(
         "from_name": "Synthetic Customer",
     }, include_media=True)
 
-    assert response["vehicle_recommendation"] is None
-    assert response["text"] == "How many people will be travelling in the car?"
-    assert "Kia Picanto" not in response["text"]
+    recommendation = response["vehicle_recommendation"]
+    assert recommendation["kind"] == "carousel"
+    assert [option["id"] for option in recommendation["options"]] == [
+        ECONOMY_VEHICLE_ID, YARIS_VEHICLE_ID, COROLLA_VEHICLE_ID,
+    ]
+    assert response["text"].startswith("Here are the smaller cars.")
+    assert "How many people" not in response["text"]
 
 
 def test_native_picker_tap_selects_exact_vehicle_without_repeating_media(
