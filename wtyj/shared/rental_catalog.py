@@ -39,6 +39,33 @@ def _validate_id(value: str) -> str:
     return value
 
 
+class RentalLocationOption(_StrictModel):
+    """One tenant-approved pickup or return location choice."""
+
+    id: str
+    name: str = Field(min_length=1, max_length=80)
+    kind: Literal["fixed", "hotel_delivery"] = "fixed"
+    instructions: str = Field(default="", max_length=240)
+    requiresName: bool = False
+    requiresAddress: bool = False
+    active: bool = True
+    displayOrder: int = Field(ge=0)
+
+    _id_is_valid = field_validator("id")(_validate_id)
+
+    @model_validator(mode="after")
+    def hotel_delivery_requires_hotel_details(self):
+        if self.kind == "hotel_delivery" and not (
+            self.requiresName and self.requiresAddress
+        ):
+            raise ValueError(
+                "hotel_delivery requires both a hotel name and address"
+            )
+        if self.kind == "fixed" and (self.requiresName or self.requiresAddress):
+            raise ValueError("fixed locations cannot require hotel details")
+        return self
+
+
 class RentalSettings(_StrictModel):
     currency: str
     quoteValidityHours: int = Field(ge=1, le=720)
@@ -51,6 +78,8 @@ class RentalSettings(_StrictModel):
     refundableSecurityDepositId: str = "refundable-security-deposit"
     refundableSecurityDepositCents: int = Field(ge=0)
     reservationDepositPercent: int = Field(default=0, ge=0, le=100)
+    pickupLocations: list[RentalLocationOption] = Field(default_factory=list)
+    returnLocations: list[RentalLocationOption] = Field(default_factory=list)
 
     @field_validator("currency")
     @classmethod
@@ -72,6 +101,18 @@ class RentalSettings(_StrictModel):
         return _validate_id(value) if value is not None else None
 
     _deposit_id_is_valid = field_validator("refundableSecurityDepositId")(_validate_id)
+
+    @model_validator(mode="after")
+    def location_ids_and_names_are_unique(self):
+        for field_name in ("pickupLocations", "returnLocations"):
+            values = getattr(self, field_name)
+            ids = [item.id.casefold() for item in values]
+            names = [item.name.casefold() for item in values]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{field_name} contains duplicate IDs")
+            if len(names) != len(set(names)):
+                raise ValueError(f"{field_name} contains duplicate names")
+        return self
 
 
 class VehicleCategory(_StrictModel):
@@ -206,6 +247,8 @@ def empty_document() -> dict:
             "refundableSecurityDepositId": "refundable-security-deposit",
             "refundableSecurityDepositCents": 0,
             "reservationDepositPercent": 0,
+            "pickupLocations": [],
+            "returnLocations": [],
         },
         "categories": [],
         "cars": [],
@@ -815,6 +858,22 @@ def _consumer_catalog_from_published(
         "quoteFooter": settings["quoteFooter"],
         "pdfLogoAssetId": settings["pdfLogoAssetId"],
         "reservationDepositPercent": settings["reservationDepositPercent"],
+        "pickupLocations": [
+            dict(item)
+            for item in sorted(
+                settings.get("pickupLocations") or [],
+                key=lambda value: (value["displayOrder"], value["id"]),
+            )
+            if item.get("active", True)
+        ],
+        "returnLocations": [
+            dict(item)
+            for item in sorted(
+                settings.get("returnLocations") or [],
+                key=lambda value: (value["displayOrder"], value["id"]),
+            )
+            if item.get("active", True)
+        ],
         "vehicleClasses": vehicle_classes,
         "vehicles": vehicles,
         "extras": extras,

@@ -82,6 +82,34 @@ _BROWSE_REQUEST = re.compile(
     r"|\bzeigen\s+sie\s+mir\s+(?:was|die\s+(?:autos?|fahrzeuge?))\b)",
     re.IGNORECASE,
 )
+_PICKUP_LOCATION_REQUEST = re.compile(
+    r"(?:\b(?:what|which|wbich|where|available|possible)\b.{0,48}"
+    r"\b(?:pick[ -]?up|picking\s+up|collection)\b"
+    r"|\b(?:pick[ -]?up|picking\s+up|collection)\b.{0,48}"
+    r"\b(?:option|options|choice|choices|location|locations|where|available)\b"
+    r"|\b(?:welke|wat|waar)\b.{0,48}\b(?:ophalen|ophaal|afhalen)\b"
+    r"|\b(?:ophalen|ophaal|afhalen)\b.{0,48}\b(?:optie|opties|plaats|plaatsen|waar)\b"
+    r"|\b(?:kua|kiko|unda)\b.{0,48}\b(?:tuma|buska)\b.{0,24}\bouto\b"
+    r"|\b(?:welche|was|wo)\b.{0,48}\b(?:abholen|abholung)\b"
+    r"|\b(?:abholen|abholung)\b.{0,48}\b(?:option|optionen|ort|orte|wo)\b)",
+    re.IGNORECASE,
+)
+_RETURN_LOCATION_REQUEST = re.compile(
+    r"(?:\b(?:what|which|wbich|where|available|possible)\b.{0,48}"
+    r"\b(?:drop[ -]?off|returning?|return\s+the\s+car)\b"
+    r"|\b(?:drop[ -]?off|returning?|return\s+the\s+car)\b.{0,48}"
+    r"\b(?:option|options|choice|choices|location|locations|where|available)\b"
+    r"|\b(?:welke|wat|waar)\b.{0,48}\b(?:terugbrengen|inleveren|retour)\b"
+    r"|\b(?:kua|kiko|unda)\b.{0,48}\b(?:entrega|debolbe)\b.{0,24}\bouto\b"
+    r"|\b(?:welche|was|wo)\b.{0,48}\b(?:zurückgeben|rückgabe)\b)",
+    re.IGNORECASE,
+)
+_HOTEL_DELIVERY_CHOICE = re.compile(
+    r"^\s*(?:hotel|hotel\s+delivery|deliver(?:y)?\s+to\s+(?:my\s+)?hotel|"
+    r"hotelbezorging|bezorg(?:en|ing)\s+bij\s+(?:het\s+)?hotel|"
+    r"entrega\s+na\s+hotel|hotelzustellung|lieferung\s+zum\s+hotel)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
 _SMALLER_REQUEST = re.compile(
     r"\b(?:smaller|small|compact|economy|kleiner|kleine|kleines|compacte|"
     r"mas\s+chik[ií]|chik[ií]|kleinere|kompakt)\b"
@@ -274,7 +302,150 @@ def explicit_visual_request(message_text: object) -> bool:
 
 def explicit_catalog_browse_request(message_text: object) -> bool:
     """Recognize a clear request to browse the current fleet in four locales."""
+    if rental_location_request_kind(message_text):
+        return False
     return bool(_BROWSE_REQUEST.search(str(message_text or "")))
+
+
+def rental_location_request_kind(message_text: object) -> str:
+    """Classify an explicit request for pickup/return choices before fleet routing."""
+    text = str(message_text or "")
+    if _PICKUP_LOCATION_REQUEST.search(text):
+        return "pickup"
+    if _RETURN_LOCATION_REQUEST.search(text):
+        return "return"
+    return ""
+
+
+def explicit_hotel_delivery_choice(message_text: object) -> bool:
+    """Accept only an unambiguous hotel-delivery selection."""
+    return bool(_HOTEL_DELIVERY_CHOICE.fullmatch(str(message_text or "")))
+
+
+def resolve_fixed_pickup_option_choice(
+    message_text: object,
+    catalog: dict,
+) -> dict | None:
+    """Resolve an exact fixed pickup choice from the published catalog."""
+    normalized = re.sub(
+        r"[^\w]+", " ", str(message_text or "").casefold(),
+        flags=re.UNICODE,
+    ).strip()
+    if not normalized:
+        return None
+    matches = []
+    for option in catalog.get("pickupLocations") or []:
+        if not isinstance(option, dict):
+            continue
+        if option.get("active", True) is False or option.get("kind") != "fixed":
+            continue
+        name = str(option.get("name") or "").strip()
+        candidate = re.sub(
+            r"[^\w]+", " ", name.casefold(), flags=re.UNICODE,
+        ).strip()
+        if candidate and normalized in {
+            candidate,
+            f"the {candidate}",
+            f"at the {candidate}",
+            f"at {candidate}",
+        }:
+            matches.append(option)
+    return matches[0] if len(matches) == 1 else None
+
+
+def rental_location_options_reply(
+    request_kind: str,
+    fields: dict,
+    catalog: dict,
+) -> str:
+    """Answer with tenant-approved locations and never substitute vehicle cards."""
+    locale = _locale(fields)
+    key = "pickupLocations" if request_kind == "pickup" else "returnLocations"
+    options = [
+        item
+        for item in catalog.get(key) or []
+        if isinstance(item, dict)
+        and item.get("active", True) is not False
+        and str(item.get("name") or "").strip()
+    ]
+    options.sort(key=lambda item: (
+        item.get("displayOrder")
+        if isinstance(item.get("displayOrder"), int)
+        else 999999,
+        str(item.get("name") or "").casefold(),
+    ))
+    if not options:
+        fallback = {
+            "en": "I don’t have a confirmed {kind}-location list available right now, so I don’t want to guess. Which location do you have in mind?",
+            "nl": "Ik heb nu geen bevestigde lijst met {kind}locaties beschikbaar, dus ik wil niet gokken. Welke locatie heb je in gedachten?",
+            "pap": "Awor mi no tin un lista konfirmá di lugánan pa {kind}, pues mi no ke hasi suposishon. Kua lugá bo tin na mente?",
+            "de": "Mir liegt derzeit keine bestätigte Liste der {kind}orte vor, deshalb möchte ich nicht raten. Welchen Ort haben Sie im Sinn?",
+        }[locale]
+        labels = {
+            "en": {"pickup": "pickup", "return": "return"},
+            "nl": {"pickup": "ophaal", "return": "inlever"},
+            "pap": {"pickup": "tuma e outo", "return": "entrega e outo"},
+            "de": {"pickup": "Abhol", "return": "Rückgabe"},
+        }[locale]
+        return fallback.format(kind=labels[request_kind])
+
+    names = "\n".join(f"• {str(item['name']).strip()}" for item in options)
+    has_hotel_delivery = any(
+        item.get("kind") == "hotel_delivery" for item in options
+    )
+    hotel_note = {
+        "en": "\n\nFor hotel delivery, I’ll need the hotel name and its address.",
+        "nl": "\n\nVoor hotelbezorging heb ik de hotelnaam en het adres nodig.",
+        "pap": "\n\nPa entrega na hotel, mi tin mester di nòmber di hotel i su adrès.",
+        "de": "\n\nFür eine Hotelzustellung benötige ich den Hotelnamen und die Adresse.",
+    }[locale] if has_hotel_delivery else ""
+    copy = {
+        "en": (
+            "We offer these {kind} options:\n{names}{hotel_note}\n\n"
+            "Which option works best for you?"
+        ),
+        "nl": (
+            "We bieden deze {kind}opties:\n{names}{hotel_note}\n\n"
+            "Welke optie past het beste?"
+        ),
+        "pap": (
+            "Nos tin e siguiente opshonnan pa {kind}:\n{names}{hotel_note}\n\n"
+            "Kua opshon ta mihó pa bo?"
+        ),
+        "de": (
+            "Wir bieten diese {kind}optionen an:\n{names}{hotel_note}\n\n"
+            "Welche Option passt am besten?"
+        ),
+    }[locale]
+    labels = {
+        "en": {"pickup": "pickup", "return": "return"},
+        "nl": {"pickup": "ophaal", "return": "inlever"},
+        "pap": {"pickup": "tuma e outo", "return": "entrega e outo"},
+        "de": {"pickup": "Abhol", "return": "Rückgabe"},
+    }[locale]
+    return copy.format(
+        kind=labels[request_kind], names=names, hotel_note=hotel_note,
+    )
+
+
+def hotel_delivery_detail_prompt(detail: str, fields: dict) -> str:
+    """Ask one hotel-delivery detail at a time in the conversation language."""
+    locale = _locale(fields)
+    prompts = {
+        "name": {
+            "en": "Hotel delivery works. What is the name of the hotel?",
+            "nl": "Hotelbezorging is mogelijk. Wat is de naam van het hotel?",
+            "pap": "Entrega na hotel ta posibel. Kiko ta nòmber di e hotel?",
+            "de": "Die Hotelzustellung ist möglich. Wie heißt das Hotel?",
+        },
+        "address": {
+            "en": "Thank you. What is the hotel address? A partial address is fine.",
+            "nl": "Dank je. Wat is het adres van het hotel? Een gedeeltelijk adres is prima.",
+            "pap": "Danki. Kiko ta e adrès di e hotel? Un parti di e adrès ta sufisiente.",
+            "de": "Danke. Wie lautet die Hoteladresse? Eine Teiladresse reicht aus.",
+        },
+    }
+    return prompts[detail][locale]
 
 
 def explicit_smaller_vehicle_request(message_text: object) -> bool:
@@ -569,6 +740,8 @@ def infer_media_first_intent(
 ) -> str:
     """Provide a deterministic fallback until #195 supplies primary intent."""
     customer_text = str(message_text or "")
+    if rental_location_request_kind(customer_text):
+        return ""
     has_exact_vehicle = bool(fields.get("vehicle_id") or fields.get("vehicle_name"))
     if _LUGGAGE_QUESTION.search(str(reply_text or "")) and not has_exact_vehicle:
         # Ali never interrogates customers about luggage. Once passenger count
@@ -768,6 +941,12 @@ def derive_media_first_action(
     structured primary intent, the model's catalog names when supplied, and
     canonical server-owned catalog/state fields.
     """
+    if rental_location_request_kind(message_text):
+        return {
+            "status": "not_discovery",
+            "action": None,
+            "reason": "explicit_rental_location_options",
+        }
     intent = str(primary_intent or "").strip().lower()
     explicit_names = _structured_names(structured_action)
     if intent not in _DISCOVERY_INTENTS and not explicit_names:

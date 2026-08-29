@@ -133,6 +133,9 @@ MARINA_TOOL = {
                     "rental_start": {"type": "string", "description": "Ali only: pickup date in YYYY-MM-DD format."},
                     "rental_end": {"type": "string", "description": "Ali only: return date in YYYY-MM-DD format."},
                     "pickup_location": {"type": "string", "description": "Ali only: customer-confirmed pickup location."},
+                    "pickup_location_kind": {"type": "string", "enum": ["fixed", "hotel_delivery"], "description": "Ali only: selected published pickup option kind."},
+                    "pickup_hotel_name": {"type": "string", "description": "Ali only: hotel name explicitly supplied for hotel delivery."},
+                    "pickup_hotel_address": {"type": "string", "description": "Ali only: full or partial hotel address explicitly supplied for hotel delivery."},
                     "return_location": {"type": "string", "description": "Ali only: customer-confirmed return location."},
                     "vehicle_id": {"type": "string", "description": "Ali only: Python-owned published vehicle UUID. Never invent or populate this field."},
                     "vehicle_name": {"type": "string", "description": "Ali only: exact published vehicle name when the customer selects one."},
@@ -1020,6 +1023,17 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   and ask one concise clarification. Apply this naturally in EN, NL, PAP, and DE.
 - Required facts are customer_name, rental_start, rental_end, pickup_location,
   return_location, driver_age, conversation_language, and exactly one vehicle or category.
+- PICKUP OPTIONS ARE SERVER-OWNED. If the customer asks which pickup choices Ali offers,
+  answer only from `pickup_options`; never interpret that wording as a request for cars and
+  never change or reopen an already selected vehicle. Ali currently offers Airport, Ali
+  office, and Hotel delivery when those exact options appear in the published catalog.
+  Do not invent fees, hours, delivery areas, or conditions not present in the catalog.
+- For Hotel delivery, set pickup_location_kind to `hotel_delivery`. The hotel name is
+  mandatory and its address is also required; a partial address is acceptable. Ask first
+  for only the hotel name, then in the following turn ask only for its address. Keep
+  pickup_location empty until both are known, then compose it as
+  `Hotel delivery — [hotel name], [address]`. For Airport or Ali office, set
+  pickup_location_kind to `fixed` and use the exact published option name.
 - Ask exactly one short question at a time for the most important missing or ambiguous fact.
 - QUOTE-LED CUSTOMER GUIDANCE is mandatory:
   1. The goal of the Ali conversation is to help the customer choose a suitable car and

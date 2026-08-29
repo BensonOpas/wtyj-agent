@@ -1739,6 +1739,20 @@ def catalog_prompt_context(catalog: dict) -> dict:
         "catalog_version": catalog.get("catalogVersion"),
         "availability_mode": "request_only",
         "currency": "USD",
+        "pickup_options": [{
+            "name": str(item.get("name") or ""),
+            "kind": str(item.get("kind") or "fixed"),
+            "instructions": str(item.get("instructions") or "") or None,
+            "requires_name": bool(item.get("requiresName")),
+            "requires_address": bool(item.get("requiresAddress")),
+        } for item in catalog.get("pickupLocations") or [] if isinstance(item, dict)],
+        "return_options": [{
+            "name": str(item.get("name") or ""),
+            "kind": str(item.get("kind") or "fixed"),
+            "instructions": str(item.get("instructions") or "") or None,
+            "requires_name": bool(item.get("requiresName")),
+            "requires_address": bool(item.get("requiresAddress")),
+        } for item in catalog.get("returnLocations") or [] if isinstance(item, dict)],
         "categories": categories,
         "vehicles": vehicles,
         "supplements": [{
@@ -1791,6 +1805,36 @@ def sanitize_intake_reply(
     if first_question_end >= 0 and text.find("?", first_question_end + 1) >= 0:
         text = text[:first_question_end + 1].strip()
     return text
+
+
+def next_intake_question(fields: dict) -> str:
+    """Return one localized next question after a deterministic intake step."""
+    locale = str((fields or {}).get("conversation_language") or "en").lower()
+    if locale not in LOCALES:
+        locale = "en"
+    next_field = next(
+        (
+            field
+            for field in _SEQUENTIAL_FIELD_ORDER
+            if (fields or {}).get(field) in (None, "")
+        ),
+        "",
+    )
+    if next_field:
+        return _SEQUENTIAL_INTAKE_QUESTIONS[locale][next_field]
+    if not any((fields or {}).get(key) for key in SELECTION_FIELDS):
+        return {
+            "en": "Which car would you like to choose?",
+            "nl": "Welke auto wil je kiezen?",
+            "pap": "Kua outo bo ke skohe?",
+            "de": "Welches Auto möchten Sie wählen?",
+        }[locale]
+    return {
+        "en": "Thank you. I’ve saved the hotel delivery details.",
+        "nl": "Dank je. Ik heb de gegevens voor hotelbezorging opgeslagen.",
+        "pap": "Danki. Mi a warda e detayanan pa entrega na hotel.",
+        "de": "Danke. Ich habe die Angaben zur Hotelzustellung gespeichert.",
+    }[locale]
 
 
 def _normalize_catalog_label(value: object) -> str:
