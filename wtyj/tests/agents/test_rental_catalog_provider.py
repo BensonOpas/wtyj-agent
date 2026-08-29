@@ -24,6 +24,8 @@ def document():
             "refundableSecurityDepositId": "deposit",
             "refundableSecurityDepositCents": 20_000,
             "reservationDepositPercent": 15,
+            "pickupLocations": [],
+            "returnLocations": [],
         },
         "categories": [{
             "id": "economy", "name": "Economy", "dailyRateCents": 3_500,

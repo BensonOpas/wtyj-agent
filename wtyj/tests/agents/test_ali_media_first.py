@@ -8,12 +8,16 @@ from agents.social.ali_media_first import (
     derive_media_first_action,
     enforce_vehicle_first_reply,
     explicit_catalog_browse_request,
+    explicit_hotel_delivery_choice,
     explicit_larger_vehicle_request,
     explicit_no_preference_request,
     explicit_smaller_vehicle_request,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     media_first_clarification,
+    rental_location_options_reply,
+    rental_location_request_kind,
+    resolve_fixed_pickup_option_choice,
     add_first_turn_welcome,
     proactive_child_seat_offer,
 )
@@ -33,6 +37,32 @@ def _vehicle(index, name, class_id, seats, amount):
 
 def _catalog():
     return {
+        "pickupLocations": [{
+            "id": "airport",
+            "name": "Airport",
+            "kind": "fixed",
+            "requiresName": False,
+            "requiresAddress": False,
+            "active": True,
+            "displayOrder": 10,
+        }, {
+            "id": "ali-office",
+            "name": "Ali office",
+            "kind": "fixed",
+            "requiresName": False,
+            "requiresAddress": False,
+            "active": True,
+            "displayOrder": 20,
+        }, {
+            "id": "hotel-delivery",
+            "name": "Hotel delivery",
+            "kind": "hotel_delivery",
+            "requiresName": True,
+            "requiresAddress": True,
+            "active": True,
+            "displayOrder": 30,
+        }],
+        "returnLocations": [],
         "vehicleClasses": [
             {"id": "economy", "name": "Economy"},
             {"id": "compact", "name": "Compact Car"},
@@ -1094,3 +1124,67 @@ def test_safe_invalid_plan_clarification_never_lists_cars(locale):
     })
     assert reply.count("?") == 1
     assert "Toyota" not in reply
+
+
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "what options do you have for pick up",
+        "wbich options do you have for picking up the car ?",
+        "where are your pickup locations?",
+    ],
+)
+def test_pickup_option_request_never_becomes_vehicle_discovery(message_text):
+    fields = {
+        "conversation_language": "en",
+        "vehicle_id": "vehicle-2",
+        "vehicle_name": "Kia Picanto 2024 or similar",
+    }
+
+    assert rental_location_request_kind(message_text) == "pickup"
+    assert explicit_catalog_browse_request(message_text) is False
+    assert infer_media_first_intent(
+        message_text,
+        "Here are some cars.",
+        {"mode": "curated", "vehicle_names": ["Toyota Yaris or similar"]},
+        fields,
+        {},
+        _catalog(),
+    ) == ""
+    assert derive_media_first_action(
+        "request_recommendation",
+        {"mode": "curated", "vehicle_names": ["Toyota Yaris or similar"]},
+        "Here are some cars.",
+        fields,
+        {},
+        _catalog(),
+        message_text=message_text,
+    ) == {
+        "status": "not_discovery",
+        "action": None,
+        "reason": "explicit_rental_location_options",
+    }
+
+
+def test_pickup_options_reply_uses_only_published_business_options():
+    reply = rental_location_options_reply(
+        "pickup", {"conversation_language": "en"}, _catalog(),
+    )
+
+    assert "• Airport" in reply
+    assert "• Ali office" in reply
+    assert "• Hotel delivery" in reply
+    assert "hotel name and its address" in reply
+    assert reply.count("?") == 1
+    assert "Toyota" not in reply
+
+
+def test_exact_pickup_choices_are_resolved_without_guessing():
+    assert resolve_fixed_pickup_option_choice(
+        "Airport", _catalog(),
+    )["id"] == "airport"
+    assert resolve_fixed_pickup_option_choice(
+        "Ali office", _catalog(),
+    )["id"] == "ali-office"
+    assert resolve_fixed_pickup_option_choice("office", _catalog()) is None
+    assert explicit_hotel_delivery_choice("Hotel delivery") is True

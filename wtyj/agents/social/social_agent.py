@@ -35,6 +35,7 @@ from agents.social.ali_quote_workflow import (
     invalidate_active_quote_summary,
     infer_relative_rental_end_change,
     log_rental_change_decision,
+    next_intake_question as next_ali_intake_question,
     plan_repeated_quote_confirmation,
     plan_ali_quote_turn,
     resolve_quote_confirmation_interaction,
@@ -58,10 +59,15 @@ from agents.social.ali_media_first import (
     explicit_larger_vehicle_request,
     explicit_smaller_vehicle_request,
     explicit_visual_request,
+    explicit_hotel_delivery_choice,
+    hotel_delivery_detail_prompt,
     infer_explicit_catalog_class_selection,
     infer_media_first_intent,
     add_first_turn_welcome,
     media_first_clarification,
+    rental_location_options_reply,
+    rental_location_request_kind,
+    resolve_fixed_pickup_option_choice,
     proactive_child_seat_offer,
 )
 from agents.social.ali_vehicle_selection import (
@@ -1823,6 +1829,32 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_change_outcome = "not_applicable"
     _ali_change_fields = ()
     _ali_change_configured = ali_quote_tenant_configured()
+    _ali_location_request_this_turn = (
+        rental_location_request_kind(text)
+        if _ali_change_configured
+        else ""
+    )
+    _ali_hotel_detail_reply = ""
+    _ali_hotel_finished_this_turn = False
+    _ali_hotel_stage = str(
+        flags.get("ali_pickup_hotel_detail_stage") or ""
+    )
+    _ali_hotel_choice_this_turn = bool(
+        _ali_change_configured
+        and explicit_hotel_delivery_choice(text)
+    )
+    try:
+        _ali_fixed_pickup_choice = (
+            resolve_fixed_pickup_option_choice(
+                text,
+                get_ali_intake_catalog(),
+            )
+            if _ali_change_configured and not _ali_location_request_this_turn
+            else None
+        )
+    except Exception:
+        _ali_fixed_pickup_choice = None
+    _ali_fixed_pickup_finished_this_turn = False
     _ali_repair_reply = (
         conversation_repair_reply(text, fields, flags)
         if _ali_change_configured else ""
@@ -1830,6 +1862,11 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_structured_primary_intent = str(
         result.get("ali_primary_intent") or ""
     ).strip().lower()
+    _ali_hotel_answer_candidate = bool(
+        "?" not in str(text or "")
+        and _ali_structured_primary_intent
+        not in {"ask_question", "request_recommendation", "reject_or_hesitate"}
+    )
     _ali_post_quote_change_pending = isinstance(
         flags.get("ali_post_quote_change_requested"), dict,
     )
@@ -1858,9 +1895,69 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # let opportunistic model extraction mutate the provider-delivered draft.
     _ali_change_action = _ali_forced_change_action or (
         None
-        if _ali_pure_confirmation or _ali_repair_reply
+        if (
+            _ali_pure_confirmation
+            or _ali_repair_reply
+            or _ali_location_request_this_turn
+            or _ali_hotel_choice_this_turn
+            or _ali_fixed_pickup_choice
+            or _ali_hotel_stage
+        )
         else result.get("ali_rental_change")
     )
+    if _ali_fixed_pickup_choice:
+        new_fields = dict(new_fields)
+        new_fields["pickup_location"] = str(
+            _ali_fixed_pickup_choice.get("name") or ""
+        ).strip()
+        new_fields["pickup_location_kind"] = "fixed"
+        new_fields["pickup_hotel_name"] = ""
+        new_fields["pickup_hotel_address"] = ""
+        flags.pop("ali_pickup_hotel_detail_stage", None)
+        _ali_fixed_pickup_finished_this_turn = True
+    elif _ali_hotel_choice_this_turn:
+        new_fields = dict(new_fields)
+        for _key in (
+            "pickup_location", "pickup_hotel_name", "pickup_hotel_address",
+        ):
+            new_fields.pop(_key, None)
+        new_fields["pickup_location_kind"] = "hotel_delivery"
+        flags["ali_pickup_hotel_detail_stage"] = "name"
+        _ali_hotel_detail_reply = hotel_delivery_detail_prompt("name", fields)
+    elif (
+        _ali_hotel_stage == "name"
+        and not _ali_location_request_this_turn
+        and _ali_hotel_answer_candidate
+    ):
+        _hotel_name = str(text or "").strip()
+        if _hotel_name:
+            new_fields = dict(new_fields)
+            new_fields["pickup_location_kind"] = "hotel_delivery"
+            new_fields["pickup_hotel_name"] = _hotel_name
+            new_fields.pop("pickup_location", None)
+            flags["ali_pickup_hotel_detail_stage"] = "address"
+            _ali_hotel_detail_reply = hotel_delivery_detail_prompt("address", fields)
+    elif (
+        _ali_hotel_stage == "address"
+        and not _ali_location_request_this_turn
+        and _ali_hotel_answer_candidate
+    ):
+        _hotel_address = str(text or "").strip()
+        _hotel_name = str(
+            new_fields.get("pickup_hotel_name")
+            or fields.get("pickup_hotel_name")
+            or ""
+        ).strip()
+        if _hotel_name and _hotel_address:
+            new_fields = dict(new_fields)
+            new_fields["pickup_location_kind"] = "hotel_delivery"
+            new_fields["pickup_hotel_name"] = _hotel_name
+            new_fields["pickup_hotel_address"] = _hotel_address
+            new_fields["pickup_location"] = (
+                f"Hotel delivery — {_hotel_name}, {_hotel_address}"
+            )
+            flags.pop("ali_pickup_hotel_detail_stage", None)
+            _ali_hotel_finished_this_turn = True
     if (
         _ali_pure_confirmation
         and _ali_post_quote_change_pending
@@ -1886,6 +1983,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     )
     _ali_quote_merge_keys = {
         "customer_name", "first_name", "surnames", "rental_start", "rental_end", "pickup_location",
+        "pickup_location_kind", "pickup_hotel_name", "pickup_hotel_address",
         "return_location", "vehicle_id", "vehicle_name", "vehicle_class_id",
         "vehicle_class_name", "driver_age", "passenger_count", "luggage_count",
         "vehicle_catalog_class_id", "vehicle_catalog_class_name",
@@ -1896,6 +1994,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     _ali_protect_quote_fields = (
         _ali_pure_confirmation
         or bool(_ali_repair_reply)
+        or bool(_ali_location_request_this_turn)
         or (
             _ali_summary_anchor_active
             and _ali_structured_primary_intent == "ask_question"
@@ -1987,6 +2086,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _ali_change_configured
             and not _ali_pure_confirmation
             and not _ali_repair_reply
+            and not _ali_location_request_this_turn
+            and not _ali_hotel_detail_reply
             and isinstance(result.get("ali_vehicle_recommendation"), dict)
         ):
             try:
@@ -2017,6 +2118,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if (
         _ali_change_configured
         and not _ali_selected_this_turn
+        and not _ali_location_request_this_turn
+        and not _ali_hotel_detail_reply
     ):
         try:
             _explicit_class = infer_explicit_catalog_class_selection(
@@ -2047,6 +2150,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     _ali_change_outcome,
                     _ali_change_fields,
                 )
+
+    if _ali_hotel_finished_this_turn or _ali_fixed_pickup_finished_this_turn:
+        _ali_hotel_detail_reply = next_ali_intake_question(fields)
 
     if _ali_change_outcome == "changed":
         flags.pop("ali_post_quote_change_requested", None)
@@ -2146,6 +2252,8 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             _ali_selected_this_turn
             or _ali_explicit_class_this_turn
             or _ali_pure_confirmation
+            or _ali_location_request_this_turn
+            or _ali_hotel_detail_reply
         )
         else result.get("ali_vehicle_recommendation")
     )
@@ -2154,22 +2262,46 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     media_first_intent = ""
     _ali_catalog_for_media = None
     if (
-        include_media
-        and channel == "whatsapp"
+        channel == "whatsapp"
         and _ali_workflow_on
         and not result.get("requires_human")
         and not _ali_selected_this_turn
+        and (
+            include_media
+            or bool(_ali_location_request_this_turn)
+            or bool(_ali_hotel_detail_reply)
+        )
     ):
         try:
             _ali_catalog_for_media = get_ali_intake_catalog()
-            if _ali_explicit_class_this_turn:
+            if _ali_location_request_this_turn:
+                media_first_intent = "ask_question"
+                recommendation_action = None
+                reply_text = rental_location_options_reply(
+                    _ali_location_request_this_turn,
+                    fields,
+                    _ali_catalog_for_media,
+                )
+                media_first_status = "rental_location"
+                media_first_reason = (
+                    f"explicit_{_ali_location_request_this_turn}_options"
+                )
+            elif _ali_hotel_detail_reply:
+                media_first_intent = "ask_question"
+                recommendation_action = None
+                reply_text = _ali_hotel_detail_reply
+                media_first_status = "hotel_delivery_details"
+                media_first_reason = "sequential_hotel_delivery_intake"
+            elif _ali_explicit_class_this_turn:
                 _class_action = catalog_class_recommendation_action(
                     _ali_explicit_class_this_turn,
                     _ali_catalog_for_media,
                 )
                 if _class_action:
                     recommendation_action = _class_action
-            if _ali_repair_reply:
+            if _ali_location_request_this_turn or _ali_hotel_detail_reply:
+                pass
+            elif _ali_repair_reply:
                 media_first_intent = "continue_intake"
                 recommendation_action = None
                 reply_text = _ali_repair_reply
@@ -2236,10 +2368,15 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             media_first_intent = "ask_question"
             flags["ali_child_seat_prompted"] = True
             bm_logger.log("ali_child_seat_offer_added")
-        reply_text = enforce_vehicle_first_reply(reply_text, fields)
+        if not _ali_location_request_this_turn and not _ali_hotel_detail_reply:
+            reply_text = enforce_vehicle_first_reply(reply_text, fields)
     _ali_effective_primary_intent = (
         "ask_question"
-        if _ali_child_seat_offer
+        if (
+            _ali_child_seat_offer
+            or _ali_location_request_this_turn
+            or _ali_hotel_detail_reply
+        )
         else "confirm_summary"
         if _ali_pure_confirmation and not _ali_selected_this_turn
         else (

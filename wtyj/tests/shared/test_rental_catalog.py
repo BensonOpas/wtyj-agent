@@ -21,6 +21,8 @@ def catalog_document():
             "refundableSecurityDepositId": "deposit",
             "refundableSecurityDepositCents": 20_000,
             "reservationDepositPercent": 15,
+            "pickupLocations": [],
+            "returnLocations": [],
         },
         "categories": [{
             "id": "economy",
@@ -80,6 +82,65 @@ def test_validation_rejects_unknown_fields_duplicate_ids_and_inactive_category()
     assert {error["code"] for error in result.errors} >= {
         "duplicate_id", "inactive_category",
     }
+
+
+def test_pickup_locations_are_validated_and_published_to_consumers(tmp_path):
+    document = catalog_document()
+    document["settings"]["pickupLocations"] = [{
+        "id": "airport",
+        "name": "Airport",
+        "kind": "fixed",
+        "instructions": "",
+        "requiresName": False,
+        "requiresAddress": False,
+        "active": True,
+        "displayOrder": 10,
+    }, {
+        "id": "hotel-delivery",
+        "name": "Hotel delivery",
+        "kind": "hotel_delivery",
+        "instructions": "Hotel name is mandatory; a partial address is fine.",
+        "requiresName": True,
+        "requiresAddress": True,
+        "active": True,
+        "displayOrder": 20,
+    }]
+    db_path = str(tmp_path / "registry.db")
+    rental_catalog.save_draft(
+        "tenant-a", document, expected_revision=0, actor="operator",
+        db_path=db_path,
+    )
+    rental_catalog.publish(
+        "tenant-a", expected_revision=1, idempotency_key="publish-locations",
+        actor="operator", db_path=db_path,
+    )
+
+    contract = rental_catalog.consumer_catalog("tenant-a", db_path=db_path)
+
+    assert [item["name"] for item in contract["pickupLocations"]] == [
+        "Airport", "Hotel delivery",
+    ]
+    assert contract["pickupLocations"][1]["requiresName"] is True
+    assert contract["returnLocations"] == []
+
+
+def test_hotel_delivery_requires_name_and_address_flags():
+    document = catalog_document()
+    document["settings"]["pickupLocations"] = [{
+        "id": "hotel-delivery",
+        "name": "Hotel delivery",
+        "kind": "hotel_delivery",
+        "instructions": "",
+        "requiresName": True,
+        "requiresAddress": False,
+        "active": True,
+        "displayOrder": 10,
+    }]
+
+    result = rental_catalog.validate_document(document)
+
+    assert result.valid is False
+    assert result.errors[0]["path"] == "settings.pickupLocations.0"
 
 
 def test_validation_rejects_floats_and_missing_tenant_media():

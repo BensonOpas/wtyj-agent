@@ -159,6 +159,33 @@ def media_catalog_with_van():
     return catalog
 
 
+def pickup_catalog():
+    catalog = correction_catalog()
+    catalog["pickupLocations"] = [{
+        "id": "airport",
+        "name": "Airport",
+        "kind": "fixed",
+        "active": True,
+        "displayOrder": 10,
+    }, {
+        "id": "ali-office",
+        "name": "Ali office",
+        "kind": "fixed",
+        "active": True,
+        "displayOrder": 20,
+    }, {
+        "id": "hotel-delivery",
+        "name": "Hotel delivery",
+        "kind": "hotel_delivery",
+        "requiresName": True,
+        "requiresAddress": True,
+        "active": True,
+        "displayOrder": 30,
+    }]
+    catalog["returnLocations"] = []
+    return catalog
+
+
 def _stored_fields(locale="en"):
     return {
         "customer_name": "Synthetic Customer",
@@ -2286,3 +2313,134 @@ def test_explicit_picture_request_after_exact_choice_resends_one_image(
 
     assert response["vehicle_recommendation"]["kind"] == "image"
     assert response["vehicle_recommendation"]["options"][0]["id"] == YARIS_VEHICLE_ID
+
+
+def test_pickup_options_question_preserves_selected_car_and_never_sends_cars(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-pickup-options-guard"
+    fields = _stored_fields()
+    fields.pop("pickup_location")
+    stale_model_result = {
+        "intents": ["inquiry"],
+        "fields": {
+            "vehicle_name": "Kia Seltos or similar",
+            "vehicle_class_name": "Compact SUV",
+        },
+        "confidence": "high",
+        "reply": "Here are a few cars from our fleet.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "request_recommendation",
+        "ali_vehicle_recommendation": {
+            "mode": "specific",
+            "vehicle_names": ["Kia Seltos or similar"],
+        },
+    }
+    _configure(monkeypatch, tmp_path, stale_model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", pickup_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", pickup_catalog)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "wbich options do you have for picking up the car ?",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+    stored = state_registry.wa_get_booking_state(phone)
+
+    assert response["vehicle_recommendation"] is None
+    assert response["ali_turn_commit"]["outbound_kind"] == "agent_reply"
+    assert "• Airport" in response["text"]
+    assert "• Ali office" in response["text"]
+    assert "• Hotel delivery" in response["text"]
+    assert stored["fields"]["vehicle_id"] == ECONOMY_VEHICLE_ID
+    assert stored["fields"]["vehicle_name"] == "Kia Picanto 2024 or similar"
+    assert "pickup_location" not in stored["fields"]
+
+
+def test_hotel_delivery_collects_name_then_partial_address_one_at_a_time(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-hotel-delivery-sequence"
+    fields = _stored_fields()
+    fields.pop("pickup_location")
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {"pickup_location": "Hotel delivery"},
+        "confidence": "high",
+        "reply": "Please send the hotel name and address.",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "continue_intake",
+    }
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(social_agent, "get_ali_intake_catalog", pickup_catalog)
+    monkeypatch.setattr(workflow, "get_intake_catalog", pickup_catalog)
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    selected = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Hotel delivery",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+    after_choice = state_registry.wa_get_booking_state(phone)
+
+    assert selected["text"] == "Hotel delivery works. What is the name of the hotel?"
+    assert selected["text"].count("?") == 1
+    assert "pickup_location" not in after_choice["fields"]
+    assert after_choice["flags"]["ali_pickup_hotel_detail_stage"] == "name"
+
+    question_result = {
+        **model_result,
+        "fields": {},
+        "reply": "I don’t have a confirmed hotel-delivery fee, so I don’t want to guess.",
+        "ali_primary_intent": "ask_question",
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: question_result,
+    )
+    answered = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Is hotel delivery free?",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+    after_question = state_registry.wa_get_booking_state(phone)
+
+    assert answered["text"] == question_result["reply"]
+    assert "pickup_hotel_name" not in after_question["fields"]
+    assert after_question["flags"]["ali_pickup_hotel_detail_stage"] == "name"
+
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: {**model_result, "fields": {}},
+    )
+    named = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Avila Beach Hotel",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+    after_name = state_registry.wa_get_booking_state(phone)
+
+    assert "What is the hotel address?" in named["text"]
+    assert "partial address is fine" in named["text"]
+    assert named["text"].count("?") == 1
+    assert after_name["fields"]["pickup_hotel_name"] == "Avila Beach Hotel"
+    assert "pickup_location" not in after_name["fields"]
+    assert after_name["flags"]["ali_pickup_hotel_detail_stage"] == "address"
+
+    completed = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Penstraat",
+        "from_name": "Synthetic Customer",
+    }, include_media=True)
+    after_address = state_registry.wa_get_booking_state(phone)
+
+    assert completed["vehicle_recommendation"] is None
+    assert after_address["fields"]["pickup_location"] == (
+        "Hotel delivery — Avila Beach Hotel, Penstraat"
+    )
+    assert "ali_pickup_hotel_detail_stage" not in after_address["flags"]
