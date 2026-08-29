@@ -22,6 +22,10 @@ _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _CARD_LABELS = {
     "en": {
         "seats": "seats",
+        "luggage_one": "Cargo: approx. 1 medium suitcase",
+        "luggage_many": "Cargo: approx. {count} medium suitcases",
+        "bags_one": "1 suitcase",
+        "bags_many": "{count} suitcases",
         "details": "Car Details",
         "choose_one": "Choose This Car",
         "choose_many": "Choose A Car",
@@ -31,6 +35,10 @@ _CARD_LABELS = {
     },
     "nl": {
         "seats": "zitplaatsen",
+        "luggage_one": "Bagageruimte: ca. 1 middelgrote koffer",
+        "luggage_many": "Bagageruimte: ca. {count} middelgrote koffers",
+        "bags_one": "1 koffer",
+        "bags_many": "{count} koffers",
         "details": "Autodetails",
         "choose_one": "Kies Deze Auto",
         "choose_many": "Kies Een Auto",
@@ -40,6 +48,10 @@ _CARD_LABELS = {
     },
     "pap": {
         "seats": "lugá",
+        "luggage_one": "Espasio di ekipahe: aprox. 1 maleta mediano",
+        "luggage_many": "Espasio di ekipahe: aprox. {count} maleta mediano",
+        "bags_one": "1 maleta",
+        "bags_many": "{count} maleta",
         "details": "Detayenan Di Outo",
         "choose_one": "Skoge E Outo Aki",
         "choose_many": "Skoge Un Outo",
@@ -49,6 +61,10 @@ _CARD_LABELS = {
     },
     "de": {
         "seats": "Sitzplätze",
+        "luggage_one": "Gepäckraum: ca. 1 mittelgroßer Koffer",
+        "luggage_many": "Gepäckraum: ca. {count} mittelgroße Koffer",
+        "bags_one": "1 Koffer",
+        "bags_many": "{count} Koffer",
         "details": "Fahrzeugdetails",
         "choose_one": "Dieses Auto Wählen",
         "choose_many": "Auto Auswählen",
@@ -178,6 +194,19 @@ def _catalog_vehicle(
     seats = vehicle.get("seats")
     if isinstance(seats, bool) or (seats is not None and not isinstance(seats, int)):
         raise AliVehicleRecommendationError("invalid_vehicle_capacity")
+    luggage_capacity = vehicle.get("luggageCapacity")
+    if (
+        isinstance(luggage_capacity, bool)
+        or (
+            luggage_capacity is not None
+            and (
+                not isinstance(luggage_capacity, int)
+                or luggage_capacity < 0
+                or luggage_capacity > 20
+            )
+        )
+    ):
+        raise AliVehicleRecommendationError("invalid_vehicle_luggage_capacity")
     transmission = str(vehicle.get("transmission") or "").strip().lower()
     if transmission and transmission not in _TRANSMISSIONS:
         raise AliVehicleRecommendationError("invalid_vehicle_transmission")
@@ -187,6 +216,7 @@ def _catalog_vehicle(
         "name": name,
         "category": category,
         "seats": seats,
+        "luggage_capacity": luggage_capacity,
         "transmission": transmission or None,
         "daily_usd": amount,
         "image_url": image_url,
@@ -201,6 +231,12 @@ def _card_body(option: dict, locale: str) -> str:
     lines = [option["name"], option["category"]]
     if option.get("seats") is not None:
         lines.append(f"{option['seats']} {_CARD_LABELS[locale]['seats']}")
+    luggage_capacity = option.get("luggage_capacity")
+    if isinstance(luggage_capacity, int) and luggage_capacity > 0:
+        key = "luggage_one" if luggage_capacity == 1 else "luggage_many"
+        lines.append(
+            _CARD_LABELS[locale][key].format(count=luggage_capacity)
+        )
     if option.get("transmission"):
         lines.append(_TRANSMISSIONS[option["transmission"]][locale])
     amount = option["daily_usd"]
@@ -213,6 +249,12 @@ def _picker_description(option: dict, locale: str) -> str:
     details = [option["category"]]
     if option.get("seats") is not None:
         details.append(f"{option['seats']} {_CARD_LABELS[locale]['seats']}")
+    luggage_capacity = option.get("luggage_capacity")
+    if isinstance(luggage_capacity, int) and luggage_capacity > 0:
+        key = "bags_one" if luggage_capacity == 1 else "bags_many"
+        details.append(
+            _CARD_LABELS[locale][key].format(count=luggage_capacity)
+        )
     displayed_amount = (
         option["daily_usd"][:-3]
         if option["daily_usd"].endswith(".00")

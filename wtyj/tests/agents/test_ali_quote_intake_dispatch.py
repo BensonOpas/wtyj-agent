@@ -302,7 +302,8 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "If they explicitly say they are undecided" in normalized
     assert "never combine vehicle preference with passenger count" in normalized
     assert "ask only passenger_count next" in normalized
-    assert "ask only about luggage when it is useful" in normalized
+    assert "Never ask how much luggage the customer has" in normalized
+    assert "Each vehicle card shows the catalog-owned approximate luggage capacity" in normalized
     assert "approximate daily budget" in normalized
     assert "Do not ask every discovery question mechanically" in normalized
     assert "never ask the vehicle question again" in normalized

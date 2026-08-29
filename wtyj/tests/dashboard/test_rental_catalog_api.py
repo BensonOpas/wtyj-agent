@@ -28,7 +28,8 @@ def document():
         }],
         "cars": [{
             "id": "picanto", "displayName": "Kia Picanto or similar",
-            "categoryId": "economy", "seats": 4, "transmission": "automatic",
+            "categoryId": "economy", "seats": 4, "luggageCapacity": 2,
+            "transmission": "automatic",
             "primaryImageAssetId": None, "active": True,
             "displayOrder": 0, "archivedAt": None,
         }],
