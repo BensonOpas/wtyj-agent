@@ -143,9 +143,10 @@ def test_v2_auto_approved_reserve_creates_no_availability_alert(monkeypatch):
         social_agent,
         "handle_ali_post_quote_action",
         lambda *_args, **_kwargs: {
-            "text": "Will you use a passport or an ID card?",
+            "text": "",
             "status": "created",
             "action": "reserve",
+            "customer_delivery_deferred": True,
             "reservation": {
                 "public_id": "reservation-auto-290",
                 "availability_status": "approved",
@@ -167,7 +168,8 @@ def test_v2_auto_approved_reserve_creates_no_availability_alert(monkeypatch):
         include_media=True,
     )
 
-    assert result["text"] == "Will you use a passport or an ID card?"
+    assert result["text"] == ""
+    assert result["ali_customer_delivery_deferred"] is True
     assert len(saved) == 1
     assert alerts == []
 

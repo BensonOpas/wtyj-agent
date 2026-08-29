@@ -67,10 +67,6 @@ _CONTROL_COPY = {
             "I have your reservation request. I am asking our team to check "
             "the vehicle availability now. I will update you when they have reviewed it."
         ),
-        "reserve_reply_auto": (
-            "Great — I’ll guide you through the remaining steps one at a time. "
-            "Will you use a passport or an ID card for your reservation?"
-        ),
         "reserve_reply_in_progress": (
             "Your reservation request is already in progress. Please continue "
             "with the latest step I sent."
@@ -85,10 +81,6 @@ _CONTROL_COPY = {
         "reserve_reply": (
             "Ik heb je reserveringsaanvraag. Ik vraag ons team nu om de "
             "beschikbaarheid van de auto te controleren. Daarna laat ik je het weten."
-        ),
-        "reserve_reply_auto": (
-            "Prima — ik begeleid je stap voor stap door het vervolg. Gebruik je "
-            "een paspoort of identiteitskaart voor je reservering?"
         ),
         "reserve_reply_in_progress": (
             "Je reserveringsaanvraag loopt al. Ga verder met de laatste stap die "
@@ -105,10 +97,6 @@ _CONTROL_COPY = {
             "Mi tin bo petishon di reservashon. Mi ta pidi nos tim pa kontrola "
             "disponibilidat di e outo awor. Mi ta laga bo sa despues di nan revision."
         ),
-        "reserve_reply_auto": (
-            "Hopi bon — mi ta guia bo paso pa paso. Bo ta usa pasport òf karta "
-            "di identidat pa bo reservashon?"
-        ),
         "reserve_reply_in_progress": (
             "Bo petishon di reservashon ta andando kaba. Sigui ku e último paso "
             "ku mi a manda bo."
@@ -123,10 +111,6 @@ _CONTROL_COPY = {
         "reserve_reply": (
             "Ich habe Ihre Reservierungsanfrage. Unser Team pruft jetzt die "
             "Fahrzeugverfugbarkeit. Danach melde ich mich bei Ihnen."
-        ),
-        "reserve_reply_auto": (
-            "Sehr gut — ich begleite Sie Schritt für Schritt. Verwenden Sie für "
-            "Ihre Reservierung einen Reisepass oder Personalausweis?"
         ),
         "reserve_reply_in_progress": (
             "Ihre Reservierungsanfrage wird bereits bearbeitet. Fahren Sie bitte "
@@ -706,15 +690,26 @@ def _create_reservation_for_quote(
         conn.close()
 
 
-def _reserve_reply(copy: dict, reservation: dict, created: bool) -> str:
+def _scheduler_owns_initial_document_prompt(
+    reservation: dict,
+) -> bool:
+    """Return true when V2's durable scheduler is the sole prompt owner."""
     workflow_case = reservation.get("workflow_v2") or {}
+    return bool(
+        reservation.get("availability_status") == "approved"
+        and workflow_case.get("state") == "documents_collecting"
+        and not workflow_case.get("identityType")
+    )
+
+
+def _reserve_reply(copy: dict, reservation: dict) -> str:
     if reservation.get("availability_status") != "approved":
         return str(copy["reserve_reply"])
-    if created or (
-        workflow_case.get("state") == "documents_collecting"
-        and not workflow_case.get("identityType")
-    ):
-        return str(copy["reserve_reply_auto"])
+    if _scheduler_owns_initial_document_prompt(reservation):
+        # The V2 scheduler sends and records the provider-confirmed prompt.
+        # Returning the same question here created two outbound owners and
+        # duplicated the passport/ID question for a single reserve tap.
+        return ""
     return str(copy["reserve_reply_in_progress"])
 
 
@@ -748,11 +743,15 @@ def handle_post_quote_action(interaction: dict, action_id: str = "") -> dict:
             actor_id="signed_postback",
             action_id=action_id,
         )
+        delivery_deferred = _scheduler_owns_initial_document_prompt(
+            reservation,
+        )
         return {
-            "text": _reserve_reply(copy, reservation, created),
+            "text": _reserve_reply(copy, reservation),
             "action": action,
             "status": "created" if created else "repeated",
             "reservation": reservation,
+            "customer_delivery_deferred": delivery_deferred,
         }
     if action == "change":
         return {"text": copy["change_reply"], "action": action, "status": "change_requested", "reservation": None}
@@ -783,11 +782,15 @@ def handle_exact_reserve(
         quote, actor_type="customer", actor_id="exact_reserve_fallback", action_id=action_id,
     )
     copy = _CONTROL_COPY.get(str(quote["locale"] or "en").lower(), _CONTROL_COPY["en"])
+    delivery_deferred = _scheduler_owns_initial_document_prompt(
+        reservation,
+    )
     return {
-        "text": _reserve_reply(copy, reservation, created),
+        "text": _reserve_reply(copy, reservation),
         "action": "reserve",
         "status": "created" if created else "repeated",
         "reservation": reservation,
+        "customer_delivery_deferred": delivery_deferred,
     }
 
 
