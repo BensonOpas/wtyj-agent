@@ -788,6 +788,7 @@ def _flush_buffer(phone):
                 reply_vehicle_recommendation = None
                 reply_quote_confirmation = None
                 ali_turn_commit = None
+                ali_customer_delivery_deferred = False
                 if _orchestrator_on:
                     state_registry.dm_store_inbound_message(
                         _zernio_conv, _zernio_channel, combined_text,
@@ -815,6 +816,9 @@ def _flush_buffer(phone):
                             reply_result.get("ali_turn_commit")
                             if isinstance(reply_result.get("ali_turn_commit"), dict)
                             else None
+                        )
+                        ali_customer_delivery_deferred = bool(
+                            reply_result.get("ali_customer_delivery_deferred")
                         )
                     else:
                         reply_text = reply_result
@@ -988,8 +992,20 @@ def _flush_buffer(phone):
                         state_registry.inbound_processing_bulk_update(
                             ids, "replied", reason="provider_send_ok")
                 else:
-                    state_registry.inbound_processing_bulk_update(
-                        ids, "ignored", reason="no_reply_returned")
+                    if ali_customer_delivery_deferred:
+                        log(
+                            "ali_customer_delivery_deferred",
+                            conversation_id=_zernio_conv[:20],
+                            delivery_owner="reservation_v2_scheduler",
+                        )
+                        state_registry.inbound_processing_bulk_update(
+                            ids,
+                            "replied",
+                            reason="reservation_v2_scheduler_owns_reply",
+                        )
+                    else:
+                        state_registry.inbound_processing_bulk_update(
+                            ids, "ignored", reason="no_reply_returned")
             else:
                 # Brief 220: per-conversation runtime block (Meta-legacy WhatsApp path).
                 if state_registry.get_blocked(phone):

@@ -1155,7 +1155,12 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                         or ""
                     ),
                 )
-                if not _ali_post_quote_result.get("text"):
+                if (
+                    not _ali_post_quote_result.get("text")
+                    and not _ali_post_quote_result.get(
+                        "customer_delivery_deferred"
+                    )
+                ):
                     _post_status = str(
                         _ali_post_quote_result.get("status") or "invalid"
                     )
@@ -1234,6 +1239,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 mode="soft",
             )
         _reply_text = str(_ali_post_quote_result.get("text") or "")
+        _customer_delivery_deferred = bool(
+            _ali_post_quote_result.get("customer_delivery_deferred")
+        )
         if _reply_text:
             _reply_times.append(int(time.time()))
             flags["reply_times"] = _reply_times
@@ -1247,6 +1255,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 "vehicle_recommendation": None,
                 "quote_confirmation": None,
                 "ali_turn_commit": None,
+                "ali_customer_delivery_deferred": _customer_delivery_deferred,
             }
         return _reply_text
 

@@ -118,7 +118,7 @@ def _delivered_quote(conversation="conversation-one", account="account-one"):
     )
 
 
-def _reserve(quote):
+def _reserve(quote, expected_status="current"):
     control = workflow.build_post_quote_control(quote, secret=SECRET)
     payload = control["buttons"][0]["payload"]
     interaction = workflow.resolve_post_quote_interaction(
@@ -128,7 +128,7 @@ def _reserve(quote):
         quote["zernio_account_id"],
         secret=SECRET,
     )
-    assert interaction["status"] == "current"
+    assert interaction["status"] == expected_status
     return workflow.handle_post_quote_action(interaction, action_id="inbound-message-one")
 
 
@@ -233,7 +233,13 @@ def test_v2_reserve_skips_availability_gate_and_starts_documents(
     assert reservation["workflow_v2"]["state"] == "documents_collecting"
     assert reservation["workflow_v2"]["responsibleParty"] == "Client"
     assert reservation["workflow_v2"]["nextAction"] == "send_next_document"
-    assert "passport or an ID card" in result["text"]
+    assert result["text"] == ""
+    assert result["customer_delivery_deferred"] is True
+
+    repeated = _reserve(quote, expected_status="repeated")
+    assert repeated["status"] == "repeated"
+    assert repeated["customer_delivery_deferred"] is True
+    assert repeated["text"] == ""
     event_types = [
         item["event_type"]
         for item in workflow.list_reservation_events(reservation["public_id"])
