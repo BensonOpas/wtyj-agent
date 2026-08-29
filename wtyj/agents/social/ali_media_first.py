@@ -171,6 +171,14 @@ _LUGGAGE_QUESTION = re.compile(
     r"|\bwie\s+viele\s+(?:koffer|taschen)\b)",
     re.IGNORECASE,
 )
+_PASSENGER_QUESTION = re.compile(
+    r"(?:\bhow\s+many\s+(?:people|persons?|passengers?)\b"
+    r"|\bhow\s+large\s+is\s+(?:your|the)\s+(?:group|party)\b"
+    r"|\bmet\s+hoeveel\s+personen\b|\bhoeveel\s+passagiers\b"
+    r"|\bkuantu\s+persona\b|\bkuantu\s+pasahero\b"
+    r"|\bwie\s+viele\s+personen\b|\bwie\s+viele\s+passagiere\b)",
+    re.IGNORECASE,
+)
 _CHILD_TRAVELER_CUE = re.compile(
     r"\b(?:baby|babies|infant|infants|toddler|toddlers|child|children|kid|kids|"
     r"peuter|peuters|kind|kinderen|beibi|mucha(?:\s+chik[ií])?|"
@@ -198,10 +206,9 @@ _COPY = {
         "intro_many": "Here are a few options that may suit your trip. Which one do you prefer?",
         "availability": "Final vehicle availability still needs confirmation.",
         "cta": "Car Details",
-        "needs_passengers": "How many people will be travelling in the car?",
         "clarify_preference": "Would you prefer a smaller car, an SUV, or a van?",
-        "repair_category": "Sorry, I wasn't clear. I have {category} as your preferred category, but you haven't selected a specific car yet. How many people will be travelling in the car?",
-        "resume_category": "Hi! I have {category} as your preferred category. How many people will be travelling in the car?",
+        "repair_category": "Sorry, I wasn't clear. I have {category} as your preferred category, but you haven't selected a specific car yet. What date would you like to pick up the car?",
+        "resume_category": "Hi! I have {category} as your preferred category, but you haven't selected a specific car yet. What date would you like to pick up the car?",
         "repair_vehicle": "Sorry, I wasn't clear. I have {vehicle} as your selected car. What rental dates do you need?",
         "resume_vehicle": "Hi! I have {vehicle} as your selected car. What rental dates do you need?",
         "repair_general": "Sorry, I wasn't clear. What would you like me to explain?",
@@ -223,10 +230,9 @@ _COPY = {
         "intro_many": "Hier zijn een paar opties die bij je reis kunnen passen. Welke heeft je voorkeur?",
         "availability": "De definitieve voertuigbeschikbaarheid moet nog worden bevestigd.",
         "cta": "Autodetails",
-        "needs_passengers": "Met hoeveel personen reizen jullie in de auto?",
         "clarify_preference": "Heb je liever een kleinere auto, een SUV of een busje?",
-        "repair_category": "Sorry, ik was niet duidelijk. Ik heb {category} als je voorkeurscategorie, maar je hebt nog geen specifieke auto gekozen. Met hoeveel personen reizen jullie?",
-        "resume_category": "Hallo! Ik heb {category} als je voorkeurscategorie. Met hoeveel personen reizen jullie?",
+        "repair_category": "Sorry, ik was niet duidelijk. Ik heb {category} als je voorkeurscategorie, maar je hebt nog geen specifieke auto gekozen. Op welke datum wil je de auto ophalen?",
+        "resume_category": "Hallo! Ik heb {category} als je voorkeurscategorie, maar je hebt nog geen specifieke auto gekozen. Op welke datum wil je de auto ophalen?",
         "repair_vehicle": "Sorry, ik was niet duidelijk. Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
         "resume_vehicle": "Hallo! Ik heb {vehicle} als je gekozen auto. Voor welke data wil je huren?",
         "repair_general": "Sorry, ik was niet duidelijk. Wat wil je dat ik uitleg?",
@@ -248,10 +254,9 @@ _COPY = {
         "intro_many": "Aki tin algun opshon ku por pas ku bo biahe. Kua bo ta preferá?",
         "availability": "Disponibilidat final di e outo mester wordu konfirmá ainda.",
         "cta": "Detayenan Di Outo",
-        "needs_passengers": "Kuantu persona lo biaha den e outo?",
         "clarify_preference": "Bo ta preferá un outo mas chikí, un SUV òf un van?",
-        "repair_category": "Pordon, mi no tabata kla. Mi tin {category} komo bo preferensia, pero bo no a skohe un outo spesífiko ainda. Kuantu persona lo biaha den e outo?",
-        "resume_category": "Bon dia! Mi tin {category} komo bo preferensia. Kuantu persona lo biaha den e outo?",
+        "repair_category": "Pordon, mi no tabata kla. Mi tin {category} komo bo preferensia, pero bo no a skohe un outo spesífiko ainda. Kua fecha bo ke tuma e outo?",
+        "resume_category": "Bon dia! Mi tin {category} komo bo preferensia, pero bo no a skohe un outo spesífiko ainda. Kua fecha bo ke tuma e outo?",
         "repair_vehicle": "Pordon, mi no tabata kla. Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
         "resume_vehicle": "Bon dia! Mi tin {vehicle} komo e outo ku bo a skohe. Pa kua fechanan bo ke huur'é?",
         "repair_general": "Pordon, mi no tabata kla. Kiko bo ke pa mi splika?",
@@ -273,10 +278,9 @@ _COPY = {
         "intro_many": "Hier sind einige passende Optionen. Welches Auto bevorzugen Sie?",
         "availability": "Die endgültige Fahrzeugverfügbarkeit muss noch bestätigt werden.",
         "cta": "Fahrzeugdetails",
-        "needs_passengers": "Wie viele Personen fahren im Auto mit?",
         "clarify_preference": "Bevorzugen Sie einen kleineren Wagen, einen SUV oder einen Van?",
-        "repair_category": "Entschuldigung, ich war nicht klar. Ich habe {category} als Ihre bevorzugte Kategorie, aber noch kein bestimmtes Auto. Wie viele Personen fahren mit?",
-        "resume_category": "Hallo! Ich habe {category} als Ihre bevorzugte Kategorie. Wie viele Personen fahren mit?",
+        "repair_category": "Entschuldigung, ich war nicht klar. Ich habe {category} als Ihre bevorzugte Kategorie, aber noch kein bestimmtes Auto. An welchem Datum möchten Sie das Auto abholen?",
+        "resume_category": "Hallo! Ich habe {category} als Ihre bevorzugte Kategorie, aber noch kein bestimmtes Auto. An welchem Datum möchten Sie das Auto abholen?",
         "repair_vehicle": "Entschuldigung, ich war nicht klar. Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
         "resume_vehicle": "Hallo! Ich habe {vehicle} als Ihr gewähltes Auto. Für welche Daten möchten Sie mieten?",
         "repair_general": "Entschuldigung, ich war nicht klar. Was soll ich erklären?",
@@ -678,13 +682,6 @@ def proactive_child_seat_offer(
 def media_first_clarification(fields: dict) -> str:
     """Return one safe question when a discovery plan cannot be rendered."""
     copy = _COPY[_locale(fields)]
-    passenger_count = fields.get("passenger_count")
-    if (
-        isinstance(passenger_count, bool)
-        or not isinstance(passenger_count, int)
-        or passenger_count < 1
-    ):
-        return copy["needs_passengers"]
     return copy["clarify_preference"]
 
 
@@ -743,11 +740,14 @@ def infer_media_first_intent(
     if rental_location_request_kind(customer_text):
         return ""
     has_exact_vehicle = bool(fields.get("vehicle_id") or fields.get("vehicle_name"))
-    if _LUGGAGE_QUESTION.search(str(reply_text or "")) and not has_exact_vehicle:
-        # Ali never interrogates customers about luggage. Once passenger count
-        # is known, the deterministic planner presents suitable cars and each
-        # catalog card states its approximate luggage capacity. If passenger
-        # count is still missing, that same planner asks only for passengers.
+    if (
+        (_LUGGAGE_QUESTION.search(str(reply_text or ""))
+         or _PASSENGER_QUESTION.search(str(reply_text or "")))
+        and not has_exact_vehicle
+    ):
+        # Ali never interrogates customers about passengers or luggage. Repair
+        # a model-generated question into visual catalog choices; every card
+        # communicates seat and approximate luggage capacity.
         return "request_recommendation"
     has_vehicle_context = bool(
         _VEHICLE_CONTEXT.search(customer_text)
@@ -1220,24 +1220,16 @@ def derive_media_first_action(
     if lowest_price_requested:
         candidates = []
     if not candidates:
-        # A direct request, deferral, or alternative choice owns this turn.
-        # Passenger count still matters before claiming suitability, but it
-        # must not prevent Nick from showing the current fleet, a requested
-        # class, or the published lowest-price options first.
-        if passenger_count_missing and direct_options_request:
+        # Passenger count is optional and is never an intake question. When it
+        # is unknown, show current catalog choices without claiming group fit;
+        # the cards communicate seat and luggage capacity.
+        if passenger_count_missing:
             candidates = list(vehicles)
             reason = (
                 "lowest_price_catalog"
                 if lowest_price_requested
-                else "latest_intent_catalog"
+                else "capacity_unknown_catalog"
             )
-        elif passenger_count_missing:
-            return {
-                "status": "needs_context",
-                "action": None,
-                "reply_text": copy["needs_passengers"],
-                "reason": "missing_passenger_count",
-            }
         else:
             candidates = [
                 vehicle
@@ -1302,14 +1294,6 @@ def derive_media_first_action(
             "reason": "no_unseen_suitable_options",
         }
 
-    if len(candidates) >= 2:
-        if passenger_count_missing and not direct_options_request:
-            return {
-                "status": "needs_context",
-                "action": None,
-                "reply_text": copy["needs_passengers"],
-                "reason": "missing_passenger_count",
-            }
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
     if browse_requested or no_preference_requested:
@@ -1379,9 +1363,7 @@ def derive_media_first_action(
         "reply_text": intro,
         "vehicle_ids": [str(vehicle["id"]).strip() for vehicle in candidates],
         "reason": reason,
-        # Server-owned routing metadata.  A direct question about the fleet,
-        # a class, alternatives, or price must be answered now.  Passenger
-        # count remains useful later for fit advice, but cannot veto this
-        # customer-directed response at the delivery-builder boundary.
-        "capacity_advisory": direct_options_request,
+        # Passenger count may refine fit advice when volunteered, but never
+        # gates a customer-directed recommendation.
+        "capacity_advisory": direct_options_request or passenger_count_missing,
     }

@@ -125,13 +125,13 @@ def test_non_discovery_after_exact_choice_does_not_repeat_visuals():
 )
 def test_first_turn_welcome_is_localized_and_preserves_one_next_question(locale, opening):
     reply = add_first_turn_welcome(
-        "How many people will be travelling in the car?",
+        "What date would you like to pick up the car?",
         {"conversation_language": locale},
     )
 
     assert reply.startswith(opening)
-    assert reply.endswith("How many people will be travelling in the car?")
-    assert reply.count("How many people") == 1
+    assert reply.endswith("What date would you like to pick up the car?")
+    assert reply.count("pick up the car") == 1
 
 
 @pytest.mark.parametrize(
@@ -535,7 +535,9 @@ def test_confusion_and_reengagement_keep_category_without_assuming_vehicle():
     assert "Small Car" in confused
     assert "haven't selected a specific car" in confused
     assert "Small Car" in resumed
-    assert "How many people" in resumed
+    assert "pick up the car" in resumed
+    assert "How many people" not in confused
+    assert "How many people" not in resumed
 
 
 @pytest.mark.parametrize(
@@ -691,31 +693,56 @@ def test_explicit_selected_vehicle_picture_is_one_specific_action():
     assert decision["reason"] == "selected_vehicle_picture"
 
 
-@pytest.mark.parametrize(
-    ("fields", "reason", "question"),
-    [
-        (
-            {"conversation_language": "en"},
-            "missing_passenger_count",
-            "How many people",
-        ),
-    ],
-)
-def test_missing_trip_context_asks_one_useful_question(fields, reason, question):
+def test_missing_passenger_count_shows_options_instead_of_asking():
     decision = derive_media_first_action(
         "request_recommendation",
         None,
         "What cars do you recommend?",
-        fields,
+        {"conversation_language": "en"},
         {},
         _catalog(),
     )
 
-    assert decision["status"] == "needs_context"
-    assert decision["action"] is None
-    assert decision["reason"] == reason
-    assert question in decision["reply_text"]
-    assert decision["reply_text"].count("?") == 1
+    assert decision["status"] == "planned"
+    assert decision["action"]["mode"] == "curated"
+    assert decision["reason"] == "capacity_unknown_catalog"
+    assert "How many people" not in decision["reply_text"]
+    assert decision["capacity_advisory"] is True
+
+
+@pytest.mark.parametrize(
+    "reply_text",
+    [
+        "How many people will be travelling in the car?",
+        "Met hoeveel personen reizen jullie in de auto?",
+        "Kuantu persona lo biaha den e outo?",
+        "Wie viele Personen fahren im Auto mit?",
+    ],
+)
+def test_model_passenger_question_is_repaired_into_catalog_options(reply_text):
+    fields = {"conversation_language": "en"}
+    intent = infer_media_first_intent(
+        "Which one do you have?",
+        reply_text,
+        None,
+        fields,
+        {},
+        _catalog(),
+    )
+    decision = derive_media_first_action(
+        intent,
+        None,
+        reply_text,
+        fields,
+        {},
+        _catalog(),
+        message_text="Which one do you have?",
+    )
+
+    assert intent == "request_recommendation"
+    assert decision["status"] == "planned"
+    assert decision["action"]["mode"] == "curated"
+    assert "How many people" not in decision["reply_text"]
 
 
 def test_passenger_count_immediately_unlocks_options_without_luggage_question():
@@ -957,7 +984,7 @@ def test_no_preference_reopens_the_only_suitable_previously_rejected_car():
     assert "Would you prefer" not in decision["reply_text"]
 
 
-def test_no_preference_without_passenger_count_shows_options_before_retrying_question():
+def test_no_preference_without_passenger_count_shows_options_without_question():
     decision = derive_media_first_action(
         "request_recommendation",
         None,
@@ -969,7 +996,7 @@ def test_no_preference_without_passenger_count_shows_options_before_retrying_que
     )
 
     assert decision["status"] == "planned"
-    assert decision["reason"] == "latest_intent_catalog"
+    assert decision["reason"] == "capacity_unknown_catalog"
     assert decision["action"]["mode"] == "curated"
     assert "current fleet" in decision["reply_text"]
     assert "How many people" not in decision["reply_text"]

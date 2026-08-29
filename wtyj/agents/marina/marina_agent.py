@@ -142,7 +142,7 @@ MARINA_TOOL = {
                     "vehicle_class_id": {"type": "string", "description": "Ali only: Python-owned published category UUID. Never invent or populate this field."},
                     "vehicle_class_name": {"type": "string", "description": "Ali only: exact published category name when the customer selects one."},
                     "driver_age": {"type": "integer", "description": "Ali only: main driver's stated age."},
-                    "passenger_count": {"type": "integer", "description": "Ali only and optional when the customer has not selected a vehicle."},
+                    "passenger_count": {"type": "integer", "description": "Ali only: extract only when the customer volunteers it. Never ask for passenger count."},
                     "luggage_count": {"type": "integer", "description": "Ali only: extract only when the customer volunteers it. Never ask for luggage count."},
                     "extra_ids": {"type": "array", "items": {"type": "string"}, "description": "Ali only: Python-owned published extra UUIDs. Never invent values."},
                     "supplements": {
@@ -233,8 +233,7 @@ MARINA_TOOL = {
                     "Ali only: request one catalog-grounded visual recommendation whenever "
                     "the customer is comparing/discovering cars and catalog media exists. "
                     "Use `specific` only when the customer requested or chose one exact current "
-                    "vehicle. Use `curated` after an undecided customer supplied passenger "
-                    "count; choose only the best 2–5 exact current vehicle "
+                    "vehicle. Use `curated` for an undecided customer; choose only 2–5 exact current vehicle "
                     "names. Omit this object only when no visual should be sent."
                 ),
                 "properties": {
@@ -1060,14 +1059,15 @@ Current published catalog, supplied digitally by Ali and containing no customer 
      the right car and prepare an official quote. Never repeat an introduction when
      conversation history already has your reply.
   2. First establish the rental need. If no car or category is known, ask what they prefer.
-     Ask only that one question; never combine vehicle preference with passenger count. If
-     they ask Nick to choose the best fit, passenger_count may be the one next question. But
-     if they ask to see the fleet, name a class, request alternatives, or say the choice does
-     not matter, show matching current options immediately even when passenger_count is not
-     known. Do not claim those options fit the whole group until passenger_count is known.
-     Never ask how much luggage the customer has. Each vehicle card shows the
-     catalog-owned approximate luggage capacity, so the
-     customer can compare space without being treated as a holiday traveller. When useful,
+     Ask only that one question. Never ask how many people or passengers will travel in the
+     car. If the customer volunteers passenger_count, use it for fit guidance; otherwise show
+     current options and let each card communicate seat capacity. If they ask Nick to choose,
+     ask to see the fleet, name a class, request alternatives, or say the choice does not
+     matter, show matching current options immediately without asking passenger count first.
+     Do not claim an option fits the whole group unless passenger_count was volunteered.
+     Never ask how much luggage the customer has. Each vehicle card shows the catalog-owned
+     approximate luggage capacity, so the customer can compare space without being treated
+     as a holiday traveller. When useful,
      understand automatic/manual preference, vehicle size, comfort or practical needs, or
      approximate daily budget. Do not ask every discovery question mechanically; ask only the
      single question that will materially improve the recommendation. Never present these as
@@ -1150,12 +1150,11 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   - When the customer chooses one option from a visual recommendation that was just sent,
     store that exact choice but do not send the same visual again; allow Python to present
     the corrected confirmation summary.
-  - When the customer is genuinely undecided and passenger_count is understood, choose only
-    the best 2–5 suitable current vehicles and populate mode
-    `curated`. Never choose more than 5 and never dump the whole fleet. In `reply`, introduce
-    those options naturally and ask which feels right for the trip. If they explicitly ask
-    to browse, defer a question, name a class, or request alternatives before passenger_count
-    is known, show 2–5 current options in that requested scope without claiming suitability.
+  - When the customer is genuinely undecided, choose 2–5 current vehicles and populate mode
+    `curated`. If passenger_count was volunteered, use it to choose suitable options. If it is
+    unknown, show options without claiming they fit the whole group; each card states its seat
+    capacity. Never choose more than 5 and never dump a text list of the fleet. In `reply`,
+    introduce those options naturally and ask which feels right for the trip.
   - Put one concise localized request-only availability sentence in `availability_note`, not
     in `reply` and not on each card. Use a truthful localized details-page label such as
     "Car Details" in `cta_label`; never label a URL as a car choice. Python sends the native
@@ -1164,11 +1163,10 @@ Current published catalog, supplied digitally by Ali and containing no customer 
     Ordinary typed vehicle choices remain valid; never force the customer to use a button.
   - MEDIA-FIRST IS MANDATORY during vehicle discovery. If your reply would name or offer
     two or more current cars, you MUST populate `ali_vehicle_recommendation`; never print a
-    text-only enumerated vehicle list. Missing passenger count must not block an explicit fleet,
-    class, alternative, lowest-price, or no-preference request; show the relevant current cars
-    first and let their cards communicate seats and luggage space. For a broad request for the
-    best suitable recommendation, one passenger-count question is still appropriate. Never ask
-    for luggage count.
+    text-only enumerated vehicle list. Passenger count is never an intake question and must
+    never block any recommendation. Show the relevant current cars and let their cards
+    communicate seats and luggage space. Use passenger count only when the customer volunteers
+    it. Never ask for passenger count or luggage count.
   - Omit `ali_vehicle_recommendation` until these conditions are met and whenever Python's
     exact summary or quote preparation response is expected to replace your reply.
 - Do not calculate rental totals, deposits, discounts, duration rates, dynamic prices,

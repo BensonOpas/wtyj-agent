@@ -235,21 +235,20 @@ def test_direct_catalog_answer_can_show_cards_before_passenger_count_is_known():
     assert [option["seats"] for option in plan["options"]] == [4, 5]
 
 
-def test_best_fit_curated_recommendation_still_requires_passenger_count():
-    with pytest.raises(
-        recommendations.AliVehicleRecommendationError,
-        match="missing_passenger_count",
-    ):
-        recommendations.build_vehicle_recommendation(
-            _action(
-                "curated",
-                ["Kia Picanto or similar", "Toyota Yaris or similar"],
-            ),
-            _catalog(),
-            {"conversation_language": "en"},
-            {},
-            "Here are the best options for your group.",
-        )
+def test_curated_recommendation_does_not_require_passenger_count():
+    plan = recommendations.build_vehicle_recommendation(
+        _action(
+            "curated",
+            ["Kia Picanto or similar", "Toyota Yaris or similar"],
+        ),
+        _catalog(),
+        {"conversation_language": "en"},
+        {},
+        "Here are a few current options.",
+    )
+
+    assert plan["kind"] == "carousel"
+    assert [option["seats"] for option in plan["options"]] == [4, 5]
 
 
 def test_accepted_discovery_hash_suppresses_replay():
@@ -425,11 +424,12 @@ def test_ali_prompt_requires_one_image_or_two_to_five_curated_options(monkeypatc
 
     assert "PREMIUM VEHICLE VISUALS" in prompt
     assert "mode `specific` and exactly that catalog vehicle name" in prompt
-    assert "best 2–5 suitable current vehicles" in prompt
+    assert "choose 2–5 current vehicles" in prompt
+    assert "If passenger_count was volunteered" in prompt
     assert "MEDIA-FIRST IS MANDATORY" in prompt
     schema = marina_agent.MARINA_TOOL["input_schema"]["properties"]
     assert schema["ali_vehicle_recommendation"]["properties"]["vehicle_names"]["maxItems"] == 5
-    assert "never dump the whole fleet" in prompt
+    assert "never dump a text list of the fleet" in prompt
     assert "not in `reply` and not on each card" in prompt
     assert "Ordinary typed vehicle choices remain valid" in prompt
     assert "Do not repeat the unchanged summary" in prompt
