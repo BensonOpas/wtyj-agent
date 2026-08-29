@@ -117,6 +117,14 @@ _NO_PREFERENCE_REQUEST = re.compile(
     r"kualke|no\s+tin\s+preferensia|egal|keine\s+präferenz)[.!?\s]*$",
     re.IGNORECASE,
 )
+_NO_PREFERENCE_PHRASE = re.compile(
+    r"(?:\bwhatever\b|\bno\s+preference\b|\bdoesn['’]?t\s+matter\b|"
+    r"\bany(?:\s+car)?\s+is\s+fine\b|\byou\s+choose\b|\bsurprise\s+me\b|"
+    r"\bmaakt\s+niet\s+uit\b|\bgeen\s+voorkeur\b|\bkies\s+(?:jij|maar)\b|"
+    r"\bno\s+tin\s+preferensia\b|\bkualke\s+(?:outo\s+)?ta\s+bon\b|"
+    r"\begal\b|\bkeine\s+pr[aä]ferenz\b|\bsie\s+k[oö]nnen\s+w[aä]hlen\b)",
+    re.IGNORECASE,
+)
 _PERSONAL_DETAIL_REQUEST = re.compile(
     r"(?:\b(?:what(?:'s|\s+is)|tell\s+me|may\s+i\s+have|can\s+i\s+have)\s+"
     r"(?:your\s+)?(?:full\s+)?name\b"
@@ -288,8 +296,12 @@ def explicit_larger_vehicle_request(message_text: object) -> bool:
 
 
 def explicit_no_preference_request(message_text: object) -> bool:
-    """Recognize a concise request to choose from any suitable current car."""
-    return bool(_NO_PREFERENCE_REQUEST.fullmatch(str(message_text or "").strip()))
+    """Recognize a request to choose freely, including inside a fuller reply."""
+    text = str(message_text or "").strip()
+    return bool(
+        _NO_PREFERENCE_REQUEST.fullmatch(text)
+        or _NO_PREFERENCE_PHRASE.search(text)
+    )
 
 
 def enforce_vehicle_first_reply(reply_text: object, fields: dict) -> str:
@@ -771,6 +783,9 @@ def derive_media_first_action(
     lowest_price_requested = bool(
         _LOWEST_PRICE_REQUEST.search(str(message_text or ""))
     )
+    alternative_requested = bool(
+        _ALTERNATIVE_REQUEST.search(str(message_text or ""))
+    )
     browse_requested = explicit_catalog_browse_request(message_text)
     smaller_requested = explicit_smaller_vehicle_request(message_text)
     larger_requested = explicit_larger_vehicle_request(message_text)
@@ -781,6 +796,16 @@ def derive_media_first_action(
     )
     broad_smaller_request = bool(
         smaller_requested and explicit_class_request is None
+    )
+    direct_options_request = bool(
+        browse_requested
+        or no_preference_requested
+        or broad_smaller_request
+        or larger_requested
+        or explicit_class_request is not None
+        or lowest_price_requested
+        or alternative_requested
+        or intent == "reject_or_hesitate"
     )
 
     # A broad, explicit customer instruction owns the discovery scope. Claude's
@@ -918,11 +943,16 @@ def derive_media_first_action(
 
     # "Whatever / no preference" explicitly discards model-mentioned and
     # previously selected candidates. Recompute from current capacity truth.
-    if no_preference_requested:
+    if no_preference_requested and not browse_requested:
         candidates = []
         reason = ""
 
     passenger_count = fields.get("passenger_count")
+    passenger_count_missing = bool(
+        isinstance(passenger_count, bool)
+        or not isinstance(passenger_count, int)
+        or passenger_count < 1
+    )
     if larger_requested:
         selected_vehicle = next(
             (
@@ -1011,31 +1041,39 @@ def derive_media_first_action(
     if lowest_price_requested:
         candidates = []
     if not candidates:
-        if (
-            isinstance(passenger_count, bool)
-            or not isinstance(passenger_count, int)
-            or passenger_count < 1
-        ):
+        # A direct request, deferral, or alternative choice owns this turn.
+        # Passenger count still matters before claiming suitability, but it
+        # must not prevent Nick from showing the current fleet, a requested
+        # class, or the published lowest-price options first.
+        if passenger_count_missing and direct_options_request:
+            candidates = list(vehicles)
+            reason = (
+                "lowest_price_catalog"
+                if lowest_price_requested
+                else "latest_intent_catalog"
+            )
+        elif passenger_count_missing:
             return {
                 "status": "needs_context",
                 "action": None,
                 "reply_text": copy["needs_passengers"],
                 "reason": "missing_passenger_count",
             }
-        candidates = [
-            vehicle
-            for vehicle in vehicles
-            if vehicle.get("seats") is None
-            or (
-                isinstance(vehicle.get("seats"), int)
-                and not isinstance(vehicle.get("seats"), bool)
-                and vehicle["seats"] >= passenger_count
+        else:
+            candidates = [
+                vehicle
+                for vehicle in vehicles
+                if vehicle.get("seats") is None
+                or (
+                    isinstance(vehicle.get("seats"), int)
+                    and not isinstance(vehicle.get("seats"), bool)
+                    and vehicle["seats"] >= passenger_count
+                )
+            ]
+            reason = (
+                "lowest_price_catalog"
+                if lowest_price_requested else "capacity_curated"
             )
-        ]
-        reason = (
-            "lowest_price_catalog"
-            if lowest_price_requested else "capacity_curated"
-        )
 
     unique = {}
     for vehicle in candidates:
@@ -1086,11 +1124,7 @@ def derive_media_first_action(
         }
 
     if len(candidates) >= 2:
-        if (
-            isinstance(passenger_count, bool)
-            or not isinstance(passenger_count, int)
-            or passenger_count < 1
-        ):
+        if passenger_count_missing and not direct_options_request:
             return {
                 "status": "needs_context",
                 "action": None,
@@ -1099,7 +1133,7 @@ def derive_media_first_action(
             }
     mode = "specific" if len(candidates) == 1 else "curated"
     intro = copy["intro_one"] if mode == "specific" else copy["intro_many"]
-    if browse_requested:
+    if browse_requested or no_preference_requested:
         intro = copy["browse_many"]
         if (
             isinstance(passenger_count, int)

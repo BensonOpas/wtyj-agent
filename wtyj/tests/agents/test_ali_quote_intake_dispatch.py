@@ -299,9 +299,14 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "Just checking I’ve got everything right" not in normalized
     assert "Does that all look right?" not in normalized
     assert "ask what they prefer" in normalized
-    assert "If they explicitly say they are undecided" in normalized
+    assert "THE NEWEST CUSTOMER TURN OWNS THE RESPONSE" in normalized
+    assert "An unanswered earlier question is pending context" in normalized
+    assert "Never resend the same unanswered question unchanged" in normalized
+    assert "Fulfil the new request first" in normalized
+    assert "show matching current options immediately" in normalized
+    assert "Missing passenger count must not block" in normalized
     assert "never combine vehicle preference with passenger count" in normalized
-    assert "ask only passenger_count next" in normalized
+    assert "passenger_count may be the one next question" in normalized
     assert "Never ask how much luggage the customer has" in normalized
     assert "Each vehicle card shows the catalog-owned approximate luggage capacity" in normalized
     assert "approximate daily budget" in normalized
