@@ -325,6 +325,8 @@ def test_ali_prompt_discovers_vehicle_needs_before_personal_details(monkeypatch)
     assert "extract it into `fields.email`" in normalized
     assert "Never ask for the email again once it is known" in normalized
     assert "never claim the email has already been sent" in normalized
+    assert "reply briefly and warmly" in normalized
+    assert "do not repeat the reservation reference" in normalized
     assert "never ask for any of those facts again" in normalized
     assert "Never join two requested facts" in normalized
     assert "never ask a conditional second question" in normalized
@@ -378,6 +380,16 @@ def test_bad_canary_contact_redirect_is_replaced_by_safe_same_chat_fallback():
     assert reply == "I couldn't complete that step safely. Please try again here in a moment."
     assert "wa.me" not in reply
     assert "@" not in reply
+
+
+def test_intake_contact_guard_remains_strict_even_when_email_is_in_fields():
+    reply = workflow.sanitize_intake_reply(
+        "Thanks—I saved Calvin@gaimin.io for you.",
+        "en",
+        {"email": "Calvin@gaimin.io"},
+    )
+
+    assert reply == "I couldn't complete that step safely. Please try again here in a moment."
 
 
 def test_combined_rental_dates_are_rewritten_to_pickup_date_only():

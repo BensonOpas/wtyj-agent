@@ -2486,3 +2486,113 @@ def test_hotel_delivery_collects_name_then_partial_address_one_at_a_time(
         "Hotel delivery — Avila Beach Hotel, Penstraat"
     )
     assert "ali_pickup_hotel_detail_stage" not in after_address["flags"]
+
+
+def test_confirmed_reservation_email_uses_model_reply_without_quote_rewrite(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-confirmed-after-sales-email"
+    expected_reply = (
+        "Thank you—I’ve saved your email address. Our team will send your "
+        "reservation documents and agreements to Calvin@gaimin.io. If you "
+        "need anything else before pickup, just message me here."
+    )
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {"email": "Calvin@gaimin.io"},
+        "confidence": "high",
+        "reply": expected_reply,
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "other",
+    }
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(
+        social_agent,
+        "get_ali_quote_context",
+        lambda *_args, **_kwargs: {"status": "quoted"},
+    )
+    monkeypatch.setattr(
+        social_agent,
+        "get_ali_reservation_context",
+        lambda *_args, **_kwargs: {
+            "status": "confirmed",
+            "confirmation_reference": "ALI-RSV-SYNTHETIC",
+        },
+    )
+    state_registry.wa_save_booking_state(
+        phone,
+        _stored_fields(),
+        {"ali_phase": "QUOTED"},
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Calvin@gaimin.io",
+        "from_name": "Synthetic Customer",
+        "message_id": "confirmed-email-1",
+        "_zernio_sender_id": "+5999677145",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+    stored = state_registry.wa_get_booking_state(phone)
+
+    assert response["text"] == expected_reply
+    assert "couldn't complete that step safely" not in response["text"]
+    assert response["ali_turn_commit"] is None
+    assert response["quote_confirmation"] is None
+    assert response["vehicle_recommendation"] is None
+    assert stored["fields"]["email"] == "Calvin@gaimin.io"
+
+
+def test_confirmed_reservation_short_ack_does_not_repeat_confirmation(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-confirmed-after-sales-ack"
+    expected_reply = (
+        "You’re very welcome. If you need anything else before pickup, "
+        "just message me here."
+    )
+    model_result = {
+        "intents": ["inquiry"],
+        "fields": {},
+        "confidence": "high",
+        "reply": expected_reply,
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "other",
+    }
+    _configure(monkeypatch, tmp_path, model_result)
+    monkeypatch.setattr(
+        social_agent,
+        "get_ali_quote_context",
+        lambda *_args, **_kwargs: {"status": "quoted"},
+    )
+    monkeypatch.setattr(
+        social_agent,
+        "get_ali_reservation_context",
+        lambda *_args, **_kwargs: {
+            "status": "confirmed",
+            "confirmation_reference": "ALI-RSV-SYNTHETIC",
+        },
+    )
+    state_registry.wa_save_booking_state(
+        phone,
+        _stored_fields(),
+        {"ali_phase": "QUOTED"},
+    )
+
+    response = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Ok",
+        "from_name": "Synthetic Customer",
+        "message_id": "confirmed-ack-1",
+        "_zernio_sender_id": "+5999677145",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
+
+    assert response["text"] == expected_reply
+    assert "ALI-RSV-SYNTHETIC" not in response["text"]
+    assert "reservation is confirmed" not in response["text"].lower()
+    assert response["ali_turn_commit"] is None
+    assert response["quote_confirmation"] is None
+    assert response["vehicle_recommendation"] is None

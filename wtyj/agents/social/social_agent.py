@@ -1695,6 +1695,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     agent_flags = dict(flags)
     for _rk in ("awaiting_relay", "relay_token", "relay_question", "reply_times"):
         agent_flags.pop(_rk, None)
+    _quote_context = None
+    _reservation_context = None
+    _ali_reservation_confirmed = False
     if channel == "whatsapp" and ali_quote_tenant_enabled() and _ali_account_id:
         try:
             _quote_context = get_ali_quote_context(phone, _ali_account_id)
@@ -1705,6 +1708,9 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 agent_flags["_ali_quote_context"] = _quote_context
             if _reservation_context:
                 agent_flags["_ali_reservation_context"] = _reservation_context
+                _ali_reservation_confirmed = bool(
+                    _reservation_context.get("status") == "confirmed"
+                )
         except AliReservationError as exc:
             bm_logger.log(
                 "ali_post_quote_context_unavailable",
@@ -2274,6 +2280,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     if (
         channel == "whatsapp"
         and _ali_workflow_on
+        and not _ali_reservation_confirmed
         and not result.get("requires_human")
         and not _ali_selected_this_turn
         and (
@@ -2362,7 +2369,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 reason=media_first_reason[:80],
             )
     _ali_child_seat_offer = ""
-    if _ali_workflow_on:
+    if _ali_workflow_on and not _ali_reservation_confirmed:
         try:
             _ali_child_seat_offer = proactive_child_seat_offer(
                 text,
@@ -2416,7 +2423,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 rejected.append(str(vehicle_id))
         flags["ali_rejected_vehicle_ids"] = rejected[-20:]
     vehicle_recommendation = None
-    if _ali_workflow_on:
+    if _ali_workflow_on and not _ali_reservation_confirmed:
         reply_text = sanitize_ali_intake_reply(
             reply_text,
             fields.get("conversation_language"),
@@ -2461,6 +2468,12 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 ),
             )
             reply_text = _ali_turn_plan.text
+    elif _ali_workflow_on:
+        recommendation_action = None
+        bm_logger.log(
+            "ali_confirmed_reservation_model_reply_preserved",
+            conversation_id=phone[:20],
+        )
     if (
         include_media
         and channel == "whatsapp"
