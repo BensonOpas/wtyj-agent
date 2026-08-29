@@ -694,6 +694,45 @@ def test_single_file_approval_advances_only_the_legacy_identity_rollup(configure
     } == {"received"}
 
 
+def test_identical_resend_cannot_satisfy_the_next_document_slot(configured):
+    workflow.initialize_reservation("reservation-291", now=BASE)
+    legacy.apply_staff_decision(
+        "reservation-291", "approve", "staff-291",
+    )
+    workflow.set_identity_type(
+        "reservation-291", "passport", message_id="identity-choice-291",
+    )
+    image = _png()
+    dossier.store_whatsapp_document(
+        "reservation-291",
+        slot="passport",
+        payload=image,
+        claimed_mime="image/png",
+        provider_message_id="provider-message-passport",
+        provider_attachment_id="provider-attachment-passport",
+        filename="passport.png",
+        classification_source="expected_slot",
+    )
+
+    with pytest.raises(legacy.AliReservationError) as duplicate:
+        dossier.store_whatsapp_document(
+            "reservation-291",
+            slot="license_front",
+            payload=image,
+            claimed_mime="image/png",
+            provider_message_id="provider-message-license-front",
+            provider_attachment_id="provider-attachment-license-front",
+            filename="license-front.png",
+            classification_source="expected_slot",
+        )
+
+    assert duplicate.value.code == "duplicate_document_content"
+    assert workflow.get_case("reservation-291")["expectedDocumentSlot"] == "license_front"
+    assert [item["slot"] for item in dossier.list_documents("reservation-291")] == [
+        "passport",
+    ]
+
+
 def test_replayed_identity_choice_does_not_reset_document_progress(configured):
     workflow.initialize_reservation("reservation-291", now=BASE)
     workflow.transition(

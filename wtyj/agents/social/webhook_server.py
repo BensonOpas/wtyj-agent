@@ -734,7 +734,10 @@ def _flush_buffer(phone):
                             reason=(
                                 "reservation_document_stored"
                                 if document_result.get("success")
-                                else "reservation_document_rejected"
+                                else (
+                                    "reservation_document_rejected:"
+                                    + str(document_result.get("error_code") or "unknown")[:80]
+                                )
                             ),
                         )
                         workflow_after_upload = (

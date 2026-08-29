@@ -48,7 +48,6 @@ _COPY = {
     "en": {
         "next": "Got it — {stored} is stored securely. Please send {next} next.",
         "review": "Got it — all required documents are stored securely. I’ll send your pre-contract next so you can review and sign it.",
-        "failed": "I couldn't store that file safely. Please resend it as a clear JPG, PNG, or PDF under 10 MB.",
         "unclassified": "I stored the file securely, but I’m not expecting a document at this step. What document is it?",
         "extras": " I also stored {count} extra file(s) securely. Please tell me what they are.",
         "identity": "Thanks. Please send {document} here in WhatsApp.",
@@ -62,7 +61,6 @@ _COPY = {
     "nl": {
         "next": "Ontvangen — {stored} is veilig opgeslagen. Stuur nu {next}.",
         "review": "Ontvangen — alle vereiste documenten zijn veilig opgeslagen. Ik stuur nu je pre-contract zodat je het kunt bekijken en ondertekenen.",
-        "failed": "Ik kon dat bestand niet veilig opslaan. Stuur het opnieuw als duidelijke JPG, PNG of PDF onder 10 MB.",
         "unclassified": "Ik heb het bestand veilig opgeslagen, maar verwacht nu geen document. Welk document is het?",
         "extras": " Ik heb ook {count} extra bestand(en) veilig opgeslagen. Laat weten wat ze zijn.",
         "identity": "Bedankt. Stuur nu {document} hier in WhatsApp.",
@@ -76,7 +74,6 @@ _COPY = {
     "pap": {
         "next": "Risibí — {stored} ta warda sigur. Awor manda {next}.",
         "review": "Risibí — tur dokumento rekerí ta warda sigur. Awor mi ta manda bo pre-kontrato pa bo lesa i firma.",
-        "failed": "Mi no por a warda e file ei sigur. Manda'é atrobe komo un JPG, PNG òf PDF kla bou di 10 MB.",
         "unclassified": "Mi a warda e file sigur, pero mi no ta spera un dokumento den e paso aki. Kua dokumento e ta?",
         "extras": " Mi a warda tambe {count} file extra sigur. Laga mi sa kiko nan ta.",
         "identity": "Danki. Manda {document} aki den WhatsApp.",
@@ -90,7 +87,6 @@ _COPY = {
     "de": {
         "next": "Erhalten — {stored} wurde sicher gespeichert. Bitte senden Sie jetzt {next}.",
         "review": "Erhalten — alle erforderlichen Dokumente wurden sicher gespeichert. Als Nächstes sende ich Ihnen den Vorvertrag zur Prüfung und Unterschrift.",
-        "failed": "Ich konnte diese Datei nicht sicher speichern. Bitte senden Sie sie erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
         "unclassified": "Ich habe die Datei sicher gespeichert, erwarte in diesem Schritt aber kein Dokument. Um welches Dokument handelt es sich?",
         "extras": " Ich habe außerdem {count} zusätzliche Datei(en) sicher gespeichert. Bitte teilen Sie mir mit, was sie sind.",
         "identity": "Danke. Bitte senden Sie jetzt {document} hier über WhatsApp.",
@@ -102,6 +98,177 @@ _COPY = {
         "payment_expired": "Das 24-stündige Zahlungsfenster ist abgelaufen, daher wurde das Fahrzeug nicht gesichert. Ich habe unser Team gebeten, die aktuelle Verfügbarkeit zu prüfen, bevor wir fortfahren.",
     },
 }
+
+_FAILURE_COPY = {
+    "en": {
+        "duplicate_document_content": (
+            "That image is identical to a document you already sent, so I "
+            "couldn't use it as {document}. Please send a different image "
+            "showing {document}."
+        ),
+        "too_large": (
+            "That file is too large. Please send {document} as a JPG, PNG, "
+            "or PDF smaller than 10 MB."
+        ),
+        "dimensions": (
+            "That image's dimensions are too large or too small to process. "
+            "Please take a new, clear photo of {document} and send it again."
+        ),
+        "unreadable": (
+            "I couldn't read that image. It may be damaged or unclear. "
+            "Please take a new, well-lit photo of {document} and send it again."
+        ),
+        "file_type": (
+            "That file format doesn't match its contents. Please send "
+            "{document} as a genuine JPG, PNG, or PDF."
+        ),
+        "pdf": (
+            "I couldn't read that PDF safely. Please send a new PDF, or a "
+            "clear JPG or PNG photo of {document}, smaller than 10 MB."
+        ),
+        "temporary": (
+            "I couldn't download that file from WhatsApp just now. Please "
+            "wait a moment and resend {document}."
+        ),
+        "generic": (
+            "I couldn't store that file safely. Please send a new, clear JPG, "
+            "PNG, or PDF of {document}, smaller than 10 MB."
+        ),
+        "document": "the requested document",
+    },
+    "nl": {
+        "duplicate_document_content": (
+            "Deze afbeelding is identiek aan een document dat je al hebt "
+            "gestuurd. Ik kon deze daarom niet gebruiken als {document}. "
+            "Stuur een andere afbeelding waarop {document} staat."
+        ),
+        "too_large": (
+            "Dit bestand is te groot. Stuur {document} als JPG, PNG of PDF "
+            "kleiner dan 10 MB."
+        ),
+        "dimensions": (
+            "De afmetingen van deze afbeelding zijn te groot of te klein om "
+            "te verwerken. Maak een nieuwe, duidelijke foto van {document}."
+        ),
+        "unreadable": (
+            "Ik kon deze afbeelding niet lezen; ze kan beschadigd of onduidelijk "
+            "zijn. Stuur een nieuwe, goed belichte foto van {document}."
+        ),
+        "file_type": (
+            "Het bestandsformaat komt niet overeen met de inhoud. Stuur "
+            "{document} als een echte JPG, PNG of PDF."
+        ),
+        "pdf": (
+            "Ik kon deze PDF niet veilig lezen. Stuur een nieuwe PDF of een "
+            "duidelijke JPG- of PNG-foto van {document}, kleiner dan 10 MB."
+        ),
+        "temporary": (
+            "Ik kon dit bestand zojuist niet downloaden uit WhatsApp. Wacht "
+            "even en stuur {document} opnieuw."
+        ),
+        "generic": (
+            "Ik kon dit bestand niet veilig opslaan. Stuur een nieuwe, duidelijke "
+            "JPG, PNG of PDF van {document}, kleiner dan 10 MB."
+        ),
+        "document": "het gevraagde document",
+    },
+    "pap": {
+        "duplicate_document_content": (
+            "E imágen aki ta idéntiko na un dokumento ku bo a manda kaba. "
+            "Mi no por usa esaki komo {document}. Manda un otro imágen ku ta "
+            "mustra {document}."
+        ),
+        "too_large": (
+            "E file aki ta muchu grandi. Manda {document} komo JPG, PNG òf "
+            "PDF mas chikí ku 10 MB."
+        ),
+        "dimensions": (
+            "E dimensonan di e imágen ta muchu grandi òf muchu chikí pa procesa. "
+            "Tuma un foto nobo i kla di {document} i manda'é atrobe."
+        ),
+        "unreadable": (
+            "Mi no por lesa e imágen aki; por ta ku e ta dañá òf no ta kla. "
+            "Tuma un foto nobo ku bon lus di {document} i manda'é atrobe."
+        ),
+        "file_type": (
+            "E tipo di file no ta kuadra ku su kontenido. Manda {document} "
+            "komo un JPG, PNG òf PDF válido."
+        ),
+        "pdf": (
+            "Mi no por lesa e PDF aki sigur. Manda un PDF nobo òf un foto JPG "
+            "òf PNG kla di {document}, mas chikí ku 10 MB."
+        ),
+        "temporary": (
+            "Mi no por a baha e file for di WhatsApp awor. Warda un momento i "
+            "manda {document} atrobe."
+        ),
+        "generic": (
+            "Mi no por a warda e file aki sigur. Manda un JPG, PNG òf PDF nobo "
+            "i kla di {document}, mas chikí ku 10 MB."
+        ),
+        "document": "e dokumento ku nos a pidi",
+    },
+    "de": {
+        "duplicate_document_content": (
+            "Dieses Bild ist identisch mit einem bereits gesendeten Dokument. "
+            "Ich konnte es deshalb nicht als {document} verwenden. Bitte senden "
+            "Sie ein anderes Bild, das {document} zeigt."
+        ),
+        "too_large": (
+            "Diese Datei ist zu groß. Bitte senden Sie {document} als JPG, PNG "
+            "oder PDF mit weniger als 10 MB."
+        ),
+        "dimensions": (
+            "Die Bildabmessungen sind zu groß oder zu klein für die Verarbeitung. "
+            "Bitte fotografieren Sie {document} erneut klar und vollständig."
+        ),
+        "unreadable": (
+            "Ich konnte dieses Bild nicht lesen; es könnte beschädigt oder "
+            "unklar sein. Bitte senden Sie ein neues, gut beleuchtetes Foto von "
+            "{document}."
+        ),
+        "file_type": (
+            "Das Dateiformat stimmt nicht mit dem Inhalt überein. Bitte senden "
+            "Sie {document} als echte JPG-, PNG- oder PDF-Datei."
+        ),
+        "pdf": (
+            "Ich konnte diese PDF-Datei nicht sicher lesen. Bitte senden Sie eine "
+            "neue PDF-Datei oder ein klares JPG-/PNG-Foto von {document} mit "
+            "weniger als 10 MB."
+        ),
+        "temporary": (
+            "Ich konnte die Datei gerade nicht von WhatsApp herunterladen. Bitte "
+            "warten Sie einen Moment und senden Sie {document} erneut."
+        ),
+        "generic": (
+            "Ich konnte diese Datei nicht sicher speichern. Bitte senden Sie eine "
+            "neue, klare JPG-, PNG- oder PDF-Datei von {document} mit weniger "
+            "als 10 MB."
+        ),
+        "document": "das angeforderte Dokument",
+    },
+}
+
+_FAILURE_CATEGORY = {
+    "duplicate_document_content": "duplicate_document_content",
+    "media_too_large": "too_large",
+    "invalid_document_size": "too_large",
+    "invalid_image_dimensions": "dimensions",
+    "invalid_image_document": "unreadable",
+    "document_content_type_mismatch": "file_type",
+    "invalid_pdf_document": "pdf",
+    "active_pdf_rejected": "pdf",
+    "media_transport_failed": "temporary",
+    "media_stream_failed": "temporary",
+    "media_provider_unavailable": "temporary",
+}
+
+
+def _failure_reply(locale: str, error_code: str, expected_slot: str) -> str:
+    copy = _FAILURE_COPY[locale]
+    category = _FAILURE_CATEGORY.get(error_code, "generic")
+    document = _SLOT_LABELS[locale].get(expected_slot, copy["document"])
+    return copy[category].format(document=document)
 
 
 def _create_document_attention(workflow_case: dict, code: str) -> None:
@@ -313,9 +480,13 @@ def process_whatsapp_documents(message: dict) -> dict:
             for item in attachments[1:]
         ] + [(attachments[0], expected, "expected_slot")]
     stored = []
+    current_item = {}
+    current_media = {}
     try:
         for item, slot, source in ordered:
+            current_item = item
             media = download_whatsapp_media(item.get("media_id"), account_id)
+            current_media = media
             claimed_mime = str(item.get("mime_type") or media["content_type"])
             stored.append(ali_customer_dossier.store_whatsapp_document(
                 workflow_case["reservationPublicId"],
@@ -338,12 +509,19 @@ def process_whatsapp_documents(message: dict) -> dict:
             "ali_reservation_v2_document_failed",
             reservation_public_id=workflow_case["reservationPublicId"],
             error_code=error_code,
+            expected_document_slot=expected or "",
+            attachment_count=len(attachments),
+            claimed_mime=str(current_item.get("mime_type") or "")[:80],
+            size_bytes=int(current_media.get("size_bytes") or 0),
         )
         _create_document_attention(workflow_case, error_code)
         return {
             "handled": True,
             "success": False,
-            "reply": _COPY[_locale(conversation_id)]["failed"],
+            "reply": _failure_reply(
+                _locale(conversation_id), error_code, expected,
+            ),
+            "error_code": error_code,
             "reservation_public_id": workflow_case["reservationPublicId"],
         }
 
@@ -369,6 +547,14 @@ def process_whatsapp_documents(message: dict) -> dict:
         reply = _COPY[locale]["review"]
     if len(attachments) > 1:
         reply += _COPY[locale]["extras"].format(count=len(attachments) - 1)
+    bm_logger.log(
+        "ali_reservation_v2_document_stored",
+        reservation_public_id=workflow_case["reservationPublicId"],
+        expected_document_slot=expected,
+        next_document_slot=next_slot,
+        document_count=len(stored),
+        replayed=any(bool(item.get("replayed")) for item in stored),
+    )
     return {
         "handled": True,
         "success": True,

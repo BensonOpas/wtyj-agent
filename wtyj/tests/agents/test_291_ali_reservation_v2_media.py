@@ -18,6 +18,7 @@ from agents.social.ali_reservation_v2_inbound import (
     process_structural_text,
     process_whatsapp_documents,
 )
+from agents.social.ali_reservation_workflow import AliReservationError
 
 
 def _payload(*, text="", attachments=None):
@@ -336,6 +337,64 @@ def test_media_failure_fails_closed_and_creates_staff_attention(
     assert result["success"] is False
     notify.assert_called_once()
     assert "media_provider_unavailable" in notify.call_args.args[5]
+
+
+@pytest.mark.parametrize(
+    "error_code,expected_text",
+    [
+        ("duplicate_document_content", "identical to a document you already sent"),
+        ("media_too_large", "file is too large"),
+        ("invalid_document_size", "file is too large"),
+        ("invalid_image_dimensions", "dimensions are too large or too small"),
+        ("invalid_image_document", "couldn't read that image"),
+        ("document_content_type_mismatch", "format doesn't match its contents"),
+        ("invalid_pdf_document", "couldn't read that PDF safely"),
+        ("active_pdf_rejected", "couldn't read that PDF safely"),
+        ("media_provider_unavailable", "download that file from WhatsApp"),
+        ("unexpected_failure", "couldn't store that file safely"),
+    ],
+)
+@patch("agents.social.ali_reservation_v2_inbound._create_document_attention")
+@patch("agents.social.ali_reservation_v2_inbound.state_registry.wa_get_booking_state")
+@patch("agents.social.ali_reservation_v2_inbound.ali_customer_dossier.store_whatsapp_document")
+@patch("agents.social.ali_reservation_v2_inbound.download_whatsapp_media")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.get_active_case")
+@patch("agents.social.ali_reservation_v2_inbound.ali_reservation_v2.enabled")
+def test_document_rejection_explains_the_specific_problem_and_expected_slot(
+    enabled, get_case, download, store, booking, attention,
+    error_code, expected_text,
+):
+    enabled.return_value = True
+    get_case.return_value = {
+        "reservationPublicId": "reservation-1",
+        "state": "documents_collecting",
+        "expectedDocumentSlot": "license_front",
+    }
+    download.return_value = {
+        "payload": b"\xff\xd8\xffvalid",
+        "content_type": "image/jpeg",
+        "size_bytes": 1234,
+    }
+    store.side_effect = AliReservationError(error_code, 422)
+    booking.return_value = {"fields": {"conversation_language": "en"}}
+
+    result = process_whatsapp_documents({
+        "message_id": "message-1",
+        "_zernio_conversation_id": "conversation-1",
+        "_zernio_account_id": "account-1",
+        "_zernio_attachments": [{
+            "media_id": "media-1",
+            "provider_attachment_id": "attachment-1",
+            "mime_type": "image/jpeg",
+        }],
+    })
+
+    assert result["handled"] is True
+    assert result["success"] is False
+    assert result["error_code"] == error_code
+    assert expected_text in result["reply"]
+    assert "front of your driver's license" in result["reply"]
+    attention.assert_called_once_with(get_case.return_value, error_code)
 
 
 @patch("agents.social.ali_reservation_v2_inbound.state_registry.wa_get_booking_state")

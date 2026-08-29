@@ -1488,6 +1488,12 @@ def store_whatsapp_document(
         if replay:
             if replay["reservation_public_id"] != public_id or replay["sha256"] != digest:
                 raise reservation.AliReservationError("provider_attachment_replay_mismatch", 409)
+            if str(replay["slot"] or "") != str(slot):
+                # A provider may deliver the same attachment again under a new
+                # message after the checklist has advanced.  Treating that as
+                # success makes Nick acknowledge the new slot even though no
+                # new document was stored, trapping the customer in a loop.
+                raise reservation.AliReservationError("duplicate_document_content", 422)
             conn.commit()
             result = _safe_document(replay)
             result["replayed"] = True
@@ -1500,11 +1506,11 @@ def store_whatsapp_document(
             (TENANT_SLUG, public_id, digest),
         ).fetchone()
         if duplicate_content:
-            conn.commit()
-            result = _safe_document(duplicate_content)
-            result["replayed"] = True
-            result["workflowV2"] = ali_reservation_v2.get_case(public_id)
-            return result
+            # A byte-identical upload with a new provider attachment id is a
+            # customer resend, not a transport replay.  It cannot satisfy a
+            # different checklist slot (or replace a rejected copy), so fail
+            # explicitly and let the inbound layer explain what is wrong.
+            raise reservation.AliReservationError("duplicate_document_content", 422)
 
         storage_name = _write_private(payload, extension, public_id)
         current = None
