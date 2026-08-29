@@ -218,6 +218,40 @@ def test_explicit_capacity_advisory_can_show_requested_smaller_cars():
     assert "will not fit your full group" in plan["text"]
 
 
+def test_direct_catalog_answer_can_show_cards_before_passenger_count_is_known():
+    plan = recommendations.build_vehicle_recommendation(
+        _action(
+            "curated",
+            ["Kia Picanto or similar", "Toyota Yaris or similar"],
+        ),
+        _catalog(),
+        {"conversation_language": "en"},
+        {},
+        "Here are a few cars from our current fleet.",
+        capacity_advisory=True,
+    )
+
+    assert plan["kind"] == "carousel"
+    assert [option["seats"] for option in plan["options"]] == [4, 5]
+
+
+def test_best_fit_curated_recommendation_still_requires_passenger_count():
+    with pytest.raises(
+        recommendations.AliVehicleRecommendationError,
+        match="missing_passenger_count",
+    ):
+        recommendations.build_vehicle_recommendation(
+            _action(
+                "curated",
+                ["Kia Picanto or similar", "Toyota Yaris or similar"],
+            ),
+            _catalog(),
+            {"conversation_language": "en"},
+            {},
+            "Here are the best options for your group.",
+        )
+
+
 def test_accepted_discovery_hash_suppresses_replay():
     action = _action("specific", ["Kia Picanto or similar"])
     plan = recommendations.build_vehicle_recommendation(

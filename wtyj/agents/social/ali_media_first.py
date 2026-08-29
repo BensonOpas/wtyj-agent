@@ -1379,4 +1379,9 @@ def derive_media_first_action(
         "reply_text": intro,
         "vehicle_ids": [str(vehicle["id"]).strip() for vehicle in candidates],
         "reason": reason,
+        # Server-owned routing metadata.  A direct question about the fleet,
+        # a class, alternatives, or price must be answered now.  Passenger
+        # count remains useful later for fit advice, but cannot veto this
+        # customer-directed response at the delivery-builder boundary.
+        "capacity_advisory": direct_options_request,
     }

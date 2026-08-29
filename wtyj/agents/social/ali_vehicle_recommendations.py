@@ -562,13 +562,19 @@ def build_vehicle_recommendation(
 
     passenger_count = fields.get("passenger_count")
     if mode == "curated":
-        if (
+        passenger_count_missing = bool(
             isinstance(passenger_count, bool)
             or not isinstance(passenger_count, int)
             or passenger_count < 1
-        ):
+        )
+        # A direct fleet/class/price/alternative request owns the current
+        # turn.  In that advisory mode the cards may be shown before Nick
+        # knows the party size; they communicate capacity without claiming
+        # that every option fits.  Broad "recommend the best fit" requests
+        # still require passenger count before a curated recommendation.
+        if passenger_count_missing and not capacity_advisory:
             raise AliVehicleRecommendationError("missing_passenger_count")
-        if not capacity_advisory and any(
+        if not passenger_count_missing and not capacity_advisory and any(
             option.get("seats") is not None and option["seats"] < passenger_count
             for option in options
         ):
