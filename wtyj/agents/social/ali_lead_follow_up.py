@@ -24,6 +24,7 @@ MAX_FREE_FORM_WINDOW_SECONDS = 24 * 60 * 60
 WINDOW_SAFETY_SECONDS = 10 * 60
 SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
 TERMINAL_DELIVERY_STATUSES = {"sent", "skipped_window", "cancelled"}
+_SCHEMA_READY_PATHS: set[str] = set()
 
 
 def _now(value: datetime | None = None) -> datetime:
@@ -86,6 +87,9 @@ def _settings(raw: dict | None = None) -> dict:
 
 
 def ensure_schema(*, now: datetime | None = None) -> None:
+    schema_path = str(state_registry.DB_PATH)
+    if schema_path in _SCHEMA_READY_PATHS:
+        return
     from agents.social import ali_reservation_workflow
 
     ali_reservation_workflow.ensure_schema()
@@ -149,6 +153,7 @@ def ensure_schema(*, now: datetime | None = None) -> None:
             (TENANT_SLUG, timestamp),
         )
         conn.commit()
+        _SCHEMA_READY_PATHS.add(schema_path)
     finally:
         conn.close()
 
