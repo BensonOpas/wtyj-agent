@@ -704,11 +704,15 @@ def _effective_active_seconds(row: sqlite3.Row | dict, now: datetime) -> int:
     return value
 
 
-def _public(row: sqlite3.Row | dict, now: datetime | None = None) -> dict:
+def _public(
+    row: sqlite3.Row | dict,
+    now: datetime | None = None,
+    settings: dict | None = None,
+) -> dict:
     current = (now or _now()).astimezone(timezone.utc)
     value = dict(row)
     active = _effective_active_seconds(value, current)
-    settings = _settings()
+    settings = settings or _settings()
     try:
         milestones = json.loads(value.get("reminder_milestones_json") or "[]")
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -753,6 +757,37 @@ def get_case(public_id: str, *, now: datetime | None = None) -> dict:
         return _public(_case(conn, public_id), now)
     finally:
         conn.close()
+
+
+def get_cases(
+    public_ids: list[str] | set[str] | tuple[str, ...],
+    *,
+    now: datetime | None = None,
+) -> dict[str, dict]:
+    """Return tenant-scoped public cases in one read for dashboard queues."""
+    normalized = sorted({str(item) for item in public_ids if str(item).strip()})
+    if not normalized:
+        return {}
+    ensure_schema()
+    placeholders = ",".join("?" for _ in normalized)
+    conn = _connection()
+    try:
+        rows = conn.execute(
+            "SELECT v.*, r.conversation_id, r.zernio_account_id, "
+            "r.quote_public_id, r.quote_snapshot_id, r.quote_reference "
+            "FROM ali_reservation_v2_cases v JOIN ali_reservations r "
+            "ON r.public_id = v.reservation_public_id "
+            f"WHERE v.tenant_slug = ? AND v.reservation_public_id IN ({placeholders})",
+            (TENANT_SLUG, *normalized),
+        ).fetchall()
+    finally:
+        conn.close()
+    current = now or _now()
+    settings = _settings()
+    return {
+        str(row["reservation_public_id"]): _public(row, current, settings)
+        for row in rows
+    }
 
 
 def get_active_case(conversation_id: str, account_id: str) -> dict | None:

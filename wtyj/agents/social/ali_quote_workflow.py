@@ -71,6 +71,54 @@ QUOTE_LEAD_FIELD_LABELS = {
     "conversation_language": "Conversation language",
     "vehicle_preference": "Preferred vehicle/category",
 }
+RENTAL_OPERATIONS_CONTRACT_VERSION = 1
+RENTAL_PROGRESS_STAGES = (
+    "quote", "reserved", "documents", "agreement", "payment", "dossier",
+    "confirmed",
+)
+_V2_STAGE = {
+    "availability_pending": "reserved",
+    "availability_declined": "closed",
+    "documents_collecting": "documents",
+    "documents_collected": "documents",
+    "document_review_pending": "documents",
+    "document_replacement_required": "documents",
+    "documents_approved": "documents",
+    "contract_sent": "agreement",
+    "contract_signed": "agreement",
+    "prepayment_approval_pending": "agreement",
+    "prepayment_approved": "payment",
+    "payment_link_sent": "payment",
+    "customer_reports_paid": "payment",
+    "payment_verified": "dossier",
+    "dossier_ready": "dossier",
+    "final_approval_pending": "dossier",
+    "confirmed": "confirmed",
+    "hold_expired": "closed",
+    "cancelled": "closed",
+    "client_opted_out": "closed",
+    "technical_attention_required": "dossier",
+}
+_V2_STAFF_ACTIONS = {
+    "availability_pending": (
+        "approve_availability", "Review availability", "customer", "high",
+    ),
+    "document_review_pending": (
+        "review_documents", "Review documents", "documents", "high",
+    ),
+    "prepayment_approval_pending": (
+        "review_file", "Review signed file", "agreement_payment", "high",
+    ),
+    "customer_reports_paid": (
+        "verify_payment", "Verify payment", "agreement_payment", "high",
+    ),
+    "final_approval_pending": (
+        "final_approval", "Give final approval", "dossier", "high",
+    ),
+    "technical_attention_required": (
+        "resolve_technical", "Resolve technical issue", "customer", "critical",
+    ),
+}
 ALI_REQUEST_KEYS = {"rentalStart", "rentalEnd", "selection", "extraSelections", "chargeSelections"}
 QUOTE_CONFIRMATION_PREFIX = "ali_quote_confirm:v1:"
 QUOTE_CHANGE_PREFIX = "ali_quote_change:v1:"
@@ -1334,6 +1382,222 @@ def _quote_lead_status(
     return "active"
 
 
+def _operations_progress(stage: str) -> dict:
+    """Return one stable high-level progress rail for every rental tenant."""
+    stages = list(RENTAL_PROGRESS_STAGES)
+    if stage == "closed":
+        return {
+            "currentIndex": len(stages),
+            "total": len(stages),
+            "completed": [],
+            "stages": stages,
+            "percent": 100,
+        }
+    try:
+        current = stages.index(stage)
+    except ValueError:
+        current = 0
+    return {
+        "currentIndex": current,
+        "total": len(stages),
+        "completed": stages[:current],
+        "stages": stages,
+        "percent": round((current / (len(stages) - 1)) * 100),
+    }
+
+
+def _operations_result(
+    *,
+    lifecycle: str,
+    stage: str,
+    responsible_party: str,
+    operator_action: str = "none",
+    action_label: str = "",
+    action_target: str = "none",
+    action_priority: str = "none",
+    client_time_remaining_seconds: int | None = None,
+    exception: dict | None = None,
+    can_print_dossier: bool = False,
+    workflow_state: str = "",
+    workflow_revision: int | None = None,
+) -> dict:
+    return {
+        "contractVersion": RENTAL_OPERATIONS_CONTRACT_VERSION,
+        "lifecycle": lifecycle,
+        "stage": stage,
+        "responsibleParty": responsible_party,
+        "operatorAction": operator_action,
+        "actionLabel": action_label,
+        "actionTarget": action_target,
+        "actionPriority": action_priority,
+        "clientTimeRemainingSeconds": client_time_remaining_seconds,
+        "exception": exception,
+        "progress": _operations_progress(stage),
+        "capabilities": {
+            "printDossier": bool(can_print_dossier),
+        },
+        "workflowState": workflow_state or None,
+        "workflowRevision": workflow_revision,
+    }
+
+
+def rental_operations_projection(
+    *,
+    projected_status: str,
+    quote: dict | None,
+    reservation: dict | None,
+    workflow_v2: dict | None,
+    has_active_escalation: bool,
+) -> dict:
+    """Project structured workflow state into the reusable dashboard contract.
+
+    This function deliberately accepts no display copy and never parses
+    ``next_action``. Rental policy remains in the workflow implementation;
+    this projection only describes the state already chosen by that policy.
+    """
+    if workflow_v2:
+        state = str(workflow_v2.get("state") or "")
+        stage = _V2_STAGE.get(state, "reserved")
+        lifecycle = (
+            "confirmed" if state == "confirmed"
+            else "closed" if stage == "closed"
+            else "post_quote"
+        )
+        responsible = str(
+            workflow_v2.get("responsibleParty") or "System"
+        ).strip().lower()
+        responsible_party = {
+            "staff": "staff",
+            "client": "client",
+            "customer": "client",
+            "nick": "agent",
+            "agent": "agent",
+            "system": "system",
+        }.get(responsible, "system")
+        action = _V2_STAFF_ACTIONS.get(state)
+        operator_action, label, target, priority = (
+            action if action and responsible_party == "staff"
+            else ("none", "", "none", "none")
+        )
+        clock = workflow_v2.get("clock") or {}
+        remaining = clock.get("remainingSeconds")
+        if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
+            remaining = None
+        exception = (
+            {
+                "kind": "technical_attention",
+                "code": str(clock.get("pauseReason") or "technical_attention"),
+            }
+            if state == "technical_attention_required" else None
+        )
+        return _operations_result(
+            lifecycle=lifecycle,
+            stage=stage,
+            responsible_party=responsible_party,
+            operator_action=operator_action,
+            action_label=label,
+            action_target=target,
+            action_priority=priority,
+            client_time_remaining_seconds=(
+                max(0, int(remaining)) if remaining is not None else None
+            ),
+            exception=exception,
+            can_print_dossier=state in {
+                "payment_verified", "dossier_ready",
+                "final_approval_pending", "confirmed",
+            },
+            workflow_state=state,
+            workflow_revision=(
+                int(workflow_v2["revision"])
+                if isinstance(workflow_v2.get("revision"), int)
+                and not isinstance(workflow_v2.get("revision"), bool)
+                else None
+            ),
+        )
+
+    if reservation:
+        status = str(reservation.get("status") or "")
+        if status in {"declined", "cancelled", "superseded"}:
+            return _operations_result(
+                lifecycle="closed", stage="closed", responsible_party="system",
+                workflow_state=status,
+            )
+        if status == "confirmed":
+            return _operations_result(
+                lifecycle="confirmed", stage="confirmed",
+                responsible_party="system", can_print_dossier=True,
+                workflow_state=status,
+                workflow_revision=reservation.get("revision"),
+            )
+        if status == "availability_pending":
+            return _operations_result(
+                lifecycle="post_quote", stage="reserved",
+                responsible_party="staff",
+                operator_action="approve_availability",
+                action_label="Review availability", action_target="customer",
+                action_priority="high", workflow_state=status,
+                workflow_revision=reservation.get("revision"),
+            )
+        if status == "alternative_required":
+            return _operations_result(
+                lifecycle="post_quote", stage="reserved",
+                responsible_party="staff", operator_action="answer_customer",
+                action_label="Offer an alternative", action_target="conversation",
+                action_priority="high", workflow_state=status,
+                workflow_revision=reservation.get("revision"),
+            )
+        payment = str(reservation.get("payment_status") or "")
+        if payment in {"customer_reports_paid", "awaiting_manual_verification"}:
+            return _operations_result(
+                lifecycle="post_quote", stage="payment",
+                responsible_party="staff", operator_action="verify_payment",
+                action_label="Verify payment", action_target="agreement_payment",
+                action_priority="high", workflow_state=status,
+                workflow_revision=reservation.get("revision"),
+            )
+        return _operations_result(
+            lifecycle="post_quote", stage="documents",
+            responsible_party="client", workflow_state=status,
+            workflow_revision=reservation.get("revision"),
+        )
+
+    if has_active_escalation or projected_status == "needs_an_answer":
+        return _operations_result(
+            lifecycle="pre_quote", stage="quote", responsible_party="staff",
+            operator_action="answer_customer", action_label="Answer customer",
+            action_target="conversation", action_priority="critical",
+            exception={"kind": "customer_attention", "code": "active_escalation"},
+            workflow_state=projected_status,
+        )
+    delivery_state = (
+        "delivered" if str((quote or {}).get("whatsapp_status") or "") == "accepted"
+        else "failed" if str((quote or {}).get("whatsapp_status") or "") == "failed"
+        else "pending" if quote else "not_started"
+    )
+    if projected_status == "ready_to_quote" or delivery_state == "failed":
+        return _operations_result(
+            lifecycle="pre_quote", stage="quote", responsible_party="staff",
+            operator_action="resolve_technical", action_label="Recover quote",
+            action_target="customer", action_priority="critical",
+            exception={"kind": "quote_delivery", "code": delivery_state},
+            workflow_state=projected_status,
+        )
+    if projected_status == "in_progress":
+        return _operations_result(
+            lifecycle="pre_quote", stage="quote", responsible_party="system",
+            workflow_state=projected_status,
+        )
+    if delivery_state == "delivered":
+        return _operations_result(
+            lifecycle="pre_quote", stage="quote", responsible_party="client",
+            workflow_state="quote_delivered",
+        )
+    return _operations_result(
+        lifecycle="pre_quote", stage="quote", responsible_party="agent",
+        workflow_state=projected_status,
+    )
+
+
 def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
     """Project Ali's open rental conversations into one read-only lead queue.
 
@@ -1398,6 +1662,28 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             str(row["conversation_id"]): dict(row)
             for row in reservation_rows
         }
+        v2_reservation_ids = set()
+        active_conversation_ids = {str(row[0]) for row in state_rows}
+        candidate_v2_ids = {
+            str(reservation.get("public_id") or "")
+            for conversation_id, reservation in latest_reservations.items()
+            if conversation_id in active_conversation_ids
+            and reservation.get("public_id")
+        }
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'ali_reservation_v2_cases'"
+        ).fetchone() and candidate_v2_ids:
+            placeholders = ",".join("?" for _ in candidate_v2_ids)
+            v2_reservation_ids = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT reservation_public_id FROM ali_reservation_v2_cases "
+                    f"WHERE tenant_slug = ? AND reservation_public_id IN ({placeholders})",
+                    (TENANT_SLUG, *sorted(candidate_v2_ids)),
+                ).fetchall()
+                if row[0]
+            }
         escalation_ids = {
             str(row[0]) for row in conn.execute(
                 "SELECT DISTINCT customer_id FROM pending_notifications "
@@ -1407,6 +1693,11 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
         }
     finally:
         conn.close()
+
+    workflow_v2_cases = {}
+    if v2_reservation_ids:
+        from agents.social import ali_reservation_v2
+        workflow_v2_cases = ali_reservation_v2.get_cases(v2_reservation_ids)
 
     leads = []
     for row in state_rows:
@@ -1418,6 +1709,9 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             fields, flags = {}, {}
         quote = latest_quotes.get(conversation_id)
         reservation = latest_reservations.get(conversation_id)
+        workflow_v2 = workflow_v2_cases.get(
+            str((reservation or {}).get("public_id") or "")
+        )
         known_customer_name = str(
             fields.get("customer_name")
             or fields.get("name")
@@ -1484,6 +1778,13 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             else "failed" if whatsapp_status == "failed"
             else "pending" if quote else "not_started"
         )
+        operations = rental_operations_projection(
+            projected_status=projected_status,
+            quote=quote,
+            reservation=reservation,
+            workflow_v2=workflow_v2,
+            has_active_escalation=conversation_id in escalation_ids,
+        )
         leads.append({
             "id": conversation_id,
             "conversation_id": conversation_id,
@@ -1533,6 +1834,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             "reservation_public_id": (reservation or {}).get("public_id"),
             "reservation_reference": (reservation or {}).get("confirmation_reference"),
             "reservation_revision": (reservation or {}).get("revision"),
+            "operations": operations,
             "visit_reason": "",
             "handoff_reason": next_action,
             "callback_preference": "",
