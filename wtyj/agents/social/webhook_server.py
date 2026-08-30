@@ -273,6 +273,10 @@ def _ali_inbound_recovery_loop(stop_event: threading.Event) -> None:
             _run_ali_reservation_v2_scheduled_once()
         except Exception as exc:
             log("ali_reservation_v2_scheduler_failed", error=type(exc).__name__)
+        try:
+            _run_ali_lead_follow_up_scheduled_once()
+        except Exception as exc:
+            log("ali_lead_follow_up_scheduler_failed", error=type(exc).__name__)
         stop_event.wait(5)
 
 
@@ -342,6 +346,60 @@ def _run_ali_reservation_v2_scheduled_once() -> int:
             idempotency_key=str(plan["idempotencyKey"]),
         )
         ali_reservation_v2.record_reminder_result(plan, sent=bool(delivered))
+        handled += 1
+    return handled
+
+
+def _run_ali_lead_follow_up_scheduled_once() -> int:
+    """Send claimed pre-reservation reminders only in an open Meta window."""
+    from agents.social import ali_lead_follow_up
+    from agents.social.zernio_dm_client import whatsapp_customer_service_window
+
+    if not ali_lead_follow_up.enabled():
+        return 0
+    handled = 0
+    for plan in ali_lead_follow_up.claim_due_follow_ups():
+        window = whatsapp_customer_service_window(
+            str(plan.get("conversationId") or ""),
+            str(plan.get("accountId") or ""),
+            str(plan.get("latestInboundAt") or ""),
+        )
+        if not window.get("open"):
+            reason = str(window.get("reason") or "provider_unavailable")
+            status = "skipped_window" if reason == "window_closed" else "failed"
+            ali_lead_follow_up.record_delivery_result(
+                plan,
+                status=status,
+                error_code=reason,
+            )
+            handled += 1
+            continue
+        try:
+            delivered = send_reply(
+                "whatsapp",
+                str(plan["conversationId"]),
+                str(plan["accountId"]),
+                str(plan["message"]),
+                confirm_delivery=True,
+                idempotency_key=str(plan["idempotencyKey"]),
+            )
+        except Exception as exc:
+            delivered = False
+            error_code = type(exc).__name__
+        else:
+            error_code = "" if delivered else "provider_send_failed"
+        if delivered:
+            state_registry.dm_store_message(
+                str(plan["conversationId"]),
+                "whatsapp",
+                "assistant",
+                str(plan["message"]),
+            )
+        ali_lead_follow_up.record_delivery_result(
+            plan,
+            status="sent" if delivered else "failed",
+            error_code=error_code,
+        )
         handled += 1
     return handled
 

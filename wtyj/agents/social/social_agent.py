@@ -86,6 +86,7 @@ from agents.social.ali_reservation_workflow import (
     resolve_post_quote_interaction as resolve_ali_post_quote_interaction,
 )
 from agents.social import ali_customer_dossier
+from agents.social import ali_lead_follow_up
 
 
 _BOOKING_INTENTS = {"booking", "reschedule"}
@@ -1697,6 +1698,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         agent_flags.pop(_rk, None)
     _quote_context = None
     _reservation_context = None
+    _ali_lead_follow_up_context = None
     _ali_reservation_confirmed = False
     if channel == "whatsapp" and ali_quote_tenant_enabled() and _ali_account_id:
         try:
@@ -1716,6 +1718,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                 "ali_post_quote_context_unavailable",
                 code=exc.code,
                 conversation_id=phone[:20],
+            )
+        try:
+            _ali_lead_follow_up_context = (
+                ali_lead_follow_up.pending_reply_context(phone)
+            )
+            if _ali_lead_follow_up_context:
+                agent_flags["_ali_lead_follow_up_context"] = (
+                    _ali_lead_follow_up_context
+                )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_lead_follow_up_context_unavailable",
+                conversation_id=phone[:20],
+                error=type(exc).__name__,
             )
 
     # Returning customer — booking ref detection
@@ -1778,6 +1794,20 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         messages=history,
         customer_file=_cust_file,
     )
+
+    if _ali_lead_follow_up_context:
+        try:
+            ali_lead_follow_up.record_customer_action(
+                phone,
+                _ali_lead_follow_up_context,
+                result.get("ali_lead_follow_up_action"),
+            )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_lead_follow_up_action_failed",
+                conversation_id=phone[:20],
+                error=type(exc).__name__,
+            )
 
     # Brief 166: record interaction + merge any new identifiers Marina extracted
     if _cust_row and _cust_row.get("id"):

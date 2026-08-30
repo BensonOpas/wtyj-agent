@@ -27,6 +27,7 @@ _RESPONSE_DEFAULTS = {
     "ali_rental_change": None,
     "ali_summary_action": None,
     "ali_primary_intent": None,
+    "ali_lead_follow_up_action": "none",
 }
 
 
@@ -335,6 +336,18 @@ MARINA_TOOL = {
                     "Ali only: the single primary intent of the newest customer "
                     "message. Choose exactly one. This intent is independent from "
                     "ali_rental_change, so a correction may also request a recommendation."
+                ),
+            },
+            "ali_lead_follow_up_action": {
+                "type": "string",
+                "enum": ["continue", "stop", "none"],
+                "description": (
+                    "Ali only: classify the newest reply to a pre-reservation "
+                    "follow-up when _ali_lead_follow_up_context is present. Use "
+                    "continue when the customer wants rental help to continue, "
+                    "asks a rental question, or supplies rental information; stop "
+                    "only for an explicit request to stop reminders or contact; "
+                    "otherwise use none."
                 ),
             },
             "semi_escalation": {
@@ -1015,6 +1028,14 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   unchanged. Treat phrases such as "doesn't matter", "whatever", "any is fine", and "you
   choose" as a deliberate deferral, not a failed answer. Fulfil the new request first; return
   to a still-required detail only in a later natural turn when it is actually needed.
+- PRE-RESERVATION FOLLOW-UP REPLIES: when `_ali_lead_follow_up_context` is present,
+  the newest message is a reply after an automated check-in. Set
+  `ali_lead_follow_up_action` to `continue` when the customer wants to continue, asks a
+  rental question, or supplies rental information; set it to `stop` only when they
+  explicitly ask Ali to stop reminders or contact; otherwise set it to `none`. For
+  `continue`, respond to the customer's actual message naturally and resume assistance
+  with at most one useful question. For `stop`, briefly confirm that reminders will stop
+  and do not ask another sales question. Never repeat the automated check-in text.
 - Set exactly one `ali_primary_intent` for every Ali turn. Use `ask_question` for a factual
   or price question, `reject_or_hesitate` for rejection/uncertainty/alternative exploration,
   `request_recommendation` for images or vehicle options, `repeat_summary` only for an

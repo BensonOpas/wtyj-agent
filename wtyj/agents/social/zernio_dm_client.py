@@ -642,6 +642,72 @@ def _recommendation_session_open(
     )
 
 
+def whatsapp_customer_service_window(
+    conversation_id: str,
+    account_id: str,
+    trigger_sent_at: str = "",
+) -> dict:
+    """Verify the WhatsApp free-form service window at the provider boundary.
+
+    A local timestamp is never sufficient authorization for an automated
+    free-form send.  Zernio's current message history is the primary source;
+    the signed inbound webhook timestamp is accepted as a race-safe fallback
+    while that history endpoint catches up.  Any provider error fails closed.
+    """
+    api_key = os.environ.get("LATE_API_KEY", "")
+    if not api_key or not conversation_id or not account_id:
+        return {"open": False, "reason": "provider_unavailable"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    base_url = (
+        "https://zernio.com/api/v1/inbox/conversations/"
+        f"{urllib.parse.quote(conversation_id)}/messages"
+    )
+    try:
+        response = http_requests.get(
+            base_url,
+            headers=headers,
+            params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
+            timeout=15,
+        )
+    except http_requests.RequestException as exc:
+        bm_logger.log(
+            "ali_lead_follow_up_window_check_failed",
+            conversation_id=conversation_id[:20],
+            error=type(exc).__name__,
+        )
+        return {"open": False, "reason": "provider_unavailable"}
+    if not 200 <= response.status_code < 300:
+        bm_logger.log(
+            "ali_lead_follow_up_window_check_failed",
+            conversation_id=conversation_id[:20],
+            status=response.status_code,
+        )
+        return {"open": False, "reason": "provider_unavailable"}
+    messages = _payload_messages(_response_json(response))
+    incoming_times = [
+        _parse_provider_time(item.get("createdAt") or item.get("created_at"))
+        for item in messages
+        if str(item.get("direction") or "").lower() == "incoming"
+    ]
+    trigger_time = _parse_provider_time(trigger_sent_at)
+    if trigger_time is not None:
+        incoming_times.append(trigger_time)
+    latest = max((item for item in incoming_times if item is not None), default=None)
+    if latest is None:
+        return {"open": False, "reason": "missing_inbound"}
+    expires_at = latest + timedelta(hours=24)
+    is_open = datetime.now(timezone.utc) < expires_at
+    return {
+        "open": is_open,
+        "reason": "open" if is_open else "window_closed",
+        "latest_inbound_at": latest.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+
 def _recommendation_visible_message(messages: list[dict], text: str) -> dict | None:
     return next(
         (
