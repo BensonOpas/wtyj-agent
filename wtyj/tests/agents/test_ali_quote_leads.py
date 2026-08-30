@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agents.social import ali_quote_workflow as workflow
+from agents.social import ali_reservation_v2
 from agents.social import ali_reservation_workflow as reservation_workflow
 from dashboard import api
 from shared import state_registry
@@ -136,6 +137,8 @@ def test_incomplete_conversation_appears_once_with_aggregated_unread(quote_leads
     assert "customer_name" not in rows[0]["missing_fields"]
     assert "vehicle_preference" in rows[0]["missing_fields"]
     assert rows[0]["phone_raw"] == "WhatsApp conversation"
+    assert rows[0]["operations"]["responsibleParty"] == "agent"
+    assert rows[0]["operations"]["operatorAction"] == "none"
 
 
 def test_internal_zernio_id_is_never_masked_as_customer_phone(quote_leads):
@@ -218,6 +221,9 @@ def test_confirmed_undelivered_quote_is_ready_to_quote(quote_leads):
     assert row["complete"] is True
     assert row["quote_delivery_state"] == "failed"
     assert row["quote_reference"] == "ALI-READY191-QUOTE"
+    assert row["operations"]["responsibleParty"] == "staff"
+    assert row["operations"]["operatorAction"] == "resolve_technical"
+    assert row["operations"]["exception"]["kind"] == "quote_delivery"
 
 
 def test_escalation_and_processing_use_canonical_status_precedence(quote_leads):
@@ -232,6 +238,9 @@ def test_escalation_and_processing_use_canonical_status_precedence(quote_leads):
 
     assert rows[escalated]["status"] == "needs_an_answer"
     assert rows[processing]["status"] == "in_progress"
+    assert rows[escalated]["operations"]["operatorAction"] == "answer_customer"
+    assert rows[processing]["operations"]["responsibleParty"] == "system"
+    assert rows[processing]["operations"]["operatorAction"] == "none"
 
 
 def test_quote_lead_exposes_latest_post_quote_reservation_state(quote_leads):
@@ -264,6 +273,80 @@ def test_quote_lead_exposes_latest_post_quote_reservation_state(quote_leads):
     assert row["reservation_public_id"] == "reservation-191"
     assert row["reservation_revision"] == 3
     assert row["next_action"] == "Complete the required rental checks."
+
+
+def test_quote_lead_uses_v2_as_authoritative_post_quote_projection(quote_leads):
+    conversation_id = "191000000000000000000040"
+    _state(conversation_id, REQUIRED)
+    reservation_workflow.ensure_schema()
+    now = workflow._iso(datetime.now(timezone.utc))
+    conn = workflow._connection()
+    conn.execute(
+        "INSERT INTO ali_reservations ("
+        "public_id, tenant_slug, quote_public_id, quote_snapshot_id, quote_reference, "
+        "conversation_id, zernio_account_id, status, availability_status, "
+        "identity_status, agreement_status, payment_status, revision, created_at, updated_at"
+        ") VALUES (?, 'ali-car-rental', ?, ?, ?, ?, 'account', "
+        "'requirements_pending', 'approved', 'requested', 'not_sent', "
+        "'not_requested', 1, ?, ?)",
+        (
+            "reservation-v2-191", "quote-v2-191", "snapshot-v2-191",
+            "ALI-QUOTE-V2-191", conversation_id, now, now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    ali_reservation_v2.initialize_reservation("reservation-v2-191")
+
+    row = workflow.list_quote_leads()[0]
+
+    assert row["operations"]["contractVersion"] == 1
+    assert row["operations"]["lifecycle"] == "post_quote"
+    assert row["operations"]["stage"] == "documents"
+    assert row["operations"]["responsibleParty"] == "client"
+    assert row["operations"]["operatorAction"] == "none"
+    assert row["operations"]["workflowState"] == "documents_collecting"
+    assert row["operations"]["clientTimeRemainingSeconds"] > 0
+    assert row["operations"]["capabilities"]["printDossier"] is False
+
+
+@pytest.mark.parametrize(
+    ("state", "responsible", "action", "stage", "printable"),
+    (
+        ("availability_pending", "staff", "approve_availability", "reserved", False),
+        ("document_review_pending", "staff", "review_documents", "documents", False),
+        ("prepayment_approval_pending", "staff", "review_file", "agreement", False),
+        ("customer_reports_paid", "staff", "verify_payment", "payment", False),
+        ("final_approval_pending", "staff", "final_approval", "dossier", True),
+        ("technical_attention_required", "staff", "resolve_technical", "dossier", False),
+        ("confirmed", "system", "none", "confirmed", True),
+    ),
+)
+def test_operations_contract_maps_v2_staff_gates_without_copy_parsing(
+    state, responsible, action, stage, printable,
+):
+    projection = workflow.rental_operations_projection(
+        projected_status="active",
+        quote={"whatsapp_status": "accepted"},
+        reservation={"status": "requirements_pending", "revision": 9},
+        workflow_v2={
+            "state": state,
+            "responsibleParty": "Staff" if responsible == "staff" else "System",
+            "nextAction": "copy changes must not matter",
+            "clock": {
+                "remainingSeconds": 1234,
+                "pauseReason": "provider_failure" if "technical" in state else None,
+            },
+            "revision": 9,
+        },
+        has_active_escalation=False,
+    )
+
+    assert projection["responsibleParty"] == responsible
+    assert projection["operatorAction"] == action
+    assert projection["stage"] == stage
+    assert projection["capabilities"]["printDossier"] is printable
+    assert projection["workflowRevision"] == 9
 
 
 def test_archived_blocked_and_resolved_conversations_are_excluded(quote_leads):

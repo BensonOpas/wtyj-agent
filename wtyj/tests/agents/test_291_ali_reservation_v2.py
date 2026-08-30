@@ -120,6 +120,18 @@ def test_approved_reservation_starts_with_client_document_collection(configured)
     assert created["nextAction"] == "send_next_document"
 
 
+def test_dashboard_can_read_multiple_cases_without_inventing_missing_rows(configured):
+    created = workflow.initialize_reservation("reservation-291", now=BASE)
+
+    cases = workflow.get_cases(
+        {"reservation-291", "reservation-does-not-exist"},
+        now=BASE,
+    )
+
+    assert set(cases) == {"reservation-291"}
+    assert cases["reservation-291"] == created
+
+
 def test_tenant_schedule_settings_are_validated_and_apply_to_active_case(configured):
     workflow.initialize_reservation("reservation-291", now=BASE)
     updated = workflow.save_tenant_settings(
