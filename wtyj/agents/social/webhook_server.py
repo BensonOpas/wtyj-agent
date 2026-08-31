@@ -42,6 +42,25 @@ from agents.social.ali_quote_workflow import (
 
 from contextlib import asynccontextmanager
 
+
+def _quote_confirmation_fallback_text(
+    conversation_id: str,
+    source_text: str,
+) -> str:
+    """Return Ali's locale-correct, idempotent text confirmation fallback."""
+    state = state_registry.wa_get_booking_state(conversation_id)
+    locale = str(
+        ((state.get("fields") or {}).get("conversation_language") or "en")
+    ).strip().lower()
+    instruction = QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION.get(
+        locale,
+        QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION["en"],
+    )
+    text = str(source_text or "").strip()
+    if any(text.endswith(value) for value in QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION.values()):
+        return text
+    return f"{text}\n\n{instruction}" if text else instruction
+
 @asynccontextmanager
 async def lifespan(app):
     # Brief 190: content pipeline archived — scheduler only starts when explicitly enabled
@@ -925,10 +944,6 @@ def _flush_buffer(phone):
                             reply_quote_confirmation
                         )
                         reply_quote_confirmation["text"] = reply_text
-                        reply_quote_confirmation["fallback_text"] = (
-                            f"{reply_text.rstrip()}\n\n"
-                            f"{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
-                        )
                         confirmation_delivery = send_dm_quote_confirmation(
                             _zernio_conv,
                             _zernio_acct,
@@ -960,11 +975,10 @@ def _flush_buffer(phone):
                             ids, "provider returned false")
                         if reply_quote_confirmation:
                             state_registry.create_pending_notification(
-                                "escalation", "whatsapp", _zernio_conv,
+                                "technical", "whatsapp", _zernio_conv,
                                 _zernio_sender or "Ali quote customer",
                                 "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
                                 "The rental summary and Send My Quote control could not be delivered. Open the conversation in Unboks.",
-                                mode="hard",
                             )
                         return
                     if ali_turn_commit:
@@ -1333,13 +1347,12 @@ def _process_zernio_event(payload: dict):
                                 error=type(exc).__name__,
                             )
                         state_registry.create_pending_notification(
-                            "escalation",
+                            "technical",
                             "whatsapp",
                             failed["conversation_id"],
                             "Ali rental customer",
                             "[ALI VEHICLE IMAGES FAILED]",
                             "The vehicle carousel and automatic image recovery failed. Open the conversation in Unboks.",
-                            mode="hard",
                         )
                     log(
                         "ali_vehicle_media_recovery_sent"
@@ -1373,13 +1386,9 @@ def _process_zernio_event(payload: dict):
                             ),
                             "",
                         )
-                    recovery_text = source_text
-                    if QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION not in recovery_text:
-                        recovery_text = (
-                            f"{source_text}\n\n{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
-                            if source_text
-                            else QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION
-                        )
+                    recovery_text = _quote_confirmation_fallback_text(
+                        failed["conversation_id"], source_text,
+                    )
                     fallback_key = hashlib.sha256(
                         str(failed["message_id"]).encode("utf-8")
                     ).hexdigest()
@@ -1406,13 +1415,12 @@ def _process_zernio_event(payload: dict):
                         )
                     else:
                         state_registry.create_pending_notification(
-                            "escalation",
+                            "technical",
                             "whatsapp",
                             failed["conversation_id"],
                             "Ali quote customer",
                             "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
                             "The Send My Quote control failed and its text fallback could not be delivered. Open the conversation in Unboks.",
-                            mode="hard",
                         )
                     log(
                         "ali_quote_confirmation_late_fallback_sent"

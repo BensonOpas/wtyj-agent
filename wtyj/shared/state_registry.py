@@ -3140,8 +3140,11 @@ def create_pending_notification(notification_type: str, channel: str,
     conn.commit()
     conn.close()
 
-    # Brief 188: escalation/relay created → conversation is now "open"
-    set_conversation_status(customer_id, "open", channel)
+    # Customer escalations and relays require an operator conversation. Pure
+    # technical attention belongs to the operations queue and must not imply
+    # human takeover or change the customer's conversation state.
+    if notification_type in {"escalation", "relay"}:
+        set_conversation_status(customer_id, "open", channel)
 
     # Brief 239: read previous summary BEFORE the new one is generated, so
     # the suppression check has both versions to compare.
@@ -3715,7 +3718,9 @@ def get_active_escalation_mode(conversation_id: str):
     conn = _get_conn()
     row = conn.execute(
         "SELECT mode FROM pending_notifications "
-        "WHERE customer_id = ? AND status != 'resolved' "
+        "WHERE customer_id = ? "
+        "AND notification_type IN ('escalation', 'relay') "
+        "AND status != 'resolved' "
         "ORDER BY created_at DESC LIMIT 1",
         (conversation_id,)).fetchone()
     conn.close()
@@ -4167,7 +4172,8 @@ def get_all_escalations() -> list:
         # LEFT JOIN preserves rows whose conversation has no
         # conversation_status entry at all (most active conversations).
         "LEFT JOIN conversation_status cs ON pn.customer_id = cs.conversation_id "
-        "WHERE cs.deleted IS NULL OR cs.deleted = 0 "
+        "WHERE pn.notification_type IN ('escalation', 'relay') "
+        "AND (cs.deleted IS NULL OR cs.deleted = 0) "
         "ORDER BY pn.created_at DESC"
     ).fetchall()
     conn.close()

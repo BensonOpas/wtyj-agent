@@ -382,6 +382,36 @@ def test_operations_contract_maps_v2_staff_gates_without_copy_parsing(
     assert projection["workflowRevision"] == 9
 
 
+def test_complete_pre_quote_file_stays_with_nick_until_real_attention():
+    normal = workflow.rental_operations_projection(
+        projected_status="ready_to_quote",
+        quote=None,
+        reservation=None,
+        workflow_v2=None,
+        has_active_escalation=False,
+    )
+    customer_question = workflow.rental_operations_projection(
+        projected_status="needs_an_answer",
+        quote=None,
+        reservation=None,
+        workflow_v2=None,
+        has_active_escalation=True,
+    )
+    technical_failure = workflow.rental_operations_projection(
+        projected_status="ready_to_quote",
+        quote=None,
+        reservation=None,
+        workflow_v2=None,
+        has_active_escalation=False,
+        has_active_technical=True,
+    )
+
+    assert normal["responsibleParty"] == "agent"
+    assert normal["operatorAction"] == "none"
+    assert customer_question["operatorAction"] == "answer_customer"
+    assert technical_failure["operatorAction"] == "resolve_technical"
+
+
 def test_archived_deleted_and_blocked_conversations_are_excluded(quote_leads):
     for suffix, status, deleted, blocked in (
         ("1", "pending", 1, 0),

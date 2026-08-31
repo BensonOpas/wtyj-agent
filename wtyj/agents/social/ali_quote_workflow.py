@@ -1487,6 +1487,7 @@ def rental_operations_projection(
     reservation: dict | None,
     workflow_v2: dict | None,
     has_active_escalation: bool,
+    has_active_technical: bool = False,
 ) -> dict:
     """Project structured workflow state into the reusable dashboard contract.
 
@@ -1613,12 +1614,17 @@ def rental_operations_projection(
         else "failed" if str((quote or {}).get("whatsapp_status") or "") == "failed"
         else "pending" if quote else "not_started"
     )
-    if projected_status == "ready_to_quote" or delivery_state == "failed":
+    if has_active_technical or delivery_state == "failed":
         return _operations_result(
             lifecycle="pre_quote", stage="quote", responsible_party="staff",
             operator_action="resolve_technical", action_label="Recover quote",
             action_target="customer", action_priority="critical",
             exception={"kind": "quote_delivery", "code": delivery_state},
+            workflow_state=projected_status,
+        )
+    if projected_status == "ready_to_quote":
+        return _operations_result(
+            lifecycle="pre_quote", stage="quote", responsible_party="agent",
             workflow_state=projected_status,
         )
     if projected_status == "in_progress":
@@ -1733,6 +1739,13 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
                 "AND status != 'resolved'"
             ).fetchall() if row[0]
         }
+        technical_ids = {
+            str(row[0]) for row in conn.execute(
+                "SELECT DISTINCT customer_id FROM pending_notifications "
+                "WHERE notification_type = 'technical' "
+                "AND status != 'resolved'"
+            ).fetchall() if row[0]
+        }
     finally:
         conn.close()
 
@@ -1793,8 +1806,8 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             ),
             "in_progress": "Official quote creation or delivery is in progress.",
             "ready_to_quote": (
-                "Recover official quote creation."
-                if not quote else "Resume official quote delivery."
+                "Nick is preparing the rental summary and official quote."
+                if not quote else "Nick is completing official quote delivery."
             ),
             "active": (
                 "Waiting for customer confirmation of the rental summary."
@@ -1826,6 +1839,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             reservation=reservation,
             workflow_v2=workflow_v2,
             has_active_escalation=conversation_id in attention_ids,
+            has_active_technical=conversation_id in technical_ids,
         )
         leads.append({
             "id": conversation_id,

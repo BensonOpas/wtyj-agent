@@ -463,6 +463,32 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
     assert len(completed) == 1
 
 
+def test_quote_confirmation_fallback_uses_customer_language(monkeypatch):
+    from agents.social import webhook_server
+
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "wa_get_booking_state",
+        lambda _conversation_id: {
+            "fields": {"conversation_language": "es"},
+            "flags": {},
+        },
+    )
+
+    fallback = webhook_server._quote_confirmation_fallback_text(
+        "conversation-es", "Resumen actual del alquiler",
+    )
+
+    assert fallback == (
+        "Resumen actual del alquiler\n\n"
+        "Responde ENVIAR COTIZACIÓN para continuar o CAMBIAR DATOS "
+        "para hacer una corrección."
+    )
+    assert webhook_server._quote_confirmation_fallback_text(
+        "conversation-es", fallback,
+    ) == fallback
+
+
 def test_failed_plain_text_does_not_trigger_recursive_fallback(monkeypatch):
     from agents.social import webhook_server
 

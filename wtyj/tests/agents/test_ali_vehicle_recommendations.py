@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from agents.marina import marina_agent
+from agents.social import ali_quote_workflow as quote_workflow
 from agents.social import ali_vehicle_recommendations as recommendations
 from agents.social import zernio_dm_client
 from shared import state_registry
@@ -723,6 +724,51 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
         "message": confirmation["fallback_text"],
     }
     assert posts[1]["headers"]["Idempotency-Key"].endswith("-fallback")
+
+
+@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de", "es"])
+def test_every_localized_quote_confirmation_passes_provider_contract(
+    monkeypatch,
+    locale,
+):
+    """Brief 325: the workflow builder and provider validator share policy."""
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setenv(
+        "ALI_QUOTE_CONFIRMATION_SECRET",
+        "synthetic-confirmation-secret-32-bytes",
+    )
+    plan = quote_workflow.AliTurnPlan(
+        "summary", "Current rental summary", "SUMMARY_PRESENTED",
+        "continue_intake", "complete", "a" * 64, "b" * 64, "c" * 64, 1,
+    )
+    confirmation = quote_workflow.build_quote_confirmation_control(
+        "conversation-1", plan, locale=locale,
+    )
+    monkeypatch.setattr(
+        zernio_dm_client,
+        "_recommendation_session_open",
+        lambda *_args: (True, []),
+    )
+    sent = []
+    monkeypatch.setattr(
+        zernio_dm_client,
+        "_send_recommendation_part",
+        lambda *_args, **kwargs: (
+            sent.append(kwargs["body"])
+            or ("sent", "sent", False, "provider-confirmation")
+        ),
+    )
+
+    result = zernio_dm_client.send_dm_quote_confirmation(
+        "conversation-1", "account-1", confirmation,
+    )
+
+    assert result["success"] is True
+    assert result["delivery"] == "interactive"
+    assert sent[0]["buttons"] == confirmation["buttons"]
+    assert confirmation["fallback_text"].endswith(
+        quote_workflow.QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION[locale]
+    )
 
 
 def test_specific_vehicle_posts_one_image_message(monkeypatch):

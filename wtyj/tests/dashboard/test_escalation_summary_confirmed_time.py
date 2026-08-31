@@ -142,6 +142,61 @@ def test_summary_prompt_includes_concrete_entity_extraction_rule():
     assert "based on their reply" in prompt
 
 
+def test_ali_rental_prompt_never_treats_rental_dates_as_meeting_slots():
+    """Brief 325: the tenant prompt establishes the rental boundary."""
+    from dashboard.escalation_summary import _build_system_prompt
+
+    prompt = _build_system_prompt("ali_quote")
+
+    assert "vehicle-rental workflow" in prompt
+    assert "pickup date" in prompt
+    assert "return date" in prompt
+    assert "Never classify those details as scheduling intent" in prompt
+
+
+def test_ali_rental_summary_cannot_create_an_appointment(monkeypatch):
+    """Brief 325: even a bad model classification is blocked server-side."""
+    from shared import escalation_dispatcher, state_registry
+
+    monkeypatch.setattr(
+        escalation_dispatcher.config_loader,
+        "get_raw",
+        lambda: {"workflow": {"type": "ali_quote"}},
+    )
+    monkeypatch.setattr(
+        escalation_dispatcher._esc_summary,
+        "generate_summary",
+        lambda **_kwargs: {
+            "extractedDetails": {
+                "intent": "scheduling",
+                "proposedTimes": ["24/12 al 29/12"],
+                "confirmedTime": "",
+                "topic": "Car rental quote",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        state_registry,
+        "wa_get_full_history",
+        lambda *_args, **_kwargs: [],
+    )
+    appointments = []
+    monkeypatch.setattr(
+        state_registry,
+        "appointment_upsert",
+        lambda **kwargs: appointments.append(kwargs),
+    )
+
+    escalation_dispatcher._generate_escalation_summary(
+        escalation_id=325,
+        channel="whatsapp",
+        customer_id="ferla-conversation",
+        customer_name="Ferla Silvina",
+    )
+
+    assert appointments == []
+
+
 def test_summary_prompt_includes_concrete_do_examples():
     """Brief 252: the prompt MUST include positive DO examples that
     show Claude what concrete entity extraction looks like (not just
