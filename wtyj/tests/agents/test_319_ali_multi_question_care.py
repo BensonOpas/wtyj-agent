@@ -51,7 +51,7 @@ def _catalog():
     }
 
 
-def _configure_ali_prompt(monkeypatch):
+def _configure_ali_prompt(monkeypatch, *, icp_envelope=None):
     raw = _raw_config()
     monkeypatch.setattr(marina_agent.config_loader, "get_raw", lambda: raw)
     monkeypatch.setattr(
@@ -76,7 +76,11 @@ def _configure_ali_prompt(monkeypatch):
         lambda: "Nick",
     )
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda **_kwargs: _catalog())
-    monkeypatch.setattr(marina_agent, "_icp_envelope_for_prompt", lambda: {})
+    monkeypatch.setattr(
+        marina_agent,
+        "_icp_envelope_for_prompt",
+        lambda: icp_envelope or {},
+    )
     monkeypatch.setattr(marina_agent, "_build_live_product_catalog_block", lambda: "")
 
 
@@ -136,6 +140,71 @@ def test_malformed_or_empty_source_of_truth_fails_closed(monkeypatch, tmp_path):
     assert marina_agent._build_source_of_truth_block() == ""
 
 
+def test_dashboard_sot_replaces_conflicting_icp_sot_but_keeps_tone(
+    monkeypatch,
+    tmp_path,
+):
+    icp_envelope = {
+        "sot_entries": [{
+            "id": "stale-payment",
+            "title": "Old payment policy",
+            "category": "payment",
+            "content": "Collect a 25% reservation payment by bank transfer.",
+        }],
+        "ai_agent_settings": {
+            "tone": {
+                "tone": "Warm premium service",
+                "notes": "Be concise and attentive.",
+            },
+            "escalation_rules": None,
+        },
+    }
+    _configure_ali_prompt(monkeypatch, icp_envelope=icp_envelope)
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "ali.db"))
+    state_registry.source_of_truth_set([{
+        "id": "current-payment",
+        "title": "Current payment policy",
+        "content": "Collect a 15% booking deposit with the WhatsApp payment link.",
+        "items": [],
+        "subsections": [],
+    }])
+
+    prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
+
+    assert prompt.count("TENANT SOURCE OF TRUTH") == 1
+    assert "15% booking deposit" in prompt
+    assert "25% reservation payment" not in prompt
+    assert "bank transfer" not in prompt
+    assert "Tone override: Warm premium service" in prompt
+    assert prompt.index("TENANT SOURCE OF TRUTH") > prompt.index(
+        "FINAL TENANT-SPECIFIC OPERATOR OVERRIDES"
+    )
+    assert prompt.index("TENANT SOURCE OF TRUTH") < prompt.index(
+        "ALI CAR RENTAL WHATSAPP QUOTE INTAKE"
+    )
+
+
+def test_icp_sot_remains_fallback_when_dashboard_sot_is_empty(
+    monkeypatch,
+    tmp_path,
+):
+    icp_envelope = {
+        "sot_entries": [{
+            "id": "fallback-policy",
+            "title": "Fallback policy",
+            "category": "general",
+            "content": "Use the tenant fallback instructions.",
+        }],
+        "ai_agent_settings": {},
+    }
+    _configure_ali_prompt(monkeypatch, icp_envelope=icp_envelope)
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "empty.db"))
+
+    prompt = marina_agent._build_system_prompt({}, channel="whatsapp")
+
+    assert "TENANT SOURCE OF TRUTH" not in prompt
+    assert "Use the tenant fallback instructions." in prompt
+
 def test_ali_high_engagement_contract_covers_both_owner_examples(monkeypatch):
     _configure_ali_prompt(monkeypatch)
     prompt = " ".join(marina_agent._build_ali_quote_block().split())
@@ -153,6 +222,10 @@ def test_ali_high_engagement_contract_covers_both_owner_examples(monkeypatch):
         "limits NEW questions Nick asks the customer",
         "never limits how many customer questions Nick must answer",
         "normal WhatsApp word target",
+        "Never announce that their message was long or detailed",
+        "do not multiply a catalog daily rate",
+        "more than one driver age",
+        "preserve every additional driver's age in `comments`",
     )
     for rule in required_contract:
         assert rule in prompt
