@@ -772,6 +772,90 @@ def _build_approved_answers_block(channel: str) -> str:
     )
 
 
+_SOURCE_OF_TRUTH_PROMPT_CHAR_LIMIT = 12000
+
+
+def _build_source_of_truth_block() -> str:
+    """Render the tenant-local dashboard Source of Truth for the Agent.
+
+    Brief 262 made the dashboard editor server-backed, but those blocks were
+    not part of Marina's runtime prompt. Brief 319 closes that gap. The state
+    registry is already tenant-local (one mounted database per container), so
+    the prompt must read that local store directly and must not accept a tenant
+    identifier from the browser or inbound message.
+
+    The renderer is deliberately bounded. Operators can maintain a substantial
+    knowledge base without letting it consume the complete model context. A
+    failed read is non-fatal: normal client.json, live catalog, uploaded files,
+    and workflow-state context continue to work.
+    """
+    try:
+        from shared import state_registry
+        blocks = state_registry.source_of_truth_get()
+    except Exception:
+        return ""
+    if not isinstance(blocks, list) or not blocks:
+        return ""
+
+    body_lines = []
+    remaining = _SOURCE_OF_TRUTH_PROMPT_CHAR_LIMIT
+
+    def append_line(value: str, prefix: str = "") -> bool:
+        nonlocal remaining
+        text = str(value or "").strip()
+        if not text or remaining <= 0:
+            return remaining > 0
+        rendered = f"{prefix}{text}"
+        if len(rendered) > remaining:
+            remaining = 0
+            return False
+        body_lines.append(rendered)
+        remaining -= len(rendered) + 1
+        return remaining > 0
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        title = str(block.get("title") or "").strip()
+        if not title:
+            continue
+        if not append_line(title, "## "):
+            break
+        if not append_line(block.get("content") or ""):
+            break
+        for item in block.get("items") or []:
+            if not append_line(item, "- "):
+                break
+        if remaining <= 0:
+            break
+        for subsection in block.get("subsections") or []:
+            if not isinstance(subsection, dict):
+                continue
+            subsection_title = str(subsection.get("title") or "").strip()
+            if subsection_title and not append_line(subsection_title, "### "):
+                break
+            if not append_line(subsection.get("content") or ""):
+                break
+            for item in subsection.get("items") or []:
+                if not append_line(item, "- "):
+                    break
+            if remaining <= 0:
+                break
+        if remaining <= 0:
+            break
+
+    if not body_lines:
+        return ""
+    return (
+        "\n\nTENANT SOURCE OF TRUTH (operator-curated in the dashboard):\n"
+        "Use this as authoritative business policy when answering customer questions. "
+        "The current live catalog remains authoritative for fleet, prices and extras, "
+        "and persisted workflow state remains authoritative for what has actually "
+        "happened. If this knowledge does not answer a question, do not invent an answer.\n\n"
+        + "\n".join(body_lines)
+    )
+
+
 def _build_info_updates_block() -> str:
     """Brief 216: render an ACTIVE BUSINESS UPDATES prompt block listing
     operator-curated info_updates that are currently active (permanent
@@ -1066,6 +1150,39 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   `Hotel delivery — [hotel name], [address]`. For Airport or Ali office, set
   pickup_location_kind to `fixed` and use the exact published option name.
 - Ask exactly one short question at a time for the most important missing or ambiguous fact.
+- PREMIUM SERVICE STANDARD is mandatory on every Ali turn. Be observant, respectful,
+  patient, proactive, and easy to deal with. Anticipate the next useful step, explain it
+  clearly, and reduce the customer's effort without becoming verbose or performative.
+  High-engagement messages receive extra completeness and care; shorter messages still
+  receive the same warmth, precision, and ownership.
+- HIGH-ENGAGEMENT, MULTI-QUESTION CARE is mandatory:
+  1. Detect when the newest customer message contains two or more distinct direct questions,
+     several requested confirmations, or a detailed rental request that clearly took effort
+     to compose. Treat that as a highly engaged customer who deserves exceptional care. Do
+     not make them split the message, repeat it, or wait through the intake before receiving
+     answers.
+  2. Begin with one brief, natural sentence that recognizes the care in their message, then
+     help immediately. Avoid canned praise, forced enthusiasm, or a sales speech. Be calm,
+     patient, warm, precise, and generous with useful detail.
+  3. Extract and retain every rental and customer fact they supplied anywhere in the message.
+     Answer every question and requested confirmation directly, in the same order. For a
+     longer list, mirror its numbering so the reply is easy to scan on a phone. Never answer
+     only the first question, collapse several questions into a vague summary, or silently
+     skip an item. State answers directly instead of repeating the customer's questions as
+     new questions; reserve question punctuation for the one new intake question at the end.
+  4. Ground each answer in the tenant Source of Truth, current live catalog, official quote,
+     and persisted workflow state. If one item is genuinely not covered, answer all covered
+     items first, identify only the unresolved item clearly, and say that item needs checking.
+     Never guess, invent a policy, or replace the remaining direct answers with a generic
+     escalation.
+  5. After every customer question has been handled, briefly state which supplied details
+     you already have and that you are gathering the remaining details to prepare and send
+     the official quote. Then ask at most one genuinely missing quote field. Do not re-ask a
+     fact from their message.
+  6. The one-question-at-a-time rule limits NEW questions Nick asks the customer. It never
+     limits how many customer questions Nick must answer. Completeness takes priority over
+     the normal WhatsApp word target for these high-engagement messages, but keep each answer
+     concise and mobile-readable.
 - QUOTE-LED CUSTOMER GUIDANCE is mandatory:
   1. The goal of the Ali conversation is to help the customer choose a suitable car and
      gather the details needed to prepare and send an official quote. Do this helpfully,
@@ -1372,6 +1489,7 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
 
     _customer_file_block = _build_customer_file_block(customer_file)
     _approved_answers_block = _build_approved_answers_block(channel)
+    _source_of_truth_block = _build_source_of_truth_block()
     _info_updates_block = _build_info_updates_block()
     _live_product_catalog_block = _build_live_product_catalog_block()
     _knowledge_files_block = _build_knowledge_files_block()
@@ -1437,7 +1555,7 @@ Your customer-facing name is {agent_name}. Use this name only when natural. Do n
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
+{_customer_file_block}{_approved_answers_block}{_source_of_truth_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
 
 {writing_style_block}
 
