@@ -513,7 +513,7 @@ def test_complete_natural_intake_maps_category_and_returns_summary(monkeypatch):
 
 def test_unchanged_summary_questions_and_explicit_repeat_are_locale_safe(monkeypatch):
     monkeypatch.setattr(workflow, "get_intake_catalog", lambda: catalog())
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         fields = {
             "customer_name": "Synthetic Customer",
             "rental_start": "2026-09-01",
@@ -1166,7 +1166,7 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
 
     for locale, phase, intent in (
         (locale, phase, intent)
-        for locale in ("en", "nl", "pap", "de")
+        for locale in ("en", "nl", "pap", "de", "es")
         for phase in phases
         for intent in intents
     ):
@@ -1478,7 +1478,7 @@ def test_change_action_contract_and_prompt_cover_universal_corrections(monkeypat
     assert "special-request correction to `comments`" in prompt
     assert "`vehicle_selection_kind`" in prompt
     assert "mode `clarify`" in prompt
-    assert "EN, NL, PAP, and DE" in prompt
+    assert "EN, NL, PAP, DE, and ES" in prompt
 
 
 def test_specific_recommendation_never_promotes_category_to_exact_vehicle():

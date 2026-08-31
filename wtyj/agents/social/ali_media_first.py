@@ -79,7 +79,9 @@ _BROWSE_REQUEST = re.compile(
     r"|\bmustra\s+mi\s+(?:kiko|loke|e\s+outo(?:nan)?)\b"
     r"|\bwas\s+haben\s+(?:sie|ihr)\b"
     r"|\bwelche\s+(?:autos?|fahrzeuge?|optionen)\s+haben\s+(?:sie|ihr)\b"
-    r"|\bzeigen\s+sie\s+mir\s+(?:was|die\s+(?:autos?|fahrzeuge?))\b)",
+    r"|\bzeigen\s+sie\s+mir\s+(?:was|die\s+(?:autos?|fahrzeuge?))\b"
+    r"|\b(?:qu[eé]|cu[aá]les)\s+(?:autos?|coches?|veh[ií]culos?|opciones)\s+(?:tienen|tienes|hay)\b"
+    r"|\bmu[eé]strame\s+(?:los\s+)?(?:autos?|coches?|veh[ií]culos?|opciones)\b)",
     re.IGNORECASE,
 )
 _PICKUP_LOCATION_REQUEST = re.compile(
@@ -91,7 +93,9 @@ _PICKUP_LOCATION_REQUEST = re.compile(
     r"|\b(?:ophalen|ophaal|afhalen)\b.{0,48}\b(?:optie|opties|plaats|plaatsen|waar)\b"
     r"|\b(?:kua|kiko|unda)\b.{0,48}\b(?:tuma|buska)\b.{0,24}\bouto\b"
     r"|\b(?:welche|was|wo)\b.{0,48}\b(?:abholen|abholung)\b"
-    r"|\b(?:abholen|abholung)\b.{0,48}\b(?:option|optionen|ort|orte|wo)\b)",
+    r"|\b(?:abholen|abholung)\b.{0,48}\b(?:option|optionen|ort|orte|wo)\b"
+    r"|\b(?:qu[eé]|cu[aá]les|d[oó]nde)\b.{0,48}\b(?:recoger|recogida|retiro)\b"
+    r"|\b(?:recoger|recogida|retiro)\b.{0,48}\b(?:opci[oó]n|opciones|lugar|lugares|d[oó]nde)\b)",
     re.IGNORECASE,
 )
 _RETURN_LOCATION_REQUEST = re.compile(
@@ -101,18 +105,22 @@ _RETURN_LOCATION_REQUEST = re.compile(
     r"\b(?:option|options|choice|choices|location|locations|where|available)\b"
     r"|\b(?:welke|wat|waar)\b.{0,48}\b(?:terugbrengen|inleveren|retour)\b"
     r"|\b(?:kua|kiko|unda)\b.{0,48}\b(?:entrega|debolbe)\b.{0,24}\bouto\b"
-    r"|\b(?:welche|was|wo)\b.{0,48}\b(?:zurückgeben|rückgabe)\b)",
+    r"|\b(?:welche|was|wo)\b.{0,48}\b(?:zurückgeben|rückgabe)\b"
+    r"|\b(?:qu[eé]|cu[aá]les|d[oó]nde)\b.{0,48}\b(?:devolver|devoluci[oó]n|entregar)\b"
+    r"|\b(?:devolver|devoluci[oó]n|entregar)\b.{0,48}\b(?:opci[oó]n|opciones|lugar|lugares|d[oó]nde)\b)",
     re.IGNORECASE,
 )
 _HOTEL_DELIVERY_CHOICE = re.compile(
     r"^\s*(?:hotel|hotel\s+delivery|deliver(?:y)?\s+to\s+(?:my\s+)?hotel|"
     r"hotelbezorging|bezorg(?:en|ing)\s+bij\s+(?:het\s+)?hotel|"
-    r"entrega\s+na\s+hotel|hotelzustellung|lieferung\s+zum\s+hotel)\s*[.!?]*\s*$",
+    r"entrega\s+na\s+hotel|entrega\s+(?:en|al)\s+(?:el\s+)?hotel|"
+    r"hotelzustellung|lieferung\s+zum\s+hotel)\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
 _SMALLER_REQUEST = re.compile(
     r"\b(?:smaller|small|compact|economy|kleiner|kleine|kleines|compacte|"
-    r"mas\s+chik[ií]|chik[ií]|kleinere|kompakt)\b"
+    r"mas\s+chik[ií]|chik[ií]|m[aá]s\s+peque[ñn]o|peque[ñn]o|econ[oó]mico|"
+    r"kleinere|kompakt)\b"
     r"(?:\s+(?:car|cars|vehicle|vehicles|one|option|auto|auto['’]?s|outo|"
     r"outonan|wagen|fahrzeug))?",
     re.IGNORECASE,
@@ -121,6 +129,7 @@ _LARGER_REQUEST = re.compile(
     r"(?:\b(?:bigger|larger|more\s+spacious|more\s+room)\b"
     r"|\b(?:groter|grotere|ruimer|ruimere|meer\s+ruimte)\b"
     r"|\b(?:m[aá]s\s+grandi|mas\s+grandi|mas\s+espasio)\b"
+    r"|\b(?:m[aá]s\s+grande|m[aá]s\s+espacioso|m[aá]s\s+espacio)\b"
     r"|\b(?:gr[oö][sß]er|gr[oö][sß]ere|gr[oö][sß]eres|mehr\s+platz)\b)",
     re.IGNORECASE,
 )
@@ -142,6 +151,7 @@ _NEGATED_SMALLER_REQUEST = re.compile(
 _NO_PREFERENCE_REQUEST = re.compile(
     r"^(?:whatever|anything|any(?:\s+car)?|no\s+preference|"
     r"doesn['’]?t\s+matter|maakt\s+niet\s+uit|geen\s+voorkeur|"
+    r"me\s+da\s+igual|cualquiera|sin\s+preferencia|"
     r"kualke|no\s+tin\s+preferensia|egal|keine\s+präferenz)[.!?\s]*$",
     re.IGNORECASE,
 )
@@ -150,6 +160,8 @@ _NO_PREFERENCE_PHRASE = re.compile(
     r"\bany(?:\s+car)?\s+is\s+fine\b|\byou\s+choose\b|\bsurprise\s+me\b|"
     r"\bmaakt\s+niet\s+uit\b|\bgeen\s+voorkeur\b|\bkies\s+(?:jij|maar)\b|"
     r"\bno\s+tin\s+preferensia\b|\bkualke\s+(?:outo\s+)?ta\s+bon\b|"
+    r"\bme\s+da\s+igual\b|\bsin\s+preferencia\b|\bcualquier(?:a|\s+auto)\b|"
+    r"\belige\s+t[uú]\b|"
     r"\begal\b|\bkeine\s+pr[aä]ferenz\b|\bsie\s+k[oö]nnen\s+w[aä]hlen\b)",
     re.IGNORECASE,
 )
@@ -160,7 +172,9 @@ _PERSONAL_DETAIL_REQUEST = re.compile(
     r"|\bwat\s+is\s+(?:je|uw)\s+(?:volledige\s+)?naam\b|\bhoe\s+oud\s+ben\s+(?:je|u)\b"
     r"|\bkiko\s+ta\s+bo\s+n[òo]mber\b|\bkuantu\s+a[ñn]a\s+bo\s+tin\b"
     r"|\bwie\s+hei(?:ß|ss)t\s+(?:du|sie)\b|\bwie\s+ist\s+(?:ihr|dein)\s+(?:vollst[aä]ndiger\s+)?name\b"
-    r"|\bwie\s+alt\s+sind\s+sie\b)",
+    r"|\bwie\s+alt\s+sind\s+sie\b"
+    r"|\bcu[aá]l\s+es\s+(?:tu|su)\s+nombre\s+completo\b"
+    r"|\b(?:qu[eé]|cu[aá]l)\s+edad\s+tiene\s+el\s+conductor\b)",
     re.IGNORECASE,
 )
 _LUGGAGE_QUESTION = re.compile(
@@ -168,7 +182,8 @@ _LUGGAGE_QUESTION = re.compile(
     r"|\bhoeveel\s+(?:bagage|koffers?|tassen?)\b"
     r"|\bkuantu\s+(?:ekipahe|maleta)\b"
     r"|\bwie\s+viel\s+gep[äa]ck\b"
-    r"|\bwie\s+viele\s+(?:koffer|taschen)\b)",
+    r"|\bwie\s+viele\s+(?:koffer|taschen)\b"
+    r"|\bcu[aá]nto\s+equipaje\b|\bcu[aá]ntas\s+(?:maletas|bolsas)\b)",
     re.IGNORECASE,
 )
 _PASSENGER_QUESTION = re.compile(
@@ -176,28 +191,32 @@ _PASSENGER_QUESTION = re.compile(
     r"|\bhow\s+large\s+is\s+(?:your|the)\s+(?:group|party)\b"
     r"|\bmet\s+hoeveel\s+personen\b|\bhoeveel\s+passagiers\b"
     r"|\bkuantu\s+persona\b|\bkuantu\s+pasahero\b"
-    r"|\bwie\s+viele\s+personen\b|\bwie\s+viele\s+passagiere\b)",
+    r"|\bwie\s+viele\s+personen\b|\bwie\s+viele\s+passagiere\b"
+    r"|\bcu[aá]ntas\s+(?:personas|pasajeros)\b)",
     re.IGNORECASE,
 )
 _CHILD_TRAVELER_CUE = re.compile(
     r"\b(?:baby|babies|infant|infants|toddler|toddlers|child|children|kid|kids|"
     r"peuter|peuters|kind|kinderen|beibi|mucha(?:\s+chik[ií])?|"
-    r"kleinkind|kleinkinder)\b",
+    r"kleinkind|kleinkinder|beb[eé]|beb[eé]s|ni[ñn]o|ni[ñn]os|menor|menores)\b",
     re.IGNORECASE,
 )
 _NO_CHILD_TRAVELER = re.compile(
     r"\b(?:no\s+(?:baby|babies|infants?|toddlers?|children|kids)|"
     r"geen\s+(?:baby|peuters?|kinderen)|sin\s+(?:beibi|mucha)|"
-    r"kein(?:e|en)?\s+(?:baby|kleinkind|kinder))\b",
+    r"kein(?:e|en)?\s+(?:baby|kleinkind|kinder)|"
+    r"sin\s+(?:beb[eé]s?|ni[ñn]os?|menores)|no\s+(?:hay|viaja(?:n)?)\s+(?:beb[eé]s?|ni[ñn]os?|menores))\b",
     re.IGNORECASE,
 )
 _CHILD_SEAT_ALREADY_ADDRESSED = re.compile(
     r"\b(?:child\s*seat|car\s*seat|baby\s*seat|booster\s*seat|"
-    r"kinderzitje|autostoel|stul\s+pa\s+mucha|kindersitz)\b",
+    r"kinderzitje|autostoel|stul\s+pa\s+mucha|kindersitz|silla\s+infantil|"
+    r"asiento\s+infantil)\b",
     re.IGNORECASE,
 )
 _CHILD_SEAT_CATALOG_NAMES = {
     "child seat", "kinderzitje", "stul pa mucha", "kindersitz",
+    "silla infantil", "asiento infantil",
 }
 _COPY = {
     "en": {
@@ -296,6 +315,30 @@ _COPY = {
         "child_seat_per_day": "Sie haben ein Kind erwähnt. Bringen Sie einen eigenen Kindersitz mit, oder möchten Sie einen für USD {price} pro Miettag mieten?",
         "child_seat_per_rental": "Sie haben ein Kind erwähnt. Bringen Sie einen eigenen Kindersitz mit, oder möchten Sie einen für USD {price} pro Miete mieten?",
     },
+    "es": {
+        "welcome": "¡Bienvenido a Ali Car Rental! Soy Nick ☀️ Te ayudaré a encontrar un auto adecuado para tu viaje en Curaçao.",
+        "intro_one": "Aquí tienes un auto que coincide con lo que buscas. ¿Te parece adecuado para tu viaje?",
+        "intro_many": "Aquí tienes algunas opciones que pueden servirte. ¿Cuál prefieres?",
+        "availability": "La disponibilidad final del vehículo aún debe confirmarse.",
+        "cta": "Detalles Del Auto",
+        "clarify_preference": "¿Prefieres un auto pequeño, un SUV o una van?",
+        "repair_category": "Perdona, no fui claro. Tengo {category} como tu categoría preferida, pero todavía no has elegido un auto específico. ¿Qué fecha deseas recogerlo?",
+        "resume_category": "¡Hola! Tengo {category} como tu categoría preferida, pero todavía no has elegido un auto específico. ¿Qué fecha deseas recogerlo?",
+        "repair_vehicle": "Perdona, no fui claro. Tengo {vehicle} como tu auto elegido. ¿Para qué fechas lo necesitas?",
+        "resume_vehicle": "¡Hola! Tengo {vehicle} como tu auto elegido. ¿Para qué fechas lo necesitas?",
+        "repair_general": "Perdona, no fui claro. ¿Qué quieres que te explique?",
+        "lowest_price_many": "{vehicle} es la opción adecuada de menor precio por USD {price} al día. Incluí las alternativas más cercanas para que puedas comparar.",
+        "lowest_price_one": "{vehicle} es la opción adecuada de menor precio por USD {price} al día.",
+        "browse_many": "Aquí tienes algunos autos de nuestra flota actual. Revísalos y dime cuál prefieres.",
+        "browse_capacity": "Aquí tienes algunos autos de nuestra flota actual. Cada tarjeta muestra la capacidad; los autos con menos de {passengers} asientos no sirven para todo tu grupo. ¿Cuál quieres comparar?",
+        "smaller_many": "Aquí tienes los autos más pequeños. ¿Cuál quieres ver?",
+        "smaller_capacity": "Aquí tienes los autos más pequeños. Tienen hasta {max_seats} asientos; si viajan {passengers} personas, necesitarás una opción más grande. ¿Cuál quieres ver?",
+        "larger_one": "Esta es la opción más grande que sirve para tu grupo. ¿Te parece adecuada?",
+        "larger_many": "Aquí tienes las opciones más grandes que sirven para tu grupo. ¿Cuál prefieres?",
+        "largest_one": "Esta es la opción más grande de nuestra flota actual. ¿Te parece adecuada?",
+        "child_seat_per_day": "Mencionaste que viaja un menor. ¿Traerás tu propia silla infantil o quieres alquilar una por USD {price} por día de alquiler?",
+        "child_seat_per_rental": "Mencionaste que viaja un menor. ¿Traerás tu propia silla infantil o quieres alquilar una por USD {price} por alquiler?",
+    },
 }
 
 
@@ -329,8 +372,9 @@ def explicit_hotel_delivery_choice(message_text: object) -> bool:
 def resolve_fixed_pickup_option_choice(
     message_text: object,
     catalog: dict,
+    request_kind: str = "pickup",
 ) -> dict | None:
-    """Resolve an exact fixed pickup choice from the published catalog."""
+    """Resolve an exact fixed pickup or return choice from the catalog."""
     normalized = re.sub(
         r"[^\w]+", " ", str(message_text or "").casefold(),
         flags=re.UNICODE,
@@ -338,7 +382,10 @@ def resolve_fixed_pickup_option_choice(
     if not normalized:
         return None
     matches = []
-    for option in catalog.get("pickupLocations") or []:
+    location_key = (
+        "returnLocations" if request_kind == "return" else "pickupLocations"
+    )
+    for option in catalog.get(location_key) or []:
         if not isinstance(option, dict):
             continue
         if option.get("active", True) is False or option.get("kind") != "fixed":
@@ -384,12 +431,14 @@ def rental_location_options_reply(
             "nl": "Ik heb nu geen bevestigde lijst met {kind}locaties beschikbaar, dus ik wil niet gokken. Welke locatie heb je in gedachten?",
             "pap": "Awor mi no tin un lista konfirmá di lugánan pa {kind}, pues mi no ke hasi suposishon. Kua lugá bo tin na mente?",
             "de": "Mir liegt derzeit keine bestätigte Liste der {kind}orte vor, deshalb möchte ich nicht raten. Welchen Ort haben Sie im Sinn?",
+            "es": "Ahora mismo no tengo una lista confirmada de lugares de {kind}, así que no quiero adivinar. ¿Qué lugar tienes en mente?",
         }[locale]
         labels = {
             "en": {"pickup": "pickup", "return": "return"},
             "nl": {"pickup": "ophaal", "return": "inlever"},
             "pap": {"pickup": "tuma e outo", "return": "entrega e outo"},
             "de": {"pickup": "Abhol", "return": "Rückgabe"},
+            "es": {"pickup": "recogida", "return": "devolución"},
         }[locale]
         return fallback.format(kind=labels[request_kind])
 
@@ -402,6 +451,7 @@ def rental_location_options_reply(
         "nl": "\n\nVoor hotelbezorging heb ik de hotelnaam en het adres nodig.",
         "pap": "\n\nPa entrega na hotel, mi tin mester di nòmber di hotel i su adrès.",
         "de": "\n\nFür eine Hotelzustellung benötige ich den Hotelnamen und die Adresse.",
+        "es": "\n\nPara la entrega en un hotel, necesito el nombre y la dirección del hotel.",
     }[locale] if has_hotel_delivery else ""
     copy = {
         "en": (
@@ -420,12 +470,17 @@ def rental_location_options_reply(
             "Wir bieten diese {kind}optionen an:\n{names}{hotel_note}\n\n"
             "Welche Option passt am besten?"
         ),
+        "es": (
+            "Ofrecemos estas opciones de {kind}:\n{names}{hotel_note}\n\n"
+            "¿Qué opción te conviene más?"
+        ),
     }[locale]
     labels = {
         "en": {"pickup": "pickup", "return": "return"},
         "nl": {"pickup": "ophaal", "return": "inlever"},
         "pap": {"pickup": "tuma e outo", "return": "entrega e outo"},
         "de": {"pickup": "Abhol", "return": "Rückgabe"},
+        "es": {"pickup": "recogida", "return": "devolución"},
     }[locale]
     return copy.format(
         kind=labels[request_kind], names=names, hotel_note=hotel_note,
@@ -441,12 +496,14 @@ def hotel_delivery_detail_prompt(detail: str, fields: dict) -> str:
             "nl": "Hotelbezorging is mogelijk. Wat is de naam van het hotel?",
             "pap": "Entrega na hotel ta posibel. Kiko ta nòmber di e hotel?",
             "de": "Die Hotelzustellung ist möglich. Wie heißt das Hotel?",
+            "es": "Podemos entregar el auto en el hotel. ¿Cómo se llama el hotel?",
         },
         "address": {
             "en": "Thank you. What is the hotel address? A partial address is fine.",
             "nl": "Dank je. Wat is het adres van het hotel? Een gedeeltelijk adres is prima.",
             "pap": "Danki. Kiko ta e adrès di e hotel? Un parti di e adrès ta sufisiente.",
             "de": "Danke. Wie lautet die Hoteladresse? Eine Teiladresse reicht aus.",
+            "es": "Gracias. ¿Cuál es la dirección del hotel? Una dirección parcial está bien.",
         },
     }
     return prompts[detail][locale]
@@ -549,6 +606,11 @@ _FIRST_TURN_SELF_INTRO = {
         r"(?:\s+von\s+ali\s+car\s+rental)?[.!]?\s*",
         re.IGNORECASE,
     ),
+    "es": re.compile(
+        r"^\s*(?:(?:hola|buenos\s+d[ií]as)[,!]?\s+)?soy\s+nick"
+        r"(?:\s+de\s+ali\s+car\s+rental)?[.!]?\s*",
+        re.IGNORECASE,
+    ),
 }
 
 _FIRST_TURN_GENERIC_HELP = {
@@ -571,6 +633,11 @@ _FIRST_TURN_GENERIC_HELP = {
     "de": re.compile(
         r"^\s*(?:gerne\s+helfe\s+ich\s+ihnen|ich\s+helfe\s+ihnen\s+gerne)\b"
         r"[^.!?]*(?:auto|angebot)[^.!?]*[.!]\s*",
+        re.IGNORECASE,
+    ),
+    "es": re.compile(
+        r"^\s*(?:con\s+gusto\s+te\s+ayudo|te\s+ayudo\s+con\s+gusto)\b"
+        r"[^.!?]*(?:auto|cotizaci[oó]n)[^.!?]*[.!]\s*",
         re.IGNORECASE,
     ),
 }

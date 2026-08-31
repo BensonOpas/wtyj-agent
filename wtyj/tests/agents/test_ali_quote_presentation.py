@@ -23,6 +23,7 @@ def test_rental_period_is_human_readable_in_all_supported_languages():
         "nl": "1 september 2026 – 8 september 2026",
         "pap": "1 di sèptèmber 2026 – 8 di sèptèmber 2026",
         "de": "1. September 2026 – 8. September 2026",
+        "es": "1 de septiembre de 2026 – 8 de septiembre de 2026",
     }
 
     for locale, rendered in expected.items():
@@ -36,6 +37,7 @@ def test_expiry_is_converted_to_curacao_time_and_localized():
         "nl": "28 augustus 2026 om 18:50 (Curaçaose tijd)",
         "pap": "28 di ougùstù 2026 pa 18:50 (ora di Kòrsou)",
         "de": "28. August 2026 um 18:50 (Curaçao-Zeit)",
+        "es": "28 de agosto de 2026 a las 18:50 (hora de Curaçao)",
     }
 
     for locale, rendered in expected.items():

@@ -135,6 +135,30 @@ def test_reminders_follow_latest_customer_message_at_3_8_and_22_hours(
     )
 
 
+def test_internal_system_audit_after_nick_reply_does_not_suppress_reminder(
+    lead_db, monkeypatch,
+):
+    settings = CONFIG["workflow"]["pre_reservation_follow_up"]
+    monkeypatch.setitem(settings, "quiet_hours_start", "00:00")
+    monkeypatch.setitem(settings, "quiet_hours_end", "00:00")
+    anchor = BASE + timedelta(minutes=2)
+    _seed_turn("conversation-system-audit", anchor)
+    state_registry.dm_store_message(
+        "conversation-system-audit",
+        "whatsapp",
+        "system",
+        "Ali vehicle recommendation sent: synthetic audit",
+        created_at=(anchor + timedelta(seconds=2)).isoformat(),
+    )
+
+    due = follow_up.claim_due_follow_ups(now=anchor + timedelta(hours=3))
+
+    assert [item["conversationId"] for item in due] == [
+        "conversation-system-audit"
+    ]
+    assert due[0]["message"] == "Three-hour check-in"
+
+
 def test_customer_reply_resets_the_entire_schedule(lead_db):
     first_anchor = BASE + timedelta(minutes=1)
     _seed_turn("conversation-reset", first_anchor)

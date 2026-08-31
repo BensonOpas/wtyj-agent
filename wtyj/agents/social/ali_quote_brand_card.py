@@ -39,6 +39,7 @@ TITLES = {
     "nl": "OFFICIËLE OFFERTE",
     "pap": "OFERTA OFISIAL",
     "de": "OFFIZIELLES ANGEBOT",
+    "es": "COTIZACIÓN OFICIAL",
 }
 FOOTER_TEXT = "ALI CAR RENTAL | CURAÇAO"
 FONT_ROOT = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "dejavu"

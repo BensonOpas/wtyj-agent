@@ -42,6 +42,13 @@ _SLOT_LABELS = {
         "identity_front": "die Vorderseite Ihres Personalausweises",
         "identity_back": "die Rückseite Ihres Personalausweises",
     },
+    "es": {
+        "license_front": "el frente de tu permiso de conducir",
+        "license_back": "el reverso de tu permiso de conducir",
+        "passport": "tu pasaporte",
+        "identity_front": "el frente de tu tarjeta de identidad",
+        "identity_back": "el reverso de tu tarjeta de identidad",
+    },
 }
 
 _COPY = {
@@ -96,6 +103,19 @@ _COPY = {
         "more_time": "Kein Problem. Ich halte die Reservierung, während Sie fortfahren.",
         "payment": "Danke — unser Team prüft die Zahlung jetzt.",
         "payment_expired": "Das 24-stündige Zahlungsfenster ist abgelaufen, daher wurde das Fahrzeug nicht gesichert. Ich habe unser Team gebeten, die aktuelle Verfügbarkeit zu prüfen, bevor wir fortfahren.",
+    },
+    "es": {
+        "next": "Recibido: {stored} se guardó de forma segura. Ahora envía {next}.",
+        "review": "Recibido: todos los documentos necesarios se guardaron de forma segura. Ahora te enviaré el precontrato para que lo revises y firmes.",
+        "unclassified": "Guardé el archivo de forma segura, pero no esperaba un documento en este paso. ¿Qué documento es?",
+        "extras": " También guardé {count} archivo(s) adicional(es) de forma segura. Dime qué son.",
+        "identity": "Gracias. Envía {document} aquí por WhatsApp.",
+        "opt_out": "Entendido. No te enviaré más mensajes.",
+        "cancelled": "Entendido. Detuve esta solicitud de reserva.",
+        "ambiguous": "¿Quieres que detenga esta reserva o necesitas más tiempo?",
+        "more_time": "Está bien. Mantendré la reserva en espera mientras continúas.",
+        "payment": "Gracias. Nuestro equipo verificará el pago ahora.",
+        "payment_expired": "La ventana de pago de 24 horas venció, por lo que el auto no quedó asegurado. Pedí a nuestro equipo que revise la disponibilidad actual antes de continuar.",
     },
 }
 
@@ -246,6 +266,42 @@ _FAILURE_COPY = {
             "als 10 MB."
         ),
         "document": "das angeforderte Dokument",
+    },
+    "es": {
+        "duplicate_document_content": (
+            "Esta imagen es idéntica a un documento que ya enviaste, por lo que "
+            "no pude usarla como {document}. Envía una imagen diferente que "
+            "muestre {document}."
+        ),
+        "too_large": (
+            "El archivo es demasiado grande. Envía {document} como JPG, PNG o "
+            "PDF de menos de 10 MB."
+        ),
+        "dimensions": (
+            "Las dimensiones de la imagen son demasiado grandes o pequeñas para "
+            "procesarla. Toma una foto nueva y clara de {document} y vuelve a enviarla."
+        ),
+        "unreadable": (
+            "No pude leer la imagen; puede estar dañada o poco clara. Toma una "
+            "foto nueva, bien iluminada, de {document} y vuelve a enviarla."
+        ),
+        "file_type": (
+            "El formato del archivo no coincide con su contenido. Envía "
+            "{document} como un JPG, PNG o PDF auténtico."
+        ),
+        "pdf": (
+            "No pude leer ese PDF de forma segura. Envía un PDF nuevo o una foto "
+            "JPG o PNG clara de {document}, de menos de 10 MB."
+        ),
+        "temporary": (
+            "No pude descargar el archivo de WhatsApp en este momento. Espera "
+            "un momento y vuelve a enviar {document}."
+        ),
+        "generic": (
+            "No pude guardar el archivo de forma segura. Envía un JPG, PNG o PDF "
+            "nuevo y claro de {document}, de menos de 10 MB."
+        ),
+        "document": "el documento solicitado",
     },
 }
 

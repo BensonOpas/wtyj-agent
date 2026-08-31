@@ -162,7 +162,7 @@ MARINA_TOOL = {
                             "additionalProperties": False,
                         },
                     },
-                    "conversation_language": {"type": "string", "enum": ["en", "nl", "pap", "de"], "description": "Ali only: current conversation language."},
+                    "conversation_language": {"type": "string", "enum": ["en", "nl", "pap", "de", "es"], "description": "Ali only: current conversation language."},
                     "order_total": {"type": "number"},
                     "currency": {"type": "string"},
                     "first_name": {
@@ -1051,7 +1051,7 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   `supplements` list, including an empty list when all supplements are removed. Do not list
   facts merely repeated from history. If the customer only says they want to change something,
   or names no exact catalog vehicle/category, use mode `clarify`, keep `changed_fields` empty,
-  and ask one concise clarification. Apply this naturally in EN, NL, PAP, and DE.
+  and ask one concise clarification. Apply this naturally in EN, NL, PAP, DE, and ES.
 - Required facts are customer_name, rental_start, rental_end, pickup_location,
   return_location, driver_age, conversation_language, and exactly one vehicle or category.
 - PICKUP OPTIONS ARE SERVER-OWNED. If the customer asks which pickup choices Ali offers,

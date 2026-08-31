@@ -150,4 +150,5 @@ def invalid_vehicle_selection_reply(locale: object) -> str:
         "nl": "Die auto-optie is niet meer geldig. Kies alsjeblieft uit de nieuwste auto-opties die ik stuur.",
         "pap": "E opshon di outo ei no ta válido mas. Skohe for di e último opshonnan di outo ku mi manda bo.",
         "de": "Diese Fahrzeugoption ist nicht mehr gültig. Bitte wählen Sie aus den neuesten Fahrzeugoptionen, die ich Ihnen sende.",
+        "es": "Esa opción de auto ya no es válida. Elige una de las opciones de auto más recientes que te envié.",
     }.get(language, "That car option is no longer valid. Please choose from the latest car options I send you.")

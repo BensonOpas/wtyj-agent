@@ -129,7 +129,7 @@ def test_question_that_mentions_exact_vehicle_is_not_treated_as_choice():
     ) is None
 
 
-@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])
+@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de", "es"])
 def test_invalid_selection_clarification_is_localized(locale):
     assert invalid_vehicle_selection_reply(locale)
 

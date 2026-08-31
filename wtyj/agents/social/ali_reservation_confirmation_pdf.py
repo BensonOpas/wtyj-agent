@@ -116,6 +116,24 @@ LABELS = {
             "Zahlungsnachweis."
         ),
     },
+    "es": {
+        "title": "Confirmación de reserva",
+        "status": "Confirmada",
+        "reservation": "Reserva",
+        "quote": "Cotización",
+        "customer": "Cliente",
+        "vehicle": "Vehículo",
+        "period": "Período de alquiler",
+        "pickup": "Recogida",
+        "return": "Devolución",
+        "total": "Total confirmado de la cotización",
+        "issued": "Emitida",
+        "next": "Información de recogida",
+        "notice": (
+            "Este documento confirma la reserva registrada por Ali Car Rental. "
+            "No es un contrato de alquiler, una factura ni un comprobante de pago."
+        ),
+    },
 }
 
 

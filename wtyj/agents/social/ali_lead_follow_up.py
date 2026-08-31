@@ -22,7 +22,7 @@ DEFAULT_QUIET_START = "20:30"
 DEFAULT_QUIET_END = "08:30"
 MAX_FREE_FORM_WINDOW_SECONDS = 24 * 60 * 60
 WINDOW_SAFETY_SECONDS = 10 * 60
-SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
+SUPPORTED_LOCALES = {"en", "nl", "pap", "de", "es"}
 TERMINAL_DELIVERY_STATUSES = {"sent", "skipped_window", "cancelled"}
 _SCHEMA_READY_PATHS: set[str] = set()
 
@@ -234,7 +234,8 @@ def _latest_candidates(conn: sqlite3.Connection, activated_at: str) -> list[sqli
         " WHERE latest_user.phone = user.phone AND latest_user.role = 'user' "
         " AND latest_user.channel = 'whatsapp') "
         "AND 'assistant' = (SELECT latest.role FROM whatsapp_threads latest "
-        " WHERE latest.phone = user.phone ORDER BY latest.id DESC LIMIT 1) "
+        " WHERE latest.phone = user.phone AND latest.role != 'system' "
+        " ORDER BY latest.id DESC LIMIT 1) "
         "AND NOT EXISTS (SELECT 1 FROM ali_reservations reservation "
         " WHERE reservation.conversation_id = user.phone) "
         "AND NOT EXISTS (SELECT 1 FROM ali_lead_follow_up_preferences preference "

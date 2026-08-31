@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 
 CURACAO_TZ = ZoneInfo("America/Curacao")
-SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
+SUPPORTED_LOCALES = {"en", "nl", "pap", "de", "es"}
 
 MONTHS = {
     "en": (
@@ -28,6 +28,10 @@ MONTHS = {
     "de": (
         "Januar", "Februar", "März", "April", "Mai", "Juni",
         "Juli", "August", "September", "Oktober", "November", "Dezember",
+    ),
+    "es": (
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
     ),
 }
 
@@ -56,6 +60,8 @@ def format_date(value: str, locale: str = "en") -> str:
         return f"{parsed.day}. {month} {parsed.year}"
     if locale == "pap":
         return f"{parsed.day} di {month} {parsed.year}"
+    if locale == "es":
+        return f"{parsed.day} de {month} de {parsed.year}"
     return f"{parsed.day} {month} {parsed.year}"
 
 
@@ -75,6 +81,8 @@ def format_curacao_datetime(value: str, locale: str = "en") -> str:
         return f"{rendered_date} pa {parsed:%H:%M} (ora di Kòrsou)"
     if locale == "de":
         return f"{rendered_date} um {parsed:%H:%M} (Curaçao-Zeit)"
+    if locale == "es":
+        return f"{rendered_date} a las {parsed:%H:%M} (hora de Curaçao)"
     return f"{rendered_date} at {parsed:%H:%M} (Curaçao time)"
 
 

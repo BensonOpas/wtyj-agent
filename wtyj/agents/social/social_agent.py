@@ -34,6 +34,7 @@ from agents.social.ali_quote_workflow import (
     get_intake_catalog as get_ali_intake_catalog,
     invalidate_active_quote_summary,
     infer_relative_rental_end_change,
+    hotel_delivery_completion_reply,
     log_rental_change_decision,
     next_intake_question as next_ali_intake_question,
     plan_repeated_quote_confirmation,
@@ -1888,18 +1889,37 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         _ali_change_configured
         and explicit_hotel_delivery_choice(text)
     )
+    _ali_fixed_location_kind = (
+        "pickup"
+        if _ali_hotel_stage
+        else (
+            "return"
+            if (
+                (
+                    new_fields.get("return_location")
+                    and not new_fields.get("pickup_location")
+                )
+                or (
+                    fields.get("pickup_location")
+                    and not fields.get("return_location")
+                )
+            )
+            else "pickup"
+        )
+    )
     try:
-        _ali_fixed_pickup_choice = (
+        _ali_fixed_location_choice = (
             resolve_fixed_pickup_option_choice(
                 text,
                 get_ali_intake_catalog(),
+                _ali_fixed_location_kind,
             )
             if _ali_change_configured and not _ali_location_request_this_turn
             else None
         )
     except Exception:
-        _ali_fixed_pickup_choice = None
-    _ali_fixed_pickup_finished_this_turn = False
+        _ali_fixed_location_choice = None
+    _ali_fixed_location_finished_this_turn = False
     _ali_repair_reply = (
         conversation_repair_reply(text, fields, flags)
         if _ali_change_configured else ""
@@ -1945,21 +1965,25 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
             or _ali_repair_reply
             or _ali_location_request_this_turn
             or _ali_hotel_choice_this_turn
-            or _ali_fixed_pickup_choice
+            or _ali_fixed_location_choice
             or _ali_hotel_stage
         )
         else result.get("ali_rental_change")
     )
-    if _ali_fixed_pickup_choice:
+    if _ali_fixed_location_choice:
         new_fields = dict(new_fields)
-        new_fields["pickup_location"] = str(
-            _ali_fixed_pickup_choice.get("name") or ""
+        _location_name = str(
+            _ali_fixed_location_choice.get("name") or ""
         ).strip()
-        new_fields["pickup_location_kind"] = "fixed"
-        new_fields["pickup_hotel_name"] = ""
-        new_fields["pickup_hotel_address"] = ""
-        flags.pop("ali_pickup_hotel_detail_stage", None)
-        _ali_fixed_pickup_finished_this_turn = True
+        if _ali_fixed_location_kind == "return":
+            new_fields["return_location"] = _location_name
+        else:
+            new_fields["pickup_location"] = _location_name
+            new_fields["pickup_location_kind"] = "fixed"
+            new_fields["pickup_hotel_name"] = ""
+            new_fields["pickup_hotel_address"] = ""
+            flags.pop("ali_pickup_hotel_detail_stage", None)
+        _ali_fixed_location_finished_this_turn = True
     elif _ali_hotel_choice_this_turn:
         new_fields = dict(new_fields)
         for _key in (
@@ -2196,7 +2220,12 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
                     _ali_change_fields,
                 )
 
-    if _ali_hotel_finished_this_turn or _ali_fixed_pickup_finished_this_turn:
+    if _ali_hotel_finished_this_turn:
+        _ali_hotel_detail_reply = (
+            next_ali_intake_question(fields)
+            or hotel_delivery_completion_reply(fields)
+        )
+    elif _ali_fixed_location_finished_this_turn:
         _ali_hotel_detail_reply = next_ali_intake_question(fields)
 
     if _ali_change_outcome == "changed":

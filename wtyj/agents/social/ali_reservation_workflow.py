@@ -118,6 +118,21 @@ _CONTROL_COPY = {
         ),
         "change_reply": "Gerne. Was mochten Sie in Ihrem Angebot andern?",
     },
+    "es": {
+        "text": "¿Cómo quieres continuar?",
+        "reserve": "Reservar Este Auto",
+        "change": "Cambiar Algo",
+        "question": "Hacer Una Pregunta",
+        "reserve_reply": (
+            "Recibí tu solicitud de reserva. Nuestro equipo revisará ahora "
+            "la disponibilidad del vehículo y te avisaré cuando termine."
+        ),
+        "reserve_reply_in_progress": (
+            "Tu solicitud de reserva ya está en curso. Continúa con el último "
+            "paso que te envié."
+        ),
+        "change_reply": "Claro. ¿Qué quieres cambiar en tu cotización?",
+    },
 }
 
 

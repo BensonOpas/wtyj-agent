@@ -96,6 +96,7 @@ def child_seat(locale="en", quantity=2):
     names = {
         "en": "Child seat", "nl": "Kinderzitje",
         "pap": "Stul pa mucha", "de": "Kindersitz",
+        "es": "Silla infantil",
     }
     return {
         "id": CHILD_SEAT_ID,
@@ -289,6 +290,7 @@ def test_nick_progress_copy_is_direct_and_quote_led_in_all_locales():
         "nl": "Bedankt, ik heb alles wat ik nodig heb. Ik maak je officiële offerte nu klaar en stuur die hier over een paar minuten.",
         "pap": "Danki, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial awor i lo manda e aki den un par di minüt.",
         "de": "Danke, ich habe alle Angaben. Ich bereite Ihr offizielles Angebot jetzt vor und sende es Ihnen hier in wenigen Minuten.",
+        "es": "Gracias, ya tengo todo lo necesario. Estoy preparando tu cotización oficial y la enviaré aquí en unos minutos.",
     }
     assert workflow.PREPARING == expected
     assert all("30" not in text for text in workflow.PREPARING.values())
@@ -344,7 +346,7 @@ def test_existing_quote_database_adds_brand_delivery_columns(monkeypatch, tmp_pa
 
 
 def test_child_seat_summary_and_no_pii_request_are_catalog_grounded_in_all_locales():
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         selected = rental(locale)
         selected["supplements"] = [child_seat(locale)]
         selected.pop("extra_ids", None)
@@ -605,7 +607,7 @@ def test_ali_client_retries_one_transient_failure_and_validates_24_hours():
 
 
 def test_pdf_is_one_page_in_all_locales_and_displays_exact_snapshot_totals(tmp_path):
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         path, digest = render_quote_pdf(
             f"quote-{locale}", locale, customer(), rental(locale), pricing(),
             output_root=str(tmp_path),
@@ -715,8 +717,9 @@ def test_pdf_itemizes_supplement_basis_unit_days_and_total_in_all_locales(tmp_pa
     expected_basis = {
         "en": "per rental day", "nl": "per huurdag",
         "pap": "pa dia di huur", "de": "pro Miettag",
+        "es": "por día de alquiler",
     }
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         selected_rental = rental(locale)
         selected_rental["supplements"] = [child_seat(locale)]
         path, _digest = render_quote_pdf(
@@ -802,7 +805,7 @@ def test_brand_card_is_localized_pii_free_and_mobile_sized(tmp_path):
     customer_name = customer()["name"]
     phone = customer()["whatsapp"]
     digests = set()
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         path, digest = render_quote_brand_card(
             f"card-{locale}", locale, pricing()["quoteReference"],
             output_root=str(tmp_path),
@@ -817,7 +820,7 @@ def test_brand_card_is_localized_pii_free_and_mobile_sized(tmp_path):
         with Image.open(path) as image:
             assert image.size == (BRAND_CARD_WIDTH, BRAND_CARD_HEIGHT)
             assert image.format == "PNG"
-    assert len(digests) == 4
+    assert len(digests) == 5
 
 
 def test_customer_brand_card_uses_signed_image_attachment(monkeypatch):

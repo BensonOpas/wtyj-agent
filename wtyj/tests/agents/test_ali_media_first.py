@@ -811,7 +811,7 @@ def test_model_luggage_question_is_repaired_into_catalog_options():
     assert "luggage" not in decision.get("reply_text", "").casefold()
 
 
-@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])
+@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de", "es"])
 def test_media_first_copy_is_localized(locale):
     decision = derive_media_first_action(
         "request_recommendation",
@@ -1143,7 +1143,7 @@ def test_specific_recommendation_never_keeps_model_personal_question():
     assert "feel right" in decision["reply_text"]
 
 
-@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de"])
+@pytest.mark.parametrize("locale", ["en", "nl", "pap", "de", "es"])
 def test_safe_invalid_plan_clarification_never_lists_cars(locale):
     reply = media_first_clarification({
         "conversation_language": locale,

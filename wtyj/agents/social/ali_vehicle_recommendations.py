@@ -17,7 +17,7 @@ import urllib.parse
 from shared import bm_logger
 
 
-SUPPORTED_LOCALES = {"en", "nl", "pap", "de"}
+SUPPORTED_LOCALES = {"en", "nl", "pap", "de", "es"}
 _MONEY = re.compile(r"(?:0|[1-9]\d*)\.\d{2}")
 _OR_SIMILAR_SUFFIX = re.compile(r"\s+or\s+similar\s*$", re.IGNORECASE)
 _PICKER_TITLE_LIMIT = 24
@@ -74,6 +74,19 @@ _CARD_LABELS = {
         "picker_section": "Autos",
         "picker_fallback": "Antworten Sie mit der Nummer Ihres gewünschten Autos:",
     },
+    "es": {
+        "seats": "asientos",
+        "luggage_one": "Maletero: aprox. 1 maleta mediana",
+        "luggage_many": "Maletero: aprox. {count} maletas medianas",
+        "bags_one": "1 maleta",
+        "bags_many": "{count} maletas",
+        "details": "Detalles Del Auto",
+        "choose_one": "Elegir Este Auto",
+        "choose_many": "Elegir Un Auto",
+        "picker_body": "Elige tu auto a continuación.",
+        "picker_section": "Autos",
+        "picker_fallback": "Responde con el número del auto que prefieres:",
+    },
 }
 _TRANSMISSIONS = {
     "automatic": {
@@ -81,12 +94,14 @@ _TRANSMISSIONS = {
         "nl": "Automaat",
         "pap": "Outomátiko",
         "de": "Automatik",
+        "es": "Automático",
     },
     "manual": {
         "en": "Manual",
         "nl": "Handgeschakeld",
         "pap": "Manual",
         "de": "Schaltung",
+        "es": "Manual",
     },
 }
 _SELECTION_PREFIX = "ali_vehicle_select:v1:"
@@ -212,7 +227,13 @@ def _catalog_vehicle(
     transmission = str(vehicle.get("transmission") or "").strip().lower()
     if transmission and transmission not in _TRANSMISSIONS:
         raise AliVehicleRecommendationError("invalid_vehicle_transmission")
-    detail_url = _absolute_https_url(f"/{locale}/fleet/{slug}", base_url)
+    # The public website currently publishes EN/NL/PAP/DE routes. Spanish
+    # WhatsApp presentation remains Spanish while its optional web details
+    # link uses the guaranteed English route instead of a broken /es URL.
+    public_site_locale = locale if locale in {"en", "nl", "pap", "de"} else "en"
+    detail_url = _absolute_https_url(
+        f"/{public_site_locale}/fleet/{slug}", base_url,
+    )
     return {
         "id": public_id,
         "name": name,

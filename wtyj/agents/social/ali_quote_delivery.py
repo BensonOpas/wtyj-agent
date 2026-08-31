@@ -37,6 +37,7 @@ MESSAGES = {
     "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Kies hieronder wat je wilt doen."),
     "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Skoh abou kiko bo ke hasi."),
     "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Wählen Sie unten aus, wie Sie fortfahren möchten."),
+    "es": ("Tu cotización oficial de Ali Car Rental está lista.", "Elige cómo quieres continuar."),
 }
 
 VALID_UNTIL = {
@@ -44,6 +45,7 @@ VALID_UNTIL = {
     "nl": "Geldig tot",
     "pap": "Válido te ku",
     "de": "Gültig bis",
+    "es": "Válida hasta",
 }
 
 _ALI_SUPPORT_EMAIL = "info@alicarrental.com"
@@ -106,6 +108,20 @@ _RESERVATION_CONFIRMATION_COPY = {
         "email_heading": "Möchten Sie auch Kopien per E-Mail?",
         "email_offer": "Wenn Sie Ihre Reservierungsunterlagen und Vereinbarungen auch per E-Mail erhalten möchten, senden Sie uns bitte die gewünschte E-Mail-Adresse.",
     },
+    "es": {
+        "confirmed": "Tu reserva con Ali Car Rental está confirmada ✅",
+        "reference": "Reserva",
+        "document": "Adjuntamos tu documento de confirmación.",
+        "next": "Qué sigue ahora",
+        "contact": "Nuestro equipo se comunicará contigo antes de la recogida para confirmar la entrega y los datos de tu llegada.",
+        "arrival": "Cuando llegues, ten preparados tu permiso de conducir original y el pasaporte o documento de identidad usado para la reserva.",
+        "changes": "Si cambian tu vuelo, hora de llegada, hotel o datos de recogida, avísanos aquí lo antes posible.",
+        "ready": "Todo está organizado. No tienes que hacer nada más por ahora.",
+        "help": "¿Necesitas ayuda?",
+        "help_text": "Responde en este chat de WhatsApp ({whatsapp}) o escribe a {email}. Con gusto te ayudamos.",
+        "email_heading": "¿También quieres copias por correo electrónico?",
+        "email_offer": "Si quieres recibir tus documentos de reserva y acuerdos por correo electrónico, responde con la dirección que quieres que usemos.",
+    },
 }
 
 SUPPLEMENT_LABELS = {
@@ -113,6 +129,7 @@ SUPPLEMENT_LABELS = {
     "nl": ("Extra's", "per huurdag", "per huur", "dagen"),
     "pap": ("Ekstranan", "pa dia di huur", "pa huur", "dia"),
     "de": ("Extras", "pro Miettag", "pro Miete", "Tage"),
+    "es": ("Extras", "por día de alquiler", "por alquiler", "días"),
 }
 
 _DOSSIER_MESSAGES = {
@@ -144,6 +161,13 @@ _DOSSIER_MESSAGES = {
         "documents_direct": "Sehr gut — Ihr Auto ist verfügbar. Ich begleite Sie Schritt für Schritt. Verwenden Sie für Ihre Reservierung einen Reisepass oder Personalausweis?",
         "documents_replacement": "Bitte senden Sie {slot} hier in WhatsApp erneut als klare JPG-, PNG- oder PDF-Datei unter 10 MB.",
     },
+    "es": {
+        "documents": "Tu auto está disponible. Te ayudaré con los últimos pasos para que nuestra oficina pueda revisar y preparar el alquiler. Carga cada documento de forma segura a continuación:\n{links}\n\nNuestro equipo revisará las copias manualmente.",
+        "contract": "Tu precontrato está listo para revisar y firmar:\n{url}\n\nNuestra oficina completará la aprobación final después de revisar todos los requisitos.",
+        "payment": "Para asegurar tu auto, paga dentro de {hours} horas el anticipo de reserva del {percent}% (USD {amount}) mediante este enlace seguro:\n{url}\n\nEl auto no queda reservado hasta que nuestro equipo verifique el pago. Si el pago no se verifica dentro de {hours} horas, la solicitud vencerá y el vehículo no se mantendrá reservado.\n\nDespués de pagar, responde ‘Pagado’ aquí para que nuestro equipo pueda verificarlo.",
+        "documents_direct": "Excelente, tu auto está disponible. Te guiaré por los pasos restantes uno a uno. ¿Usarás un pasaporte o una tarjeta de identidad para la reserva?",
+        "documents_replacement": "Vuelve a enviar {slot} aquí por WhatsApp como un JPG, PNG o PDF claro de menos de 10 MB.",
+    },
 }
 
 _DOCUMENT_SLOT_LABELS = {
@@ -151,6 +175,7 @@ _DOCUMENT_SLOT_LABELS = {
     "nl": {"license_front": "Rijbewijs — voorkant", "license_back": "Rijbewijs — achterkant", "identity": "Paspoort of identiteitskaart"},
     "pap": {"license_front": "Rijbewijs — parti dilanti", "license_back": "Rijbewijs — parti patras", "identity": "Pasport òf karta di identidat"},
     "de": {"license_front": "Führerschein — Vorderseite", "license_back": "Führerschein — Rückseite", "identity": "Reisepass oder Personalausweis"},
+    "es": {"license_front": "Permiso de conducir — frente", "license_back": "Permiso de conducir — reverso", "identity": "Pasaporte o tarjeta de identidad"},
 }
 
 
@@ -262,6 +287,7 @@ _RESERVATION_REMINDERS = {
     "nl": "Even een herinnering — je reservering staat nog in de wacht. {next}",
     "pap": "Un rekordatorio — bo reservashon ta ainda warda. {next}",
     "de": "Eine kurze Erinnerung — Ihre Reservierung wird noch vorgemerkt. {next}",
+    "es": "Un recordatorio: tu reserva sigue en espera. {next}",
 }
 
 _RESERVATION_HOLD_EXPIRED = {
@@ -269,6 +295,7 @@ _RESERVATION_HOLD_EXPIRED = {
     "nl": "Ik heb de reservering van de autocategorie voorlopig vrijgegeven. Als je later nog een auto nodig hebt, stuur me een bericht en ik controleer de beschikbaarheid opnieuw.",
     "pap": "Mi a laga e reserva di kategoria di outo liber pa awor. Si bo tin mester di un outo despues, manda mi un mensahe i mi lo kontrolá disponibilidat atrobe.",
     "de": "Ich habe die Vormerkung der Fahrzeugkategorie vorerst freigegeben. Wenn Sie später noch ein Auto benötigen, schreiben Sie mir und ich prüfe die Verfügbarkeit erneut.",
+    "es": "He liberado por ahora la retención de la categoría del auto. Si más adelante todavía necesitas un auto, escríbeme y volveré a revisar la disponibilidad.",
 }
 
 _RESERVATION_NEXT_STEPS = {
@@ -291,6 +318,11 @@ _RESERVATION_NEXT_STEPS = {
         "choose_identity_type": "Teilen Sie mir mit, ob Sie einen Reisepass oder Personalausweis verwenden.",
         "send_expected_document": "Senden Sie das angeforderte Dokument bitte hier in WhatsApp.",
         "report_payment": "Geben Sie mir hier Bescheid, sobald die Zahlung abgeschlossen ist.",
+    },
+    "es": {
+        "choose_identity_type": "Dime si usarás un pasaporte o una tarjeta de identidad.",
+        "send_expected_document": "Envía el documento solicitado aquí por WhatsApp.",
+        "report_payment": "Avísame aquí cuando hayas completado el pago.",
     },
 }
 

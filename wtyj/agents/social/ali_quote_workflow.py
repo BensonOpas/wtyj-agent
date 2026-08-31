@@ -28,7 +28,7 @@ from shared import bm_logger, config_loader, state_registry, rental_catalog
 
 TENANT_SLUG = "ali-car-rental"
 WORKFLOW_TYPE = "ali_quote"
-LOCALES = {"en", "nl", "pap", "de"}
+LOCALES = {"en", "nl", "pap", "de", "es"}
 PENDING_STATUSES = ("confirmed", "pricing", "quoted", "pdf_ready", "delivering")
 ALI_PHASES = {
     "COLLECTING", "DISCOVERY", "SUMMARY_PRESENTED",
@@ -127,22 +127,29 @@ QUOTE_CONFIRMATION_ACTIONS = {
     "nl": ("Stuur Mijn Offerte", "Iets Wijzigen"),
     "pap": ("Manda Mi Oferta", "Kambia Algu"),
     "de": ("Angebot Senden", "Etwas Ändern"),
+    "es": ("Enviar Mi Cotización", "Cambiar Algo"),
 }
 QUOTE_CHANGE_PROMPTS = {
     "en": "Of course—what would you like to change?",
     "nl": "Natuurlijk—wat wil je wijzigen?",
     "pap": "Sigur—kiko bo ke kambia?",
     "de": "Natürlich—was möchten Sie ändern?",
+    "es": "Claro. ¿Qué te gustaría cambiar?",
 }
 QUOTE_CHANGE_VALUE_PROMPTS = {
     "en": "Please send the exact new return date or other detail you want changed.",
     "nl": "Stuur de exacte nieuwe retourdatum of het andere gegeven dat je wilt wijzigen.",
     "pap": "Manda e fecha eksakto nobo di entrega òf e otro detaye ku bo ke kambia.",
     "de": "Bitte senden Sie das genaue neue Rückgabedatum oder die andere Angabe, die Sie ändern möchten.",
+    "es": "Envíame la nueva fecha exacta de devolución o el otro dato que quieres cambiar.",
 }
-QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = (
-    "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
-)
+QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION = {
+    "en": "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction.",
+    "nl": "Antwoord OFFERTE VERSTUREN om verder te gaan, of GEGEVENS WIJZIGEN om iets te corrigeren.",
+    "pap": "Kontestá MANDA OFERTA pa sigui, òf KAMBIA DETAYENAN pa koregí algu.",
+    "de": "Antworten Sie mit ANGEBOT SENDEN, um fortzufahren, oder mit ANGABEN ÄNDERN für eine Korrektur.",
+    "es": "Responde ENVIAR COTIZACIÓN para continuar o CAMBIAR DATOS para hacer una corrección.",
+}
 _QUOTE_CONFIRMATION_INTERACTIVE_TYPES = {"buttonreply", "listreply"}
 AFFIRMATIVE = {
     # English
@@ -165,6 +172,11 @@ AFFIRMATIVE = {
     "alles stimmt", "alles sieht richtig aus", "alles sieht gut aus", "das ist richtig",
     "das ist korrekt", "alles korrekt", "alles gut", "korrekt", "machen sie weiter",
     "mach weiter", "weiter", "ja bitte",
+    # Spanish
+    "sí", "si", "sí está bien", "si esta bien", "sí todo está bien",
+    "si todo esta bien", "todo está bien",
+    "todo esta bien", "es correcto", "correcto", "de acuerdo", "adelante",
+    "enviar cotización", "enviar mi cotización", "acepto",
 }
 NEGATION_OR_QUALIFICATION = {
     "no", "not", "but", "except", "almost", "maybe", "think", "probably",
@@ -172,6 +184,7 @@ NEGATION_OR_QUALIFICATION = {
     "pero", "ma", "kasi", "kisas",
     "nein", "kein", "nicht", "aber", "außer", "fast", "vielleicht", "glaube",
     "denke", "wahrscheinlich",
+    "excepto", "casi", "quizás", "quizas", "creo", "probablemente",
 }
 CORRECTION_OR_DETAIL = {
     "change", "correct", "add", "remove", "date", "dates", "pickup", "return",
@@ -184,6 +197,9 @@ CORRECTION_OR_DETAIL = {
     "maleta", "edat", "nòmber", "lokashon",
     "ändern", "korrigieren", "hinzufügen", "entfernen", "datum", "daten", "abholung",
     "rückgabe", "kindersitz", "gepäck", "alter", "name", "ort", "flughafen", "hotel",
+    "cambiar", "cambio", "corregir", "agregar", "quitar", "fecha", "fechas",
+    "recogida", "devolución", "devolucion", "silla", "equipaje", "conductor",
+    "edad", "nombre", "ubicación", "ubicacion", "aeropuerto",
 }
 _CATALOG_CACHE = {"expires_at": 0.0, "value": None, "provider": None}
 _CATALOG_CACHE_SECONDS = 60.0
@@ -197,6 +213,7 @@ _INTAKE_SAFETY_FALLBACK = {
     "nl": "Ik kon die stap niet veilig afronden. Probeer het hier over een moment opnieuw.",
     "pap": "Mi no por a kompletá e paso ei na un manera sigur. Purba atrobe aki den un momentu.",
     "de": "Ich konnte diesen Schritt nicht sicher abschließen. Bitte versuchen Sie es gleich hier erneut.",
+    "es": "No pude completar ese paso de forma segura. Inténtalo de nuevo aquí en un momento.",
 }
 _SEQUENTIAL_INTAKE_QUESTIONS = {
     "en": {
@@ -231,6 +248,14 @@ _SEQUENTIAL_INTAKE_QUESTIONS = {
         "customer_name": "Welchen vollständigen Namen soll ich in das offizielle Angebot eintragen?",
         "driver_age": "Wie alt ist der Fahrer?",
     },
+    "es": {
+        "rental_start": "¿Qué fecha deseas recoger el auto?",
+        "rental_end": "¿Qué fecha deseas devolver el auto?",
+        "pickup_location": "¿Dónde deseas recoger el auto?",
+        "return_location": "¿Dónde deseas devolver el auto?",
+        "customer_name": "¿Qué nombre completo debo poner en la cotización oficial?",
+        "driver_age": "¿Qué edad tiene el conductor?",
+    },
 }
 _COMBINED_RENTAL_DATE_QUESTION = {
     "en": re.compile(
@@ -255,6 +280,12 @@ _COMBINED_RENTAL_DATE_QUESTION = {
         r"(?:welche|wann|f[uü]r\s+welche|an\s+welchem)[^?]*(?:mietdaten|"
         r"(?:abholen|abholdatum)[^?]{0,160}(?:zur[uü]ckgeben|r[uü]ckgabe)|"
         r"startdatum[^?]{0,120}enddatum)[^?]*\?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "es": re.compile(
+        r"(?:qu[eé]|cu[aá]les|cu[aá]ndo)[^?]*(?:fechas?\s+de\s+alquiler|"
+        r"(?:recoger|recogida)[^?]{0,160}(?:devolver|devoluci[oó]n)|"
+        r"fecha\s+de\s+inicio[^?]{0,120}fecha\s+de\s+fin)[^?]*\?",
         re.IGNORECASE | re.DOTALL,
     ),
 }
@@ -446,6 +477,8 @@ def confirmation_decision(text: str) -> tuple[bool, str]:
             if "?" in raw or remainder.split(maxsplit=1)[0] in {
                 "how", "what", "when", "where", "which", "who", "why",
                 "can", "could", "do", "does", "is", "are", "will", "would",
+                "cómo", "como", "qué", "que", "cuándo", "cuando", "dónde",
+                "donde", "cuál", "cual", "puede", "podría", "podria",
             }:
                 return True, "affirmative_with_question"
     if "?" in raw:
@@ -589,7 +622,8 @@ def build_quote_confirmation_control(
         "button": buttons[0],
         "buttons": buttons,
         "fallback_text": (
-            f"{plan.text.rstrip()}\n\n{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION}"
+            f"{plan.text.rstrip()}\n\n"
+            f"{QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION[locale]}"
         ),
         "summary_hash": plan.summary_hash,
         "summary_version": plan.summary_version,
@@ -2130,12 +2164,22 @@ def next_intake_question(fields: dict) -> str:
             "nl": "Welke auto wil je kiezen?",
             "pap": "Kua outo bo ke skohe?",
             "de": "Welches Auto möchten Sie wählen?",
+            "es": "¿Qué auto quieres elegir?",
         }[locale]
+    return ""
+
+
+def hotel_delivery_completion_reply(fields: dict) -> str:
+    """Confirm only an actually completed hotel-delivery detail sequence."""
+    locale = str((fields or {}).get("conversation_language") or "en").lower()
+    if locale not in LOCALES:
+        locale = "en"
     return {
         "en": "Thank you. I’ve saved the hotel delivery details.",
         "nl": "Dank je. Ik heb de gegevens voor hotelbezorging opgeslagen.",
         "pap": "Danki. Mi a warda e detayanan pa entrega na hotel.",
         "de": "Danke. Ich habe die Angaben zur Hotelzustellung gespeichert.",
+        "es": "Gracias. Guardé los datos de entrega en el hotel.",
     }[locale]
 
 
@@ -2227,6 +2271,10 @@ _RELATIVE_RENTAL_EXTENSION_PATTERNS = {
         r"\b(?P<days>\d{1,3})\s+(?:weitere|zusätzliche|zusaetzliche|extra)\s+tage?\b",
         r"\b(?P<days>\d{1,3})\s+tage?\s+(?:mehr|länger|laenger)\b",
     ),
+    "es": (
+        r"\b(?P<days>\d{1,3})\s+d[ií]as?\s+(?:extra|adicionales?|m[aá]s)\b",
+        r"\b(?P<days>\d{1,3})\s+(?:extra|adicionales?|m[aá]s)\s+d[ií]as?\b",
+    ),
 }
 
 _RELATIVE_RENTAL_EXTENSION_UNCERTAIN = {
@@ -2234,6 +2282,7 @@ _RELATIVE_RENTAL_EXTENSION_UNCERTAIN = {
     "nl": r"\b(?:misschien|mogelijk|kunnen|zou)\b",
     "pap": r"\b(?:kisas|por|lo por)\b",
     "de": r"\b(?:vielleicht|eventuell|können|koennen|würden|wuerden)\b",
+    "es": r"\b(?:quiz[aá]s|tal vez|posiblemente|podr[ií]a|puede)\b",
 }
 
 
@@ -2728,6 +2777,7 @@ SUMMARY_LABELS = {
     "nl": ("Ik heb deze gegevens van je:", "Naam", "WhatsApp", "Huurperiode", "Ophalen", "Terugbrengen", "Auto", "Klopt alles? Kies hieronder een optie."),
     "pap": ("Mi tin e detayanan aki di bo:", "Nòmber", "WhatsApp", "Periodo di huur", "Busca", "Devolvé", "Outo", "Tur kos ta bon? Skohe un opshon aki bou."),
     "de": ("Ich habe diese Angaben von Ihnen:", "Name", "WhatsApp", "Mietzeitraum", "Abholung", "Rückgabe", "Fahrzeug", "Stimmt alles? Wählen Sie unten eine Option."),
+    "es": ("Tengo estos datos:", "Nombre", "WhatsApp", "Período de alquiler", "Recogida", "Devolución", "Auto", "¿Está todo correcto? Elige una opción a continuación."),
 }
 
 SUPPLEMENT_LABELS = {
@@ -2735,6 +2785,7 @@ SUPPLEMENT_LABELS = {
     "nl": {"heading": "Extra's", "per_day": "per huurdag", "per_rental": "per huur", "days": "dagen"},
     "pap": {"heading": "Ekstranan", "per_day": "pa dia di huur", "per_rental": "pa huur", "days": "dia"},
     "de": {"heading": "Extras", "per_day": "pro Miettag", "per_rental": "pro Miete", "days": "Tage"},
+    "es": {"heading": "Extras", "per_day": "por día de alquiler", "per_rental": "por alquiler", "days": "días"},
 }
 
 SUMMARY_DETAIL_LABELS = {
@@ -2742,6 +2793,7 @@ SUMMARY_DETAIL_LABELS = {
     "nl": {"driver_age": "Leeftijd bestuurder", "passengers": "Passagiers", "luggage": "Bagage", "comments": "Speciale verzoeken"},
     "pap": {"driver_age": "Edat di chauffeur", "passengers": "Pasaheronan", "luggage": "Maleta", "comments": "Petishonnan spesial"},
     "de": {"driver_age": "Alter des Fahrers", "passengers": "Passagiere", "luggage": "Gepäck", "comments": "Besondere Wünsche"},
+    "es": {"driver_age": "Edad del conductor", "passengers": "Pasajeros", "luggage": "Equipaje", "comments": "Solicitudes especiales"},
 }
 
 PREPARING = {
@@ -2749,6 +2801,7 @@ PREPARING = {
     "nl": "Bedankt, ik heb alles wat ik nodig heb. Ik maak je officiële offerte nu klaar en stuur die hier over een paar minuten.",
     "pap": "Danki, mi tin tur loke mi mester. Mi ta prepara bo oferta ofisial awor i lo manda e aki den un par di minüt.",
     "de": "Danke, ich habe alle Angaben. Ich bereite Ihr offizielles Angebot jetzt vor und sende es Ihnen hier in wenigen Minuten.",
+    "es": "Gracias, ya tengo todo lo necesario. Estoy preparando tu cotización oficial y la enviaré aquí en unos minutos.",
 }
 
 QUOTE_ALREADY_PROCESSING = {
@@ -2756,6 +2809,7 @@ QUOTE_ALREADY_PROCESSING = {
     "nl": "Je officiële offerte wordt al klaargemaakt. Ik stuur die hier over een paar minuten.",
     "pap": "Bo oferta ofisial ta den preparashon kaba. Mi lo manda e aki den un par di minüt.",
     "de": "Ihr offizielles Angebot wird bereits vorbereitet. Ich sende es Ihnen hier in wenigen Minuten.",
+    "es": "Tu cotización oficial ya se está preparando. La enviaré aquí en unos minutos.",
 }
 
 QUOTE_ALREADY_SENT = {
@@ -2763,6 +2817,7 @@ QUOTE_ALREADY_SENT = {
     "nl": "Je officiële offerte is hierboven al verstuurd. Laat me hier weten als je die wilt accepteren of iets wilt wijzigen.",
     "pap": "Bo oferta ofisial a wordu mandá ariba kaba. Bisa mi aki si bo ke asept'é òf kambia algu.",
     "de": "Ihr offizielles Angebot wurde oben bereits gesendet. Schreiben Sie mir hier, wenn Sie es annehmen oder etwas ändern möchten.",
+    "es": "Tu cotización oficial ya fue enviada arriba. Dime aquí si quieres aceptarla o cambiar algo.",
 }
 
 QUOTE_ACCEPTED = {
@@ -2770,6 +2825,7 @@ QUOTE_ACCEPTED = {
     "nl": "Bedankt—ik heb genoteerd dat je de officiële offerte accepteert. Ons team helpt je hier verder.",
     "pap": "Danki—mi a registrá ku bo ta aseptá e oferta ofisial. Nos tim lo sigui ku bo aki.",
     "de": "Danke—ich habe vermerkt, dass Sie das offizielle Angebot annehmen. Unser Team hilft Ihnen hier weiter.",
+    "es": "Gracias. He registrado que aceptas la cotización oficial. Nuestro equipo continuará contigo por aquí.",
 }
 
 FALLBACK = {
@@ -2777,6 +2833,7 @@ FALLBACK = {
     "nl": "Ik heb je bevestigde aanvraag aan ons team doorgegeven. Zij ronden je offerte af en helpen je hier verder via WhatsApp.",
     "pap": "Mi a pasa bo petishon konfirmá pa nos tim. Nan lo kaba ku bo oferta i sigui ku bo aki via WhatsApp.",
     "de": "Ich habe Ihre bestätigte Anfrage an unser Team weitergegeben. Es erstellt Ihr Angebot und meldet sich hier in WhatsApp.",
+    "es": "Pasé tu solicitud confirmada a nuestro equipo para que termine la cotización. Continuarán contigo aquí por WhatsApp.",
 }
 
 

@@ -56,9 +56,9 @@ def test_all_required_localized_glyphs_have_real_font_masks():
             assert bytes(mask) != replacement
 
 
-def test_four_locale_cards_use_pdf_width_geometry_and_byte_limit(tmp_path):
+def test_all_locale_cards_use_pdf_width_geometry_and_byte_limit(tmp_path):
     outputs = []
-    for locale in ("en", "nl", "pap", "de"):
+    for locale in ("en", "nl", "pap", "de", "es"):
         path, digest = card.render_quote_brand_card(
             f"font-{locale}", locale, "ALI-20260826-UNICODE",
             output_root=str(tmp_path),
@@ -70,7 +70,7 @@ def test_four_locale_cards_use_pdf_width_geometry_and_byte_limit(tmp_path):
             assert image.size == (880, 675)
             assert image.format == "PNG"
         outputs.append(path)
-    assert len(outputs) == 4
+    assert len(outputs) == 5
 
 
 def test_narrow_layout_preserves_logo_proportions_and_safe_bounds():
@@ -175,4 +175,5 @@ def test_customer_copy_and_narrow_layout_constants_are_preserved():
         "nl": "OFFICIËLE OFFERTE",
         "pap": "OFERTA OFISIAL",
         "de": "OFFIZIELLES ANGEBOT",
+        "es": "COTIZACIÓN OFICIAL",
     }

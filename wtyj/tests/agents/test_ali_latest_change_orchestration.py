@@ -2488,6 +2488,75 @@ def test_hotel_delivery_collects_name_then_partial_address_one_at_a_time(
     assert "ali_pickup_hotel_detail_stage" not in after_address["flags"]
 
 
+def test_airport_pickup_then_airport_return_never_emits_hotel_delivery_copy(
+    monkeypatch, tmp_path,
+):
+    phone = "synthetic-airport-pickup-and-return"
+    fields = _stored_fields("es")
+    fields.pop("pickup_location")
+    fields.pop("return_location")
+    pickup_result = {
+        "intents": ["inquiry"],
+        "fields": {"pickup_location": "Airport"},
+        "confidence": "high",
+        "reply": "Gracias. ¿Dónde deseas devolver el auto?",
+        "requires_human": False,
+        "flags": {},
+        "ali_primary_intent": "continue_intake",
+    }
+    _configure(monkeypatch, tmp_path, pickup_result)
+    location_catalog = pickup_catalog()
+    location_catalog["returnLocations"] = [{
+        "id": "airport-return",
+        "name": "Airport",
+        "kind": "fixed",
+        "active": True,
+        "displayOrder": 10,
+    }]
+    monkeypatch.setattr(
+        social_agent, "get_ali_intake_catalog", lambda: location_catalog,
+    )
+    monkeypatch.setattr(
+        workflow, "get_intake_catalog", lambda: location_catalog,
+    )
+    state_registry.wa_save_booking_state(phone, fields, {})
+
+    pickup = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Airport",
+        "from_name": "Federico Barcio",
+    }, include_media=True)
+    after_pickup = state_registry.wa_get_booking_state(phone)
+
+    assert after_pickup["fields"]["pickup_location"] == "Airport"
+    assert "devolver el auto" in pickup["text"]
+    assert "hotel" not in pickup["text"].lower()
+
+    return_result = {
+        **pickup_result,
+        "fields": {"return_location": "Airport"},
+        "reply": "Perfecto. Guardé el aeropuerto para la devolución.",
+    }
+    monkeypatch.setattr(
+        social_agent.marina_agent,
+        "process_message",
+        lambda **_kwargs: return_result,
+    )
+    returned = social_agent.handle_incoming_whatsapp_message({
+        "from": phone,
+        "text": "Airport",
+        "from_name": "Federico Barcio",
+    }, include_media=True)
+    after_return = state_registry.wa_get_booking_state(phone)
+
+    assert after_return["fields"]["pickup_location"] == "Airport"
+    assert after_return["fields"]["return_location"] == "Airport"
+    assert after_return["fields"]["pickup_location_kind"] == "fixed"
+    assert "ali_pickup_hotel_detail_stage" not in after_return["flags"]
+    assert "hotel delivery" not in returned["text"].lower()
+    assert "entrega en el hotel" not in returned["text"].lower()
+
+
 def test_confirmed_reservation_email_uses_model_reply_without_quote_rewrite(
     monkeypatch, tmp_path,
 ):
