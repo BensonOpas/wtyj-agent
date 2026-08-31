@@ -1463,7 +1463,7 @@ def inbound_processing_claim_recoverable(
         )
         rows = conn.execute(
             "SELECT message_id, conversation_id, channel, payload_json, "
-            "created_at, heartbeat_sent_at, attempt_count "
+            "created_at, heartbeat_sent_at, attempt_count, reason, last_error "
             "FROM inbound_processing_events AS inbound "
             "WHERE status IN ('received', 'processing', 'recovering') "
             "AND ((status IN ('received', 'processing') AND created_at < ?) "
@@ -1498,6 +1498,8 @@ def inbound_processing_claim_recoverable(
             "channel": row[2], "payload": payload, "created_at": row[4],
             "heartbeat_sent_at": row[5],
             "attempt_count": int(row[6] or 0) + 1,
+            "recovery_reason": str(row[7] or ""),
+            "recovery_error": str(row[8] or ""),
         })
     return result
 

@@ -252,7 +252,119 @@ def test_provider_failure_never_makes_summary_confirmable(mock_send):
         assert "ali_presented_summary_hash" not in state["flags"]
         assert "awaiting_quote_confirmation" not in state["flags"]
         assert [item["role"] for item in history] == ["user"]
-        assert _ledger(msg_id)[0] == "send_failed"
+        assert _ledger(msg_id)[:2] == (
+            "recovering", "provider_send_retry",
+        )
+    finally:
+        _cleanup(prefix)
+
+
+def test_provider_failed_ali_summary_recovers_and_commits_once():
+    prefix = "p0rel_ali_retry_ok"
+    conv = f"{prefix}_conv"
+    msg_id = f"{prefix}_msg"
+    payload = {
+        "conversation_id": conv,
+        "platform": "whatsapp",
+        "channel": "whatsapp",
+        "sender_name": "Synthetic Customer",
+        "sender_id": "synthetic-sender",
+        "text": "complete details",
+        "message_id": msg_id,
+        "account_id": "acct123",
+        "interactive_type": "",
+        "interactive_id": "",
+    }
+    _cleanup(prefix)
+    state_registry.wa_save_booking_state(conv, {}, {"ali_phase": "DISCOVERY"})
+    try:
+        state_registry.inbound_processing_record(
+            msg_id,
+            conv,
+            "whatsapp",
+            status="recovering",
+            reason="provider_send_retry",
+            payload=payload,
+        )
+        _stale(msg_id)
+        with patch(
+            "agents.social.webhook_server.handle_incoming_whatsapp_message",
+            return_value={
+                "text": "Synthetic recovered summary",
+                "media": None,
+                "vehicle_recommendation": None,
+                "ali_turn_commit": _summary_commit("e" * 64),
+            },
+        ), patch(
+            "agents.social.webhook_server.send_reply",
+            side_effect=[True, True],
+        ) as mock_send:
+            assert _recover_stale_ali_inbound_once(max_age_seconds=40) == 1
+
+        state = state_registry.wa_get_booking_state(conv)
+        history = state_registry.wa_get_full_history(conv, limit=10)
+        assert state["flags"]["ali_presented_summary_hash"] == "b" * 64
+        assert state["flags"]["awaiting_quote_confirmation"] is True
+        assert [item["role"] for item in history] == ["user", "assistant"]
+        assert _ledger(msg_id)[0] == "replied"
+        assert mock_send.call_count == 2
+    finally:
+        _cleanup(prefix)
+
+
+def test_provider_failed_ali_summary_retries_are_bounded_and_technical():
+    prefix = "p0rel_ali_retry_exhausted"
+    conv = f"{prefix}_conv"
+    msg_id = f"{prefix}_msg"
+    payload = {
+        "conversation_id": conv,
+        "platform": "whatsapp",
+        "channel": "whatsapp",
+        "sender_name": "Synthetic Customer",
+        "sender_id": "synthetic-sender",
+        "text": "complete details",
+        "message_id": msg_id,
+        "account_id": "acct123",
+    }
+    _cleanup(prefix)
+    try:
+        state_registry.inbound_processing_record(
+            msg_id,
+            conv,
+            "whatsapp",
+            status="recovering",
+            reason="provider_send_retry",
+            error="quote_confirmation",
+            payload=payload,
+        )
+        conn = state_registry._get_conn()
+        conn.execute(
+            "UPDATE inbound_processing_events SET attempt_count = 3 "
+            "WHERE message_id = ?",
+            (msg_id,),
+        )
+        conn.commit()
+        conn.close()
+        _stale(msg_id)
+
+        with patch("agents.social.webhook_server.send_reply") as mock_send:
+            assert _recover_stale_ali_inbound_once(max_age_seconds=40) == 0
+
+        assert mock_send.call_count == 0
+        assert _ledger(msg_id)[:2] == (
+            "send_failed", "provider_send_failed",
+        )
+        conn = state_registry._get_conn()
+        notification = conn.execute(
+            "SELECT notification_type, subject FROM pending_notifications "
+            "WHERE customer_id = ?",
+            (conv,),
+        ).fetchone()
+        conn.close()
+        assert notification[0] == "technical"
+        assert notification[1].startswith(
+            "[ALI QUOTE CONFIRMATION DELIVERY FAILED]"
+        )
     finally:
         _cleanup(prefix)
 

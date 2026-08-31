@@ -231,6 +231,10 @@ def test_ali_high_engagement_contract_covers_both_owner_examples(monkeypatch):
         "overrides the general instruction to answer a published price directly",
         "more than one driver age",
         "preserve every additional driver's age in `comments`",
+        "`request_quote_status` when the customer asks where the quote is",
+        "QUOTE-STATUS TRUTH is mandatory",
+        "unless the injected persisted workflow flags contain an active quote id",
+        "Never invent progress to reassure the customer",
     )
     for rule in required_contract:
         assert rule in prompt

@@ -36,7 +36,8 @@ ALI_PHASES = {
 }
 ALI_PRIMARY_INTENTS = {
     "continue_intake", "ask_question", "reject_or_hesitate",
-    "request_recommendation", "repeat_summary", "confirm_summary", "other",
+    "request_recommendation", "repeat_summary", "confirm_summary",
+    "request_quote_status", "other",
 }
 ALI_OUTBOUND_KINDS = {
     "agent_reply", "vehicle_recommendation", "summary",
@@ -2967,6 +2968,31 @@ def _legacy_or_explicit_phase(flags: dict, current_summary_hash: str) -> str:
     return "DISCOVERY"
 
 
+def _current_summary_delivery_anchored(
+    flags: dict,
+    summary_hash: str,
+    summary_version: int,
+) -> bool:
+    anchor = flags.get("ali_summary_anchor")
+    anchor = anchor if isinstance(anchor, dict) else {}
+    return bool(
+        flags.get("awaiting_quote_confirmation") is True
+        and hmac.compare_digest(
+            str(anchor.get("summary_hash") or ""), summary_hash,
+        )
+        and int(anchor.get("summary_version") or 0) == summary_version
+        and anchor.get("delivery") in {
+            "interactive", "text_fallback", "plain_text",
+        }
+        and (
+            anchor.get("delivery") == "plain_text"
+            or str(anchor.get("interaction_payload") or "").startswith(
+                QUOTE_CONFIRMATION_PREFIX
+            )
+        )
+    )
+
+
 def _log_turn_plan(plan: AliTurnPlan, changed_fields: tuple[str, ...]) -> None:
     bm_logger.log(
         "ali_turn_planned",
@@ -3223,6 +3249,51 @@ def plan_ali_quote_turn(
         _log_turn_plan(plan, changed_fields)
         return plan
 
+    if intent == "request_quote_status":
+        locale = rental["conversation_language"]
+        persisted_quote = get_quote(active_quote_id) if active_quote_id else None
+        if active_quote_id and persisted_quote is None:
+            flags.pop("ali_active_quote_public_id", None)
+            flags.pop("ali_quote_public_id", None)
+            active_quote_id = ""
+        if phase == "ESCALATED":
+            plan = AliTurnPlan(
+                "agent_reply", model_reply, "ESCALATED", intent,
+                "quote_status_requires_staff", action_id, state_hash,
+                quote_public_id=active_quote_id,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        if active_quote_id and persisted_quote:
+            quoted = (
+                phase == "QUOTED"
+                or persisted_quote.get("whatsapp_status") == "accepted"
+            )
+            plan = AliTurnPlan(
+                "agent_reply" if quoted else "quote_preparing",
+                (
+                    QUOTE_ALREADY_SENT[locale]
+                    if quoted
+                    else QUOTE_ALREADY_PROCESSING[locale]
+                ),
+                "QUOTED" if quoted else "QUOTE_PROCESSING",
+                intent,
+                "quote_already_delivered" if quoted else "quote_already_processing",
+                action_id,
+                state_hash,
+                quote_public_id=active_quote_id,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+        if phase not in {"QUOTED", "ESCALATED"}:
+            plan = AliTurnPlan(
+                "summary", _summary_text(summary), "SUMMARY_PRESENTED", intent,
+                "quote_status_requires_confirmation", action_id, state_hash,
+                summary_hash, summary_version,
+            )
+            _log_turn_plan(plan, changed_fields)
+            return plan
+
     if intent == "request_recommendation":
         plan = AliTurnPlan(
             "vehicle_recommendation", model_reply, "DISCOVERY", intent,
@@ -3276,23 +3347,10 @@ def plan_ali_quote_turn(
             or flags.get("ali_summary_hash")
             or ""
         )
-        anchor = flags.get("ali_summary_anchor")
-        anchor = anchor if isinstance(anchor, dict) else {}
-        delivery_anchored = bool(
-            flags.get("awaiting_quote_confirmation") is True
-            and hmac.compare_digest(
-                str(anchor.get("summary_hash") or ""), summary_hash,
-            )
-            and int(anchor.get("summary_version") or 0) == summary_version
-            and anchor.get("delivery") in {
-                "interactive", "text_fallback", "plain_text",
-            }
-            and (
-                anchor.get("delivery") == "plain_text"
-                or str(anchor.get("interaction_payload") or "").startswith(
-                    QUOTE_CONFIRMATION_PREFIX
-                )
-            )
+        delivery_anchored = _current_summary_delivery_anchored(
+            flags,
+            summary_hash,
+            summary_version,
         )
         eligible = (
             accepted
@@ -3386,6 +3444,23 @@ def plan_ali_quote_turn(
             "summary", _summary_text(summary), "SUMMARY_PRESENTED",
             intent, "initial_or_corrected_complete_draft", action_id,
             state_hash, summary_hash, summary_version,
+        )
+        _log_turn_plan(plan, changed_fields)
+        return plan
+
+    if (
+        not active_quote_id
+        and phase not in {"QUOTED", "ESCALATED"}
+        and not _current_summary_delivery_anchored(
+            flags,
+            summary_hash,
+            summary_version,
+        )
+    ):
+        plan = AliTurnPlan(
+            "summary", _summary_text(summary), "SUMMARY_PRESENTED", intent,
+            "current_summary_not_delivered", action_id, state_hash,
+            summary_hash, summary_version,
         )
         _log_turn_plan(plan, changed_fields)
         return plan

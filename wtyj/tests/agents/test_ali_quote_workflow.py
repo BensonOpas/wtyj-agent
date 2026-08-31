@@ -32,6 +32,22 @@ DEPOSIT_ID = "90000000-0000-4000-8000-000000000001"
 CHILD_SEAT_ID = "c5b7e180-5eaa-4f5d-8a41-180000000001"
 
 
+def intake_catalog():
+    return {
+        "catalogVersion": 1,
+        "currency": "USD",
+        "availabilityMode": "request_only",
+        "vehicleClasses": [{
+            "id": CLASS_ID,
+            "name": "Small car",
+            "description": "Synthetic small-car category",
+        }],
+        "vehicles": [],
+        "extras": [],
+        "charges": [],
+    }
+
+
 def raw_config(automation=True):
     return {
         "slug": "ali-car-rental",
@@ -157,6 +173,110 @@ def test_workflow_is_strictly_ali_tenant_scoped_and_master_switched():
     wrong = raw_config()
     wrong["slug"] = "other-tenant"
     assert not workflow.tenant_enabled(wrong)
+
+
+def test_complete_unanchored_summary_is_represented_instead_of_abandoned(
+    monkeypatch,
+    tmp_path,
+):
+    configure_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(workflow, "get_intake_catalog", intake_catalog)
+    fields = {**rental(), "customer_name": "Synthetic Customer"}
+    flags = {}
+
+    initial = workflow.plan_ali_quote_turn(
+        "synthetic-unanchored",
+        "synthetic-account",
+        "+59990000000",
+        "complete details",
+        fields,
+        flags,
+        "I am preparing it.",
+        raw_config=raw_config(),
+        primary_intent="continue_intake",
+        supplied_action_id="1" * 64,
+    )
+    assert initial.outbound_kind == "summary"
+
+    retry = workflow.plan_ali_quote_turn(
+        "synthetic-unanchored",
+        "synthetic-account",
+        "+59990000000",
+        "I am still waiting",
+        fields,
+        flags,
+        "Your quote is in process.",
+        raw_config=raw_config(),
+        primary_intent="other",
+        supplied_action_id="2" * 64,
+    )
+
+    assert retry.outbound_kind == "summary"
+    assert retry.phase == "SUMMARY_PRESENTED"
+    assert retry.reason_code == "current_summary_not_delivered"
+    assert "in process" not in retry.text.lower()
+
+
+def test_quote_status_intent_uses_only_persisted_quote_state(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(workflow, "get_intake_catalog", intake_catalog)
+    fields = {**rental(), "customer_name": "Synthetic Customer"}
+    flags = {}
+    workflow.plan_ali_quote_turn(
+        "synthetic-status",
+        "synthetic-account",
+        "+59990000000",
+        "complete details",
+        fields,
+        flags,
+        "Thanks.",
+        raw_config=raw_config(),
+        primary_intent="continue_intake",
+        supplied_action_id="3" * 64,
+    )
+
+    no_quote = workflow.plan_ali_quote_turn(
+        "synthetic-status",
+        "synthetic-account",
+        "+59990000000",
+        "Estoy esperando la oferta",
+        fields,
+        flags,
+        "La oferta está en proceso.",
+        raw_config=raw_config(),
+        primary_intent="request_quote_status",
+        supplied_action_id="4" * 64,
+    )
+    assert no_quote.outbound_kind == "summary"
+    assert no_quote.reason_code == "quote_status_requires_confirmation"
+
+    monkeypatch.setattr(
+        workflow,
+        "get_quote",
+        lambda public_id: (
+            {"public_id": public_id, "whatsapp_status": "pending"}
+            if public_id == "ALI-SYNTHETIC-QUOTE"
+            else None
+        ),
+    )
+    flags["ali_phase"] = "QUOTE_PROCESSING"
+    flags["ali_active_quote_public_id"] = "ALI-SYNTHETIC-QUOTE"
+    active_quote = workflow.plan_ali_quote_turn(
+        "synthetic-status",
+        "synthetic-account",
+        "+59990000000",
+        "Estoy esperando la oferta",
+        fields,
+        flags,
+        "No persisted status should be replaced by this text.",
+        raw_config=raw_config(),
+        primary_intent="request_quote_status",
+        supplied_action_id="5" * 64,
+    )
+    assert active_quote.outbound_kind == "quote_preparing"
+    assert active_quote.phase == "QUOTE_PROCESSING"
+    assert active_quote.quote_public_id == "ALI-SYNTHETIC-QUOTE"
+    assert active_quote.text == workflow.QUOTE_ALREADY_PROCESSING["en"]
     wrong = raw_config()
     wrong["workflow"]["type"] = "booking"
     assert not workflow.tenant_enabled(wrong)

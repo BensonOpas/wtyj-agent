@@ -330,6 +330,7 @@ MARINA_TOOL = {
                     "request_recommendation",
                     "repeat_summary",
                     "confirm_summary",
+                    "request_quote_status",
                     "other",
                 ],
                 "description": (
@@ -1128,8 +1129,10 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   or price question, `reject_or_hesitate` for rejection/uncertainty/alternative exploration,
   `request_recommendation` for images or vehicle options, `repeat_summary` only for an
   explicit summary resend, `confirm_summary` only for a clear confirmation of the latest
-  displayed summary, `continue_intake` while supplying or collecting rental facts, and
-  `other` only when none applies. Keep `ali_rental_change` independent for combined turns.
+  displayed summary, `request_quote_status` when the customer asks where the quote is, says
+  they are waiting for it, or asks whether it has been sent, `continue_intake` while supplying
+  or collecting rental facts, and `other` only when none applies. Keep `ali_rental_change`
+  independent for combined turns.
 - When the newest message corrects a displayed summary or an already quoted rental, populate
   `ali_rental_change`. Use mode `apply` and list only the facts explicitly replaced in that
   newest message. Map a vehicle or category correction to `vehicle_selection`, set
@@ -1216,6 +1219,11 @@ Current published catalog, supplied digitally by Ali and containing no customer 
   5. Do not announce the quote process in every message. Use a brief progress cue near the
      start, when the customer asks why details are needed, when moving from vehicle discovery
      to personal details, or when only one or two required quote facts remain.
+  6. QUOTE-STATUS TRUTH is mandatory. Never say an official quote is being prepared, processed,
+     generated, or on its way unless the injected persisted workflow flags contain an active
+     quote id. When the customer is waiting but no active quote exists, set
+     `ali_primary_intent` to `request_quote_status`; Python will re-present the required current
+     summary and Send My Quote action. Never invent progress to reassure the customer.
 - DISCOVERY BEFORE PERSONAL DETAILS is mandatory:
   1. Delivery code prepends the single localized Ali/Nick welcome on the first reply. Do not
      greet the customer, introduce Nick, repeat the business name, or add another welcome.
