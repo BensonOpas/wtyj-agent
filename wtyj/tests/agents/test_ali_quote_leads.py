@@ -379,12 +379,11 @@ def test_operations_contract_maps_v2_staff_gates_without_copy_parsing(
     assert projection["workflowRevision"] == 9
 
 
-def test_archived_blocked_and_closed_conversations_are_excluded(quote_leads):
+def test_archived_deleted_and_blocked_conversations_are_excluded(quote_leads):
     for suffix, status, deleted, blocked in (
         ("1", "pending", 1, 0),
         ("2", "pending", 0, 1),
         ("3", "archived", 0, 0),
-        ("4", "closed", 0, 0),
     ):
         conversation_id = f"19100000000000000000004{suffix}"
         _state(conversation_id, REQUIRED)
@@ -405,6 +404,23 @@ def test_archived_blocked_and_closed_conversations_are_excluded(quote_leads):
         conn.close()
 
     assert workflow.list_quote_leads() == []
+
+
+def test_closed_conversation_status_keeps_rental_file_visible(quote_leads):
+    conversation_id = "191000000000000000000044"
+    _state(conversation_id, REQUIRED)
+    conn = state_registry._get_conn()
+    conn.execute(
+        "INSERT INTO conversation_status "
+        "(conversation_id, channel, status, updated_at, deleted, blocked) "
+        "VALUES (?, 'whatsapp', 'closed', ?, 0, 0)",
+        (conversation_id, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    rows = workflow.list_quote_leads()
+    assert [lead["conversation_id"] for lead in rows] == [conversation_id]
 
 
 def test_resolving_staff_escalation_keeps_customer_visible(quote_leads):

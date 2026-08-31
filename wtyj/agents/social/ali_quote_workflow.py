@@ -1646,6 +1646,9 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
     ensure_schema()
     conn = _connection()
     try:
+        # Rental-file membership follows booking state. Generic conversation
+        # statuses such as resolved/closed only describe inbox work and must
+        # never remove a customer from the rental lifecycle.
         state_rows = conn.execute(
             "SELECT w.phone, w.fields_json, w.flags_json, w.last_activity, "
             "w.created_at, COALESCE(cs.status, 'pending'), "
@@ -1666,7 +1669,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             "LEFT JOIN conversation_status cs ON cs.conversation_id = w.phone "
             "WHERE COALESCE(cs.deleted, 0) = 0 "
             "AND COALESCE(cs.blocked, 0) = 0 "
-            "AND COALESCE(cs.status, 'pending') NOT IN ('closed', 'archived') "
+            "AND COALESCE(cs.status, 'pending') != 'archived' "
             "ORDER BY w.last_activity DESC LIMIT ?",
             (max(1, min(int(limit), 500)),),
         ).fetchall()
