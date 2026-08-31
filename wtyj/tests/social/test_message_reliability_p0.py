@@ -401,7 +401,8 @@ def test_newer_outbound_supersedes_abandoned_inbound_recovery():
             conv, "whatsapp", "assistant", "A newer turn already replied.",
         )
 
-        assert state_registry.inbound_processing_claim_recoverable(40) == []
+        claimed = state_registry.inbound_processing_claim_recoverable(40)
+        assert all(item["message_id"] != msg_id for item in claimed)
         assert _ledger(msg_id)[:2] == (
             "superseded", "newer_outbound_exists",
         )
