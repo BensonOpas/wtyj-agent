@@ -1368,11 +1368,17 @@ def _quote_lead_missing_fields(fields: dict) -> list[str]:
     return missing
 
 
-def _masked_whatsapp_identifier(value: object) -> str:
-    digits = re.sub(r"\D", "", str(value or ""))
+def _provider_whatsapp_number(value: object) -> str:
+    """Return one provider-confirmed WhatsApp number in E.164 display form."""
+    phone = str(value or "").strip()
+    if phone.lower().startswith("whatsapp:"):
+        phone = phone.split(":", 1)[1].strip()
+    if not re.fullmatch(r"\+?[0-9\s().-]+", phone):
+        return ""
+    digits = re.sub(r"[^0-9]", "", phone)
     if 9 <= len(digits) <= 15:
-        return f"WhatsApp ••••{digits[-4:]}"
-    return "WhatsApp conversation"
+        return f"+{digits}"
+    return ""
 
 
 def hydrate_quote_lead_contact_identities(
@@ -1382,17 +1388,16 @@ def hydrate_quote_lead_contact_identities(
 
     Zernio conversation ids are routing keys, not customer phone numbers.  The
     caller supplies contacts resolved through the tenant-guarded provider
-    lookup; unresolved or malformed values deliberately keep the fail-closed
-    generic label.
+    lookup. The authenticated rental workspace needs the real contact number
+    for customer service, while unresolved or malformed values deliberately
+    keep the fail-closed generic label.
     """
     for item in items:
         conversation_id = str(item.get("conversation_id") or "").strip()
         contact = contacts.get(conversation_id) or {}
-        phone = str(contact.get("phone") or "").strip()
-        if phone.lower().startswith("whatsapp:"):
-            phone = phone.split(":", 1)[1].strip()
-        item["phone_raw"] = _masked_whatsapp_identifier(phone)
-        item["phone_normalized"] = ""
+        phone = _provider_whatsapp_number(contact.get("phone"))
+        item["phone_raw"] = phone or "WhatsApp conversation"
+        item["phone_normalized"] = phone
     return items
 
 

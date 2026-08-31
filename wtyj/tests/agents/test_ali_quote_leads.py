@@ -153,7 +153,7 @@ def test_incomplete_conversation_appears_once_with_aggregated_unread(quote_leads
     assert rows[0]["operations"]["operatorAction"] == "none"
 
 
-def test_internal_zernio_id_is_never_masked_as_customer_phone(quote_leads):
+def test_internal_zernio_id_is_never_presented_as_customer_phone(quote_leads):
     conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
     assert 9 <= len("".join(filter(str.isdigit, conversation_id))) <= 15
     _state(conversation_id, {"customer_name": "Synthetic Customer"})
@@ -171,7 +171,7 @@ def test_internal_zernio_id_is_never_masked_as_customer_phone(quote_leads):
     assert row["phone_normalized"] == ""
 
 
-def test_provider_confirmed_phone_hydrates_masked_quote_lead():
+def test_provider_confirmed_phone_hydrates_full_quote_lead_contact():
     conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
     rows = [{
         "conversation_id": conversation_id,
@@ -186,11 +186,14 @@ def test_provider_confirmed_phone_hydrates_masked_quote_lead():
         },
     })
 
-    assert result[0]["phone_raw"] == "WhatsApp ••••8003"
-    assert result[0]["phone_normalized"] == ""
+    assert result[0]["phone_raw"] == "+351963618003"
+    assert result[0]["phone_normalized"] == "+351963618003"
 
 
-@pytest.mark.parametrize("provider_phone", ["", "unknown", "+123"])
+@pytest.mark.parametrize(
+    "provider_phone",
+    ["", "unknown", "+123", "a1b2c3d4e5f6a7b8c9d0e1f2"],
+)
 def test_missing_or_invalid_provider_phone_fails_closed(provider_phone):
     conversation_id = "a1b2c3d4e5f6a7b8c9d0e1f2"
     rows = [{
@@ -479,7 +482,8 @@ def test_authenticated_api_filters_counts_and_provider_identity(
     assert active.json()["counts"]["in_progress"] == 1
     assert len(filtered.json()["items"]) == 1
     assert filtered.json()["items"][0]["conversation_id"] == processing
-    assert filtered.json()["items"][0]["phone_raw"] == "WhatsApp ••••8003"
+    assert filtered.json()["items"][0]["phone_raw"] == "+351963618003"
+    assert filtered.json()["items"][0]["phone_normalized"] == "+351963618003"
     assert processing in captured
 
 
