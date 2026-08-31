@@ -524,7 +524,11 @@ def _build_icp_sot_block(envelope: dict) -> str:
     )
 
 
-def _build_icp_final_override_block(envelope: dict) -> str:
+def _build_icp_final_override_block(
+    envelope: dict,
+    *,
+    include_sot_entries: bool = True,
+) -> str:
     """Render Nr3 operator edits as the final high-priority prompt block.
 
     The base Marina prompt still carries generic booking examples and
@@ -534,7 +538,7 @@ def _build_icp_final_override_block(envelope: dict) -> str:
     """
     if not isinstance(envelope, dict):
         return ""
-    entries = envelope.get("sot_entries") or []
+    entries = (envelope.get("sot_entries") or []) if include_sot_entries else []
     ai_agent_settings = envelope.get("ai_agent_settings") or {}
     if not isinstance(entries, list):
         entries = []
@@ -1161,9 +1165,13 @@ Current published catalog, supplied digitally by Ali and containing no customer 
      to compose. Treat that as a highly engaged customer who deserves exceptional care. Do
      not make them split the message, repeat it, or wait through the intake before receiving
      answers.
-  2. Begin with one brief, natural sentence that recognizes the care in their message, then
-     help immediately. Avoid canned praise, forced enthusiasm, or a sales speech. Be calm,
-     patient, warm, precise, and generous with useful detail.
+  2. Begin with one brief, natural sentence tied to the task, then help immediately. A useful
+     pattern is "Thanks for setting that out clearly. I’ll answer each point." Adapt it to
+     the customer's language and context; do not copy it mechanically. Never announce that
+     their message was long or detailed. Do not use canned meta-compliments such as "Great
+     set of questions", "Excellent questions", or "That’s a detailed message". Avoid forced
+     enthusiasm and sales speeches. Be calm, patient, warm, precise, and generous with useful
+     detail.
   3. Extract and retain every rental and customer fact they supplied anywhere in the message.
      Answer every question and requested confirmation directly, in the same order. For a
      longer list, mirror its numbering so the reply is easy to scan on a phone. Never answer
@@ -1183,6 +1191,15 @@ Current published catalog, supplied digitally by Ali and containing no customer 
      limits how many customer questions Nick must answer. Completeness takes priority over
      the normal WhatsApp word target for these high-engagement messages, but keep each answer
      concise and mobile-readable.
+  7. When the customer asks for a total, use the exact total only when an immutable official
+     quote in the prompt already supplies it. Otherwise do not multiply a catalog daily rate,
+     estimate date arithmetic, or invent an unofficial total in chat. Answer the policy and
+     inclusion questions, say you are preparing the official quote, and collect the one next
+     missing field so the quote engine can calculate the authoritative total.
+  8. When the customer supplies more than one driver age, put the main or first driver's age
+     in `driver_age` and preserve every additional driver's age in `comments` as a concise
+     factual note. Append to other volunteered comments instead of replacing them. Never lose
+     an additional driver or ask again for an age already supplied.
 - QUOTE-LED CUSTOMER GUIDANCE is mandatory:
   1. The goal of the Ali conversation is to help the customer choose a suitable car and
      gather the details needed to prepare and send an official quote. Do this helpfully,
@@ -1496,8 +1513,18 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     # J3-N2-02: ICP override envelope - fetched ONCE per prompt build
     # so both persona block and SOT block see the same snapshot.
     _icp_envelope = _icp_envelope_for_prompt()
-    _icp_sot_block = _build_icp_sot_block(_icp_envelope)
-    _icp_final_override_block = _build_icp_final_override_block(_icp_envelope)
+    # Brief 320: business policy has one authority per prompt. The tenant-local
+    # dashboard SOT is the current operator-owned source when present. ICP SOT
+    # remains the compatibility fallback, while ICP tone/escalation settings
+    # continue to apply in either case.
+    _has_dashboard_sot = bool(_source_of_truth_block)
+    _icp_sot_block = (
+        "" if _has_dashboard_sot else _build_icp_sot_block(_icp_envelope)
+    )
+    _icp_final_override_block = _build_icp_final_override_block(
+        _icp_envelope,
+        include_sot_entries=not _has_dashboard_sot,
+    )
     _tenant_hard_rule_block = tenant_hard_rules.phone_privacy_rule_block()
     _consulta_relationship_block = (
         tenant_hard_rules.consulta_despertares_relationship_rule_block()
@@ -1555,7 +1582,7 @@ Your customer-facing name is {agent_name}. Use this name only when natural. Do n
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_source_of_truth_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
 
 {writing_style_block}
 
@@ -1783,6 +1810,7 @@ SERVICE ALIASES: When populating the service_key field in your tool call, use th
 Only include service_key if you're certain. If the customer's description is ambiguous, omit it and ask.
 {_tenant_hard_rule_block}
 {_icp_final_override_block}
+{_source_of_truth_block}
 {_live_product_catalog_block}
 {_consulta_relationship_block}
 {_ali_quote_block}"""
