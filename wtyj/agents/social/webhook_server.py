@@ -447,6 +447,58 @@ def _mark_delivery_failed(channel: str, conversation_id: str, customer_name: str
             error=str(exc)[:200])
 
 
+def _mark_ali_structured_delivery_failed(
+    channel: str,
+    conversation_id: str,
+    customer_name: str,
+    message_ids: list[str],
+    delivery_kind: str,
+) -> None:
+    """Route Ali control/media failures to technical attention only."""
+    state_registry.inbound_processing_bulk_update(
+        message_ids,
+        "send_failed",
+        reason="provider_send_failed",
+        error=delivery_kind,
+    )
+    subject, body = {
+        "quote_confirmation": (
+            "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
+            "The rental summary and Send My Quote control could not be "
+            "delivered. Open the conversation in Unboks.",
+        ),
+        "vehicle_recommendation": (
+            "[ALI VEHICLE RECOMMENDATION DELIVERY FAILED]",
+            "The vehicle recommendation could not be delivered. Open the "
+            "conversation in Unboks.",
+        ),
+    }.get(
+        delivery_kind,
+        (
+            "[ALI STRUCTURED MESSAGE DELIVERY FAILED]",
+            "An Ali rental message could not be delivered. Open the "
+            "conversation in Unboks.",
+        ),
+    )
+    try:
+        state_registry.create_pending_notification(
+            "technical",
+            channel,
+            conversation_id,
+            customer_name or "Ali rental customer",
+            subject,
+            body,
+        )
+    except Exception as exc:
+        log(
+            "ali_delivery_technical_notification_failed",
+            channel=channel,
+            conversation_id=conversation_id[:20],
+            delivery_kind=delivery_kind,
+            error=str(exc)[:200],
+        )
+
+
 def _run_ali_document_retention_cleanup() -> None:
     try:
         from agents.social import ali_customer_dossier
@@ -970,15 +1022,29 @@ def _flush_buffer(phone):
                             conversation_id=_zernio_conv[:20],
                             media_attached=bool(attachment_url),
                             vehicle_recommendation=bool(reply_vehicle_recommendation))
-                        _mark_delivery_failed(
-                            _zernio_channel, _zernio_conv, _zernio_sender,
-                            ids, "provider returned false")
                         if reply_quote_confirmation:
-                            state_registry.create_pending_notification(
-                                "technical", "whatsapp", _zernio_conv,
-                                _zernio_sender or "Ali quote customer",
-                                "[ALI QUOTE CONFIRMATION DELIVERY FAILED]",
-                                "The rental summary and Send My Quote control could not be delivered. Open the conversation in Unboks.",
+                            _mark_ali_structured_delivery_failed(
+                                _zernio_channel,
+                                _zernio_conv,
+                                _zernio_sender,
+                                ids,
+                                "quote_confirmation",
+                            )
+                        elif reply_vehicle_recommendation:
+                            _mark_ali_structured_delivery_failed(
+                                _zernio_channel,
+                                _zernio_conv,
+                                _zernio_sender,
+                                ids,
+                                "vehicle_recommendation",
+                            )
+                        else:
+                            _mark_delivery_failed(
+                                _zernio_channel,
+                                _zernio_conv,
+                                _zernio_sender,
+                                ids,
+                                "provider returned false",
                             )
                         return
                     if ali_turn_commit:

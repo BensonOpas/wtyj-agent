@@ -489,6 +489,40 @@ def test_quote_confirmation_fallback_uses_customer_language(monkeypatch):
     ) == fallback
 
 
+def test_ali_structured_delivery_failure_never_creates_human_escalation(
+    monkeypatch,
+):
+    from agents.social import webhook_server
+
+    processing_updates = []
+    notifications = []
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "inbound_processing_bulk_update",
+        lambda *args, **kwargs: processing_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "create_pending_notification",
+        lambda *args, **kwargs: notifications.append((args, kwargs)) or 325,
+    )
+
+    webhook_server._mark_ali_structured_delivery_failed(
+        "whatsapp",
+        "conversation-325",
+        "Rental Customer",
+        ["inbound-325"],
+        "quote_confirmation",
+    )
+
+    assert processing_updates[0][0][1] == "send_failed"
+    assert notifications[0][0][0] == "technical"
+    assert notifications[0][0][4] == (
+        "[ALI QUOTE CONFIRMATION DELIVERY FAILED]"
+    )
+    assert "mode" not in notifications[0][1]
+
+
 def test_failed_plain_text_does_not_trigger_recursive_fallback(monkeypatch):
     from agents.social import webhook_server
 
