@@ -93,9 +93,9 @@ def _quote(
     conn.close()
 
 
-def _escalate(conversation_id: str):
+def _escalate(conversation_id: str) -> int:
     conn = state_registry._get_conn()
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO pending_notifications "
         "(notification_type, channel, customer_id, customer_name, subject, body, status, created_at) "
         "VALUES ('escalation', 'whatsapp', ?, 'Synthetic Customer', 'Synthetic', "
@@ -103,7 +103,9 @@ def _escalate(conversation_id: str):
         (conversation_id, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
+    escalation_id = int(cursor.lastrowid)
     conn.close()
+    return escalation_id
 
 
 def _client() -> TestClient:
@@ -349,11 +351,12 @@ def test_operations_contract_maps_v2_staff_gates_without_copy_parsing(
     assert projection["workflowRevision"] == 9
 
 
-def test_archived_blocked_and_resolved_conversations_are_excluded(quote_leads):
+def test_archived_blocked_and_closed_conversations_are_excluded(quote_leads):
     for suffix, status, deleted, blocked in (
         ("1", "pending", 1, 0),
         ("2", "pending", 0, 1),
-        ("3", "resolved", 0, 0),
+        ("3", "archived", 0, 0),
+        ("4", "closed", 0, 0),
     ):
         conversation_id = f"19100000000000000000004{suffix}"
         _state(conversation_id, REQUIRED)
@@ -374,6 +377,25 @@ def test_archived_blocked_and_resolved_conversations_are_excluded(quote_leads):
         conn.close()
 
     assert workflow.list_quote_leads() == []
+
+
+def test_resolving_staff_escalation_keeps_customer_visible(quote_leads):
+    conversation_id = "191000000000000000000045"
+    _state(conversation_id, REQUIRED)
+    escalation_id = _escalate(conversation_id)
+
+    state_registry.resolve_conversation_from_escalation(escalation_id)
+
+    conn = state_registry._get_conn()
+    row = conn.execute(
+        "SELECT status FROM conversation_status WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    assert row[0] == "resolved"
+
+    rows = workflow.list_quote_leads()
+    assert [lead["conversation_id"] for lead in rows] == [conversation_id]
 
 
 def test_authenticated_api_filters_counts_and_provider_identity(
