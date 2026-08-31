@@ -8,7 +8,7 @@ email poller process imports it directly at the top of
 `agents/marina/email_poller.py`. Each process gets its own registration
 (globals are per-process; the side effect runs per import in each).
 """
-from shared import state_registry
+from shared import config_loader, state_registry
 from dashboard import escalation_summary as _esc_summary
 
 
@@ -38,12 +38,17 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
     except Exception:
         history = []
 
+    workflow_type = str(
+        ((config_loader.get_raw() or {}).get("workflow") or {}).get("type") or ""
+    ).strip().lower()
+
     summary_dict = _esc_summary.generate_summary(
         channel=channel,
         customer_id=customer_id,
         customer_name=customer_name,
         mode=mode,
         history=history,
+        workflow_type=workflow_type,
     )
 
     if summary_dict and history:
@@ -67,7 +72,10 @@ def _generate_escalation_summary(escalation_id: int, channel: str,
     if summary_dict:
         try:
             details = (summary_dict.get("extractedDetails") or {})
-            if details.get("intent") == "scheduling":
+            if (
+                details.get("intent") == "scheduling"
+                and workflow_type != "ali_quote"
+            ):
                 proposed = details.get("proposedTimes") or []
                 topic = details.get("topic") or "Meeting"
                 # Brief 248: prefer the customer's explicit confirmation time

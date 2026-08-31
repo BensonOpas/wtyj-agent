@@ -18,17 +18,6 @@ from shared import bm_logger, state_registry
 
 _VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
 _MAX_VEHICLE_MEDIA_BYTES = 10 * 1024 * 1024
-_QUOTE_CONFIRMATION_ACTION_TITLES = {
-    ("Send My Quote", "Change Something"),
-    ("Stuur Mijn Offerte", "Iets Wijzigen"),
-    ("Manda Mi Oferta", "Kambia Algu"),
-    ("Angebot Senden", "Etwas Ändern"),
-}
-_QUOTE_CONFIRMATION_FALLBACK_SUFFIX = (
-    "Reply SEND QUOTE to continue, or CHANGE DETAILS to make a correction."
-)
-
-
 def _get_client():
     """Create a Late/Zernio API client. Returns None if no API key."""
     api_key = os.environ.get("LATE_API_KEY", "")
@@ -1058,6 +1047,16 @@ def send_dm_quote_confirmation(
     confirmation: dict,
 ) -> dict:
     """Send one replay-safe signed Ali summary confirmation control."""
+    # The workflow owns the customer-facing language contract.  Import here
+    # to keep the generic provider adapter load order independent while still
+    # validating every locale from one canonical source.
+    from agents.social.ali_quote_workflow import (
+        QUOTE_CONFIRMATION_ACTIONS,
+        QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION,
+    )
+
+    accepted_action_titles = set(QUOTE_CONFIRMATION_ACTIONS.values())
+    accepted_fallbacks = tuple(QUOTE_CONFIRMATION_FALLBACK_INSTRUCTION.values())
     api_key = os.environ.get("LATE_API_KEY", "")
     state_hash = str((confirmation or {}).get("state_hash") or "")
     idempotency_key = str((confirmation or {}).get("idempotency_key") or "")
@@ -1075,9 +1074,9 @@ def send_dm_quote_confirmation(
         or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
         or not idempotency_key
         or not text
-        or not fallback_text.endswith(_QUOTE_CONFIRMATION_FALLBACK_SUFFIX)
+        or not fallback_text.endswith(accepted_fallbacks)
         or len(buttons) != 2
-        or button_titles not in _QUOTE_CONFIRMATION_ACTION_TITLES
+        or button_titles not in accepted_action_titles
         or any(
             not isinstance(button, dict)
             or button.get("type") != "postback"

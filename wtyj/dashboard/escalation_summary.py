@@ -162,14 +162,14 @@ def _format_history(messages: list) -> str:
     return "\n".join(lines) if lines else "(no message history available)"
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(workflow_type: str = "") -> str:
     """Brief 252: extracted from generate_summary so tests can exercise
     the prompt construction directly via Brief 236's function-output
     pattern (mirrors Brief 251's _build_ai_editor_prompt). The system
     prompt is constant per-call (does not depend on customer/channel/
     history) so no parameters are needed today; if future briefs add
     per-channel adaptation, this helper grows parameters."""
-    return (
+    prompt = (
         "You are an operator-facing assistant. Your job is to read a "
         "conversation between a CUSTOMER and an AI AGENT, then summarize "
         "the situation for a human operator who has to step in. The "
@@ -235,10 +235,25 @@ def _build_system_prompt() -> str:
         "operator does NOT have to read the message themselves -- if "
         "your output forces them to read it, you have failed."
     )
+    if str(workflow_type or "").strip().lower() == "ali_quote":
+        prompt += (
+            "\n\nAli Car Rental tenant boundary:\n"
+            "- This is a vehicle-rental workflow, not an appointment or "
+            "meeting scheduler.\n"
+            "- A pickup date, return date, rental period, airport pickup, "
+            "hotel delivery, or office pickup is rental-file data. Never "
+            "classify those details as scheduling intent, proposed meeting "
+            "times, or a decision for a human operator.\n"
+            "- Nick owns ordinary vehicle selection and rental intake. Only "
+            "summarize a real customer question, complaint, policy decision, "
+            "or explicit request for a human."
+        )
+    return prompt
 
 
 def generate_summary(channel: str, customer_id: str, customer_name: str,
-                     mode: Optional[str], history: list) -> Optional[dict]:
+                     mode: Optional[str], history: list,
+                     workflow_type: str = "") -> Optional[dict]:
     """Brief 227: build the structured escalation briefing. Returns the
     dict on success, None on any failure (caller persists null and the
     frontend falls back to its generic-text parser)."""
@@ -251,7 +266,7 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
         history_text = _format_history(history)
         mode_text = mode if mode in ("soft", "hard", "order") else "(unset)"
 
-        system_prompt = _build_system_prompt()
+        system_prompt = _build_system_prompt(workflow_type)
 
         user_prompt = (
             f"CHANNEL: {channel}\n"

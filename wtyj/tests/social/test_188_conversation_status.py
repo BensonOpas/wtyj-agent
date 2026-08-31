@@ -71,6 +71,26 @@ def test_create_notification_sets_status_open():
         _cleanup(conv)
 
 
+def test_technical_notification_is_not_a_customer_escalation():
+    """Brief 325: provider trouble belongs to operations, not takeover."""
+    conv = "conv_325_technical"
+    _cleanup(conv)
+    try:
+        notification_id = state_registry.create_pending_notification(
+            "technical", "whatsapp", conv, "Rental Customer",
+            "[ALI DELIVERY FAILED]", "Recover provider delivery.",
+        )
+
+        assert state_registry.get_conversation_status(conv) == "pending"
+        assert state_registry.get_active_escalation_mode(conv) is None
+        assert all(
+            item["id"] != notification_id
+            for item in state_registry.get_all_escalations()
+        )
+    finally:
+        _cleanup(conv)
+
+
 # --- Test 4: resolve_conversation_from_escalation sets "resolved" + clears fully_escalated ---
 def test_resolve_clears_fully_escalated():
     conv = "conv_188_resolve"
