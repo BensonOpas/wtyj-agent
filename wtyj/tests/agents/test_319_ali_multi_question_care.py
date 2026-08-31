@@ -226,6 +226,9 @@ def test_ali_high_engagement_contract_covers_both_owner_examples(monkeypatch):
         "HIGH-ENGAGEMENT OPENING CONTRACT",
         "Do not appraise the questions or describe the message",
         "do not multiply a catalog daily rate",
+        "PRE-QUOTE TOTAL RESPONSE CONTRACT",
+        "Do not state a rental-day count, multiplication, subtotal, derived",
+        "overrides the general instruction to answer a published price directly",
         "more than one driver age",
         "preserve every additional driver's age in `comments`",
     )
