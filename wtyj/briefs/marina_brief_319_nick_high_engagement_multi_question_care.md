@@ -1,5 +1,5 @@
 # BRIEF 319 — Nick high-engagement multi-question care
-**Status:** Approved | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/tests/agents/test_319_ali_multi_question_care.py` | **Depends on:** Brief 284 / #213, Brief 262 / source-of-truth storage | **Blocks:** none
+**Status:** Approved | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/tests/agents/test_319_ali_multi_question_care.py`, `wtyj/tests/social/test_message_reliability_p0.py` | **Depends on:** Brief 284 / #213, Brief 262 / source-of-truth storage | **Blocks:** none
 
 ## Context
 
@@ -65,6 +65,9 @@ per inbound message.
    Assert the runtime contract requires ordered complete answers, fact preservation,
    premium care, honest unknown handling and no more than one new intake question.
 5. Run the focused Ali quote-intake tests and full Marina/agent regression suite.
+6. Keep the existing recovery test scoped to the synthetic inbound it creates. Other
+   suites may leave unrelated stale synthetic rows in the shared test database; those rows
+   must not make a correctly superseded inbound look recoverable or fail the release gate.
 
 ## Success Condition
 
