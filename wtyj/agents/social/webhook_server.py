@@ -209,6 +209,8 @@ _ALI_HEARTBEAT_COPY = {
     "de": "Ich prüfe das noch für Sie. Ich mache hier gleich weiter.",
 }
 
+_ALI_PROVIDER_SEND_MAX_RECOVERY_ATTEMPTS = 3
+
 
 def _ali_recovery_heartbeat(conversation_id: str) -> str:
     state = state_registry.wa_get_booking_state(conversation_id) or {}
@@ -224,6 +226,37 @@ def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
     grouped = {}
     for item in claimed:
         payload = item.get("payload") or {}
+        if (
+            item.get("recovery_reason") == "provider_send_retry"
+            and int(item.get("attempt_count") or 0)
+            > _ALI_PROVIDER_SEND_MAX_RECOVERY_ATTEMPTS
+        ):
+            delivery_kind = str(item.get("recovery_error") or "ali_turn")
+            failure_args = (
+                str(item.get("channel") or "whatsapp"),
+                str(item.get("conversation_id") or ""),
+                str(payload.get("sender_name") or ""),
+                [str(item.get("message_id") or "")],
+            )
+            if delivery_kind in {
+                "quote_confirmation", "vehicle_recommendation",
+            }:
+                _mark_ali_structured_delivery_failed(
+                    *failure_args,
+                    delivery_kind,
+                )
+            else:
+                _mark_delivery_failed(
+                    *failure_args,
+                    "provider send failed after automatic retries",
+                )
+            log(
+                "ali_provider_send_retry_exhausted",
+                conversation_id=str(item.get("conversation_id") or "")[:20],
+                attempt_count=int(item.get("attempt_count") or 0),
+                delivery_kind=delivery_kind,
+            )
+            continue
         if payload.get("platform") != "whatsapp":
             state_registry.inbound_processing_update(
                 item.get("message_id", ""), "processing_failed",
@@ -497,6 +530,28 @@ def _mark_ali_structured_delivery_failed(
             delivery_kind=delivery_kind,
             error=str(exc)[:200],
         )
+
+
+def _mark_ali_delivery_retry(
+    channel: str,
+    conversation_id: str,
+    message_ids: list[str],
+    delivery_kind: str,
+) -> None:
+    """Keep a provider-rejected Ali turn durable until bounded recovery."""
+    state_registry.inbound_processing_bulk_update(
+        message_ids,
+        "recovering",
+        reason="provider_send_retry",
+        error=delivery_kind,
+    )
+    log(
+        "ali_provider_send_retry_scheduled",
+        channel=channel,
+        conversation_id=conversation_id[:20],
+        message_count=len(message_ids),
+        delivery_kind=delivery_kind,
+    )
 
 
 def _run_ali_document_retention_cleanup() -> None:
@@ -1022,30 +1077,23 @@ def _flush_buffer(phone):
                             conversation_id=_zernio_conv[:20],
                             media_attached=bool(attachment_url),
                             vehicle_recommendation=bool(reply_vehicle_recommendation))
-                        if reply_quote_confirmation:
-                            _mark_ali_structured_delivery_failed(
+                        if ali_turn_commit:
+                            _mark_ali_delivery_retry(
                                 _zernio_channel,
                                 _zernio_conv,
-                                _zernio_sender,
                                 ids,
-                                "quote_confirmation",
-                            )
-                        elif reply_vehicle_recommendation:
-                            _mark_ali_structured_delivery_failed(
-                                _zernio_channel,
-                                _zernio_conv,
-                                _zernio_sender,
-                                ids,
-                                "vehicle_recommendation",
+                                (
+                                    "quote_confirmation"
+                                    if reply_quote_confirmation
+                                    else "vehicle_recommendation"
+                                    if reply_vehicle_recommendation
+                                    else "ali_turn"
+                                ),
                             )
                         else:
                             _mark_delivery_failed(
-                                _zernio_channel,
-                                _zernio_conv,
-                                _zernio_sender,
-                                ids,
-                                "provider returned false",
-                            )
+                                _zernio_channel, _zernio_conv, _zernio_sender,
+                                ids, "provider returned false")
                         return
                     if ali_turn_commit:
                         commit_ali_turn_delivery(

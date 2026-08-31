@@ -1155,7 +1155,8 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
     }
     intents = (
         "continue_intake", "ask_question", "reject_or_hesitate",
-        "request_recommendation", "repeat_summary", "confirm_summary", "other",
+        "request_recommendation", "repeat_summary", "confirm_summary",
+        "request_quote_status", "other",
     )
     phases = (
         "COLLECTING", "DISCOVERY", "SUMMARY_PRESENTED",
@@ -1221,6 +1222,16 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
             elif phase == "COLLECTING":
                 expected_kind = "agent_reply"
                 expected_phase = "COLLECTING"
+            elif intent == "request_quote_status":
+                if phase in {"DISCOVERY", "SUMMARY_PRESENTED"}:
+                    expected_kind = "summary"
+                    expected_phase = "SUMMARY_PRESENTED"
+                elif phase == "QUOTE_PROCESSING":
+                    expected_kind = "summary"
+                    expected_phase = "SUMMARY_PRESENTED"
+                else:
+                    expected_kind = "agent_reply"
+                    expected_phase = phase
             elif intent == "repeat_summary" and phase not in terminal_phases:
                 expected_kind = "summary"
                 expected_phase = "SUMMARY_PRESENTED"
@@ -1234,6 +1245,9 @@ def test_every_phase_by_primary_intent_has_a_deterministic_route(monkeypatch, tm
             elif intent == "confirm_summary" and phase == "QUOTE_PROCESSING":
                 expected_kind = "quote_preparing"
                 expected_phase = "QUOTE_PROCESSING"
+            elif phase == "DISCOVERY" and intent in {"continue_intake", "other"}:
+                expected_kind = "summary"
+                expected_phase = "SUMMARY_PRESENTED"
             else:
                 expected_kind = "agent_reply"
                 if phase in terminal_phases and intent in {

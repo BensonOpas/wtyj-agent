@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 
 from agents.social import ali_quote_workflow as workflow
@@ -535,9 +536,29 @@ def test_exact_vehicle_correction_emits_one_new_summary_and_persists_van(monkeyp
     assert saved["flags"]["ali_replaces_quote_public_id"] == "immutable-old-quote"
     assert saved["fields"]["return_location"] == "Synthetic hotel"
 
+    correction_text = "No, that doesn’t look right, I want a van"
+    workflow.commit_ali_turn_delivery(
+        phone,
+        {
+            "outbound_kind": "summary",
+            "phase": "SUMMARY_PRESENTED",
+            "primary_intent": "continue_intake",
+            "reason_code": "initial_or_corrected_complete_draft",
+            "action_id": hashlib.sha256(
+                f"{phone}\x1f{correction_text}".encode("utf-8")
+            ).hexdigest(),
+            "draft_hash": saved["flags"]["ali_draft_hash"],
+            "summary_hash": saved["flags"]["ali_draft_summary_hash"],
+            "summary_version": saved["flags"]["ali_draft_version"],
+            "quote_public_id": "",
+        },
+        reply,
+        [],
+    )
+
     second = social_agent.handle_incoming_whatsapp_message({
         "from": phone,
-        "text": "No, that doesn’t look right, I want a van",
+        "text": correction_text,
         "from_name": "Synthetic Customer",
         "_zernio_sender_id": "+351000000000",
         "_zernio_account_id": "synthetic-account",
