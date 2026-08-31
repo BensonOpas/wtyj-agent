@@ -1718,10 +1718,10 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
                 ).fetchall()
                 if row[0]
             }
-        escalation_ids = {
+        attention_ids = {
             str(row[0]) for row in conn.execute(
                 "SELECT DISTINCT customer_id FROM pending_notifications "
-                "WHERE notification_type = 'escalation' "
+                "WHERE notification_type IN ('escalation', 'relay') "
                 "AND status != 'resolved'"
             ).fetchall() if row[0]
         }
@@ -1760,7 +1760,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
         if known_customer_name:
             projected_fields["customer_name"] = known_customer_name
         projected_status = _quote_lead_status(
-            projected_fields, flags, quote, conversation_id in escalation_ids,
+            projected_fields, flags, quote, conversation_id in attention_ids,
         )
         if status not in (None, "active") and projected_status != status:
             continue
@@ -1817,7 +1817,7 @@ def list_quote_leads(status: str | None = None, limit: int = 200) -> list[dict]:
             quote=quote,
             reservation=reservation,
             workflow_v2=workflow_v2,
-            has_active_escalation=conversation_id in escalation_ids,
+            has_active_escalation=conversation_id in attention_ids,
         )
         leads.append({
             "id": conversation_id,

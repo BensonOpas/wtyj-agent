@@ -93,14 +93,24 @@ def _quote(
     conn.close()
 
 
-def _escalate(conversation_id: str) -> int:
+def _escalate(
+    conversation_id: str,
+    *,
+    notification_type: str = "escalation",
+    status: str = "pending",
+) -> int:
     conn = state_registry._get_conn()
     cursor = conn.execute(
         "INSERT INTO pending_notifications "
         "(notification_type, channel, customer_id, customer_name, subject, body, status, created_at) "
-        "VALUES ('escalation', 'whatsapp', ?, 'Synthetic Customer', 'Synthetic', "
-        "'Synthetic', 'pending', ?)",
-        (conversation_id, datetime.now(timezone.utc).isoformat()),
+        "VALUES (?, 'whatsapp', ?, 'Synthetic Customer', 'Synthetic', "
+        "'Synthetic', ?, ?)",
+        (
+            notification_type,
+            conversation_id,
+            status,
+            datetime.now(timezone.utc).isoformat(),
+        ),
     )
     conn.commit()
     escalation_id = int(cursor.lastrowid)
@@ -243,6 +253,24 @@ def test_escalation_and_processing_use_canonical_status_precedence(quote_leads):
     assert rows[escalated]["operations"]["operatorAction"] == "answer_customer"
     assert rows[processing]["operations"]["responsibleParty"] == "system"
     assert rows[processing]["operations"]["operatorAction"] == "none"
+
+
+def test_sent_agent_help_relay_is_staff_work(quote_leads):
+    conversation_id = "191000000000000000000032"
+    _state(conversation_id, REQUIRED)
+    _escalate(
+        conversation_id,
+        notification_type="relay",
+        status="sent",
+    )
+
+    row = workflow.list_quote_leads()[0]
+
+    assert row["status"] == "needs_an_answer"
+    assert row["next_action"] == "Review and answer the customer conversation."
+    assert row["operations"]["responsibleParty"] == "staff"
+    assert row["operations"]["operatorAction"] == "answer_customer"
+    assert row["operations"]["actionTarget"] == "conversation"
 
 
 def test_quote_lead_exposes_latest_post_quote_reservation_state(quote_leads):
