@@ -5079,8 +5079,9 @@ def upsert_follow_up_request(conversation_id: str, channel: str = "whatsapp",
         "handoff_reason, source_message_id, created_at, updated_at, closed_at "
         "FROM follow_up_requests WHERE conversation_id = ?", (conversation_id,)
     ).fetchone()
+    last_inbound_at = _latest_follow_up_inbound_at(conn, conversation_id)
     conn.close()
-    return _follow_up_row(row)
+    return _follow_up_row(row, last_inbound_at=last_inbound_at)
 
 
 def _follow_up_context(fields: dict = None) -> dict:
@@ -5099,7 +5100,20 @@ def _follow_up_context(fields: dict = None) -> dict:
     }
 
 
-def _follow_up_row(row, thread_fields: dict = None) -> dict:
+def _latest_follow_up_inbound_at(conn, conversation_id: str) -> str:
+    """Return the latest prospect message time, excluding AI and staff replies."""
+    if not conversation_id:
+        return ""
+    latest = conn.execute(
+        "SELECT MAX(created_at) FROM whatsapp_threads "
+        "WHERE phone = ? AND role = 'user'",
+        (conversation_id,),
+    ).fetchone()
+    return str(latest[0] or "") if latest else ""
+
+
+def _follow_up_row(row, thread_fields: dict = None,
+                   last_inbound_at: str = "") -> dict:
     keys = ("id", "conversation_id", "channel", "first_name", "surnames",
             "phone_raw", "phone_normalized", "callback_preference", "visit_reason",
             "status", "handoff_reason", "source_message_id", "created_at",
@@ -5108,6 +5122,7 @@ def _follow_up_row(row, thread_fields: dict = None) -> dict:
         return None
     result = dict(zip(keys, row))
     result.update(_follow_up_context(thread_fields))
+    result["last_inbound_at"] = last_inbound_at
     return result
 
 
@@ -5123,6 +5138,7 @@ def list_follow_up_requests(status: str = None, limit: int = 200) -> list:
         params.append(status)
     rows = conn.execute(query + " ORDER BY updated_at DESC LIMIT ?", [*params, limit]).fetchall()
     fields_by_conversation = {}
+    inbound_at_by_conversation = {}
     conversation_ids = [row[1] for row in rows if row[1]]
     if conversation_ids:
         placeholders = ",".join("?" for _ in conversation_ids)
@@ -5136,9 +5152,22 @@ def list_follow_up_requests(status: str = None, limit: int = 200) -> list:
                 fields_by_conversation[conversation_id] = json.loads(fields_json or "{}")
             except (TypeError, ValueError):
                 fields_by_conversation[conversation_id] = {}
+        inbound_rows = conn.execute(
+            f"SELECT phone, MAX(created_at) FROM whatsapp_threads "
+            f"WHERE role = 'user' AND phone IN ({placeholders}) GROUP BY phone",
+            conversation_ids,
+        ).fetchall()
+        inbound_at_by_conversation = {
+            conversation_id: str(created_at or "")
+            for conversation_id, created_at in inbound_rows
+        }
     conn.close()
     return [
-        _follow_up_row(row, fields_by_conversation.get(row[1], {}))
+        _follow_up_row(
+            row,
+            fields_by_conversation.get(row[1], {}),
+            inbound_at_by_conversation.get(row[1], ""),
+        )
         for row in rows
     ]
 
@@ -5162,8 +5191,9 @@ def get_follow_up_request(request_id: int) -> dict:
                 thread_fields = json.loads(state_row[0] or "{}")
             except (TypeError, ValueError):
                 pass
+    last_inbound_at = _latest_follow_up_inbound_at(conn, row[1] if row else "")
     conn.close()
-    return _follow_up_row(row, thread_fields)
+    return _follow_up_row(row, thread_fields, last_inbound_at)
 
 
 def get_follow_up_request_by_conversation(conversation_id: str) -> dict:
@@ -5178,8 +5208,9 @@ def get_follow_up_request_by_conversation(conversation_id: str) -> dict:
         "FROM follow_up_requests WHERE conversation_id = ?",
         (conversation_id,),
     ).fetchone()
+    last_inbound_at = _latest_follow_up_inbound_at(conn, conversation_id)
     conn.close()
-    return _follow_up_row(row)
+    return _follow_up_row(row, last_inbound_at=last_inbound_at)
 
 
 def update_follow_up_status(request_id: int, status: str) -> dict:

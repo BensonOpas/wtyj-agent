@@ -48,6 +48,16 @@ def test_follow_up_rows_include_complete_prospect_context(tmp_path, monkeypatch)
         },
         now,
     )
+    conn.execute(
+        "INSERT INTO whatsapp_threads (phone, role, text, created_at) "
+        "VALUES (?, 'user', 'Necesito ayuda', ?)",
+        ("+34600111222", "2026-07-27T09:58:00+00:00"),
+    )
+    conn.execute(
+        "INSERT INTO whatsapp_threads (phone, role, text, created_at) "
+        "VALUES (?, 'assistant', 'Claro que sí', ?)",
+        ("+34600111222", "2026-07-27T09:59:00+00:00"),
+    )
     conn.commit()
     conn.close()
 
@@ -57,14 +67,17 @@ def test_follow_up_rows_include_complete_prospect_context(tmp_path, monkeypatch)
     assert listed[0]["session_type"] == "Terapia individual"
     assert listed[0]["preferred_clinic"] == "Leganés"
     assert listed[0]["appointment_preference"] == "Viernes por la mañana"
+    assert listed[0]["last_inbound_at"] == "2026-07-27T09:58:00+00:00"
     assert selected["session_type"] == "Terapia individual"
     assert selected["preferred_clinic"] == "Leganés"
     assert selected["appointment_preference"] == "Viernes por la mañana"
     assert selected["callback_preference"] == "por la tarde"
     assert selected["visit_reason"] == "Ansiedad"
+    assert selected["last_inbound_at"] == "2026-07-27T09:58:00+00:00"
 
     copied = state_registry.update_follow_up_status(request_id, "copied")
     assert copied["status"] == "copied"
+    assert copied["last_inbound_at"] == "2026-07-27T09:58:00+00:00"
 
 
 def test_follow_up_uses_historical_date_and_slot_fallback(tmp_path, monkeypatch):
