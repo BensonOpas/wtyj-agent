@@ -145,7 +145,7 @@ def test_save_validate_preview_publish_and_rollback_flow(client):
     assert preview.json()["deliveryAttempted"] is False
     assert preview.json()["quote"]["grandTotalCents"] == 32_000
     assert preview.json()["customerWhatsAppText"].startswith(
-        "Your official Ali Car Rental quote is ready."
+        "✅ Your official Ali Car Rental quote was sent successfully."
     )
     assert preview.json()["pdfBytes"] > 1_000
     pdf = client.get(
