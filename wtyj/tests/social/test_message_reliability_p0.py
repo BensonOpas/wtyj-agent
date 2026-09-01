@@ -539,3 +539,35 @@ def test_recovered_inbound_history_is_idempotent_by_provider_message_batch():
         ]
     finally:
         _cleanup(prefix)
+
+
+def test_outbound_dashboard_event_is_exactly_once_by_source_key():
+    prefix = "p0rel_outbound_once"
+    conv = f"{prefix}_conv"
+    _cleanup(prefix)
+    try:
+        assert state_registry.dm_store_message_once(
+            conv,
+            "whatsapp",
+            "assistant",
+            "✅ Your official quote was sent successfully. Quote: ALI-TEST",
+            "ali-quote-delivered:quote-test",
+        ) is True
+        assert state_registry.dm_store_message_once(
+            conv,
+            "whatsapp",
+            "assistant",
+            "This retry must not create another row.",
+            "ali-quote-delivered:quote-test",
+        ) is True
+
+        history = state_registry.wa_get_full_history(conv, limit=10)
+        assert [(item["role"], item["text"]) for item in history] == [
+            (
+                "assistant",
+                "✅ Your official quote was sent successfully. "
+                "Quote: ALI-TEST",
+            ),
+        ]
+    finally:
+        _cleanup(prefix)

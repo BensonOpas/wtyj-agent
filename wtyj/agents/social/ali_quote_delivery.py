@@ -33,11 +33,11 @@ CURACAO = ZoneInfo("America/Curacao")
 PAYMENT_WINDOW_HOURS = 24
 
 MESSAGES = {
-    "en": ("Your official Ali Car Rental quote is ready.", "Choose what you'd like to do below."),
-    "nl": ("Je officiële offerte van Ali Car Rental is klaar.", "Kies hieronder wat je wilt doen."),
-    "pap": ("Bo oferta ofisial di Ali Car Rental ta kla.", "Skoh abou kiko bo ke hasi."),
-    "de": ("Ihr offizielles Angebot von Ali Car Rental ist fertig.", "Wählen Sie unten aus, wie Sie fortfahren möchten."),
-    "es": ("Tu cotización oficial de Ali Car Rental está lista.", "Elige cómo quieres continuar."),
+    "en": ("✅ Your official Ali Car Rental quote was sent successfully.", "Choose what you'd like to do below."),
+    "nl": ("✅ Je officiële offerte van Ali Car Rental is succesvol verzonden.", "Kies hieronder wat je wilt doen."),
+    "pap": ("✅ Bo oferta ofisial di Ali Car Rental a wordu manda ku éksito.", "Skoh abou kiko bo ke hasi."),
+    "de": ("✅ Ihr offizielles Angebot von Ali Car Rental wurde erfolgreich gesendet.", "Wählen Sie unten aus, wie Sie fortfahren möchten."),
+    "es": ("✅ Tu cotización oficial de Ali Car Rental se envió correctamente.", "Elige cómo quieres continuar."),
 }
 
 VALID_UNTIL = {
@@ -450,13 +450,30 @@ def send_customer_whatsapp(quote: dict, _pdf_path: str) -> bool:
         url, attachment_type="file", attachment_name=filename,
         idempotency_key=f"ali-quote-pdf-{quote['public_id']}",
     )
+    dashboard_recorded = False
+    if delivered:
+        try:
+            dashboard_recorded = state_registry.dm_store_message_once(
+                quote["conversation_id"],
+                "whatsapp",
+                "assistant",
+                text,
+                f"ali-quote-delivered:{quote['public_id']}",
+            )
+        except Exception as exc:
+            bm_logger.log(
+                "ali_quote_dashboard_confirmation_failed",
+                quote_public_id_prefix=str(quote.get("public_id") or "")[:12],
+                error=type(exc).__name__,
+            )
     bm_logger.log(
         "ali_quote_pdf_terminal_delivery",
         quote_public_id_prefix=str(quote.get("public_id") or "")[:12],
         quote_reference=str(quote.get("quote_reference") or "")[:40],
         delivered=delivered,
+        dashboard_recorded=dashboard_recorded,
     )
-    return delivered
+    return delivered and dashboard_recorded
 
 
 def build_customer_quote_text(quote: dict) -> str:

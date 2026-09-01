@@ -867,9 +867,15 @@ def test_signed_download_rejects_tampering_and_expiry():
 
 def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
     captured = {}
+    dashboard = []
     monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://unboks.example")
     monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
     monkeypatch.setattr(delivery, "send_dm_reply_with_attachment", lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}) or True)
+    monkeypatch.setattr(
+        delivery.state_registry,
+        "dm_store_message_once",
+        lambda *args, **kwargs: dashboard.append((args, kwargs)) or True,
+    )
     quote = {
         "public_id": "quote-public-id", "conversation_id": "conversation-synthetic",
         "zernio_account_id": "account-synthetic", "locale": "en",
@@ -885,6 +891,12 @@ def test_customer_delivery_uses_zernio_file_attachment(monkeypatch):
     assert "2 September 2026 at 10:00 (Curaçao time)" in captured["args"][2]
     assert "T" not in captured["args"][2].split("Valid until:", 1)[1].split("\n", 1)[0]
     assert "Subject to final vehicle availability confirmation." not in captured["args"][2]
+    assert dashboard[0][0][0:3] == (
+        "conversation-synthetic", "whatsapp", "assistant",
+    )
+    assert "sent successfully" in dashboard[0][0][3]
+    assert pricing()["quoteReference"] in dashboard[0][0][3]
+    assert dashboard[0][0][4] == "ali-quote-delivered:quote-public-id"
 
 
 def test_customer_quote_captions_remove_availability_sentence_in_all_locales(monkeypatch):
@@ -894,6 +906,11 @@ def test_customer_quote_captions_remove_availability_sentence_in_all_locales(mon
     monkeypatch.setattr(
         delivery, "send_dm_reply_with_attachment",
         lambda *args, **kwargs: captured.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        delivery.state_registry,
+        "dm_store_message_once",
+        lambda *args, **kwargs: True,
     )
     forbidden = {
         "en": "Subject to final vehicle availability confirmation.",
@@ -970,6 +987,11 @@ def test_customer_delivery_itemizes_supplement_and_keeps_deposit_separate(monkey
         delivery, "send_dm_reply_with_attachment",
         lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}) or True,
     )
+    monkeypatch.setattr(
+        delivery.state_registry,
+        "dm_store_message_once",
+        lambda *args, **kwargs: True,
+    )
     quote = {
         "public_id": "quote-public-id", "conversation_id": "conversation-synthetic",
         "zernio_account_id": "account-synthetic", "locale": "en",
@@ -983,6 +1005,49 @@ def test_customer_delivery_itemizes_supplement_and_keeps_deposit_separate(monkey
     assert "Supplements:\nChild seat: 2 × USD 5.00 per rental day × 7 days = USD 70.00" in text
     assert "Rental total: USD 350.00" in text
     assert "Refundable security deposit: USD 150.00" in text
+
+
+def test_failed_customer_quote_delivery_never_records_dashboard_confirmation(
+    monkeypatch,
+):
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://unboks.example")
+    monkeypatch.setenv("ALI_QUOTE_DOWNLOAD_SECRET", "synthetic-signing-secret")
+    monkeypatch.setattr(
+        delivery,
+        "send_dm_reply_with_attachment",
+        lambda *args, **kwargs: False,
+    )
+    dashboard = []
+    monkeypatch.setattr(
+        delivery.state_registry,
+        "dm_store_message_once",
+        lambda *args, **kwargs: dashboard.append((args, kwargs)) or True,
+    )
+    quote = {
+        "public_id": "quote-failed",
+        "conversation_id": "conversation-synthetic",
+        "zernio_account_id": "account-synthetic",
+        "locale": "es",
+        "quote_reference": pricing()["quoteReference"],
+        "pricing_json": json.dumps(pricing()),
+        "customer_json": json.dumps(customer()),
+        "rental_json": json.dumps(rental("es")),
+    }
+
+    assert delivery.send_customer_whatsapp(quote, "/private/quote.pdf") is False
+    assert dashboard == []
+
+
+def test_quote_sent_confirmation_is_explicit_in_every_supported_locale():
+    for locale, (confirmation, _next_step) in delivery.MESSAGES.items():
+        assert confirmation.startswith("✅")
+        assert {
+            "en": "sent successfully",
+            "nl": "succesvol verzonden",
+            "pap": "manda ku éksito",
+            "de": "erfolgreich gesendet",
+            "es": "se envió correctamente",
+        }[locale] in confirmation
 
 
 def test_staff_email_attaches_identical_pdf_bytes(monkeypatch):

@@ -3040,6 +3040,55 @@ def dm_store_message(conversation_id: str, channel: str, role: str, text: str,
     conn.close()
 
 
+def dm_store_message_once(
+    conversation_id: str,
+    channel: str,
+    role: str,
+    text: str,
+    source_message_key: str,
+    sender_name: str = "",
+    created_at: str = "",
+) -> bool:
+    """Persist one outbound/system transcript event exactly once.
+
+    A repeated write with the same conversation and source key is considered
+    successful because the requested dashboard record already exists.
+    """
+    source_key = str(source_message_key or "").strip()
+    if not source_key or len(source_key) > 240:
+        raise ValueError("invalid_source_message_key")
+    timestamp = (
+        str(created_at or "").strip()
+        or datetime.now(timezone.utc).isoformat()
+    )
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO whatsapp_threads "
+            "(phone, role, text, created_at, channel, sender_name, "
+            "source_message_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                conversation_id,
+                role,
+                text,
+                timestamp,
+                channel,
+                sender_name,
+                source_key,
+            ),
+        )
+        conn.commit()
+        if cursor.rowcount == 1:
+            return True
+        return conn.execute(
+            "SELECT 1 FROM whatsapp_threads "
+            "WHERE phone = ? AND source_message_key = ? LIMIT 1",
+            (conversation_id, source_key),
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def dm_store_inbound_message(
     conversation_id: str,
     channel: str,
