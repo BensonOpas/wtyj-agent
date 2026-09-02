@@ -71,6 +71,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     # dedicated getter today — get_raw is the consistent escape hatch used elsewhere).
     persona = config_loader.get_raw().get("agent_persona", {})
     master_prompt = (persona.get("freeform_notes") or "").strip()
+    enforcement_notes = (persona.get("enforcement_notes") or "").strip()
     # Brief 206: booking_flow gate so the BOOKING REDIRECT block doesn't inject
     # for non-booking tenants (unboks etc.) where it would render a recursive
     # wa.me/<same-number-the-customer-is-on> redirect.
@@ -168,7 +169,10 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         parts.extend([services_block, faq_block])
         if booking_flow:
             parts.append(booking_redirect_block)
-        parts.extend([language_block, emoji_block, output_rule])
+        parts.extend([language_block, emoji_block])
+        if enforcement_notes:
+            parts.append(enforcement_notes)
+        parts.append(output_rule)
         return "\n\n".join(parts)
 
     # Fallback: no master prompt set — use hardcoded WRITING STYLE / AVOID blocks.
