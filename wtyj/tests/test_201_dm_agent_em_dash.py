@@ -50,8 +50,7 @@ def test_em_dash_replaced_with_comma(mock_anthropic, mock_config, mock_state):
 
     assert "—" not in reply
     assert "," in reply
-    # The space normalizer collapses double spaces but leaves single-space-comma-single-space.
-    # We verify the em-dash is gone and a comma is present — not the exact whitespace.
+    assert reply == "Hello, how can I help?"
 
 
 @patch("agents.social.dm_agent.state_registry")
