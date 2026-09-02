@@ -187,6 +187,20 @@ def test_mermaid_strict_empty_allowlist_rejects_zernio_directions(
     assert all(call.kwargs["allowlist_size"] == 0 for call in log.call_args_list)
 
 
+def test_mermaid_reply_style_guards_are_deterministic(mermaid_config):
+    plain = dm_agent._apply_reply_style_guards(
+        "Great question! 👉 Check the official reservation page.",
+        "Do you have seats?",
+    )
+    mirrored = dm_agent._apply_reply_style_guards(
+        "Great question! 👉 Check the official reservation page.",
+        "Do you have seats? 🙂",
+    )
+
+    assert plain == "Check the official reservation page."
+    assert mirrored == "👉 Check the official reservation page."
+
+
 @patch("shared.icp_overrides.fetch_overrides", return_value=None)
 @patch("agents.social.dm_agent.anthropic.Anthropic")
 def test_mermaid_escalation_marker_invokes_existing_notification_bridge(

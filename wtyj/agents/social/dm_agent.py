@@ -13,6 +13,35 @@ from shared import state_registry, config_loader, bm_logger, auto_block, agent_i
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u27BF"
+    "\u200D\uFE0F"
+    "]"
+)
+
+
+def _apply_reply_style_guards(reply: str, inbound_text: str) -> str:
+    """Apply optional tenant-authored style constraints after generation."""
+    persona = config_loader.get_raw().get("agent_persona", {}) or {}
+    cleaned = reply
+
+    for opener in persona.get("forbidden_reply_openers", []) or []:
+        opener_text = str(opener or "").strip()
+        if opener_text and cleaned.lower().startswith(opener_text.lower()):
+            cleaned = cleaned[len(opener_text):].lstrip()
+            break
+
+    if persona.get("enforce_emoji_mirroring") and not _EMOJI_RE.search(
+        inbound_text or ""
+    ):
+        cleaned = _EMOJI_RE.sub("", cleaned)
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
 
 
 def _build_dm_approved_answers_block(channel: str) -> str:
@@ -315,6 +344,7 @@ def handle_incoming_dm(message: dict) -> str:
         # Strip markdown code fences if present
         reply = re.sub(r"^```(?:json)?\s*", "", reply)
         reply = re.sub(r"\s*```$", "", reply.strip())
+        reply = _apply_reply_style_guards(reply, text)
         # Clean up double spaces left by stripped placeholders
         while "  " in reply:
             reply = reply.replace("  ", " ")
