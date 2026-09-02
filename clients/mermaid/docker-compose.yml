@@ -1,0 +1,22 @@
+services:
+  agent:
+    image: wtyj-agent
+    container_name: wtyj-mermaid
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8102:8001"
+    env_file:
+      - ./config/platform.env
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+    volumes:
+      - ./config:/app/config:rw
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - default
+      - unboks-control
+
+networks:
+  unboks-control:
+    external: true

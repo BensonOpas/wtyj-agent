@@ -94,7 +94,16 @@ def _build_dm_system_prompt(channel: str) -> str:
     terminology = config_loader.get_raw().get("terminology", {})
     service_label = terminology.get("service_label", "service")
 
-    platform_name = "Instagram" if channel == "instagram_dm" else "Facebook"
+    # Brief 327: this Q&A agent serves every configured short-form channel.
+    # Keep the channel context explicit so WhatsApp and X/Twitter prompts are
+    # never mislabeled as Facebook DMs. This is presentation context only; it
+    # does not classify user text or change dispatch behavior.
+    channel_label = {
+        "whatsapp": "WhatsApp messages",
+        "instagram_dm": "Instagram DMs",
+        "facebook_dm": "Facebook DMs",
+        "twitter_dm": "X/Twitter DMs",
+    }.get(str(channel or "").strip().lower(), "messages on this channel")
 
     # Build service list
     service_lines = []
@@ -121,7 +130,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     # Empty services/faq lists render as bare "SERVICES:\n" / "FAQ:\n" — same as
     # existing behavior (chr(10).join on an empty list = ""). No empty-state change.
     intro = (
-        f"You are {agent_name}, answering {platform_name} DMs for {company_name}.\n"
+        f"You are {agent_name}, answering {channel_label} for {company_name}.\n"
         f"Your customer-facing name is {agent_name}. Use this name only when natural. "
         "Do not overuse it, do not claim to be human, and do not imply any professional license or authority.\n"
         f"{agent_identity.agent_name_authority_rule(agent_name)}"
