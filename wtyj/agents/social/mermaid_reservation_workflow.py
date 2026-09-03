@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import dateparser
@@ -314,6 +314,10 @@ def _summary(fields: dict, locale: str) -> str:
 
 
 def _next_question(fields: dict, locale: str) -> str | None:
+    if all(key in fields for key in ("adults", "children", "infants")) and sum(
+        fields[key] for key in ("adults", "children", "infants")
+    ) <= 0:
+        return COPY[locale]["composition"]
     if fields.get("party_size_hint") is not None and not any(
         field in fields for field in ("adults", "children", "infants")
     ):
@@ -471,7 +475,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         elif key == "trip_date" and isinstance(value, str):
             try:
                 parsed = datetime.strptime(value, "%Y-%m-%d")
-                if parsed.date() >= datetime.now().date():
+                if parsed.date() >= datetime.now(timezone(timedelta(hours=-4))).date():
                     changes[key] = parsed.date().isoformat()
             except ValueError:
                 pass
@@ -542,7 +546,8 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
     current = _reservation_store.latest_for_conversation(phone)
     if use_model:
         state = state_registry.wa_get_booking_state(phone)
-        cached = (state.get("flags") or {}).get("mermaid_cached_reply") or {}
+        flags = state.get("flags") or {}
+        cached = (flags.get("mermaid_cached_replies") or {}).get(str(message.get("message_id") or "")) or flags.get("mermaid_cached_reply") or {}
         if message.get("message_id") and cached.get("message_id") == message["message_id"]:
             reply = dict(cached.get("reply") or {})
             commit = reply.get("mermaid_delivery_commit") or {}
@@ -656,4 +661,7 @@ def _cache_reply(message: dict, reply: dict) -> None:
     state = state_registry.wa_get_booking_state(phone)
     flags = dict(state.get("flags") or {})
     flags["mermaid_cached_reply"] = {"message_id": message["message_id"], "reply": reply}
+    cached = dict(flags.get("mermaid_cached_replies") or {})
+    cached[str(message["message_id"])] = flags["mermaid_cached_reply"]
+    flags["mermaid_cached_replies"] = dict(list(cached.items())[-10:])
     state_registry.wa_save_booking_state(phone, state.get("fields") or {}, flags, state.get("completed_bookings") or [])
