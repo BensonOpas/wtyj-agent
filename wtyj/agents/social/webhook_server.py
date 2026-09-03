@@ -5,7 +5,9 @@
 
 import json as _json
 import hashlib
+import hmac
 import os
+import re
 import time
 import threading
 from fastapi import BackgroundTasks, FastAPI, Request, Query
@@ -76,14 +78,16 @@ async def lifespan(app):
     )
     if workflow_type == "ali_quote":
         _run_ali_document_retention_cleanup()
-        recovery_stop = threading.Event()
-        recovery_thread = threading.Thread(
-            target=_ali_inbound_recovery_loop,
-            args=(recovery_stop,),
-            name="ali-inbound-recovery",
-            daemon=True,
-        )
-        recovery_thread.start()
+    # Every WhatsApp tenant needs durable recovery after provider acceptance.
+    # Ali additionally runs its workflow schedulers and customer heartbeat.
+    recovery_stop = threading.Event()
+    recovery_thread = threading.Thread(
+        target=_ali_inbound_recovery_loop,
+        args=(recovery_stop, workflow_type == "ali_quote"),
+        name="whatsapp-inbound-recovery",
+        daemon=True,
+    )
+    recovery_thread.start()
     try:
         yield
     finally:
@@ -128,6 +132,17 @@ def _sanitize_tenant_whatsapp_reply(reply_text: str, channel: str) -> str:
     text = str(reply_text or "").strip()
     if not text or str(channel or "").strip().lower() != "whatsapp":
         return text
+    # Convert unambiguous Markdown strong spans in AI prose to WhatsApp's
+    # native single-asterisk form. Keep code spans, multiline constructs,
+    # triple emphasis, exponent-like text, and unbalanced delimiters intact.
+    code_aware_parts = re.split(r"(`[^`\n]*`)", text)
+    for index in range(0, len(code_aware_parts), 2):
+        code_aware_parts[index] = re.sub(
+            r"(?<![\w*])\*\*(?=\S)([^*\n]*?\S)\*\*(?![\w*])",
+            r"*\1*",
+            code_aware_parts[index],
+        )
+    text = "".join(code_aware_parts)
     try:
         from agents.social.ali_quote_workflow import (
             sanitize_intake_reply,
@@ -161,6 +176,52 @@ async def download_ali_quote(public_id: str, expires: int, signature: str):
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
+
+
+def _verify_meta_webhook_signature(body: bytes, signature: str) -> bool:
+    """Verify Meta's X-Hub-Signature-256 without logging request content."""
+    secret = os.environ.get("META_APP_SECRET", "").strip()
+    supplied = str(signature or "").strip()
+    if not secret or not supplied.lower().startswith("sha256="):
+        return False
+    supplied_digest = supplied.split("=", 1)[1].strip().lower()
+    if len(supplied_digest) != 64:
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, supplied_digest)
+
+
+def _meta_payload_matches_tenant(payload: dict) -> bool:
+    """Require every direct-Meta event to target this configured tenant."""
+    expected_phone = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+    expected_waba = os.environ.get("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip()
+    if not expected_phone or not expected_waba:
+        return False
+    if payload.get("object") != "whatsapp_business_account":
+        return False
+    entries = payload.get("entry")
+    if not isinstance(entries, list) or not entries:
+        return False
+    saw_destination = False
+    for entry in entries:
+        if not isinstance(entry, dict) or str(entry.get("id") or "") != expected_waba:
+            return False
+        changes = entry.get("changes")
+        if not isinstance(changes, list):
+            return False
+        for change in changes:
+            value = change.get("value") if isinstance(change, dict) else None
+            if not isinstance(value, dict):
+                return False
+            if "messages" not in value and "statuses" not in value:
+                continue
+            metadata = value.get("metadata")
+            if not isinstance(metadata, dict):
+                return False
+            if str(metadata.get("phone_number_id") or "") != expected_phone:
+                return False
+            saw_destination = True
+    return saw_destination
 
 # Message batching coalesces rapid customer messages into one Marina call. It
 # does NOT protect against concurrent orchestrator access - the per-phone lock
@@ -218,14 +279,37 @@ def _ali_recovery_heartbeat(conversation_id: str) -> str:
     return _ALI_HEARTBEAT_COPY.get(locale.lower(), _ALI_HEARTBEAT_COPY["en"])
 
 
-def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
-    """Resume abandoned Ali WhatsApp turns without waiting for new inbound."""
+def _recover_stale_ali_inbound_once(
+    max_age_seconds: int = 40,
+    *,
+    ali_workflow: bool = True,
+) -> int:
+    """Resume durably accepted WhatsApp turns without a provider replay."""
     claimed = state_registry.inbound_processing_claim_recoverable(
         max_age_seconds=max_age_seconds,
     )
     grouped = {}
     for item in claimed:
         payload = item.get("payload") or {}
+        # A durable turn may outlive a provider-account reassignment. Recheck
+        # the current tenant boundary before a heartbeat, buffering, history
+        # write, or provider send. Remove the stale customer payload locally
+        # while retaining the provider id as a terminal dedup marker.
+        if payload.get("conversation_id") and payload.get("account_id"):
+            from shared.tenant_guard import is_account_allowed
+
+            if not is_account_allowed(
+                str(payload.get("account_id") or ""), direction="inbound"
+            ):
+                state_registry.inbound_processing_quarantine(
+                    str(item.get("message_id") or ""),
+                    reason="recovery_account_not_allowlisted",
+                )
+                log(
+                    "whatsapp_recovery_payload_quarantined",
+                    message_id=str(item.get("message_id") or "")[:30],
+                )
+                continue
         if (
             item.get("recovery_reason") == "provider_send_retry"
             and int(item.get("attempt_count") or 0)
@@ -271,10 +355,47 @@ def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
         message_ids = [str(item.get("message_id") or "") for item in items]
         latest_payload = items[-1].get("payload") or {}
         account_id = str(latest_payload.get("account_id") or "")
+        heartbeat_allowed = True
+        if latest_payload.get("platform") == "whatsapp":
+            envelope = icp_overrides.fetch_overrides_fresh()
+            inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+            auto_reply_state = icp_overrides.auto_reply_state(envelope)
+            if inbox_state is None or auto_reply_state is None:
+                state_registry.inbound_processing_bulk_update(
+                    message_ids,
+                    "processing",
+                    reason="tenant_runtime_controls_unavailable",
+                )
+                log(
+                    "whatsapp_recovery_controls_unavailable",
+                    conversation_id=conversation_id[:20],
+                )
+                continue
+            if inbox_state is False:
+                state_registry.inbound_processing_bulk_update(
+                    message_ids,
+                    "paused",
+                    reason="tenant_whatsapp_inbox_paused",
+                )
+                log(
+                    "whatsapp_recovery_inbox_paused",
+                    conversation_id=conversation_id[:20],
+                )
+                continue
+            heartbeat_allowed = (
+                auto_reply_state is True
+                and not state_registry.get_ai_muted(conversation_id)
+                and not state_registry.get_blocked(conversation_id)
+            )
         heartbeat_already_sent = any(
             str(item.get("heartbeat_sent_at") or "") for item in items
         )
-        if not heartbeat_already_sent and account_id:
+        if (
+            ali_workflow
+            and heartbeat_allowed
+            and not heartbeat_already_sent
+            and account_id
+        ):
             heartbeat_ok = send_reply(
                 "whatsapp",
                 conversation_id,
@@ -296,10 +417,13 @@ def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
 
         for item in items:
             payload = item.get("payload") or {}
-            adapter_cls = ZERNIO_CHANNELS.get(
-                payload.get("channel", "whatsapp"), DEFAULT_ZERNIO_CHANNEL,
-            )
-            _buffer_message(adapter_cls.from_zernio(payload))
+            if payload.get("conversation_id") and payload.get("account_id"):
+                adapter_cls = ZERNIO_CHANNELS.get(
+                    payload.get("channel", "whatsapp"), DEFAULT_ZERNIO_CHANNEL,
+                )
+                _buffer_message(adapter_cls.from_zernio(payload))
+            else:
+                _buffer_message(payload)
         with _buffer_lock:
             buffered = _message_buffers.get(conversation_id)
             if buffered and buffered.get("timer") is not None:
@@ -314,21 +438,25 @@ def _recover_stale_ali_inbound_once(max_age_seconds: int = 40) -> int:
     return recovered
 
 
-def _ali_inbound_recovery_loop(stop_event: threading.Event) -> None:
+def _ali_inbound_recovery_loop(
+    stop_event: threading.Event,
+    ali_workflow: bool = True,
+) -> None:
     """Continuously reclaim turns lost to a crash or production deployment."""
     while not stop_event.is_set():
         try:
-            _recover_stale_ali_inbound_once()
+            _recover_stale_ali_inbound_once(ali_workflow=ali_workflow)
         except Exception as exc:
             log("ali_inbound_recovery_failed", error=type(exc).__name__)
-        try:
-            _run_ali_reservation_v2_scheduled_once()
-        except Exception as exc:
-            log("ali_reservation_v2_scheduler_failed", error=type(exc).__name__)
-        try:
-            _run_ali_lead_follow_up_scheduled_once()
-        except Exception as exc:
-            log("ali_lead_follow_up_scheduler_failed", error=type(exc).__name__)
+        if ali_workflow:
+            try:
+                _run_ali_reservation_v2_scheduled_once()
+            except Exception as exc:
+                log("ali_reservation_v2_scheduler_failed", error=type(exc).__name__)
+            try:
+                _run_ali_lead_follow_up_scheduled_once()
+            except Exception as exc:
+                log("ali_lead_follow_up_scheduler_failed", error=type(exc).__name__)
         stop_event.wait(5)
 
 
@@ -602,31 +730,116 @@ async def verify_webhook(
 @app.post("/webhooks/meta/whatsapp")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     """Receive WhatsApp webhook events — return 200 immediately, process in background."""
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_meta_webhook_signature(body, signature):
+        log("meta_whatsapp_webhook_signature_invalid")
+        return PlainTextResponse(content="Forbidden", status_code=403)
     try:
-        payload = await request.json()
+        payload = _json.loads(body)
     except Exception:
-        payload = {"raw": (await request.body()).decode("utf-8", errors="replace")}
-    log("webhook_received", source="meta_whatsapp", payload=payload)
-    background_tasks.add_task(_process_whatsapp_event, payload)
+        log("meta_whatsapp_webhook_json_invalid")
+        return PlainTextResponse(content="Bad Request", status_code=400)
+    if not isinstance(payload, dict) or not _meta_payload_matches_tenant(payload):
+        log("meta_whatsapp_webhook_destination_invalid")
+        return PlainTextResponse(content="Forbidden", status_code=403)
+    log(
+        "webhook_received",
+        source="meta_whatsapp",
+        entry_count=len(payload.get("entry") or []),
+    )
+    messages = parse_webhook_payload(payload)
+    if messages:
+        envelope = icp_overrides.fetch_overrides()
+        inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+        if inbox_state is None:
+            log("whatsapp_runtime_controls_unavailable", source="meta_whatsapp")
+            return PlainTextResponse(content="Unavailable", status_code=503)
+        if inbox_state is False:
+            log("whatsapp_inbox_disabled", source="meta_whatsapp")
+            return PlainTextResponse(content="OK", status_code=200)
+    accepted_messages = []
+    for msg in messages:
+        message_id = msg.get("message_id", "")
+        try:
+            claimed = state_registry.wa_claim_inbound_processing(
+                message_id,
+                conversation_id=msg.get("from", ""),
+                channel="whatsapp",
+                payload=msg,
+            )
+        except Exception as exc:
+            log(
+                "meta_whatsapp_durable_accept_failed",
+                error=type(exc).__name__,
+            )
+            return PlainTextResponse(content="Unavailable", status_code=503)
+        if claimed:
+            accepted_messages.append(msg)
+        elif message_id:
+            log(
+                "webhook_duplicate_skipped",
+                source="meta_whatsapp",
+                message_id=message_id,
+            )
+    if accepted_messages:
+        background_tasks.add_task(
+            _process_whatsapp_event,
+            payload,
+            accepted_messages,
+        )
     return PlainTextResponse(content="OK", status_code=200)
 
 
-def _process_whatsapp_event(payload: dict):
+def _process_whatsapp_event(
+    payload: dict,
+    accepted_messages: list[dict] | None = None,
+):
     """Background task: parse messages, dedup, buffer for debounce."""
     _maybe_run_cleanup()
     try:
-        messages = parse_webhook_payload(payload)
+        messages = (
+            accepted_messages
+            if accepted_messages is not None
+            else parse_webhook_payload(payload)
+        )
         for msg in messages:
             message_id = msg.get("message_id", "")
-            # Dedup by message ID
-            if not message_id or state_registry.wa_has_been_processed(message_id):
-                if message_id:
-                    log("webhook_duplicate_skipped", source="meta_whatsapp",
-                        message_id=message_id)
-                continue
-            state_registry.wa_mark_as_processed(message_id)
-            _record_inbound(msg, "whatsapp", msg.get("from", ""))
-            log("whatsapp_message_normalized", **msg)
+            # Nr 3 owns the channel switch. Check it before dedup or payload
+            # persistence so a disabled tenant cannot accumulate customer
+            # data and cannot poison a future replay of the same message ID.
+            if accepted_messages is None:
+                envelope = icp_overrides.fetch_overrides()
+                inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+                if inbox_state is None:
+                    log(
+                        "whatsapp_runtime_controls_unavailable",
+                        source="meta_whatsapp",
+                    )
+                    continue
+                if inbox_state is False:
+                    log(
+                        "whatsapp_inbox_disabled",
+                        source="meta_whatsapp",
+                        message_id=message_id[:30],
+                    )
+                    continue
+                if not state_registry.wa_claim_inbound_processing(
+                    message_id,
+                    conversation_id=msg.get("from", ""),
+                    channel="whatsapp",
+                    payload=msg,
+                ):
+                    if message_id:
+                        log("webhook_duplicate_skipped", source="meta_whatsapp",
+                            message_id=message_id)
+                    continue
+            log(
+                "whatsapp_message_normalized",
+                message_id=message_id[:30],
+                message_type=str(msg.get("message_type") or "unknown")[:30],
+                has_text=msg.get("text") is not None,
+            )
             # Only buffer text messages
             if msg.get("text") is None:
                 state_registry.inbound_processing_update(
@@ -728,6 +941,88 @@ def _response_timing_for_message(msg: dict) -> dict:
     return response_timing.effective_response_timing(envelope)
 
 
+def _whatsapp_inbox_still_enabled(
+    channel: str,
+    conversation_id: str,
+    message_ids: list[str],
+) -> bool:
+    """Recheck an already-buffered WhatsApp message before processing."""
+    if str(channel or "").strip().lower() != "whatsapp":
+        return True
+    envelope = icp_overrides.fetch_overrides_fresh()
+    inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+    if inbox_state is True:
+        return True
+    if inbox_state is None:
+        log(
+            "whatsapp_runtime_controls_unavailable_before_flush",
+            conversation_id=str(conversation_id or "")[:20],
+        )
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "processing",
+            reason="tenant_runtime_controls_unavailable",
+        )
+        return False
+    log(
+        "whatsapp_inbox_disabled_before_flush",
+        conversation_id=str(conversation_id or "")[:20],
+    )
+    state_registry.inbound_processing_bulk_update(
+        message_ids,
+        "paused",
+        reason="tenant_whatsapp_inbox_paused",
+    )
+    return False
+
+
+def _automated_send_still_enabled(
+    channel: str,
+    conversation_id: str,
+    message_ids: list[str],
+) -> bool:
+    """Perform the final authoritative hard-stop check before an AI send."""
+    if state_registry.get_ai_muted(conversation_id):
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "escalated",
+            reason="human_takeover_ai_muted",
+        )
+        return False
+    envelope = icp_overrides.fetch_overrides_fresh()
+    inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+    auto_reply_state = icp_overrides.auto_reply_state(envelope)
+    if str(channel or "").strip().lower() == "whatsapp" and inbox_state is None:
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "processing",
+            reason="tenant_runtime_controls_unavailable",
+        )
+        return False
+    if str(channel or "").strip().lower() == "whatsapp" and inbox_state is False:
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "paused",
+            reason="tenant_whatsapp_inbox_paused",
+        )
+        return False
+    if auto_reply_state is None:
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "processing",
+            reason="tenant_runtime_controls_unavailable",
+        )
+        return False
+    if auto_reply_state is False:
+        state_registry.inbound_processing_bulk_update(
+            message_ids,
+            "paused",
+            reason="tenant_agent_paused",
+        )
+        return False
+    return True
+
+
 def _flush_buffer(phone):
     """Flush buffered messages: concatenate texts, process as single message."""
     with _buffer_lock:
@@ -736,8 +1031,6 @@ def _flush_buffer(phone):
         return
     messages = buf["messages"]
     ids = _message_ids(messages)
-    state_registry.inbound_processing_bulk_update(
-        ids, "processing", reason="batch_flush_started")
     # Concatenate all text messages
     texts = [m["text"] for m in messages if m.get("text")]
     combined_text = "\n".join(texts)
@@ -779,6 +1072,9 @@ def _flush_buffer(phone):
                 message_count=len(ids),
             )
             return
+        state_registry.inbound_processing_bulk_update(
+            ids, "processing", reason="batch_flush_started"
+        )
         try:
             # Check if this came from Zernio (has _zernio metadata)
             _zernio_conv = final_msg.get("_zernio_conversation_id")
@@ -786,6 +1082,20 @@ def _flush_buffer(phone):
             _zernio_channel = final_msg.get("_zernio_channel", "whatsapp")
             _zernio_sender = final_msg.get("_zernio_sender_name", "")
             if _zernio_conv:
+                if not _whatsapp_inbox_still_enabled(
+                    _zernio_channel, _zernio_conv, ids
+                ):
+                    return
+                auto_reply_state = icp_overrides.auto_reply_state(
+                    icp_overrides.fetch_overrides()
+                )
+                if auto_reply_state is None:
+                    state_registry.inbound_processing_bulk_update(
+                        ids,
+                        "processing",
+                        reason="tenant_runtime_controls_unavailable",
+                    )
+                    return
                 ignored = state_registry.match_ignored_contact(
                     channel=_zernio_channel,
                     sender_id=final_msg.get("from", ""),
@@ -820,7 +1130,7 @@ def _flush_buffer(phone):
 
                 _ali_v2_automation_available = (
                     not state_registry.get_ai_muted(_zernio_conv)
-                    and icp_overrides.auto_reply_enabled()
+                    and auto_reply_state is True
                 )
                 structural_result = (
                     process_structural_text(final_msg)
@@ -836,7 +1146,20 @@ def _flush_buffer(phone):
                         _zernio_sender, ids,
                     )
                     structural_reply = str(structural_result.get("reply") or "")
-                    structural_ok = bool(structural_reply) and send_reply(
+                    if not structural_reply:
+                        _mark_delivery_failed(
+                            _zernio_channel,
+                            _zernio_conv,
+                            _zernio_sender,
+                            ids,
+                            "structural reply failed",
+                        )
+                        return
+                    if not _automated_send_still_enabled(
+                        _zernio_channel, _zernio_conv, ids
+                    ):
+                        return
+                    structural_ok = send_reply(
                         _zernio_channel,
                         _zernio_conv,
                         _zernio_acct,
@@ -883,13 +1206,26 @@ def _flush_buffer(phone):
                                 ids, "escalated", reason="human_takeover_ai_muted",
                             )
                             return
-                        if not icp_overrides.auto_reply_enabled():
+                        if auto_reply_state is False:
                             state_registry.inbound_processing_bulk_update(
                                 ids, "paused", reason="tenant_agent_paused",
                             )
                             return
                         reply_text = str(document_result.get("reply") or "")
-                        reply_ok = bool(reply_text) and send_reply(
+                        if not reply_text:
+                            _mark_delivery_failed(
+                                _zernio_channel,
+                                _zernio_conv,
+                                _zernio_sender,
+                                ids,
+                                "document acknowledgement failed",
+                            )
+                            return
+                        if not _automated_send_still_enabled(
+                            _zernio_channel, _zernio_conv, ids
+                        ):
+                            return
+                        reply_ok = send_reply(
                             _zernio_channel,
                             _zernio_conv,
                             _zernio_acct,
@@ -954,7 +1290,7 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
-                if not icp_overrides.auto_reply_enabled():
+                if auto_reply_state is False:
                     state_registry.dm_store_inbound_message(
                         _zernio_conv, _zernio_channel, combined_text,
                         _zernio_sender, ids,
@@ -1026,6 +1362,10 @@ def _flush_buffer(phone):
                 reply_text = _sanitize_tenant_whatsapp_reply(
                     reply_text, _zernio_channel)
                 if reply_text:
+                    if not _automated_send_still_enabled(
+                        _zernio_channel, _zernio_conv, ids
+                    ):
+                        return
                     attachment_url = str((reply_media or {}).get("url") or "")
                     recommendation_delivery = None
                     confirmation_delivery = None
@@ -1058,6 +1398,12 @@ def _flush_buffer(phone):
                         )
                         ok = bool(confirmation_delivery.get("success"))
                     else:
+                        delivery_idempotency_key = (
+                            f"ali-turn-{ali_turn_commit['action_id']}"
+                            if ali_turn_commit
+                            else "unboks-auto-reply-"
+                            + str(final_msg.get("_ali_action_id") or "")
+                        )
                         ok = send_reply(
                             _zernio_channel,
                             _zernio_conv,
@@ -1065,11 +1411,8 @@ def _flush_buffer(phone):
                             reply_text,
                             attachment_url=attachment_url,
                             attachment_type="image" if attachment_url else "image",
-                            confirm_delivery=bool(ali_turn_commit),
-                            idempotency_key=(
-                                f"ali-turn-{ali_turn_commit['action_id']}"
-                                if ali_turn_commit else ""
-                            ),
+                            confirm_delivery=True,
+                            idempotency_key=delivery_idempotency_key,
                         )
                     if not ok:
                         log("zernio_reply_send_failed",
@@ -1193,6 +1536,18 @@ def _flush_buffer(phone):
                         state_registry.inbound_processing_bulk_update(
                             ids, "ignored", reason="no_reply_returned")
             else:
+                if not _whatsapp_inbox_still_enabled("whatsapp", phone, ids):
+                    return
+                auto_reply_state = icp_overrides.auto_reply_state(
+                    icp_overrides.fetch_overrides()
+                )
+                if auto_reply_state is None:
+                    state_registry.inbound_processing_bulk_update(
+                        ids,
+                        "processing",
+                        reason="tenant_runtime_controls_unavailable",
+                    )
+                    return
                 # Brief 220: per-conversation runtime block (Meta-legacy WhatsApp path).
                 if state_registry.get_blocked(phone):
                     log("whatsapp_meta_blocked_conversation", phone=phone[:20])
@@ -1206,7 +1561,7 @@ def _flush_buffer(phone):
                     state_registry.inbound_processing_bulk_update(
                         ids, "escalated", reason="human_takeover_ai_muted")
                     return  # exits the with _phone_lock block; _flush_buffer returns
-                if not icp_overrides.auto_reply_enabled():
+                if auto_reply_state is False:
                     state_registry.wa_store_message(phone, "user", combined_text)
                     log("tenant_agent_paused", phone=phone[:20], channel="whatsapp")
                     state_registry.inbound_processing_bulk_update(
@@ -1229,6 +1584,10 @@ def _flush_buffer(phone):
                 reply_text = _sanitize_tenant_whatsapp_reply(
                     reply_text, "whatsapp")
                 if reply_text:
+                    if not _automated_send_still_enabled(
+                        "whatsapp", phone, ids
+                    ):
+                        return
                     ok = send_text_message(to=phone, text=reply_text)
                     if not ok:
                         _mark_delivery_failed(
@@ -1268,9 +1627,57 @@ async def receive_zernio_webhook(request: Request, background_tasks: BackgroundT
     try:
         payload = _json.loads(body)
     except Exception:
-        payload = {"raw": body.decode("utf-8", errors="replace")}
+        log("zernio_webhook_json_invalid")
+        return PlainTextResponse(content="Bad Request", status_code=400)
+    if not isinstance(payload, dict):
+        return PlainTextResponse(content="Bad Request", status_code=400)
     log("webhook_received", source="zernio", webhook_event=payload.get("event", "unknown"))
-    background_tasks.add_task(_process_zernio_event, payload)
+    if payload.get("event") == "message.received":
+        msg = parse_zernio_webhook(payload)
+        if not msg:
+            return PlainTextResponse(content="OK", status_code=200)
+        from shared.tenant_guard import is_account_allowed
+        if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
+            log(
+                "zernio_event_account_not_allowlisted",
+                account_id=msg.get("account_id", "")[:20],
+                message_id=msg.get("message_id", "")[:30],
+            )
+            return PlainTextResponse(content="OK", status_code=200)
+        if msg.get("platform") == "whatsapp":
+            envelope = icp_overrides.fetch_overrides()
+            inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+            if inbox_state is None:
+                log("whatsapp_runtime_controls_unavailable", source="zernio")
+                return PlainTextResponse(content="Unavailable", status_code=503)
+            if inbox_state is False:
+                log(
+                    "whatsapp_inbox_disabled",
+                    source="zernio",
+                    account_id=msg.get("account_id", "")[:20],
+                    message_id=msg.get("message_id", "")[:30],
+                )
+                return PlainTextResponse(content="OK", status_code=200)
+        try:
+            claimed = state_registry.wa_claim_inbound_processing(
+                msg.get("message_id", ""),
+                conversation_id=msg.get("conversation_id", ""),
+                channel=msg.get("channel", ""),
+                payload=msg,
+            )
+        except Exception as exc:
+            log("zernio_durable_accept_failed", error=type(exc).__name__)
+            return PlainTextResponse(content="Unavailable", status_code=503)
+        if not claimed:
+            log(
+                "webhook_duplicate_skipped",
+                source="zernio",
+                message_id=msg.get("message_id", ""),
+            )
+            return PlainTextResponse(content="OK", status_code=200)
+        background_tasks.add_task(_process_zernio_event, payload, msg, True)
+    else:
+        background_tasks.add_task(_process_zernio_event, payload)
     return PlainTextResponse(content="OK", status_code=200)
 
 
@@ -1347,6 +1754,13 @@ def _process_zernio_sent_event(payload: dict) -> None:
             account_id=msg.get("account_id", "")[:20],
         )
         return
+    if not icp_overrides.whatsapp_inbox_enabled():
+        log(
+            "whatsapp_inbox_disabled",
+            source="zernio_sent",
+            message_id=msg.get("message_id", "")[:30],
+        )
+        return
 
     visible_text = _external_operator_message_text(msg)
     if not visible_text:
@@ -1384,12 +1798,28 @@ def _process_zernio_sent_event(payload: dict) -> None:
     )
 
 
-def _process_zernio_event(payload: dict):
+def _process_zernio_event(
+    payload: dict,
+    accepted_message: dict | None = None,
+    message_was_claimed: bool = False,
+):
     """Background task: parse Zernio webhook, dedup, route DM to booking or Q&A."""
     try:
         if payload.get("event") == "message.failed":
             failed = parse_zernio_failed_webhook(payload)
             if failed:
+                # Zernio subscriptions are team-wide. A failed-delivery event
+                # from another tenant must not reconcile or mutate this
+                # tenant's state.
+                from shared.tenant_guard import is_account_allowed
+                if not is_account_allowed(
+                    failed.get("account_id", ""), direction="inbound"
+                ):
+                    log(
+                        "zernio_failed_event_account_not_allowlisted",
+                        account_id=failed.get("account_id", "")[:20],
+                    )
+                    return
                 recommendation_failure = state_registry.wa_claim_vehicle_recommendation_failure(
                     failed["conversation_id"], failed["message_id"],
                 )
@@ -1560,17 +1990,49 @@ def _process_zernio_event(payload: dict):
             _process_zernio_sent_event(payload)
             return
 
-        msg = parse_zernio_webhook(payload)
+        msg = accepted_message or parse_zernio_webhook(payload)
         if not msg:
             return  # Not a message event or unparseable
 
         message_id = msg["message_id"]
-        # Reuse whatsapp_processed table for dedup
-        if state_registry.wa_has_been_processed(message_id):
-            log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
-            return
-        state_registry.wa_mark_as_processed(message_id)
-        _record_inbound(msg, msg.get("channel", ""), msg.get("conversation_id", ""))
+        # Zernio subscriptions are team-wide. Validate tenant ownership before
+        # *any* dedup marker, inbound ledger row, or customer payload is
+        # persisted. Otherwise a foreign event leaks data and consumes its ID,
+        # preventing the rightful tenant from processing a replay later.
+        if not message_was_claimed:
+            from shared.tenant_guard import is_account_allowed
+            if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
+                log(
+                    "zernio_event_account_not_allowlisted",
+                    account_id=msg.get("account_id", "")[:20],
+                    message_id=message_id[:30],
+                )
+                return
+            if msg.get("platform") == "whatsapp":
+                envelope = icp_overrides.fetch_overrides()
+                inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+                if inbox_state is None:
+                    log(
+                        "whatsapp_runtime_controls_unavailable",
+                        source="zernio",
+                    )
+                    return
+                if inbox_state is False:
+                    log(
+                        "whatsapp_inbox_disabled",
+                        source="zernio",
+                        account_id=msg.get("account_id", "")[:20],
+                        message_id=message_id[:30],
+                    )
+                    return
+            if not state_registry.wa_claim_inbound_processing(
+                message_id,
+                conversation_id=msg.get("conversation_id", ""),
+                channel=msg.get("channel", ""),
+                payload=msg,
+            ):
+                log("webhook_duplicate_skipped", source="zernio", message_id=message_id)
+                return
 
         ignored = state_registry.match_ignored_contact(
             channel=msg.get("channel", ""),
@@ -1620,16 +2082,6 @@ def _process_zernio_event(payload: dict):
                 message_id=message_id)
             state_registry.inbound_processing_update(
                 message_id, "ignored", reason="blocked_conversation")
-            return
-
-        # Brief 238 — tenant isolation: refuse webhooks for accounts not
-        # allowlisted in this tenant's client.json. Strict mode aborts here;
-        # permissive mode just logs and keeps going.
-        from shared.tenant_guard import is_account_allowed
-        if not is_account_allowed(msg.get("account_id", ""), direction="inbound"):
-            state_registry.inbound_processing_update(
-                message_id, "processing_failed",
-                reason="account_not_allowlisted")
             return
 
         # Brief 240: auto-resolve operator WhatsApp alert route. If this

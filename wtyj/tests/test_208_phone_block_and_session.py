@@ -30,13 +30,13 @@ def test_ignored_phone_dropped_at_webhook(
         "sender_name": "Excluir",
         "text": "yo",
     }
-    mock_state.wa_has_been_processed.return_value = False
+    mock_state.wa_claim_inbound_processing.return_value = True
     mock_state.match_ignored_contact.return_value = None
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
     _process_zernio_event({"event": "message.received", "data": {}})
 
-    mock_state.wa_mark_as_processed.assert_called_once()
+    mock_state.wa_claim_inbound_processing.assert_called_once()
     mock_typing.assert_not_called()
 
 
@@ -59,7 +59,7 @@ def test_non_ignored_phone_proceeds(mock_typing, mock_parse, mock_config, mock_s
         "sender_name": "RealCustomer",
         "text": "hello",
     }
-    mock_state.wa_has_been_processed.return_value = False
+    mock_state.wa_claim_inbound_processing.return_value = True
     mock_state.match_ignored_contact.return_value = None
     # Brief 220: state_registry.get_blocked must return False so the new
     # block check (added after the ignored_phones check) doesn't drop

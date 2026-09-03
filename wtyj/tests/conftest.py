@@ -56,3 +56,42 @@ def _bypass_tenant_guard_in_tests():
             config_loader._CONFIG_PATH = _BM_CLIENT_CONFIG
             os.environ["CLIENT_CONFIG_PATH"] = _BM_CLIENT_CONFIG
             config_loader._cache = {}
+
+
+@pytest.fixture(autouse=True)
+def _enable_runtime_controls_for_existing_unit_scenarios(monkeypatch, request):
+    """Keep legacy unit scenarios explicit about their normal running state.
+
+    Production now fails closed when Nr 3 cannot supply channel controls. The
+    pre-existing tests exercise unrelated booking and conversation behavior
+    without an Nr 3 server, so they run with both controls enabled. Dedicated
+    bridge/hardening tests are excluded and assert the production defaults.
+    """
+    if request.node.path.name in {
+        "test_icp_overrides.py",
+        "test_mermaid_runtime_hardening.py",
+    }:
+        yield
+        return
+    from shared import icp_overrides
+    production_auto_reply_enabled = icp_overrides.auto_reply_enabled
+    production_whatsapp_inbox_enabled = icp_overrides.whatsapp_inbox_enabled
+    monkeypatch.setattr(
+        icp_overrides,
+        "auto_reply_enabled",
+        lambda envelope=None: (
+            production_auto_reply_enabled(envelope)
+            if isinstance(envelope, dict)
+            else True
+        ),
+    )
+    monkeypatch.setattr(
+        icp_overrides,
+        "whatsapp_inbox_enabled",
+        lambda envelope=None: (
+            production_whatsapp_inbox_enabled(envelope)
+            if isinstance(envelope, dict)
+            else True
+        ),
+    )
+    yield

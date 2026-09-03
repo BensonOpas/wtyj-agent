@@ -92,8 +92,8 @@ def test_paused_tenant_stores_inbound_without_replying(
     phone = "TEST_076_PAUSED_001"
     _cleanup_phone(phone)
     monkeypatch.setattr(
-        "agents.social.webhook_server.icp_overrides.auto_reply_enabled",
-        lambda: False,
+        "agents.social.webhook_server.icp_overrides.auto_reply_state",
+        lambda envelope=None: False,
     )
     _buffer_message({
         "from": phone,

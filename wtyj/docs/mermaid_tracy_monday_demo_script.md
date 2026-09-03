@@ -4,10 +4,10 @@ Meeting: Monday, 7 September 2026 at 12:00 Curaçao time (AST, UTC-4).
 Target length: 8 to 10 minutes.
 
 This is a demonstration of a real, isolated Unboks tenant. It is not a new
-Mermaid website. A real tenant does not by itself prove that Meta, WhatsApp, the
-fictional Facebook Page, or Zernio has been authorized. Use the live WhatsApp
-path only after every live-channel gate below passes. Otherwise use the clearly
-labelled rehearsal view and say that the channel is simulated.
+Mermaid website. The dedicated WhatsApp provider path completed authorization,
+strict binding, and controlled canaries on `2026-09-03`. Use the live WhatsApp
+path on Monday only after the hardened release and the same-day preflight below
+pass; otherwise use the clearly labelled rehearsal view.
 
 ## What may be called real
 
@@ -16,8 +16,8 @@ labelled rehearsal view and say that the channel is simulated.
 | Mermaid workspace, TRACY configuration, tenant isolation, operator controls | `Implemented as a dedicated Unboks tenant` after the checked-out revision and runtime health are verified |
 | Trip facts | `Grounded in Mermaid's first-party pages, checked 2 September 2026` |
 | Facebook Page | `Real, clearly disclosed fictional demo Page` — the Page exists, but its WhatsApp action and Facebook messaging are not connected |
-| Mermaid WhatsApp number | Dedicated Zernio-provisioned `+1 223 276 0075`; purchased, but not live until Meta shows it as connected and the isolation canaries pass |
-| Zernio | `Connection flow prepared` until Nr3 proves the selected provider account and exact number |
+| Mermaid WhatsApp number | Dedicated Zernio-provisioned `+1 223 276 0075`; Meta/Zernio/Nr3 connection and controlled live canaries passed on 3 September |
+| Zernio | `Connected to Mermaid with one exact strict account`; never show or read out provider identifiers |
 | Any scripted example conversation | `Rehearsal evidence only`; it was not sent through WhatsApp |
 | Booking and payment | `Handled by Mermaid's existing reservation system`; TRACY never claims to book, hold seats, or take payment |
 
@@ -41,10 +41,10 @@ Page. Do not use Mermaid's existing public number as a demo fallback.
 Complete the [owner-action checklist](mermaid_tracy_go_live_checklist.md). Then
 record one of these modes:
 
-- **Mode A, live channel:** Meta authorization is complete; Nr3 shows the exact
-  new number on the Mermaid Zernio purchase record; the strict allowlist
-  contains exactly the selected account; the inbox-only and controlled-reply
-  canaries passed.
+- **Mode A, live channel:** the hardened release is running; Nr3 shows the exact
+  dedicated number; the strict allowlist contains exactly one selected account;
+  and fresh inbox-only and controlled-reply canaries pass. The provider-side
+  version of these canaries first passed on `2026-09-03`.
 - **Mode B, safe evidence walkthrough:** any live-channel gate is incomplete.
   Keep `whatsapp_inbox`, `ai_auto_reply`, and `facebook_dms` off. Show the real
   tenant and operator controls, then walk through the labelled example prompts
@@ -82,8 +82,8 @@ Say:
 
 > This is TRACY inside a dedicated Mermaid tenant on Unboks. The knowledge,
 > safety boundaries, handoff, and operator controls are already tenant-scoped.
-> Today I will show the guest journey and exactly what remains before a real
-> Mermaid number can carry traffic.
+> Today I will show the guest journey on a dedicated pilot number and the short,
+> controlled path to an official Mermaid rollout.
 
 If using Mode B, immediately add:
 
@@ -179,9 +179,10 @@ while directing date-specific confirmation to the reservation system.
 Say:
 
 > The tenant, knowledge, safeguards, and operator workflow do not need to be
-> rebuilt. Going live is a controlled provider cutover: owner authorization,
-> exact-number selection, strict account binding, an inbox-only canary, one
-> controlled AI reply, and then monitored activation.
+> rebuilt. The dedicated pilot already has owner authorization, exact-number
+> selection, strict account binding, and controlled live proof. Moving to an
+> official Mermaid number is a separate owner-approved cutover followed by the
+> same isolation and reply-count canaries.
 
 Show the owner-only checklist, not secret-bearing provider screens. Be explicit
 about which steps are complete and which still require the Mermaid owner.

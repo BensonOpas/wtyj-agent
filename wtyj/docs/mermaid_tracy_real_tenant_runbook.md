@@ -9,11 +9,11 @@ presentation, and the [go-live checklist](mermaid_tracy_go_live_checklist.md)
 for external authorization and cutover.
 
 `Real tenant` means Mermaid has its own versioned identity, configuration,
-runtime boundary, dashboard workspace, and controls. It does not mean a Meta
-asset or provider is connected. Until Meta/Zernio authorization, exact-number
-selection, strict account persistence, and canaries have all passed, describe
-the Facebook Page, WhatsApp number, and Zernio connection as prepared or
-simulated, never live.
+runtime boundary, dashboard workspace, and controls. On `2026-09-03`, the
+dedicated Meta/Zernio WhatsApp number also completed exact-number selection,
+strict account persistence, an inbox-only canary, and one controlled live TRACY
+reply. The fictional Facebook Page's WhatsApp action and Facebook DMs remain
+separate and are not connected.
 
 ## Asset map
 
@@ -28,20 +28,20 @@ simulated, never live.
 | Public API prefix | `https://api.unboks.org/api/mermaid/` |
 | Dashboard | `https://dashboard.unboks.org/login?workspace=mermaid` |
 | Zernio channel | WhatsApp |
-| Demo number | `+1 223 276 0075`; dedicated US number purchased from Zernio on `2026-09-03`, Meta/WABA authorization pending |
+| Demo number | `+1 223 276 0075`; dedicated US number purchased from Zernio and connected through its dedicated Meta WABA on `2026-09-03` |
 | Demo Facebook Page | `Klein Curaçao Trip Desk Demo` |
-| Demo Page phone state | Empty; superseded `+599 9 686 5665` removed and verified on `2026-09-03` |
+| Demo Page phone state | Empty; superseded `+599 9 686 5665` removed and verified on `2026-09-03`; dedicated action remains pending the hardened runtime release |
 | Public trial intake | Submitted, email-verified, approved in Nr3, and all eight onboarding answers saved on `2026-09-03`. The final `Create workspace` action remains intentionally unused because its slug hint is `mermaid-demo`; the existing active tenant is `mermaid`. |
 
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
 profiles are out of scope for connection or mutation.
 
-Nr3 was checked live on `2026-09-03`: `mermaid` already exists with status
-`active`, agent name `TRACY`, WhatsApp connection pending, no connected phone or
-provider account, and an empty strict allowlist. The deployed control panel
-briefly accepted an invalid WhatsApp On toggle in this state; it was immediately
-returned to Off. Control-panel PR #94 contains the fail-closed activation guard
-and must be deployed and verified before another activation attempt.
+Nr3 was checked live on `2026-09-03`: `mermaid` exists with status `active`,
+agent name `TRACY`, the exact dedicated number, connection status
+`Connected / healthy`, and a strict allowlist containing one verified account.
+`whatsapp_inbox` is enabled, `ai_auto_reply` is paused after the canary, and
+`facebook_dms` is off. Control-panel PR #94 contains the fail-closed activation
+guard and the callback repair and still requires its coordinated release.
 
 ## Integration truth gate
 
@@ -57,6 +57,43 @@ and must be deployed and verified before another activation attempt.
 A configured name, a generated link, a screenshot, a callback, or a visible
 phone option is not connection proof. If any layer lacks its proof, keep the
 affected channel off and use the clearly labelled rehearsal flow.
+
+## Forensic connection result
+
+The failure was a chain of three independent conditions, not a Mermaid tenant
+collision:
+
+1. The existing Meta portfolio was already at its WhatsApp phone-number limit.
+   A dedicated `Mermaid Demo - Unboks` portfolio and WABA were used instead;
+   no existing number or tenant asset was moved.
+2. Zernio rejected the first callback with
+   `whatsapp_number_pinned_to_profile` because the purchased number was still
+   pinned to `Default Profile`. Moving only that number to Mermaid's dedicated
+   Zernio profile resolved the provider ownership error.
+3. Meta and Zernio then completed successfully, but the deployed Nr3 callback
+   expected a different state shape from Zernio's documented standard
+   redirect. Nr3's refresh plus verified-account allowlist repair reconciled
+   the already-active provider account without reconnecting another tenant.
+
+The resulting live state has one Mermaid profile, one Mermaid account, one
+number, and a strict one-account allowlist. Ali, Consulta/Roberto, and Unboks
+retained their existing bindings. The tracked portable tenant template remains
+strict-empty intentionally; only Nr3 and the protected live configuration hold
+the provider account identifier.
+
+## Live proof recorded 3 September 2026
+
+- With AI paused, one unique WhatsApp canary was ingested exactly once and
+  stored as `paused / tenant_agent_paused`; no reply was sent.
+- After deliberate AI activation, one published-fact question received exactly
+  one TRACY reply. It correctly stated Fishermen's Pier at 06:45 and return
+  boarding at 15:20, and was recorded as `replied / provider_send_ok`.
+- The Mermaid event audit contained only its exact account identity and the
+  other three tenant bindings were unchanged.
+- AI was paused again after the proof. Facebook DMs stayed off throughout.
+
+Repeat both canaries after the runtime hardening release. The earlier success
+proves the provider path; it does not waive the final release gate.
 
 ## Safe state progression
 
@@ -79,6 +116,9 @@ affected channel off and use the clearly labelled rehearsal flow.
 6. **Demo ready:** factual reply, escalation, takeover, hand-back, and isolation
    checks are recorded. `facebook_dms` stays false unless Facebook messaging is
    separately connected and canaried.
+
+Mermaid has completed steps 1 through 5 once. Step 6 and the repeat canaries
+remain pending the hardened release and full browser rehearsal.
 
 Do not skip directly from provisioning to enabled traffic. An absent allowlist
 is legacy-permissive; an empty strict allowlist is the required pre-connection

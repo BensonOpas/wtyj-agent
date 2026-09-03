@@ -12,11 +12,11 @@ here is the fictional, clearly disclosed `Klein Curaçao Trip Desk Demo` Page.
 
 | Capability | Repository evidence | External/live evidence required before claiming it is live |
 |---|---|---|
-| Dedicated Mermaid tenant and TRACY behavior | Versioned `mermaid` tenant package, prompt boundaries, tests, runbooks, and loopback compose exist | Nr3 was opened on `2026-09-03` and showed the existing `mermaid` tenant as active with agent name `TRACY`; runtime health, canonical routing, and cross-tenant rejection still require release verification |
+| Dedicated Mermaid tenant and TRACY behavior | Versioned `mermaid` tenant package, prompt boundaries, tests, runbooks, and loopback compose exist | Nr3 shows the existing `mermaid` tenant as active with agent name `TRACY`; the current live runtime is healthy and passed one controlled reply, while the reviewed hardening release and canonical-route recheck remain release gates |
 | Unboks operator workspace | Tenant identity and expected runtime endpoints are defined | Authorized operator opened `mermaid` in Nr3 on `2026-09-03`; no separate `mermaid-demo` workspace was created |
-| WhatsApp demo number | Dedicated Zernio number `+1 223 276 0075` was purchased on `2026-09-03` | Meta and Nr3 must show that exact number and an account uniquely owned by Mermaid's tenant |
-| Zernio | Tenant-bound authorization/status flow is implemented | A fresh owner-authorized callback succeeds, strict allowlist persistence succeeds, and Nr3 reports connected |
-| Facebook demo Page | `Klein Curaçao Trip Desk Demo` exists with the disclosure and original artwork | Verify its owning Meta business; keep its WhatsApp action empty until the dedicated number is connected |
+| WhatsApp demo number | Dedicated Zernio number `+1 223 276 0075` was purchased on `2026-09-03` | Meta and Zernio show the number active; Nr3 reports connected/healthy with one exact strict account; inbox-only and one-reply canaries passed |
+| Zernio | Tenant-bound authorization/status flow is implemented | Connected after moving only the dedicated number from Zernio's Default Profile to Mermaid's profile and completing a fresh Meta authorization; Nr3 status repair persisted the exact binding |
+| Facebook demo Page | `Klein Curaçao Trip Desk Demo` exists with the disclosure and original artwork | Its WhatsApp action remains empty; add it only after the hardened runtime release and final live canary |
 | Facebook messages | Kept fail-closed by default | Separate Facebook messaging authorization and canary; otherwise `facebook_dms` remains off |
 | Booking and payment | TRACY redirects to Mermaid's first-party reservation form | Mermaid's existing reservation system remains authoritative; no Unboks booking or payment integration is claimed |
 
@@ -33,8 +33,10 @@ live connection.
 - Assistant: `TRACY`
 - Demo WhatsApp number: dedicated Zernio-provisioned `+1 223 276 0075`,
   purchased exclusively for Mermaid on `2026-09-03`.
-- Number selection: US `+1` inventory was selected at `$3/month`; WhatsApp is
-  not live until Meta authorization, exact provider binding, and canaries pass.
+- Number selection: US `+1` inventory was selected at `$3/month`. Meta
+  authorization, the exact provider binding, strict Nr3 reconciliation, an
+  inbox-only canary, and one controlled live TRACY reply passed on
+  `2026-09-03`.
 - Fictional Page: `Klein Curaçao Trip Desk Demo`
 - Official public Mermaid number, read-only reference: `+599 9 560 1530`
 - Official booking path:
@@ -72,8 +74,9 @@ Unboks delivery owner:
   compose, state database, Nginx site, and running image.
 - [ ] The legacy dashboard credential identified during review has been rotated
   through the protected operator process.
-- [ ] `whatsapp_inbox`, `ai_auto_reply`, and `facebook_dms` are all false, and
-  Mermaid's provider allowlist is strict and empty before authorization.
+- [ ] After the hardening release, `whatsapp_inbox` is deliberately enabled,
+  `ai_auto_reply` and `facebook_dms` are false, and Mermaid's provider
+  allowlist remains strict with exactly the already verified account.
 
 Evidence to record: release commit, health timestamp, route/isolation result,
 rollback label, and toggle state. Never record a password, token, callback
@@ -132,8 +135,9 @@ Authorized Meta administrator, in the owner's browser session:
   business and messaging path are verified.
 - [ ] Keep Meta/Facebook native instant replies and automated rules off. Zernio
   and Unboks must remain the only intended automated reply path.
-- [ ] Add the `Send WhatsApp message` action only after Meta has verified the
-  dedicated demo number.
+- [ ] Add the `Send WhatsApp message` action only after the hardened Mermaid
+  runtime is deployed and a final one-message/one-reply canary passes. Meta has
+  already verified the dedicated demo number.
 - [ ] Verify the Page is visible in Meta under the expected owning business and
   that no Mermaid public asset was modified.
 
@@ -150,58 +154,56 @@ Zernio administrator completes authorization in their own browser:
   in Nr3 on `2026-09-03`: slug `mermaid`, status active, agent `TRACY`.
 - [x] In the Mermaid-bound Zernio profile, choose `Get a new number`, review the
   current price and capabilities, and complete the owner-approved purchase.
-  Zernio now lists `+1 223 276 0075` as Purchased and Active; WhatsApp remains
-  Off pending Meta authorization.
-- [x] Continue from that purchase into Meta Embedded Signup. The flow was
-  attempted twice on `2026-09-03`; the BSP-provided number appeared, but Meta
-  returned a generic phone-number error both times. No existing consumer or
-  WhatsApp Business mobile-app account was reused.
-- [ ] The owner opens the link, signs in, completes MFA and business ownership
-  checks, and authorizes only the intended demo assets.
-- [ ] If more than one provider profile, Page, WhatsApp account, or phone number
-  is shown, stop and identify ownership before selecting anything.
-- [ ] Select only the new number shown on Mermaid's Zernio purchase record. If
-  it is missing, if the public Mermaid number `+59995601530` appears as the
-  intended selection, or if any existing user/tenant number appears, stop and
-  keep every toggle off.
-- [ ] Wait for Zernio's number provisioning and Meta registration to complete;
-  purchased numbers are verified in that provider flow rather than through an
-  existing phone or eSIM.
-- [ ] Refresh Nr3 status. It must prove an active WhatsApp account, exact
-  tenant-bound profile ownership, exact phone selection, and successful strict
-  allowlist persistence.
-- [ ] Confirm the Mermaid allowlist is `strict` with exactly one account and
-  that the same provider account or profile is not assigned to any other
-  tenant.
-- [ ] Confirm callback replay, duplicate delivery, or page refresh did not
-  switch accounts, create a second connection, or enable a channel.
+  Zernio lists `+1 223 276 0075` as Purchased and Active.
+- [x] Complete Meta Embedded Signup using the dedicated `Mermaid Demo - Unboks`
+  business portfolio and WhatsApp Business Account. The original Meta
+  portfolio was already at its number limit; no existing consumer, WhatsApp
+  Business app, public Mermaid, or other tenant number was moved or reused.
+- [x] Move only the new number from Zernio's `Default Profile` to the dedicated
+  Mermaid profile after Zernio returned the exact
+  `whatsapp_number_pinned_to_profile` error.
+- [x] Complete a fresh authorization and select only the BSP-provided
+  `+1 223 276 0075` number under `Mermaid Demo - Unboks`.
+- [x] Wait for provisioning and confirm Zernio created one active WhatsApp
+  account with the exact Mermaid profile and number.
+- [x] Refresh Nr3 status, then run its verified-account allowlist repair. Nr3
+  reports `Connected`, `healthy`, and `Strict` with exactly one account.
+- [x] Confirm the same account/profile is not assigned to Ali, Roberto, or
+  Unboks and that the live Mermaid event ledger contains no foreign account.
+- [x] Confirm refresh/reconciliation did not switch accounts, create a second
+  connection, or enable Facebook DMs.
 
 An authorization callback marked pending, a phone-selection screen, or a
 queued allowlist repair is not `Connected`. Wait for the exact terminal status
 and keep traffic disabled.
 
-Live Nr3 safety observation on `2026-09-03`: its deployed UI briefly accepted
-WhatsApp Off -> On even though the connection card still showed no phone, no
-provider account, and an empty strict allowlist. The toggle was immediately
-restored to Off. Do not attempt activation again until the pre-connection
-activation guard in control-panel PR #94 is deployed and verified. Current safe
-state is tenant active, WhatsApp Off, all other channels Off, connection
-pending, strict allowlist empty.
+Forensic result on `2026-09-03`: Meta completed successfully and Zernio created
+the correct account, but the deployed Nr3 callback rejected Zernio's standard
+redirect because Nr3 expected the wrong state format. Refreshing status and
+using Nr3's verified-account repair reconciled the provider truth safely. The
+callback fix remains in control-panel PR #94. Current safe state is tenant
+active, WhatsApp inbox enabled, AI auto-reply paused, Facebook DMs off,
+connection healthy, and a strict one-account allowlist.
 
 ## Gate 5 - controlled activation
 
 Named Unboks operator and one tester:
 
-- [ ] Enable only `whatsapp_inbox`. Keep `ai_auto_reply` and `facebook_dms`
+- [x] Enable only `whatsapp_inbox`. Keep `ai_auto_reply` and `facebook_dms`
   false.
-- [ ] Send one unique `Channel check <timestamp>` message from a tester number
+- [x] Send one unique `Channel check <timestamp>` message from a tester number
   that is not any tenant's business number.
-- [ ] Verify it appears exactly once in Mermaid, receives no automatic reply,
-  and does not appear in Ali, Roberto, or Unboks.
-- [ ] Verify no message from another tenant appears in Mermaid.
-- [ ] Enable `ai_auto_reply` deliberately and send one published-fact question.
-- [ ] Verify exactly one TRACY response is stored and delivered, with the
+- [x] Verify it appears exactly once in Mermaid and receives no automatic
+  reply. Runtime status was `paused / tenant_agent_paused`.
+- [x] Verify no message from another tenant appears in Mermaid. The live audit
+  contained only Mermaid's exact provider account; the other three tenant
+  bindings were unchanged.
+- [x] Enable `ai_auto_reply` deliberately and send one published-fact question.
+- [x] Verify exactly one TRACY response is stored and delivered, with the
   correct virtual-assistant identity and no availability or booking claim.
+  The live answer correctly gave Fishermen's Pier at 06:45 and return boarding
+  at 15:20; runtime status was `replied / provider_send_ok`. AI was paused
+  again after the proof.
 - [ ] Exercise cancellation/refund escalation; the operator sees the handoff
   and the guest never sees `[ESCALATE]`.
 - [ ] Exercise takeover and hand-back; TRACY remains muted during takeover and

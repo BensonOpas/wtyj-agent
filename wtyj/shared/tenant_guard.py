@@ -9,15 +9,62 @@
 # the current tenant is allowed to handle it. Decision is driven by
 # client.json's top-level "channel_account_allowlist" block.
 
+import os
+
 from shared import config_loader
 from shared import bm_logger
 
 
 def _get_allowlist_config() -> dict:
-    """Read the current tenant's allowlist block. Returns {} if absent
-    (backward-compat: tenants without the block opt out of enforcement
-    entirely — no checks, no logs)."""
-    return config_loader.get_raw().get("channel_account_allowlist", {}) or {}
+    """Return a validated allowlist or a fail-closed invalid sentinel.
+
+    Legacy tenants may still opt out by omitting the block. Deployments that
+    set ``TENANT_ACCOUNT_ALLOWLIST_REQUIRED=true`` must present the matching
+    tenant config and a valid strict list, including during cold start.
+    """
+    required = os.environ.get(
+        "TENANT_ACCOUNT_ALLOWLIST_REQUIRED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    raw = config_loader.get_raw()
+    expected_tenant = (
+        os.environ.get("TENANT_ID", "")
+        or os.environ.get("TENANT_SLUG", "")
+    ).strip().lower()
+
+    def invalid(reason: str) -> dict:
+        bm_logger.log(
+            "tenant_guard_config_invalid",
+            reason=reason,
+            strict_required=required,
+        )
+        return {"mode": "strict", "zernio_accounts": [], "_invalid": True}
+
+    if not isinstance(raw, dict) or not raw:
+        return invalid("config_unavailable") if required else {}
+    if required:
+        actual_tenant = str(raw.get("slug") or "").strip().lower()
+        if not expected_tenant or actual_tenant != expected_tenant:
+            return invalid("tenant_identity_mismatch")
+
+    if "channel_account_allowlist" not in raw:
+        return invalid("allowlist_missing") if required else {}
+    cfg = raw.get("channel_account_allowlist")
+    if not isinstance(cfg, dict):
+        return invalid("allowlist_not_object")
+    mode = cfg.get("mode")
+    accounts = cfg.get("zernio_accounts")
+    if mode not in {"strict", "permissive"}:
+        return invalid("allowlist_mode_invalid")
+    if required and mode != "strict":
+        return invalid("strict_mode_required")
+    if not isinstance(accounts, list) or any(
+        not isinstance(value, str) or not value.strip() for value in accounts
+    ):
+        return invalid("allowlist_accounts_invalid")
+    return {
+        "mode": mode,
+        "zernio_accounts": [value.strip() for value in accounts],
+    }
 
 
 def is_account_allowed(account_id: str, direction: str) -> bool:
@@ -27,15 +74,16 @@ def is_account_allowed(account_id: str, direction: str) -> bool:
 
     Returns True when the event/send should proceed, False when it should be
     blocked. Modes:
-      - block absent: legacy behaviour, no enforcement, returns True silently
+      - block absent: legacy behaviour unless the deployment requires strict
+        enforcement
       - mode "permissive": logs WARN on unknown account_id but returns True
       - mode "strict": logs BLOCK on unknown account_id and returns False
     """
     cfg = _get_allowlist_config()
     if not cfg:
         return True
-    mode = cfg.get("mode", "permissive")
-    allowed = set(cfg.get("zernio_accounts", []) or [])
+    mode = cfg.get("mode", "strict")
+    allowed = set(cfg.get("zernio_accounts", []))
     if account_id and account_id in allowed:
         return True
     bm_logger.log(

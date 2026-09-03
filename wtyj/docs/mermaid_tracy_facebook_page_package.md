@@ -7,8 +7,9 @@ public Page.
 ## Current Facebook demo state
 
 The fictional Page was created on 2026-09-02 by an authorized administrator.
-This records the resulting public demo surface; it does not claim that Meta,
-WhatsApp, Zernio, or the Unboks production channel is connected.
+This records the resulting public demo surface. Mermaid's dedicated WhatsApp
+number is now connected through Meta/Zernio/Nr3, but the Page action button and
+Facebook messaging remain separate and are not connected.
 
 | Item | Recorded state |
 |---|---|
@@ -18,9 +19,9 @@ WhatsApp, Zernio, or the Unboks production channel is connected.
 | Created | `2026-09-02` |
 | Profile and cover | Premium original passenger-ship artwork uploaded and verified on the Page. |
 | Disclosure | Published as the first post and pinned. |
-| Public phone | Empty. The superseded `+599 9 686 5665` proposal was removed and the empty Contact info state was verified on `2026-09-03`. Dedicated replacement `+1 223 276 0075` is purchased but must not be published until Meta/WABA authorization succeeds. |
-| WhatsApp | Disconnected. Dedicated `+1 223 276 0075` is purchased in Zernio; Meta/WABA authorization is pending. No existing WhatsApp account is in scope. |
-| Action button | Disconnected. |
+| Public phone | Empty. The superseded `+599 9 686 5665` proposal was removed and the empty Contact info state was verified on `2026-09-03`. |
+| WhatsApp provider path | Dedicated `+1 223 276 0075` is active in Meta/Zernio, connected healthy in Nr3 with a strict one-account binding, and passed controlled canaries on `2026-09-03`. No existing WhatsApp account was reused. |
+| Page action button | Disconnected; connect it only after the hardened runtime release and final canary. |
 | Demo contact fields | Fictional address `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`; reserved email `tracy-demo@example.com`; reserved non-live link `https://tracy-demo.example`. Hours left empty. |
 | Marketing emails | Off. |
 | Page notifications | On. |
@@ -36,13 +37,13 @@ owner completes the explicit cutover steps below.
 | Category | `Travel service` |
 | Secondary category | Not set; `Product/service` is optional after owner review. |
 | Bio | `Private demo of TRACY, an AI-assisted guest-service concept for Klein Curaçao trips. Not an official Mermaid social Page.` |
-| Public phone | Empty; after Meta/WABA authorization, publish dedicated `+1 223 276 0075`. |
-| WhatsApp | Owner cutover target: dedicated Zernio-provisioned `+1 223 276 0075`; purchased but not yet connected. |
+| Public phone | Keep empty; the dedicated number belongs on the `Send WhatsApp message` action rather than as fictional address/contact data. |
+| WhatsApp | Dedicated Zernio-provisioned `+1 223 276 0075`; provider and Nr3 binding verified. Page action still pending. |
 | Website | `TRACY Demo Website (fictional)` → `https://tracy-demo.example`. The reserved `.example` domain is intentionally non-live; no website was created. |
 | Email | `tracy-demo@example.com`. The reserved `example.com` address is fictional and is not monitored. |
 | Address | `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`. This is not a pickup point or operating address. |
 | Hours | Leave empty; the Page does not advertise real operating hours. |
-| Action button | Leave disconnected until the dedicated number is verified. Then configure `Send WhatsApp message`. |
+| Action button | Leave disconnected until the hardened runtime and final live canary pass. Then configure `Send WhatsApp message` to `+1 223 276 0075`. |
 | Messaging greeting | `Hi, I’m TRACY, a virtual assistant in a private demo. I can answer published Klein Curaçao trip questions. For live availability, payment, changes, cancellations, safety, accessibility, or anything uncertain, I’ll involve a person.` |
 | Instant reply | Off. Zernio and Unboks must be the single automated reply path. |
 
@@ -97,11 +98,11 @@ Use the required disclosure above. Do not boost or advertise it.
 
 ## Connection rule
 
-During Meta/Zernio authorization, select only the new number shown on Mermaid's
-Zernio purchase record. If it is absent, if Meta presents Mermaid's public
-number `+59995601530`, if any existing user or tenant number appears, or if the
-selected account identity cannot be proven, stop the connection and leave the
-tenant paused with a strict empty allowlist.
+The completed Meta/Zernio authorization selected only the new number shown on
+Mermaid's Zernio purchase record. If a future reconnect does not show that
+number, if Meta presents Mermaid's public number `+59995601530`, if any existing
+user or tenant number appears, or if ownership cannot be proven, stop with AI
+paused. Never substitute or move another tenant's binding.
 
 Facebook native instant replies and other automated-message rules must remain
 off so a guest can receive at most one automated response.

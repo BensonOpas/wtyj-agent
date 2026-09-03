@@ -1293,6 +1293,64 @@ def wa_mark_as_processed(message_id: str):
     conn.close()
 
 
+def wa_claim_inbound_processing(
+    message_id: str,
+    conversation_id: str,
+    channel: str,
+    payload: dict | None = None,
+) -> bool:
+    """Atomically claim a provider event and preserve its recovery payload.
+
+    Returns ``True`` only for the first delivery.  The legacy processed marker
+    and durable inbound ledger row share one SQLite transaction, so a crash or
+    write failure cannot consume a provider message ID without leaving enough
+    data for recovery.
+    """
+    if not message_id:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    serialized_payload = json.dumps(
+        payload or {}, ensure_ascii=False, separators=(",", ":"),
+    )
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO whatsapp_processed (message_id, created_at) "
+            "VALUES (?, ?)",
+            (message_id, now),
+        )
+        if claimed.rowcount == 0:
+            conn.rollback()
+            return False
+        recorded = conn.execute(
+            "INSERT OR IGNORE INTO inbound_processing_events "
+            "(message_id, conversation_id, channel, status, reason, last_error, "
+            "payload_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'received', '', '', ?, ?, ?)",
+            (
+                message_id,
+                conversation_id or "",
+                channel or "",
+                serialized_payload,
+                now,
+                now,
+            ),
+        )
+        if recorded.rowcount == 0:
+            # A durable ledger row already exists. Roll back the marker inserted
+            # above and treat this delivery as a replay.
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def wa_store_external_operator_message(
     message_id: str,
     conversation_id: str,
@@ -1399,6 +1457,30 @@ def inbound_processing_update(message_id: str, status: str,
         )
     conn.commit()
     conn.close()
+
+
+def inbound_processing_quarantine(message_id: str, reason: str) -> None:
+    """Terminally reject a stale tenant-mismatched recovery payload.
+
+    The provider message id remains recorded for deduplication, but customer
+    content and routing metadata are erased so a reassigned account cannot
+    leak its prior tenant's payload into the current runtime.
+    """
+    if not message_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE inbound_processing_events "
+            "SET status = 'ignored', reason = ?, last_error = '', "
+            "payload_json = '{}', conversation_id = '', channel = '', "
+            "updated_at = ? WHERE message_id = ?",
+            ((reason or "recovery_payload_quarantined")[:500], now, message_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def inbound_processing_bulk_update(message_ids: list, status: str,

@@ -9,6 +9,8 @@ services:
       - ./config/platform.env
     environment:
       - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+      - TENANT_ACCOUNT_ALLOWLIST_REQUIRED=true
+      - TENANT_RUNTIME_CONTROLS_REQUIRED=true
     volumes:
       - ./config:/app/config:rw
       - ./data:/app/data

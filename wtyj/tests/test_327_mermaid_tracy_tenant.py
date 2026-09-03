@@ -57,7 +57,7 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
         "whatsapp_number_strategy": "zernio_provisioned_dedicated",
         "whatsapp_country_preference": "US",
         "whatsapp_purchase_status": "purchased",
-        "whatsapp_connection_status": "purchased_pending_meta_authorization",
+        "whatsapp_connection_status": "managed_externally_strict_empty_template",
         "facebook_page_name": "Klein Curaçao Trip Desk Demo",
         "facebook_page_disclosure": cfg["deployment"]["facebook_page_disclosure"],
     }
@@ -78,7 +78,7 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
     assert cfg["social_profiles"]["demo_facebook"] == {
         "page_name": "Klein Curaçao Trip Desk Demo",
         "url": "https://www.facebook.com/profile.php?id=61593777912590",
-        "connection_status": "page_created_whatsapp_pending_meta_authorization",
+        "connection_status": "page_created_whatsapp_action_pending",
         "disclosure": "Fictional demo page; not Mermaid's existing public Facebook Page.",
     }
 
@@ -107,7 +107,7 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
     }
 
 
-def test_mermaid_template_has_no_provider_credentials_and_starts_fail_closed(
+def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     mermaid_config,
 ):
     cfg = mermaid_config
@@ -164,10 +164,12 @@ def test_mermaid_whatsapp_uses_source_bound_tracy_qa_prompt(
 
     assert "You are TRACY, answering WhatsApp messages" in prompt
     assert "Mermaid Boat Trips Curaçao" in prompt
-    assert (
-        "Zernio-provisioned number is +1 223 276 0075" in prompt
-    )
-    assert "must not be described as live" in prompt
+    assert "dedicated demonstration WhatsApp number is +1 223 276 0075" in prompt
+    assert "assigned exclusively to this tenant" in prompt
+    assert "must not be inferred from this prompt" in prompt
+    assert "controlled live-reply canary passed" not in prompt
+    assert "WhatsApp-native formatting only" in prompt
+    assert "Do not add booking or pickup guidance unless" in prompt
     assert "+599 9 686 5665" not in prompt
     assert "Klein Curaçao Trip Desk Demo" in prompt
     assert "not Mermaid's existing public Facebook Page" in prompt
@@ -188,7 +190,7 @@ def test_mermaid_whatsapp_uses_source_bound_tracy_qa_prompt(
     assert webhook_server._use_whatsapp_orchestrator("whatsapp") is False
 
 
-def test_mermaid_strict_empty_allowlist_rejects_zernio_directions(
+def test_mermaid_portable_template_rejects_all_zernio_accounts(
     mermaid_config,
 ):
     with patch("shared.tenant_guard.bm_logger.log") as log:

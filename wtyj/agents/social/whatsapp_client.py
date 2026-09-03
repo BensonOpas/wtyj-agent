@@ -48,6 +48,7 @@ def parse_webhook_payload(payload: dict) -> list:
                 for msg in value.get("messages", []):
                     sender = msg.get("from", "")
                     normalized = {
+                        "platform": "whatsapp",
                         "channel": "whatsapp",
                         "from": sender,
                         "from_name": contacts.get(sender, ""),
