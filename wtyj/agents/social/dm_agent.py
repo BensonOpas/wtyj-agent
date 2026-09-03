@@ -100,6 +100,9 @@ def _build_dm_system_prompt(channel: str) -> str:
     # dedicated getter today — get_raw is the consistent escape hatch used elsewhere).
     persona = config_loader.get_raw().get("agent_persona", {})
     master_prompt = (persona.get("freeform_notes") or "").strip()
+    final_override = (persona.get("reservation_demo_override") or "").strip()
+    if final_override:
+        master_prompt = "\n\n".join(part for part in (master_prompt, final_override) if part)
     enforcement_notes = (persona.get("enforcement_notes") or "").strip()
     # Brief 206: booking_flow gate so the BOOKING REDIRECT block doesn't inject
     # for non-booking tenants (unboks etc.) where it would render a recursive

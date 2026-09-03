@@ -21,6 +21,7 @@ def _cleanup(conversation_id):
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (conversation_id,))
     # Clean dedup table too
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id LIKE 'test_138_%'")
+    conn.execute("DELETE FROM inbound_processing_events WHERE message_id LIKE 'test_138_%'")
     conn.commit()
     conn.close()
 

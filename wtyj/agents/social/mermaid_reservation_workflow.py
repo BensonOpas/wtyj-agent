@@ -124,6 +124,36 @@ COPY = {
 }
 
 
+SUMMARY_COPY = {
+    "en": {"title": "Here is what I have", "date": "Date", "guests": "Guests", "name": "Reservation name", "transport": "Transport", "party": "{adults} adults, {children} children 4-12, {infants} children 0-3", "pier": "meeting at Fishermen’s Pier", "pickup": "hotel pickup requested ({location})"},
+    "nl": {"title": "Dit heb ik genoteerd", "date": "Datum", "guests": "Gasten", "name": "Naam reservering", "transport": "Vervoer", "party": "{adults} volwassenen, {children} kinderen 4-12, {infants} kinderen 0-3", "pier": "ontmoeting bij Fishermen’s Pier", "pickup": "hoteltransfer aangevraagd ({location})"},
+    "de": {"title": "Das habe ich notiert", "date": "Datum", "guests": "Gäste", "name": "Reservierungsname", "transport": "Transport", "party": "{adults} Erwachsene, {children} Kinder 4-12, {infants} Kinder 0-3", "pier": "Treffpunkt Fishermen’s Pier", "pickup": "Hotelabholung angefragt ({location})"},
+    "es": {"title": "Esto es lo que anoté", "date": "Fecha", "guests": "Pasajeros", "name": "Nombre de reserva", "transport": "Transporte", "party": "{adults} adultos, {children} niños de 4-12, {infants} niños de 0-3", "pier": "encuentro en Fishermen’s Pier", "pickup": "recogida en hotel solicitada ({location})"},
+    "pap": {"title": "Esaki ta loke mi a nota", "date": "Fecha", "guests": "Huéspednan", "name": "Nòmber di reservashon", "transport": "Transporte", "party": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3", "pier": "topa na Fishermen’s Pier", "pickup": "pickup na hotel pidi ({location})"},
+    "pt": {"title": "Isto é o que anotei", "date": "Data", "guests": "Passageiros", "name": "Nome da reserva", "transport": "Transporte", "party": "{adults} adultos, {children} crianças de 4-12, {infants} crianças de 0-3", "pier": "encontro no Fishermen’s Pier", "pickup": "traslado do hotel solicitado ({location})"},
+}
+
+
+FAQ_COPY = {
+    "en": {"price": "Adult USD {adult}; child 4-12 USD {child}; age 0-3 free. Your itemized total will be in the quote.", "included": "Breakfast, soft drinks and juices, BBQ lunch, the beach house, facilities, snorkeling masks and beach chairs are included.", "bring": "Bring towels, sunscreen and swimwear. Mermaid takes care of the included food, drinks and island facilities."},
+    "nl": {"price": "Volwassene USD {adult}; kind 4-12 USD {child}; 0-3 jaar gratis. De offerte bevat het volledige prijsoverzicht.", "included": "Ontbijt, frisdrank en sap, BBQ-lunch, het strandhuis, faciliteiten, snorkelmaskers en strandstoelen zijn inbegrepen.", "bring": "Neem handdoeken, zonnebrand en zwemkleding mee. Mermaid zorgt voor het inbegrepen eten, drinken en de eilandfaciliteiten."},
+    "de": {"price": "Erwachsene USD {adult}; Kinder 4-12 USD {child}; 0-3 Jahre kostenlos. Die Einzelpreise stehen im Angebot.", "included": "Frühstück, alkoholfreie Getränke und Säfte, BBQ-Mittagessen, Strandhaus, Einrichtungen, Schnorchelmasken und Strandstühle sind inklusive.", "bring": "Bringen Sie Handtücher, Sonnencreme und Badesachen mit. Mermaid kümmert sich um inklusive Speisen, Getränke und Inseleinrichtungen."},
+    "es": {"price": "Adulto USD {adult}; niño de 4-12 USD {child}; 0-3 años gratis. El total detallado estará en la cotización.", "included": "Incluye desayuno, refrescos y jugos, almuerzo BBQ, casa de playa, instalaciones, máscaras de snorkel y sillas de playa.", "bring": "Trae toallas, protector solar y traje de baño. Mermaid se encarga de la comida, bebidas e instalaciones incluidas."},
+    "pap": {"price": "Adulto USD {adult}; mucha di 4-12 USD {child}; 0-3 aña grátis. Bo oferta lo tin e total detaya.", "included": "Desayuno, refresko i djus, BBQ, beach house, fasilidatnan, maskara di snorkel i stul di playa ta inkluí.", "bring": "Hiba handuk, krema solar i paña di landa. Mermaid ta sòru pa kuminda, bebida i fasilidatnan inkluí."},
+    "pt": {"price": "Adulto USD {adult}; criança de 4-12 USD {child}; 0-3 anos grátis. O total detalhado estará na cotação.", "included": "Inclui café da manhã, refrigerantes e sucos, almoço BBQ, casa de praia, instalações, máscaras de snorkel e cadeiras de praia.", "bring": "Leve toalhas, protetor solar e roupa de banho. A Mermaid cuida da comida, bebidas e instalações incluídas."},
+}
+
+
+PAYMENT_COPY = {
+    "en": ("For this demo, seats are available. No live inventory system was checked.", "Complete the no-money demo payment here:"),
+    "nl": ("Voor deze demo zijn er plaatsen beschikbaar. Er is geen live beschikbaarheidssysteem gecontroleerd.", "Voltooi hier de demo-betaling zonder echt geld:"),
+    "de": ("Für diese Demo sind Plätze verfügbar. Es wurde kein Live-Verfügbarkeitssystem geprüft.", "Schließen Sie hier die Demo-Zahlung ohne echtes Geld ab:"),
+    "es": ("Para esta demo hay plazas disponibles. No se consultó un sistema de disponibilidad en vivo.", "Completa aquí el pago demo sin dinero real:"),
+    "pap": ("Pa e demo aki tin lugá disponibel. No a kontrolá ningun sistema live di disponibilidat.", "Kompletá e pago demo sin plaka real aki:"),
+    "pt": ("Para esta demo há lugares disponíveis. Nenhum sistema de disponibilidade ao vivo foi consultado.", "Conclua aqui o pagamento demo sem dinheiro real:"),
+}
+
+
 LANGUAGE_MARKERS = {
     "nl": ("graag", "hoeveel", "volwassen", "kinderen", "ophalen", "datum"),
     "de": ("möchte", "erwachsene", "kinder", "abholung", "datum", "bitte"),
@@ -270,25 +300,15 @@ def _extract_fields(text: str, locale: str, current: dict) -> tuple[dict, bool]:
 
 
 def _summary(fields: dict, locale: str) -> str:
-    pickup = (
-        f"hotel pickup requested ({fields.get('pickup_location')})"
-        if fields.get("pickup_preference") == "pickup_requested"
-        else "meeting at Fishermen’s Pier"
-    )
-    labels = {
-        "en": ("Here is what I have", "Date", "Guests", "Reservation name", "Transport"),
-        "nl": ("Dit heb ik genoteerd", "Datum", "Gasten", "Naam reservering", "Vervoer"),
-        "de": ("Das habe ich notiert", "Datum", "Gäste", "Reservierungsname", "Transport"),
-        "es": ("Esto es lo que anoté", "Fecha", "Pasajeros", "Nombre de reserva", "Transporte"),
-        "pap": ("Esaki ta loke mi a nota", "Fecha", "Huéspednan", "Nòmber di reservashon", "Transporte"),
-        "pt": ("Isto é o que anotei", "Data", "Passageiros", "Nome da reserva", "Transporte"),
-    }[locale]
+    labels = SUMMARY_COPY[locale]
+    pickup = labels["pickup"].format(location=fields.get("pickup_location")) if fields.get("pickup_preference") == "pickup_requested" else labels["pier"]
+    party = labels["party"].format(adults=fields["adults"], children=fields["children"], infants=fields["infants"])
     return (
-        f"*{labels[0]}*\n"
-        f"{labels[1]}: {fields['trip_date']}\n"
-        f"{labels[2]}: {fields['adults']} adults, {fields['children']} children 4-12, {fields['infants']} children 0-3\n"
-        f"{labels[3]}: {fields['customer_name']}\n"
-        f"{labels[4]}: {pickup}\n\n{COPY[locale]['confirm']}"
+        f"*{labels['title']}*\n"
+        f"{labels['date']}: {fields['trip_date']}\n"
+        f"{labels['guests']}: {party}\n"
+        f"{labels['name']}: {fields['customer_name']}\n"
+        f"{labels['transport']}: {pickup}\n\n{COPY[locale]['confirm']}"
     )
 
 
@@ -313,12 +333,13 @@ def _question_answer(text: str, locale: str) -> str:
     lower = str(text or "").casefold()
     catalog = mermaid_catalog.get_catalog()
     prices = catalog["pricing"]["currencies"]["USD"]
+    answers = FAQ_COPY[locale]
     if any(word in lower for word in ("price", "cost", "prijs", "kosten", "precio", "preço", "kuantu")):
-        return f"Adult USD {prices['adult']}; child 4-12 USD {prices['child_4_12']}; age 0-3 free. Your itemized total will be in the quote."
+        return answers["price"].format(adult=prices["adult"], child=prices["child_4_12"])
     if any(word in lower for word in ("include", "included", "inbegrepen", "inklusive", "incluye", "incluído", "inklui")):
-        return "Breakfast, soft drinks and juices, BBQ lunch, the beach house, facilities, snorkeling masks and beach chairs are included."
+        return answers["included"]
     if any(word in lower for word in ("bring", "meenemen", "mitbringen", "llevar", "levar", "hiba")):
-        return "Bring towels, sunscreen and swimwear. Mermaid takes care of the included food, drinks and island facilities."
+        return answers["bring"]
     return ""
 
 
@@ -466,8 +487,9 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         payment_url = mermaid_demo_payment.build_payment_url(
             base_url, reservation["public_id"], secret
         )
+        availability_copy, payment_copy = PAYMENT_COPY[result.locale]
         result = IntakeResult(
-            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.\n\n" + mermaid_documents.quote_message(reservation) + "\n\nComplete the no-money demo payment here: " + payment_url,
+            result.text + "\n\n" + availability_copy + "\n\n" + mermaid_documents.quote_message(reservation) + "\n\n" + payment_copy + " " + payment_url,
             result.locale,
             result.phase,
             action=f"reservation:{reservation['public_id']}",

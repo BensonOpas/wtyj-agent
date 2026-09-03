@@ -80,12 +80,24 @@ SUCCESS_COPY = {
     "pt": "Seu grande dia em Klein Curaçao está reservado! O pagamento demo foi registrado. Código: {code}. Data: {date}. Passageiros: {guests}. Demo pago: {amount}. Chegue ao Fishermen’s Pier às 06:45. Leve toalhas e protetor solar; a Mermaid cuida do resto.",
 }
 
+SUCCESS_GUESTS = {
+    "en": "{adults} adults, {children} children 4-12, {infants} children 0-3",
+    "nl": "{adults} volwassenen, {children} kinderen 4-12, {infants} kinderen 0-3",
+    "de": "{adults} Erwachsene, {children} Kinder 4-12, {infants} Kinder 0-3",
+    "es": "{adults} adultos, {children} niños de 4-12, {infants} niños de 0-3",
+    "pap": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3",
+    "pt": "{adults} adultos, {children} crianças de 4-12, {infants} crianças de 0-3",
+}
+
 
 def success_message(reservation: dict, payment: dict) -> str:
     intake = reservation["intake"]
-    guests = f"{intake['adults']} adults, {intake['children']} children 4-12, {intake['infants']} children 0-3"
+    locale = reservation["language"] if reservation["language"] in SUCCESS_COPY else "en"
+    guests = SUCCESS_GUESTS[locale].format(
+        adults=intake["adults"], children=intake["children"], infants=intake["infants"]
+    )
     amount = f"{payment['currency']} {int(payment['amount']):,.2f}"
-    template = SUCCESS_COPY.get(reservation["language"], SUCCESS_COPY["en"])
+    template = SUCCESS_COPY[locale]
     return template.format(code=reservation["booking_code"], date=intake["trip_date"], guests=guests, amount=amount)
 
 

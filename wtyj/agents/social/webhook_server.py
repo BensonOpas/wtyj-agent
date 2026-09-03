@@ -2210,6 +2210,7 @@ def _process_zernio_event(
             # Callback-follow-up tenants need the structured WhatsApp agent
             # even though they intentionally disable booking_flow.
             _orchestrator_on = _use_whatsapp_orchestrator(channel)
+            mermaid_delivery_commit = None
 
             if _orchestrator_on:
                 # Full booking flow — route through orchestrator

@@ -217,6 +217,11 @@ def test_mermaid_whatsapp_uses_source_bound_tracy_qa_prompt(
     assert "Never use an emoji unless the current customer message" in prompt
     assert "Do not end with a generic offer to help" in prompt
     assert "BOOKING REDIRECT" not in prompt
+    assert "MERMAID WHATSAPP RESERVATION DEMO - FINAL OVERRIDE" in prompt
+    assert "Demo seat availability is always assumed" in prompt
+    assert "Papiamentu" in prompt
+    assert "Reminders are disabled" in prompt
+    assert prompt.index("MERMAID WHATSAPP RESERVATION DEMO - FINAL OVERRIDE") > prompt.index("cannot see live seats")
     assert webhook_server._use_whatsapp_orchestrator("whatsapp") is True
 
 
