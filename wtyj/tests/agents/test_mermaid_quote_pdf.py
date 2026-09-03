@@ -38,6 +38,7 @@ def test_six_localized_quote_pdfs_render_required_content(locale):
     path = Path(item["path"])
     reader = PdfReader(str(path))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = " ".join(text.split())
     assert len(reader.pages) == 2
     assert "DEMO QUOTE - NOT A VALID TICKET" in text
     assert "Ana Çosta" in text
@@ -45,7 +46,9 @@ def test_six_localized_quote_pdfs_render_required_content(locale):
     assert "USD 375.00" in text
     assert "Fishermen's Pier" in text
     assert "06:45" in text and "15:20" in text
-    assert "Insurance coverage is not verified" in text
+    assert mermaid_documents.DOCUMENT_COPY[locale]["insurance"] in normalized_text
+    assert mermaid_documents.DOCUMENT_COPY[locale]["closing"] in normalized_text
+    assert mermaid_documents.DOCUMENT_COPY[locale]["items"]["adult"] in normalized_text
     assert path.name == item["filename"]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
     assert item["content_type"] == "application/pdf"
