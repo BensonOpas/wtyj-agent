@@ -42,7 +42,16 @@ def _get_allowlist_config() -> dict:
     if not isinstance(raw, dict) or not raw:
         return invalid("config_unavailable") if required else {}
     if required:
-        actual_tenant = str(raw.get("slug") or "").strip().lower()
+        top_level_slug = str(raw.get("slug") or "").strip().lower()
+        business = raw.get("business")
+        business_slug = (
+            str(business.get("slug") or "").strip().lower()
+            if isinstance(business, dict)
+            else ""
+        )
+        if top_level_slug and business_slug and top_level_slug != business_slug:
+            return invalid("tenant_identity_conflict")
+        actual_tenant = top_level_slug or business_slug
         if not expected_tenant or actual_tenant != expected_tenant:
             return invalid("tenant_identity_mismatch")
 

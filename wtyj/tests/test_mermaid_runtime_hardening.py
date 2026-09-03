@@ -1239,6 +1239,41 @@ def test_required_tenant_allowlist_accepts_only_exact_account(monkeypatch):
         assert tenant_guard.is_account_allowed("foreign-account", "inbound") is False
 
 
+def test_required_allowlist_accepts_legacy_business_slug_without_top_level_slug(
+    monkeypatch,
+):
+    from shared import tenant_guard
+
+    monkeypatch.setenv("TENANT_ACCOUNT_ALLOWLIST_REQUIRED", "true")
+    monkeypatch.setenv("TENANT_ID", "unboks")
+    config = {
+        "business": {"slug": "unboks"},
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["unboks-account"],
+        },
+    }
+    with patch.object(tenant_guard.config_loader, "get_raw", return_value=config):
+        assert tenant_guard.is_account_allowed("unboks-account", "inbound") is True
+
+
+def test_required_allowlist_rejects_conflicting_top_and_business_slugs(monkeypatch):
+    from shared import tenant_guard
+
+    monkeypatch.setenv("TENANT_ACCOUNT_ALLOWLIST_REQUIRED", "true")
+    monkeypatch.setenv("TENANT_ID", "mermaid")
+    config = {
+        "slug": "mermaid",
+        "business": {"slug": "other"},
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["mermaid-account"],
+        },
+    }
+    with patch.object(tenant_guard.config_loader, "get_raw", return_value=config):
+        assert tenant_guard.is_account_allowed("mermaid-account", "inbound") is False
+
+
 def test_legacy_tenant_without_required_policy_keeps_compatibility(monkeypatch):
     from shared import tenant_guard
 
@@ -1356,6 +1391,26 @@ def test_strict_config_cold_start_partial_document_returns_empty(
     monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(config_path))
     config_loader._invalidate_cache()
     assert config_loader.get_raw() == {}
+
+
+def test_strict_config_loader_accepts_legacy_business_slug(tmp_path, monkeypatch):
+    from shared import config_loader
+
+    monkeypatch.setenv("TENANT_ACCOUNT_ALLOWLIST_REQUIRED", "true")
+    monkeypatch.setenv("TENANT_ID", "unboks")
+    config_path = tmp_path / "client.json"
+    config = {
+        "business": {"slug": "unboks"},
+        "channel_account_allowlist": {
+            "mode": "strict",
+            "zernio_accounts": ["unboks-account"],
+        },
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(config_path))
+    config_loader._invalidate_cache()
+
+    assert config_loader.get_raw() == config
 
 
 def test_runtime_config_update_preserves_provider_write_under_shared_lock(

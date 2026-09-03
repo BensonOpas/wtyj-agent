@@ -50,7 +50,17 @@ def _required_isolation_shape_valid(loaded: dict) -> bool:
         os.environ.get("TENANT_ID", "")
         or os.environ.get("TENANT_SLUG", "")
     ).strip().lower()
-    if not expected_tenant or str(loaded.get("slug") or "").strip().lower() != expected_tenant:
+    top_level_slug = str(loaded.get("slug") or "").strip().lower()
+    business = loaded.get("business")
+    business_slug = (
+        str(business.get("slug") or "").strip().lower()
+        if isinstance(business, dict)
+        else ""
+    )
+    if top_level_slug and business_slug and top_level_slug != business_slug:
+        return False
+    configured_tenant = top_level_slug or business_slug
+    if not expected_tenant or configured_tenant != expected_tenant:
         return False
     allowlist = loaded.get("channel_account_allowlist")
     if not isinstance(allowlist, dict) or allowlist.get("mode") != "strict":
@@ -81,9 +91,9 @@ def _load() -> dict:
 
     Nr 3 updates mounted ``client.json`` files with an atomic replace.  The old
     cache kept the first version for the lifetime of the process, so a newly
-    persisted strict account allowlist required a container restart.  Stat the
-    file on every access and reload only when its identity changes.  A
-    legacy deployments retain their last complete read during a malformed
+    persisted strict account allowlist required a container restart. Stat the
+    file on every access and reload only when its identity changes. Legacy
+    deployments retain their last complete read during a malformed
     replacement. Strict-isolation deployments instead invalidate immediately
     once a malformed or identity-mismatched document is stable, so an old
     account allowlist cannot remain authorized indefinitely.
