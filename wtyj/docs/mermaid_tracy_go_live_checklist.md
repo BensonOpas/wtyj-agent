@@ -12,11 +12,11 @@ here is the fictional, clearly disclosed `Klein Curaçao Trip Desk Demo` Page.
 
 | Capability | Repository evidence | External/live evidence required before claiming it is live |
 |---|---|---|
-| Dedicated Mermaid tenant and TRACY behavior | Versioned `mermaid` tenant package, prompt boundaries, tests, runbooks, and loopback compose exist | Verify the reviewed revision is deployed, `wtyj-mermaid` is healthy, and canonical routing and cross-tenant rejection pass |
-| Unboks operator workspace | Tenant identity and expected runtime endpoints are defined | Authorized operator opens the Mermaid workspace and verifies only Mermaid data is visible |
-| WhatsApp demo number | Provisioning policy is pinned: buy the cheapest suitable dedicated number from Zernio, preferring US `+1` inventory when it is cheapest; no number is assigned yet | The paid Zernio purchase record, Meta, and Nr3 must all show the same exact number and an account uniquely owned by Mermaid's tenant |
+| Dedicated Mermaid tenant and TRACY behavior | Versioned `mermaid` tenant package, prompt boundaries, tests, runbooks, and loopback compose exist | Nr3 was opened on `2026-09-03` and showed the existing `mermaid` tenant as active with agent name `TRACY`; runtime health, canonical routing, and cross-tenant rejection still require release verification |
+| Unboks operator workspace | Tenant identity and expected runtime endpoints are defined | Authorized operator opened `mermaid` in Nr3 on `2026-09-03`; no separate `mermaid-demo` workspace was created |
+| WhatsApp demo number | Dedicated Zernio number `+1 223 276 0075` was purchased on `2026-09-03` | Meta and Nr3 must show that exact number and an account uniquely owned by Mermaid's tenant |
 | Zernio | Tenant-bound authorization/status flow is implemented | A fresh owner-authorized callback succeeds, strict allowlist persistence succeeds, and Nr3 reports connected |
-| Facebook demo Page | Copy and original artwork package are prepared | Authorized owner creates the Page in Meta and verifies its disclosure and asset ownership |
+| Facebook demo Page | `Klein Curaçao Trip Desk Demo` exists with the disclosure and original artwork | Verify its owning Meta business; keep its WhatsApp action empty until the dedicated number is connected |
 | Facebook messages | Kept fail-closed by default | Separate Facebook messaging authorization and canary; otherwise `facebook_dms` remains off |
 | Booking and payment | TRACY redirects to Mermaid's first-party reservation form | Mermaid's existing reservation system remains authoritative; no Unboks booking or payment integration is claimed |
 
@@ -31,10 +31,10 @@ live connection.
 - Tenant package label: `Mermaid Boat Trips Demo`
 - Visible workspace business name: `Mermaid Boat Trips Curaçao`
 - Assistant: `TRACY`
-- Demo WhatsApp number: not yet assigned; purchase a new Zernio-provisioned
-  number exclusively for Mermaid.
-- Number preference: cheapest suitable inventory shown at checkout, with a US
-  `+1` number preferred when it remains one of the lowest-cost options.
+- Demo WhatsApp number: dedicated Zernio-provisioned `+1 223 276 0075`,
+  purchased exclusively for Mermaid on `2026-09-03`.
+- Number selection: US `+1` inventory was selected at `$3/month`; WhatsApp is
+  not live until Meta authorization, exact provider binding, and canaries pass.
 - Fictional Page: `Klein Curaçao Trip Desk Demo`
 - Official public Mermaid number, read-only reference: `+599 9 560 1530`
 - Official booking path:
@@ -44,6 +44,14 @@ The official public number, Calvin's existing WhatsApp and WhatsApp Business
 accounts, every other Unboks tenant number, and Mermaid's existing Facebook or
 Instagram profiles must not be connected, renamed, disconnected, migrated, or
 otherwise mutated as part of the demo.
+
+The normal public trial form was submitted for `Mermaid Demo` and its email was
+verified on `2026-09-03`. Nr3 shows that signup as awaiting review with slug
+hint `mermaid-demo`, while the intended `mermaid` tenant already exists and is
+active. Do not approve, onboard, or create a `mermaid-demo` workspace unless
+Nr3 first gains an explicit, audited way to link the signup to the existing
+`mermaid` tenant. The current approval path would start a second onboarding
+flow rather than reconcile the existing workspace.
 
 ## Gate 1 - reviewed Unboks release
 
@@ -138,13 +146,16 @@ never placed in Git, copied into the runbook, or requested in chat.
 Unboks operator prepares the tenant-bound request; Mermaid's authorized Meta or
 Zernio administrator completes authorization in their own browser:
 
-- [ ] Open the Mermaid tenant workspace, not Ali, Roberto, or Unboks.
+- [x] Open the Mermaid tenant workspace, not Ali, Roberto, or Unboks. Verified
+  in Nr3 on `2026-09-03`: slug `mermaid`, status active, agent `TRACY`.
 - [x] In the Mermaid-bound Zernio profile, choose `Get a new number`, review the
   current price and capabilities, and complete the owner-approved purchase.
   Zernio now lists `+1 223 276 0075` as Purchased and Active; WhatsApp remains
   Off pending Meta authorization.
-- [ ] Continue from that purchase into Meta Embedded Signup. Do not create or
-  reuse a consumer WhatsApp or WhatsApp Business mobile-app account.
+- [x] Continue from that purchase into Meta Embedded Signup. The flow was
+  attempted twice on `2026-09-03`; the BSP-provided number appeared, but Meta
+  returned a generic phone-number error both times. No existing consumer or
+  WhatsApp Business mobile-app account was reused.
 - [ ] The owner opens the link, signs in, completes MFA and business ownership
   checks, and authorizes only the intended demo assets.
 - [ ] If more than one provider profile, Page, WhatsApp account, or phone number
@@ -168,6 +179,14 @@ Zernio administrator completes authorization in their own browser:
 An authorization callback marked pending, a phone-selection screen, or a
 queued allowlist repair is not `Connected`. Wait for the exact terminal status
 and keep traffic disabled.
+
+Live Nr3 safety observation on `2026-09-03`: its deployed UI briefly accepted
+WhatsApp Off -> On even though the connection card still showed no phone, no
+provider account, and an empty strict allowlist. The toggle was immediately
+restored to Off. Do not attempt activation again until the pre-connection
+activation guard in control-panel PR #94 is deployed and verified. Current safe
+state is tenant active, WhatsApp Off, all other channels Off, connection
+pending, strict allowlist empty.
 
 ## Gate 5 - controlled activation
 

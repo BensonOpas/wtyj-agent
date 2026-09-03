@@ -31,9 +31,17 @@ simulated, never live.
 | Demo number | `+1 223 276 0075`; dedicated US number purchased from Zernio on `2026-09-03`, Meta/WABA authorization pending |
 | Demo Facebook Page | `Klein Curaçao Trip Desk Demo` |
 | Demo Page phone state | Empty; superseded `+599 9 686 5665` removed and verified on `2026-09-03` |
+| Public trial intake | Submitted and email-verified on `2026-09-03`; awaiting review only. Existing active tenant is `mermaid`; do not provision the signup's `mermaid-demo` slug. |
 
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
 profiles are out of scope for connection or mutation.
+
+Nr3 was checked live on `2026-09-03`: `mermaid` already exists with status
+`active`, agent name `TRACY`, WhatsApp connection pending, no connected phone or
+provider account, and an empty strict allowlist. The deployed control panel
+briefly accepted an invalid WhatsApp On toggle in this state; it was immediately
+returned to Off. Control-panel PR #94 contains the fail-closed activation guard
+and must be deployed and verified before another activation attempt.
 
 ## Integration truth gate
 

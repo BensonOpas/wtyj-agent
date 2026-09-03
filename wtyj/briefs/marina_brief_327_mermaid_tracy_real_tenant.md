@@ -23,8 +23,8 @@ Facebook Page or public WhatsApp number.
   displayed in the workspace as `Mermaid Boat Trips Curaçao`.
 - AI assistant: `TRACY`.
 - Dedicated demo WhatsApp Business number: buy the cheapest suitable available
-  Zernio number exclusively for Mermaid; prefer US `+1` inventory when it is
-  still among the lowest-cost options at checkout. No number is assigned yet.
+  Zernio number exclusively for Mermaid; `+1 223 276 0075` was purchased on
+  `2026-09-03` at `$3/month`. Meta registration is still pending.
 - Existing Mermaid public contact: `+599 9 560 1530`. It is a sourced business
   fact only and must not be migrated or connected during the demo setup.
 - Runtime: `/root/clients/mermaid`, container `wtyj-mermaid`, loopback port
@@ -65,6 +65,21 @@ Facebook Page or public WhatsApp number.
    Mermaid Zernio purchase record; otherwise fail closed.
 5. Confirm Nr3 reports `connected`, the display number is the dedicated number,
    and the strict allowlist contains only the verified Zernio account.
+
+## Live onboarding and control-plane status, 3 September 2026
+
+- Nr3 already contains the intended `mermaid` tenant and reports it active with
+  agent name `TRACY`.
+- The public `Mermaid Demo` trial intake was submitted and email-verified, but
+  its slug hint is `mermaid-demo`. Leave it awaiting review: the deployed
+  approval flow cannot link it to the existing tenant and would start a
+  duplicate onboarding path.
+- Meta Embedded Signup displayed the purchased BSP number but failed twice with
+  a generic phone-number error. Nr3 still reports no connected phone or provider
+  account and a strict-empty allowlist.
+- The deployed Nr3 UI briefly accepted WhatsApp On while the connection was
+  pending. It was immediately reset to Off. Deploy and verify the fail-closed
+  activation guard in control-panel PR #94 before enabling Mermaid traffic.
 
 ## Verification
 
