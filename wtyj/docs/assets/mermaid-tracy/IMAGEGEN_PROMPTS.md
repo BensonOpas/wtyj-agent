@@ -4,31 +4,27 @@ These project-bound assets were created with Codex's built-in image-generation
 tool. They are original demo artwork and deliberately avoid Mermaid's name and
 logo.
 
-## Facebook profile image
+## Current Facebook profile image (`facebook-profile-passenger-ship-v4.png`)
 
 ```text
 Use case: logo-brand
-Asset type: Facebook Page profile image for a clearly disclosed private demo
-Primary request: Create an original circular-friendly emblem for “Klein Curaçao Trip Desk Demo”, centered on a warm cream background. Combine a simple dark navy boat anchor with a small emerald chat bubble and a subtle sun disk.
-Style/medium: polished flat editorial illustration, vector-friendly edges, premium Caribbean hospitality, not a copy of any existing Mermaid logo
-Composition/framing: centered icon with generous safe margins, legible when cropped to a circle and displayed at small size
-Color palette: deep navy, warm sand, restrained emerald green, small burgundy accent
-Text (verbatim): “TRACY” and beneath it “DEMO”
-Constraints: exact spelling; the word DEMO must be clearly visible; no Mermaid name, no company logo, no phone number, no real Facebook branding, no photograph, no watermark
-Avoid: cartoon mascot, excessive gradients, clutter, tropical clichés, dolphins, mermaids, people
+Asset type: premium square Facebook Page profile emblem for a clearly disclosed private demo
+Primary request: Use the supplied real-vessel references to show a substantial dark-navy-and-white, multi-deck, single-hull passenger excursion ship in three-quarter view, with the Klein Curaçao pink lighthouse behind it and turquoise Caribbean water below.
+Style/medium: photorealistic central illustration within a restrained yacht-club-style circular crest; deep navy ring and subtle champagne-gold trim
+Composition/framing: the ship is the dominant subject; perfectly centered with generous circular safe margins and a strong silhouette at small avatar size
+Text: none
+Constraints: one hull only; no catamaran, twin hulls, sails, yacht, Mermaid name, company logo, phone number, anchor, people, cartoon treatment, or watermark
 ```
 
-## Facebook cover image
+## Current Facebook cover image (`facebook-cover-passenger-ship-v4.png`)
 
 ```text
 Use case: ads-marketing
-Asset type: Facebook Page cover image for a clearly disclosed private demo
-Primary request: Create a wide premium Caribbean guest-service banner for the fictional Page “Klein Curaçao Trip Desk Demo”. Show a tasteful original illustration of turquoise water, a small day-trip boat approaching a white-sand island, the Klein Curaçao lighthouse in the distance, and a subtle chat-bubble motif.
-Style/medium: polished editorial travel illustration with natural texture, sophisticated rather than cartoonish; entirely original and not copied from Mermaid branding
-Composition/framing: very wide Facebook cover composition, key text and boat centered in the mobile-safe middle area, generous side scenery, no important content at extreme edges
-Lighting/mood: warm early-morning light, calm and welcoming
-Color palette: turquoise, deep navy, warm sand, cream, restrained burgundy accent
-Text (verbatim): “KLEIN CURAÇAO TRIP DESK” and on a second line “PRIVATE DEMO • AI-ASSISTED GUEST SERVICE”
-Constraints: exact spelling including Curaçao; clear PRIVATE DEMO disclosure; no Mermaid name or logo; no phone number; no real Facebook/WhatsApp logos; no people; no watermark
-Avoid: mermaids, dolphins, cruise ships, crowded beaches, stock-photo look, neon colors, clutter
+Asset type: premium ultra-wide Facebook Page cover image for a clearly disclosed private demo
+Primary request: Use the supplied real-vessel references to show a large, substantial dark-navy-and-white, multi-deck, single-hull passenger excursion ship as the hero object, visually scaled for a large guest capacity and cruising through luminous turquoise water. Behind it, accurately evoke Klein Curaçao with its low white coral-sand beach, sparse scrub, iconic pink lighthouse, and rusted shipwreck.
+Style/medium: photorealistic luxury-travel editorial photography with believable Caribbean light and reflections
+Composition/framing: approximately 2.63:1; ship occupies about 55% of the width; vessel centered-left and landmarks on the right, all safe for Facebook's crop
+Color palette: deep navy, white, coral pink, champagne highlights, and turquoise
+Text: none
+Constraints: one hull only; no catamaran, twin hulls, sails, yacht, readable branding, Mermaid logo, phone number, people in close view, or watermark
 ```

@@ -16,7 +16,7 @@ WhatsApp, Zernio, or the Unboks production channel is connected.
 | URL | https://www.facebook.com/profile.php?id=61593777912590 |
 | Facebook profile ID | `61593777912590` |
 | Created | `2026-09-02` |
-| Profile and cover | Generic original demo artwork uploaded. |
+| Profile and cover | Premium original passenger-ship artwork uploaded and verified on the Page. |
 | Disclosure | Published as the first post and pinned. |
 | Public phone | `+599 9 686 5665` (`+59996865665`), the only real contact datum on the fictional Page. |
 | WhatsApp | Disconnected. Meta's connection screen is prefilled with `+599 9 686 5665`; no verification code has been sent. |
@@ -63,12 +63,15 @@ Place this text in the About section and pin it as the first post:
 
 ## Visual assets
 
-- Profile: `assets/mermaid-tracy/facebook-profile-generic-v2.png`
-- Cover: `assets/mermaid-tracy/facebook-cover-generic-v2.png`
+- Profile: `assets/mermaid-tracy/facebook-profile-passenger-ship-v4.png`
+- Cover: `assets/mermaid-tracy/facebook-cover-passenger-ship-v4.png`
 
-Both are original demo artwork. They deliberately omit Mermaid's name and logo.
-The v2 cover also contains no text, so the Page's visible name and pinned
-disclosure remain the authoritative identification.
+Both are premium original demo artwork generated from visual references to the
+real Mermaid vessel type. They show a large, single-hull, multi-deck passenger
+excursion ship rather than a catamaran, together with the Klein Curaçao pink
+lighthouse and Caribbean water. They deliberately omit Mermaid's name, logo,
+phone number, and other readable branding. The Page name, bio, contact fields,
+and pinned disclosure remain the authoritative identification.
 
 ## Launch posts
 
