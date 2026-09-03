@@ -28,7 +28,7 @@ simulated, never live.
 | Public API prefix | `https://api.unboks.org/api/mermaid/` |
 | Dashboard | `https://dashboard.unboks.org/login?workspace=mermaid` |
 | Zernio channel | WhatsApp |
-| Demo number | `+599 9 686 5665` / `+59996865665` |
+| Demo number | New dedicated Zernio-provisioned number; purchase pending, US `+1` preferred only if cheapest suitable inventory |
 | Demo Facebook Page | `Klein Curaçao Trip Desk Demo` |
 
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
@@ -41,7 +41,7 @@ profiles are out of scope for connection or mutation.
 | Tenant package | Reviewed revision contains the `mermaid` identity, fail-closed configuration, tests, and runbooks |
 | Runtime | `wtyj-mermaid` is healthy, canonical Mermaid routing passes, and unknown/cross-tenant requests fail closed |
 | Operator workspace | The authenticated profile is `mermaid` and only Mermaid synthetic test data is visible |
-| WhatsApp/Zernio | Nr3 proves the unique account/profile, exact normalized number `+59996865665`, and exact strict allowlist persistence |
+| WhatsApp/Zernio | Nr3 proves the unique account/profile, the exact new number from Mermaid's Zernio purchase record, and exact strict allowlist persistence |
 | Facebook Page | The authorized owner created `Klein Curaçao Trip Desk Demo`, published the disclosure, and changed no public Mermaid asset |
 | Automated replies | Inbox-only isolation passes before one controlled AI reply; duplicate delivery still produces at most one reply |
 
@@ -56,10 +56,11 @@ affected channel off and use the clearly labelled rehearsal flow.
    `facebook_dms` are explicitly false in Nr3.
 2. **Authorization pending:** a tenant-bound Zernio profile and stateful Meta
    link exist; the strict allowlist stays empty and every toggle stays false.
-3. **Connected, quarantined:** the callback/phone-selection flow records the
+3. **Connected, quarantined:** the purchase/registration flow records the
    provider account and writes it into the strict allowlist. Verify that the
-   displayed number normalizes to `+59996865665`, then verify the account has no
-   ownership collision. Keep AI and channel toggles false throughout.
+   displayed number exactly matches Mermaid's Zernio purchase record, then
+   verify the account has no ownership collision. Keep AI and channel toggles
+   false throughout.
 4. **Inbox-only canary:** enable only `whatsapp_inbox`; keep `ai_auto_reply`
    false. One tester message through the allowlisted provider account must be
    stored as paused in Mermaid and must not appear in Ali, Roberto, or Unboks.

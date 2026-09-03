@@ -1,7 +1,8 @@
 # BRIEF 327 — Provision Mermaid TRACY as a real Unboks demo tenant
 
 **Status:** In progress | **Tenant:** `mermaid` | **Runtime port:** `8102` |
-**WhatsApp:** `+599 9 686 5665` | **Provider:** Zernio
+**WhatsApp:** new dedicated Zernio-provisioned number, purchase pending |
+**Provider:** Zernio
 
 ## Outcome
 
@@ -21,8 +22,9 @@ Facebook Page or public WhatsApp number.
 - Unboks tenant: `mermaid`, package-labelled `Mermaid Boat Trips Demo` and
   displayed in the workspace as `Mermaid Boat Trips Curaçao`.
 - AI assistant: `TRACY`.
-- Dedicated demo WhatsApp Business number: `+599 9 686 5665`
-  (`+59996865665` in E.164-normalized comparisons).
+- Dedicated demo WhatsApp Business number: buy the cheapest suitable available
+  Zernio number exclusively for Mermaid; prefer US `+1` inventory when it is
+  still among the lowest-cost options at checkout. No number is assigned yet.
 - Existing Mermaid public contact: `+599 9 560 1530`. It is a sourced business
   fact only and must not be migrated or connected during the demo setup.
 - Runtime: `/root/clients/mermaid`, container `wtyj-mermaid`, loopback port
@@ -56,10 +58,11 @@ Facebook Page or public WhatsApp number.
    clear demo disclosure. Do not clone Mermaid's Page identity or imagery.
 2. Start the WhatsApp connection from Nr3 for tenant `mermaid`. Nr3 creates a
    tenant-bound Zernio profile and a single-use state-bound authorization URL.
-3. Complete Meta Embedded Signup for `+599 9 686 5665`. Never select Mermaid's
-   existing public number.
-4. If Meta presents more than one number, select the exact normalized number
-   `+59996865665`; otherwise fail closed.
+3. In Mermaid's Zernio profile, choose `Get a new number`, review and approve
+   the live price/capabilities, complete the purchase, and continue to Meta
+   registration. Never reuse an existing WhatsApp or mobile-app account.
+4. If Meta presents more than one number, select only the exact number on the
+   Mermaid Zernio purchase record; otherwise fail closed.
 5. Confirm Nr3 reports `connected`, the display number is the dedicated number,
    and the strict allowlist contains only the verified Zernio account.
 

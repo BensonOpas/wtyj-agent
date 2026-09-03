@@ -8,13 +8,13 @@ can perform.
 No step in this checklist creates a Mermaid website. The only Page described
 here is the fictional, clearly disclosed `Klein Curaçao Trip Desk Demo` Page.
 
-## Current truth, checked 2 September 2026
+## Current truth, checked 3 September 2026
 
 | Capability | Repository evidence | External/live evidence required before claiming it is live |
 |---|---|---|
 | Dedicated Mermaid tenant and TRACY behavior | Versioned `mermaid` tenant package, prompt boundaries, tests, runbooks, and loopback compose exist | Verify the reviewed revision is deployed, `wtyj-mermaid` is healthy, and canonical routing and cross-tenant rejection pass |
 | Unboks operator workspace | Tenant identity and expected runtime endpoints are defined | Authorized operator opens the Mermaid workspace and verifies only Mermaid data is visible |
-| WhatsApp demo number | Intended number is pinned as `+599 9 686 5665` (`+59996865665`) | Meta/Zernio must return that exact number and an account uniquely owned by Mermaid's tenant |
+| WhatsApp demo number | Provisioning policy is pinned: buy the cheapest suitable dedicated number from Zernio, preferring US `+1` inventory when it is cheapest; no number is assigned yet | The paid Zernio purchase record, Meta, and Nr3 must all show the same exact number and an account uniquely owned by Mermaid's tenant |
 | Zernio | Tenant-bound authorization/status flow is implemented | A fresh owner-authorized callback succeeds, strict allowlist persistence succeeds, and Nr3 reports connected |
 | Facebook demo Page | Copy and original artwork package are prepared | Authorized owner creates the Page in Meta and verifies its disclosure and asset ownership |
 | Facebook messages | Kept fail-closed by default | Separate Facebook messaging authorization and canary; otherwise `facebook_dms` remains off |
@@ -31,16 +31,19 @@ live connection.
 - Tenant package label: `Mermaid Boat Trips Demo`
 - Visible workspace business name: `Mermaid Boat Trips Curaçao`
 - Assistant: `TRACY`
-- Demo WhatsApp number: `+599 9 686 5665`
-- Exact normalized number: `+59996865665`
+- Demo WhatsApp number: not yet assigned; purchase a new Zernio-provisioned
+  number exclusively for Mermaid.
+- Number preference: cheapest suitable inventory shown at checkout, with a US
+  `+1` number preferred when it remains one of the lowest-cost options.
 - Fictional Page: `Klein Curaçao Trip Desk Demo`
 - Official public Mermaid number, read-only reference: `+599 9 560 1530`
 - Official booking path:
   `https://reservations.mermaidboattrips.com/Reservations/`
 
-The official public number and Mermaid's existing Facebook or Instagram
-profiles must not be connected, renamed, disconnected, or otherwise mutated as
-part of the demo.
+The official public number, Calvin's existing WhatsApp and WhatsApp Business
+accounts, every other Unboks tenant number, and Mermaid's existing Facebook or
+Instagram profiles must not be connected, renamed, disconnected, migrated, or
+otherwise mutated as part of the demo.
 
 ## Gate 1 - reviewed Unboks release
 
@@ -72,10 +75,14 @@ state, provider account ID, or customer message in public evidence.
 
 Mermaid owner:
 
-- [ ] Confirm in writing that `+599 9 686 5665` is the dedicated number to use
-  for the demo and that the owner controls its SMS or voice verification path.
-- [ ] Confirm that using this number will not interrupt an existing WhatsApp,
-  WhatsApp Business app, Cloud API, or business-solution-provider setup.
+- [x] Approve a newly purchased Zernio number dedicated exclusively to Mermaid;
+  no existing WhatsApp, WhatsApp Business app, Cloud API, personal, or other
+  tenant number will be migrated or reused.
+- [ ] At Zernio checkout, confirm the displayed recurring price, country,
+  capabilities, billing terms, and any KYC requirement. Prefer a US `+1`
+  number only if it is still the cheapest suitable option at purchase time.
+- [ ] Complete the paid number purchase using the Mermaid Zernio profile and
+  retain the exact assigned E.164 number in protected operator records.
 - [ ] Approve the fictional Page name and its required `PRIVATE DEMO`
   disclosure. The Page must not use Mermaid's public Page name or imply it is an
   official profile.
@@ -105,7 +112,10 @@ Authorized Meta administrator, in the owner's browser session:
   the [Facebook Page package](mermaid_tracy_facebook_page_package.md).
 - [x] Add only clearly fictional demo contact data, using reserved `.example`
   email/link values and an address literally labelled `DEMO LOCATION` and
-  `(fictional)`. The only real public contact datum is `+59996865665`.
+  `(fictional)`.
+- [ ] Remove the superseded `+599 9 686 5665` public-phone entry, then leave the
+  public phone and WhatsApp action empty until the newly purchased Mermaid
+  number exists and passes Meta/Zernio verification.
 - [x] Publish and pin the `PRIVATE DEMO` disclosure before any messaging test.
 - [ ] Configure the messaging greeting from the Page package after the owning
   business and messaging path are verified.
@@ -126,16 +136,21 @@ Unboks operator prepares the tenant-bound request; Mermaid's authorized Meta or
 Zernio administrator completes authorization in their own browser:
 
 - [ ] Open the Mermaid tenant workspace, not Ali, Roberto, or Unboks.
-- [ ] Generate one fresh tenant-bound WhatsApp authorization link. Do not reuse
-  an expired or previously claimed callback.
+- [ ] In the Mermaid-bound Zernio profile, choose `Get a new number`, review the
+  current price and capabilities, and complete the owner-approved purchase.
+- [ ] Continue from that purchase into Meta Embedded Signup. Do not create or
+  reuse a consumer WhatsApp or WhatsApp Business mobile-app account.
 - [ ] The owner opens the link, signs in, completes MFA and business ownership
   checks, and authorizes only the intended demo assets.
 - [ ] If more than one provider profile, Page, WhatsApp account, or phone number
   is shown, stop and identify ownership before selecting anything.
-- [ ] Select only the phone number that normalizes exactly to `+59996865665`.
-  If it is missing or the public Mermaid number `+59995601530` appears as the
-  intended selection, stop and keep every toggle off.
-- [ ] Complete SMS or voice verification from the owner's controlled device.
+- [ ] Select only the new number shown on Mermaid's Zernio purchase record. If
+  it is missing, if the public Mermaid number `+59995601530` appears as the
+  intended selection, or if any existing user/tenant number appears, stop and
+  keep every toggle off.
+- [ ] Wait for Zernio's number provisioning and Meta registration to complete;
+  purchased numbers are verified in that provider flow rather than through an
+  existing phone or eSIM.
 - [ ] Refresh Nr3 status. It must prove an active WhatsApp account, exact
   tenant-bound profile ownership, exact phone selection, and successful strict
   allowlist persistence.
@@ -194,7 +209,7 @@ Mermaid owner and Unboks delivery owner together:
 - [ ] Monitor the first controlled traffic window and define an explicit end
   time or handoff to the on-duty operator.
 
-## Moving from the demo number to an official Mermaid number
+## Future move from the dedicated pilot number to an official Mermaid number
 
 The Unboks tenant, TRACY knowledge, safety rules, and operator workspace can be
 kept. The provider identity cannot simply be edited in JSON. Use a new owner-

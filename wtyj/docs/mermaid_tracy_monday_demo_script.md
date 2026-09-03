@@ -16,7 +16,7 @@ labelled rehearsal view and say that the channel is simulated.
 | Mermaid workspace, TRACY configuration, tenant isolation, operator controls | `Implemented as a dedicated Unboks tenant` after the checked-out revision and runtime health are verified |
 | Trip facts | `Grounded in Mermaid's first-party pages, checked 2 September 2026` |
 | Facebook Page | `Real, clearly disclosed fictional demo Page` — the Page exists, but its WhatsApp action and Facebook messaging are not connected |
-| WhatsApp number `+599 9 686 5665` | `Dedicated intended demo number` until Meta/Zernio shows it as connected |
+| Mermaid WhatsApp number | `New dedicated Zernio-provisioned number; purchase pending` until Zernio assigns it and Meta shows it as connected |
 | Zernio | `Connection flow prepared` until Nr3 proves the selected provider account and exact number |
 | Any scripted example conversation | `Rehearsal evidence only`; it was not sent through WhatsApp |
 | Booking and payment | `Handled by Mermaid's existing reservation system`; TRACY never claims to book, hold seats, or take payment |
@@ -41,9 +41,10 @@ Page. Do not use Mermaid's existing public number as a demo fallback.
 Complete the [owner-action checklist](mermaid_tracy_go_live_checklist.md). Then
 record one of these modes:
 
-- **Mode A, live channel:** Meta authorization is complete; Nr3 identifies
-  Zernio and exactly `+59996865665`; the strict allowlist contains exactly the
-  selected account; the inbox-only and controlled-reply canaries passed.
+- **Mode A, live channel:** Meta authorization is complete; Nr3 shows the exact
+  new number on the Mermaid Zernio purchase record; the strict allowlist
+  contains exactly the selected account; the inbox-only and controlled-reply
+  canaries passed.
 - **Mode B, safe evidence walkthrough:** any live-channel gate is incomplete.
   Keep `whatsapp_inbox`, `ai_auto_reply`, and `facebook_dms` off. Show the real
   tenant and operator controls, then walk through the labelled example prompts
@@ -96,10 +97,11 @@ If using Mode B, immediately add:
 Open the Mermaid workspace. Point out the tenant identity, assistant name,
 channel state, conversation list, pause control, and operator handoff controls.
 
-In Mode A, first keep AI off. Send `Channel check` from the tester to
-`+599 9 686 5665`. Confirm that it appears only in Mermaid and receives no
-automatic reply. Turn AI on deliberately, then send `Hi, who are you?` as a new
-message. TRACY should identify herself as a virtual assistant.
+In Mode A, first keep AI off. Send `Channel check` from the tester to the new
+dedicated number shown on Mermaid's Zernio connection card. Confirm that it
+appears only in Mermaid and receives no automatic reply. Turn AI on
+deliberately, then send `Hi, who are you?` as a new message. TRACY should
+identify herself as a virtual assistant.
 
 In Mode B, point to the fail-closed connection card and use `Hi, who are you?`
 as the first labelled example prompt. Explain that the automated tests verify
@@ -188,7 +190,9 @@ about which steps are complete and which still require the Mermaid owner.
 
 Pause Mermaid immediately if any of these occurs:
 
-- the channel number is not exactly `+59996865665`;
+- the connected number does not exactly match Mermaid's new Zernio purchase
+  record, or any pre-existing personal, business-app, public Mermaid, or other
+  tenant number appears;
 - a provider account outside Mermaid's strict allowlist appears;
 - one guest message receives more than one automated reply;
 - a Mermaid message appears in another tenant, or another tenant's message

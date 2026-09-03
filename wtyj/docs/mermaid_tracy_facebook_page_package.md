@@ -18,8 +18,8 @@ WhatsApp, Zernio, or the Unboks production channel is connected.
 | Created | `2026-09-02` |
 | Profile and cover | Premium original passenger-ship artwork uploaded and verified on the Page. |
 | Disclosure | Published as the first post and pinned. |
-| Public phone | `+599 9 686 5665` (`+59996865665`), the only real contact datum on the fictional Page. |
-| WhatsApp | Disconnected. Meta's connection screen is prefilled with `+599 9 686 5665`; no verification code has been sent. |
+| Public phone | The superseded `+599 9 686 5665` proposal is still visible; removal is prepared but not yet saved. Leave empty afterward until Mermaid's dedicated Zernio number is purchased. |
+| WhatsApp | Disconnected. The earlier unverified number proposal was abandoned; no existing WhatsApp account is in scope. |
 | Action button | Disconnected. |
 | Demo contact fields | Fictional address `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`; reserved email `tracy-demo@example.com`; reserved non-live link `https://tracy-demo.example`. Hours left empty. |
 | Marketing emails | Off. |
@@ -36,8 +36,8 @@ owner completes the explicit cutover steps below.
 | Category | `Travel service` |
 | Secondary category | Not set; `Product/service` is optional after owner review. |
 | Bio | `Private demo of TRACY, an AI-assisted guest-service concept for Klein Curaçao trips. Not an official Mermaid social Page.` |
-| Public phone | `+599 9 686 5665` (`+59996865665`). |
-| WhatsApp | Owner cutover target: `+599 9 686 5665` (`+59996865665`); prefilled in Meta but not verified or connected. |
+| Public phone | Remove the superseded `+599 9 686 5665`, then leave empty until Mermaid's dedicated Zernio number has been purchased and verified. |
+| WhatsApp | Owner cutover target: the new Zernio-provisioned number assigned exclusively to Mermaid; not yet purchased or connected. |
 | Website | `TRACY Demo Website (fictional)` → `https://tracy-demo.example`. The reserved `.example` domain is intentionally non-live; no website was created. |
 | Email | `tracy-demo@example.com`. The reserved `example.com` address is fictional and is not monitored. |
 | Address | `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`. This is not a pickup point or operating address. |
@@ -97,10 +97,11 @@ Use the required disclosure above. Do not boost or advertise it.
 
 ## Connection rule
 
-During Meta/Zernio authorization, select only the number that normalizes to
-`+59996865665`. If it is absent, if Meta presents Mermaid's public number
-`+59995601530`, or if the selected account identity cannot be proven, stop the
-connection and leave the tenant paused with a strict empty allowlist.
+During Meta/Zernio authorization, select only the new number shown on Mermaid's
+Zernio purchase record. If it is absent, if Meta presents Mermaid's public
+number `+59995601530`, if any existing user or tenant number appears, or if the
+selected account identity cannot be proven, stop the connection and leave the
+tenant paused with a strict empty allowlist.
 
 Facebook native instant replies and other automated-message rules must remain
 off so a guest can receive at most one automated response.
