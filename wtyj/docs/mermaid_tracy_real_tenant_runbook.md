@@ -68,12 +68,89 @@ Use a tester number that is not any tenant's own business number.
 
 - `wtyj-mermaid` is healthy on `127.0.0.1:8102`.
 - `/api/mermaid/health` returns HTTP 200 through Nginx.
+- The response has exactly one `X-Unboks-Tenant: mermaid` header.
+- `/api/not-a-real-tenant/health` returns HTTP 404 and has no
+  `X-Unboks-Tenant` header.
 - Nr3 connection status identifies Zernio and the exact normalized demo number.
 - `channel_account_allowlist.mode` is `strict` and contains exactly the account
   selected for that number.
 - No provider event for Ali, Roberto, or Unboks appears in Mermaid's data.
 - No Mermaid event appears in another tenant's data.
 - No secret, callback state, OTP, or raw provider token is captured in evidence.
+
+Run `wtyj/scripts/smoke_unboks_domain.sh` for the public, read-only route
+checks. To add authenticated profile and cross-tenant token checks, supply all
+three environment variables named by that script from a protected operator
+session. Never place their values in the command line, shell history, Git, or
+demo evidence.
+
+A legacy revision of the smoke script contained a dashboard credential. This
+branch removes it, but Git history is not a secret store. Rotate that Unboks
+dashboard credential through the normal protected operator workflow before the
+demo; do not record the old or replacement value in this runbook or the PR.
+
+## Canonical API routing
+
+Every enabled tenant must have a literal Nginx location and a fixed loopback
+upstream. The current production set used by this demo is:
+
+| Public prefix | Fixed upstream |
+|---|---|
+| `/api/mermaid/` | `127.0.0.1:8102` |
+| `/api/ali-car-rental/` | `127.0.0.1:8101` |
+| `/api/consulta-despertares/` | `127.0.0.1:8103` |
+| `/api/unboks/` | `127.0.0.1:8004` |
+
+Add another tenant only by adding another explicit location after its runtime
+exists. Never use a regex capture such as `/api/(?<tenant>...)/(.*)` with a
+shared fallback upstream. That pattern makes nonexistent tenants look healthy
+and lets the caller-selected slug be emitted as trusted identity. The server's
+final `location /` must return 404 without proxying.
+
+`ensure_dashboard_nginx.py` removes only the recognized legacy fallback to
+port 8004, creates one explicit `/api/unboks/` route, rejects any unrecognized
+API regex, and validates the final non-proxying 404. The dashboard deployment
+then verifies authenticated Mermaid, Ali, and Unboks profiles, rejects tokens
+used against a different tenant, and proves that an authenticated unknown slug
+still returns 404.
+
+## Live gluten-field drift and credential-preserving sync
+
+The pre-merge live verification found that Mermaid's generated `client.json`
+was missing the reviewed `faq.gluten_free` field and the corresponding bounded
+gluten-free wording in `agent_persona.freeform_notes`. The live file also
+contains generated dashboard credentials, a WhatsApp connection token, and
+provider state that do not belong in Git and must not be replaced by the
+tracked template.
+
+After this commit is available in `/root/wtyj-agent-source`, first run the
+narrow sync in dry-run mode:
+
+```bash
+python3 /root/wtyj-agent-source/wtyj/scripts/sync_mermaid_config_fields.py \
+  --source /root/wtyj-agent-source/clients/mermaid/config/client.json \
+  --target /root/clients/mermaid/config/client.json \
+  --backup-dir /root/backups/mermaid-content-sync
+```
+
+It must report only `agent_persona.freeform_notes` and `faq.gluten_free` as
+changed, or `none` if another reviewed process already synchronized them. To
+apply the same two-field update, repeat the command with `--apply`. The tool:
+
+- requires both documents to identify the `mermaid` tenant;
+- requires the live target to be a real mode-0600 file;
+- copies only those two reviewed content fields;
+- preserves every other live field, including credentials, connection tokens,
+  account allowlists, Facebook state, and provider identifiers;
+- writes a mode-0600 backup under the mode-0700 backup directory; and
+- aborts if the target changes during the operation.
+
+The backup is credential-bearing. Keep it outside the repository and never
+attach it to an issue, PR, log, or demo record. Do not use `cp` to replace the
+live `client.json`, and do not export the live file for comparison. After an
+approved apply, recreate only `wtyj-mermaid`, then repeat the health, paused
+state, allowlist, dashboard profile, and isolation checks before enabling any
+channel.
 
 ## Rollback checkpoints
 

@@ -24,16 +24,94 @@ def api_config() -> str:
 
     # BEGIN UNBOKS TENANT ali-car-rental
     location ^~ /api/ali-car-rental/ {
-        proxy_pass http://ali;
+        proxy_set_header X-Tenant-Slug ali-car-rental;
+        proxy_pass http://127.0.0.1:8101/;
         add_header X-Unboks-Tenant "ali-car-rental" always;
     }
     # END UNBOKS TENANT ali-car-rental
 
-    location /api/unboks/ {
+    location ^~ /api/mermaid/ {
+        proxy_set_header X-Tenant-Slug mermaid;
+        proxy_pass http://127.0.0.1:8102/;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "mermaid" always;
+    }
+
+    location ^~ /api/consulta-despertares/ {
+        proxy_set_header X-Tenant-Slug consulta-despertares;
+        proxy_pass http://127.0.0.1:8103/;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "consulta-despertares" always;
+    }
+
+    # BEGIN UNBOKS TENANT unboks
+    location ^~ /api/unboks/ {
+        proxy_set_header X-Tenant-Slug unboks;
+        proxy_pass http://127.0.0.1:8004/;
+        proxy_hide_header X-Unboks-Tenant;
         add_header X-Unboks-Tenant "unboks" always;
-        add_header X-Unboks-Tenant "intentionally-untouched" always;
+    }
+    # END UNBOKS TENANT unboks
+
+    location / {
+        return 404;
     }
 }
+"""
+
+
+def legacy_dynamic_api_config() -> str:
+    dynamic = """    location ~ ^/api/(?<tenant>[^/]+)/(.*)$ {
+        proxy_set_header X-Tenant-Slug $tenant;
+        proxy_pass http://127.0.0.1:8004/$2$is_args$args;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "$tenant" always;
+    }
+"""
+    return f"""server {{
+    # BEGIN UNBOKS TENANT ali-car-rental
+    location ^~ /api/ali-car-rental/ {{
+        proxy_set_header X-Tenant-Slug ali-car-rental;
+        proxy_pass http://127.0.0.1:8101/;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "ali-car-rental" always;
+    }}
+    # END UNBOKS TENANT ali-car-rental
+
+    # BEGIN UNBOKS TENANT mermaid
+    location ^~ /api/mermaid/ {{
+        proxy_set_header X-Tenant-Slug mermaid;
+        proxy_pass http://127.0.0.1:8102/;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "mermaid" always;
+    }}
+    # END UNBOKS TENANT mermaid
+
+    # BEGIN UNBOKS TENANT consulta-despertares
+    location ^~ /api/consulta-despertares/ {{
+        proxy_set_header X-Tenant-Slug consulta-despertares;
+        proxy_pass http://127.0.0.1:8103/;
+        proxy_hide_header X-Unboks-Tenant;
+        add_header X-Unboks-Tenant "consulta-despertares" always;
+    }}
+    # END UNBOKS TENANT consulta-despertares
+
+    location = /api/unboks/webhooks/zernio {{
+        proxy_pass http://127.0.0.1:8010/internal/api/zernio/webhook-router;
+    }}
+
+    # Health check
+{dynamic}
+    location /api/staging/ {{
+        proxy_pass http://127.0.0.1:9001/;
+    }}
+
+    # === Dynamic multi-tenant routing + CORS ===
+{dynamic}
+    location / {{
+        return 404;
+    }}
+}}
 """
 
 
@@ -145,6 +223,96 @@ def test_ambiguous_ali_header_policy_fails_closed(ali_body, message):
 
     with pytest.raises(ValueError, match=message):
         MODULE.ensure_single_tenant_header(original)
+
+
+def test_legacy_arbitrary_tenant_fallback_becomes_explicit_unboks_route():
+    original = legacy_dynamic_api_config()
+
+    updated = MODULE.ensure_explicit_tenant_routing(original)
+
+    assert "(?<tenant>" not in updated
+    assert 'add_header X-Unboks-Tenant "$tenant"' not in updated
+    assert updated.count("location ^~ /api/unboks/") == 1
+    assert updated.count("proxy_pass http://127.0.0.1:8004/;") == 1
+    assert 'add_header X-Unboks-Tenant "unboks" always;' in updated
+    assert "location / {\n        return 404;\n    }" in updated
+    assert "location ^~ /api/mermaid/" in updated
+    assert "proxy_pass http://127.0.0.1:8102/;" in updated
+    assert "location = /api/unboks/webhooks/zernio" in updated
+    assert "proxy_pass http://127.0.0.1:8010/internal/api/zernio/webhook-router;" in updated
+    assert MODULE.ensure_explicit_tenant_routing(updated) == updated
+
+
+def test_canonical_tenant_routing_preserves_crlf():
+    original = legacy_dynamic_api_config().replace("\n", "\r\n")
+
+    updated = MODULE.ensure_explicit_tenant_routing(original)
+
+    assert "\n" not in updated.replace("\r\n", "")
+    assert MODULE.ensure_explicit_tenant_routing(updated) == updated
+
+
+def test_dynamic_tenant_rewrite_rejects_unexpected_upstream():
+    original = legacy_dynamic_api_config().replace(
+        "http://127.0.0.1:8004/$2$is_args$args",
+        "http://127.0.0.1:8102/$2$is_args$args",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="unexpected upstream"):
+        MODULE.ensure_explicit_tenant_routing(original)
+
+
+def test_other_regex_api_location_fails_closed():
+    original = legacy_dynamic_api_config().replace(
+        "location ~ ^/api/(?<tenant>[^/]+)/(.*)$",
+        "location ~ ^/api/(?<slug>[^/]+)/(.*)$",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="unsupported regex API location"):
+        MODULE.ensure_explicit_tenant_routing(original)
+
+
+def test_unknown_api_path_requires_non_proxying_404_fallback():
+    original = legacy_dynamic_api_config().replace(
+        "location / {\n        return 404;\n    }",
+        "location / {\n        proxy_pass http://127.0.0.1:8004/;\n    }",
+    )
+
+    with pytest.raises(ValueError, match="must return 404 without proxying"):
+        MODULE.ensure_explicit_tenant_routing(original)
+
+
+def test_known_tenant_route_cannot_point_at_another_tenant():
+    original = legacy_dynamic_api_config().replace(
+        "proxy_pass http://127.0.0.1:8102/;",
+        "proxy_pass http://127.0.0.1:8004/;",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="must proxy only to"):
+        MODULE.ensure_explicit_tenant_routing(original)
+
+
+def test_known_tenant_route_cannot_emit_another_identity():
+    original = legacy_dynamic_api_config().replace(
+        "proxy_set_header X-Tenant-Slug mermaid;",
+        "proxy_set_header X-Tenant-Slug unboks;",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="fixed tenant identity"):
+        MODULE.ensure_explicit_tenant_routing(original)
+
+
+def test_duplicate_explicit_unboks_routes_fail_closed():
+    original = MODULE.ensure_explicit_tenant_routing(legacy_dynamic_api_config())
+    unboks_block = MODULE._canonical_unboks_block("    ", "\n")
+    duplicate = original.replace("    location / {", unboks_block + "\n    location / {")
+
+    with pytest.raises(ValueError, match="at most one"):
+        MODULE.ensure_explicit_tenant_routing(duplicate)
 
 
 def test_dashboard_html_is_no_store_but_hashed_assets_are_byte_identical():
@@ -326,6 +494,9 @@ def test_deployment_workflow_tracks_enforcer_and_has_config_rollback_guard():
     assert "DASHBOARD_APP_ROOT_COUNT" in workflow
     assert "grep -qi 'conflicting server name'" in workflow
     assert "pnpm --filter @workspace/unboks test" in workflow
+    assert '"mermaid": "wtyj-mermaid"' in workflow
+    assert 'unknown = "not-a-real-tenant"' in workflow
+    assert "Canonical tenant routing and authenticated isolation verified" in workflow
 
 
 def _workflow_awk_program(variable: str) -> str:
