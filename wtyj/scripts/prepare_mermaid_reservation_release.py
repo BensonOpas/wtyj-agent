@@ -18,7 +18,7 @@ import sqlite3
 import subprocess
 import tempfile
 
-from sync_mermaid_config_fields import _canonical_client_json_lock
+from sync_mermaid_config_fields import _canonical_client_json_lock, merge_reviewed_fields
 
 
 LIVE = Path("/root/clients/mermaid")
@@ -46,7 +46,7 @@ def merged_config(live: dict, source: dict) -> dict:
     allowlist = live.get("channel_account_allowlist") or {}
     if allowlist.get("mode") != "strict" or len(allowlist.get("zernio_accounts") or []) != 1:
         raise ValueError("Expected one strict Mermaid provider account")
-    updated = copy.deepcopy(live)
+    updated, _ = merge_reviewed_fields(source, live)
     updated["workflow"] = copy.deepcopy(source["workflow"])
     for key, value in source["features"].items():
         if key.startswith("mermaid_"):
@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--service-stopped", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"wtyj-agent:mermaid-reservations-[a-f0-9]{7,40}", args.image):
         raise ValueError("Expected a Mermaid-only revision image tag")
@@ -88,7 +89,13 @@ def main():
     if not release.is_absolute() or not str(release).startswith("/root/backups/mermaid-reservations/"):
         raise ValueError("Protected Mermaid release directory required")
     if args.apply:
+        if not args.service_stopped or subprocess.check_output(
+            ["docker", "inspect", "wtyj-mermaid", "--format", "{{.State.Running}}"], text=True
+        ).strip() != "false":
+            raise RuntimeError("Stop only Mermaid and pause config writers before applying")
         manifest = json.loads((release / "manifest.json").read_text())
+        if manifest["candidate_image"] != args.image:
+            raise RuntimeError("Release image does not match prepared manifest")
         with _canonical_client_json_lock(FILES["client.json"]):
             for name, live_path in FILES.items():
                 if live_path.is_symlink() or hashlib.sha256(live_path.read_bytes()).hexdigest() != manifest["original_hashes"][name]:
