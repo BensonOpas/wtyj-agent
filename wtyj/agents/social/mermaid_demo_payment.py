@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from agents.social import mermaid_documents, mermaid_reservation_store
 from agents.social.senders import send_reply
+from shared import icp_overrides, mermaid_catalog, state_registry
 
 
 def _secret() -> str:
@@ -102,7 +103,7 @@ def success_message(reservation: dict, payment: dict) -> str:
 
 
 def complete_checkout(reservation_id: str, expires: int, signature: str, status: str) -> Response:
-    if not verify_payment(reservation_id, expires, signature, _secret()):
+    if not mermaid_catalog.reservation_demo_enabled() or not mermaid_catalog.demo_features()["demo_payment"] or not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
     if not reservation:
@@ -119,13 +120,28 @@ def complete_checkout(reservation_id: str, expires: int, signature: str, status:
     base_url = os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001")
     receipt_url = mermaid_documents.build_signed_url(base_url, document["public_id"], _secret())
     delivered = job["status"] == "delivered"
-    if not delivered:
+    controls = icp_overrides.fetch_overrides_fresh()
+    can_send = (
+        icp_overrides.whatsapp_inbox_state(controls) is True
+        and icp_overrides.auto_reply_state(controls) is True
+        and not state_registry.get_ai_muted(reservation["conversation_id"])
+    )
+    if not delivered and can_send:
         delivered = send_reply(
             "whatsapp", reservation["conversation_id"], reservation.get("zernio_account_id") or "",
             success_message(reservation, payment), attachment_url=receipt_url, attachment_type="file",
             confirm_delivery=True, idempotency_key=job["idempotency_key"],
         )
         mermaid_documents.mark_delivery(job["public_id"], delivered, "provider returned false" if not delivered else "")
+        if delivered:
+            state_registry.dm_store_message(
+                conversation_id=reservation["conversation_id"], channel="whatsapp", role="assistant",
+                text=success_message(reservation, payment),
+            )
+            state_registry.dm_store_message(
+                conversation_id=reservation["conversation_id"], channel="whatsapp", role="system",
+                text="Payment receipt sent: " + document["filename"],
+            )
     body = (
         f"<p><b>Demo payment complete.</b></p><p>Booking code: <b>{html.escape(reservation['booking_code'])}</b></p>"
         "<p>Your receipt and warm booking message were prepared for the same WhatsApp conversation. No money moved.</p>"

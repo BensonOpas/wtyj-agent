@@ -1059,7 +1059,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     from shared import mermaid_catalog
     if channel == "whatsapp" and mermaid_catalog.reservation_demo_enabled():
         from agents.social.mermaid_reservation_workflow import handle_demo_message
-        return handle_demo_message(message, include_media=include_media)
+        return handle_demo_message(message, include_media=include_media, use_model=True)
 
     # Consulta Despertares receives commercial proposals, supplier outreach,
     # professional referrals, and job applications on the patient WhatsApp

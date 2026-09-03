@@ -1424,6 +1424,7 @@ def _flush_buffer(buffer_key):
                 reply_vehicle_recommendation = None
                 reply_quote_confirmation = None
                 ali_turn_commit = None
+                mermaid_delivery_commit = None
                 ali_customer_delivery_deferred = False
                 if _orchestrator_on:
                     state_registry.dm_store_inbound_message(
@@ -1451,6 +1452,11 @@ def _flush_buffer(buffer_key):
                         ali_turn_commit = (
                             reply_result.get("ali_turn_commit")
                             if isinstance(reply_result.get("ali_turn_commit"), dict)
+                            else None
+                        )
+                        mermaid_delivery_commit = (
+                            reply_result.get("mermaid_delivery_commit")
+                            if isinstance(reply_result.get("mermaid_delivery_commit"), dict)
                             else None
                         )
                         ali_customer_delivery_deferred = bool(
@@ -1515,6 +1521,8 @@ def _flush_buffer(buffer_key):
                         ok = bool(confirmation_delivery.get("success"))
                     else:
                         delivery_idempotency_key = (
+                            f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"
+                            if mermaid_delivery_commit else
                             f"ali-turn-{ali_turn_commit['action_id']}"
                             if ali_turn_commit
                             else "unboks-auto-reply-"
@@ -1526,17 +1534,22 @@ def _flush_buffer(buffer_key):
                             _zernio_acct,
                             reply_text,
                             attachment_url=attachment_url,
-                            attachment_type="image" if attachment_url else "image",
+                            attachment_type=str((reply_media or {}).get("type") or "image"),
                             confirm_delivery=True,
                             idempotency_key=delivery_idempotency_key,
                         )
+                    if mermaid_delivery_commit:
+                        from agents.social.mermaid_documents import mark_delivery
+                        mark_delivery(mermaid_delivery_commit["job_id"], bool(ok), "" if ok else "provider returned false")
                     if not ok:
                         log("zernio_reply_send_failed",
                             channel=_zernio_channel,
                             conversation_id=_zernio_conv[:20],
                             media_attached=bool(attachment_url),
                             vehicle_recommendation=bool(reply_vehicle_recommendation))
-                        if ali_turn_commit:
+                        if mermaid_delivery_commit:
+                            _mark_ali_delivery_retry(_zernio_channel, _zernio_conv, ids, "mermaid_quote")
+                        elif ali_turn_commit:
                             _mark_ali_delivery_retry(
                                 _zernio_channel,
                                 _zernio_conv,
@@ -1626,12 +1639,13 @@ def _flush_buffer(buffer_key):
                             ),
                         )
                     if attachment_url:
-                        state_registry.increment_photo_used_count(int(reply_media["id"]))
+                        if str((reply_media or {}).get("type") or "image") == "image":
+                            state_registry.increment_photo_used_count(int(reply_media["id"]))
                         state_registry.dm_store_message(
                             conversation_id=_zernio_conv,
                             channel=_zernio_channel,
                             role="system",
-                            text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                            text=f"Attachment sent: {reply_media.get('caption') or reply_media.get('filename')}",
                         )
                     if not ali_turn_commit:
                         state_registry.inbound_processing_bulk_update(

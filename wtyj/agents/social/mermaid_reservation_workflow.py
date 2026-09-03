@@ -9,6 +9,7 @@ state store.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -428,13 +429,131 @@ def process_intake_turn(
     return IntakeResult(response, locale, fields.get("phase", "collecting"), action=action)
 
 
-def handle_demo_message(message: dict, include_media: bool = False) -> str | dict:
+def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
+    """The single model call understands language; Python validates and owns state."""
+    from agents.marina import marina_agent
+
+    phone = str(message.get("from") or "")
+    message_id = str(message.get("message_id") or "")
+    state = state_registry.wa_get_booking_state(phone)
+    root_fields = dict(state.get("fields") or {})
+    flags = dict(state.get("flags") or {})
+    fields = dict(root_fields.get("mermaid_intake") or {})
+    seen = list(flags.get("mermaid_seen_message_ids") or [])
+    if message_id and message_id in seen:
+        return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
+    history = state_registry.dm_get_history(phone, "whatsapp", limit=16)
+    context = dict(fields)
+    context["reservation_state"] = (reservation or {}).get("state")
+    understood = marina_agent.process_message(
+        from_email=phone, subject="Mermaid WhatsApp reservation demo",
+        body=str(message.get("text") or ""), thread_fields=context,
+        thread_flags={"phase": fields.get("phase", "collecting")},
+        action_context=json.dumps({"required_fields": REQUIRED_FIELDS}),
+        channel="whatsapp", messages=history,
+        response_contract="mermaid_reservation_demo",
+    )
+    locale = understood.get("language")
+    if locale not in SUPPORTED_LOCALES:
+        locale = fields.get("language", "en")
+    action = understood.get("mermaid_action")
+    if action not in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}:
+        return IntakeResult(str(understood.get("reply") or COPY[locale]["trip_date"]), locale, fields.get("phase", "collecting"))
+    if action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
+        fields = {}
+    old_phase = fields.get("phase", "collecting")
+    fields["language"] = locale
+    changes = {}
+    for key, value in (understood.get("fields") or {}).items():
+        if key in {"adults", "children", "infants"}:
+            if type(value) is int and 0 <= value <= 100:
+                changes[key] = value
+        elif key == "trip_date" and isinstance(value, str):
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+                if parsed.date() >= datetime.now().date():
+                    changes[key] = parsed.date().isoformat()
+            except ValueError:
+                pass
+        elif key == "pickup_preference" and value in {"pier", "pickup_requested"}:
+            changes[key] = value
+        elif key in {"customer_name", "pickup_location", "dietary_requirements", "accessibility_notes", "special_requests"} and isinstance(value, str):
+            cleaned = " ".join(value.split())[:160]
+            if cleaned:
+                changes[key] = cleaned
+    changes = {key: value for key, value in changes.items() if fields.get(key) != value}
+    fields.update(changes)
+    if fields.get("pickup_preference") == "pier":
+        fields.pop("pickup_location", None)
+    response = str(understood.get("reply") or "").strip()
+    result_action = None
+    if understood.get("requires_human") or action == "request_human" or (
+        action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
+    ):
+        state_registry.set_ai_muted(phone, True, channel="whatsapp")
+        state_registry.create_pending_notification(
+            "escalation", "whatsapp", phone,
+            str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
+            "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
+        )
+        fields["phase"] = "human_takeover"
+        response = COPY[locale]["human"]
+        result_action = "human_takeover"
+    elif action == "cancel":
+        fields["phase"] = "cancelled"
+        response = COPY[locale]["cancelled"]
+        result_action = "cancel"
+    elif reservation and reservation["state"] in {"demo_payment_pending", "booked"} and action != "new_booking":
+        # Answers after a quote never reopen intake or change the immutable quote.
+        fields = dict(root_fields.get("mermaid_intake") or fields)
+        fields["language"] = locale
+        fields["phase"] = reservation["state"]
+        result_action = "payment_status" if action == "payment_status" else None
+    else:
+        if fields.get("trip_date"):
+            day = datetime.strptime(fields["trip_date"], "%Y-%m-%d").strftime("%A").casefold()
+            if day not in mermaid_catalog.get_catalog()["service"]["operating_weekdays"]:
+                fields.pop("trip_date")
+                response = COPY[locale]["invalid_day"] + "\n\n" + COPY[locale]["trip_date"]
+        question = _next_question(fields, locale)
+        if question:
+            fields["phase"] = "collecting"
+            if not response:
+                response = question
+        elif action == "confirm_summary" and old_phase == "awaiting_summary_confirmation" and not changes:
+            fields["phase"] = "summary_confirmed"
+            response = COPY[locale]["confirmed"]
+            result_action = "summary_confirmed"
+        else:
+            fields["phase"] = "awaiting_summary_confirmation"
+            response = ((response + "\n\n") if action == "question" and response else "") + _summary(fields, locale)
+    root_fields["mermaid_intake"] = fields
+    if message_id:
+        flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
+    state_registry.wa_save_booking_state(phone, root_fields, flags, state.get("completed_bookings") or [])
+    return IntakeResult(response, locale, fields["phase"], action=result_action)
+
+
+def handle_demo_message(message: dict, include_media: bool = False, *, use_model: bool = False) -> str | dict:
     # Customer prose is never payment evidence. Only the signed callback below
     # can mutate payment state.
     from agents.social import mermaid_reservation_store as _reservation_store
-    current = _reservation_store.latest_for_conversation(str(message.get("from") or ""))
+    phone = str(message.get("from") or "")
+    current = _reservation_store.latest_for_conversation(phone)
+    if use_model:
+        state = state_registry.wa_get_booking_state(phone)
+        cached = (state.get("flags") or {}).get("mermaid_cached_reply") or {}
+        if message.get("message_id") and cached.get("message_id") == message["message_id"]:
+            reply = dict(cached.get("reply") or {})
+            commit = reply.get("mermaid_delivery_commit") or {}
+            if commit:
+                from agents.social.mermaid_documents import delivery_job
+                if (delivery_job(commit["job_id"]) or {}).get("status") == "delivered":
+                    return IntakeResult("", current["language"] if current else "en", "duplicate", duplicate=True).as_reply() if include_media else ""
+            reply["duplicate"] = True
+            return reply if include_media else str(reply.get("text") or "")
     lower = str(message.get("text") or "").casefold()
-    if current and current["state"] == "demo_payment_pending" and any(
+    if not use_model and current and current["state"] == "demo_payment_pending" and any(
         phrase in lower for phrase in ("i paid", "paid", "betaald", "bezahlt", "pagué", "paguei", "mi a paga")
     ):
         text = (
@@ -444,7 +563,7 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         if include_media:
             return IntakeResult(text, current["language"], "demo_payment_pending").as_reply()
         return text
-    result = process_intake_turn(
+    result = process_model_turn(message, current) if use_model else process_intake_turn(
         str(message.get("from") or ""),
         str(message.get("text") or ""),
         message_id=str(message.get("message_id") or ""),
@@ -474,7 +593,7 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
             updates={"quote_public_id": document["public_id"]},
         )
         base_url = __import__("os").environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001")
-        secret = __import__("os").environ.get("MERMAID_DEMO_SIGNING_SECRET", "local-mermaid-demo-secret")
+        secret = __import__("os").environ.get("MERMAID_DEMO_SIGNING_SECRET", "")
         media = {
             "url": mermaid_documents.build_signed_url(base_url, document["public_id"], secret),
             "type": "file", "filename": document["filename"], "id": document["public_id"],
@@ -498,7 +617,17 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
             reply = result.as_reply()
             reply["media"] = media
             reply["mermaid_delivery_commit"] = {"job_id": job["public_id"]}
+            if use_model:
+                _cache_reply(message, reply)
             return reply
+    elif result.action == "payment_status" and current and current["state"] == "demo_payment_pending":
+        from agents.social import mermaid_demo_payment
+        import os
+        url = mermaid_demo_payment.build_payment_url(
+            os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001"),
+            current["public_id"], os.environ.get("MERMAID_DEMO_SIGNING_SECRET", ""),
+        )
+        result = IntakeResult(result.text + "\n\n" + PAYMENT_COPY[result.locale][1] + " " + url, result.locale, result.phase)
     elif result.action == "cancel":
         from agents.social import mermaid_reservation_store
 
@@ -514,4 +643,17 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         current = mermaid_reservation_store.latest_for_conversation(str(message.get("from") or ""))
         if current:
             mermaid_reservation_store.freeze_for_human(current["public_id"])
+    if use_model:
+        _cache_reply(message, result.as_reply())
     return result.as_reply() if include_media else result.text
+
+
+def _cache_reply(message: dict, reply: dict) -> None:
+    """Keep the exact payload for the provider's stable idempotent retry."""
+    if not message.get("message_id"):
+        return
+    phone = str(message.get("from") or "")
+    state = state_registry.wa_get_booking_state(phone)
+    flags = dict(state.get("flags") or {})
+    flags["mermaid_cached_reply"] = {"message_id": message["message_id"], "reply": reply}
+    state_registry.wa_save_booking_state(phone, state.get("fields") or {}, flags, state.get("completed_bookings") or [])
