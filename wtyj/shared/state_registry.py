@@ -307,6 +307,8 @@ def _get_conn():
         ("payload_json", "TEXT NOT NULL DEFAULT '{}'") ,
         ("heartbeat_sent_at", "TEXT NOT NULL DEFAULT ''"),
         ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("batch_id", "TEXT NOT NULL DEFAULT ''"),
+        ("batch_position", "INTEGER NOT NULL DEFAULT 0"),
     ):
         try:
             conn.execute(
@@ -317,6 +319,10 @@ def _get_conn():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inbound_processing_conversation "
         "ON inbound_processing_events(conversation_id, updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbound_processing_batch "
+        "ON inbound_processing_events(batch_id, batch_position)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS whatsapp_threads ("
@@ -1351,6 +1357,84 @@ def wa_claim_inbound_processing(
         conn.close()
 
 
+def _inbound_processing_batch_id(message_id: str) -> str:
+    """Return the stable opaque identity for a batch's first provider event."""
+    return hashlib.sha256(
+        ("whatsapp-inbound-batch-v1\x1f" + str(message_id)).encode("utf-8")
+    ).hexdigest()
+
+
+def inbound_processing_join_batch(
+    message_id: str,
+    batch_id: str = "",
+    position: int = 0,
+) -> str:
+    """Durably bind one accepted provider event to its debounce batch.
+
+    The first event creates the stable batch identity; later events join that
+    identity while the in-memory debounce buffer is open.  An existing binding
+    is immutable, which prevents a recovery worker or concurrent buffer from
+    silently merging a provider event into a different outbound turn.
+
+    Direct unit/legacy callers may buffer an event without a durable ledger row.
+    They still receive the deterministic identity, but no row is synthesized
+    because the original recovery payload is unavailable here.
+    """
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_message_id:
+        return ""
+    requested_batch_id = str(batch_id or "").strip()
+    desired_batch_id = requested_batch_id or _inbound_processing_batch_id(
+        normalized_message_id
+    )
+    normalized_position = max(0, int(position or 0))
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT conversation_id, channel, batch_id, batch_position "
+            "FROM inbound_processing_events WHERE message_id = ?",
+            (normalized_message_id,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return desired_batch_id
+        existing_batch_id = str(row[2] or "")
+        if existing_batch_id:
+            conn.commit()
+            return existing_batch_id
+        owner = conn.execute(
+            "SELECT conversation_id, channel FROM inbound_processing_events "
+            "WHERE batch_id = ? LIMIT 1",
+            (desired_batch_id,),
+        ).fetchone()
+        if owner is not None and (
+            str(owner[0] or "") != str(row[0] or "")
+            or str(owner[1] or "") != str(row[1] or "")
+        ):
+            conn.rollback()
+            raise ValueError("Inbound batch cannot cross a conversation or channel")
+        conn.execute(
+            "UPDATE inbound_processing_events "
+            "SET batch_id = ?, batch_position = ?, updated_at = ? "
+            "WHERE message_id = ? AND batch_id = ''",
+            (
+                desired_batch_id,
+                normalized_position,
+                now,
+                normalized_message_id,
+            ),
+        )
+        conn.commit()
+        return desired_batch_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def wa_store_external_operator_message(
     message_id: str,
     conversation_id: str,
@@ -1466,31 +1550,92 @@ def inbound_processing_quarantine(message_id: str, reason: str) -> None:
     content and routing metadata are erased so a reassigned account cannot
     leak its prior tenant's payload into the current runtime.
     """
-    if not message_id:
+    inbound_processing_quarantine_batch([message_id], reason)
+
+
+def inbound_processing_quarantine_batch(
+    message_ids: list[str],
+    reason: str,
+) -> None:
+    """Atomically quarantine every member of a stale tenant-mismatched batch."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    if not ids:
         return
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     try:
-        conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
             "UPDATE inbound_processing_events "
             "SET status = 'ignored', reason = ?, last_error = '', "
             "payload_json = '{}', conversation_id = '', channel = '', "
             "updated_at = ? WHERE message_id = ?",
-            ((reason or "recovery_payload_quarantined")[:500], now, message_id),
+            [
+                (
+                    (reason or "recovery_payload_quarantined")[:500],
+                    now,
+                    message_id,
+                )
+                for message_id in ids
+            ],
         )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def inbound_processing_bulk_update(message_ids: list, status: str,
                                    reason: str = "", error: str = ""):
-    """Update a batch of inbound processing records."""
-    seen = set()
-    for message_id in message_ids or []:
-        if message_id and message_id not in seen:
-            seen.add(message_id)
-            inbound_processing_update(message_id, status, reason=reason, error=error)
+    """Atomically update every member of an inbound processing batch."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    if not ids:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    normalized_reason = (reason or "")[:500]
+    normalized_error = (error or "")[:500]
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for message_id in ids:
+            cur = conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET status = ?, reason = ?, last_error = ?, updated_at = ? "
+                "WHERE message_id = ?",
+                (
+                    status,
+                    normalized_reason,
+                    normalized_error,
+                    now,
+                    message_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                conn.execute(
+                    "INSERT INTO inbound_processing_events "
+                    "(message_id, status, reason, last_error, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        message_id,
+                        status,
+                        normalized_reason,
+                        normalized_error,
+                        now,
+                        now,
+                    ),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def inbound_processing_mark_stale_failures(max_age_seconds: int = 300) -> int:
@@ -1521,7 +1666,13 @@ def inbound_processing_claim_recoverable(
     max_age_seconds: int = 40,
     limit: int = 50,
 ) -> list[dict]:
-    """Claim durable WhatsApp turns abandoned before a terminal reply."""
+    """Claim whole durable WhatsApp batches abandoned before a terminal reply.
+
+    ``limit`` is a batch limit, never a row limit.  Returning every member in
+    its original position keeps debounce input and provider idempotency stable
+    across repeated crashes.  Legacy unbatched rows are conservatively migrated
+    to singleton batches because their former in-memory membership is unknowable.
+    """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
     ).isoformat()
@@ -1529,43 +1680,129 @@ def inbound_processing_claim_recoverable(
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "UPDATE inbound_processing_events AS inbound "
-            "SET status = 'superseded', reason = 'newer_outbound_exists', "
-            "updated_at = ? "
-            "WHERE status IN ('received', 'processing', 'recovering') "
+        legacy_rows = conn.execute(
+            "SELECT message_id FROM inbound_processing_events "
+            "WHERE batch_id = '' AND payload_json != '{}' "
+            "AND status IN ('received', 'processing', 'recovering') "
             "AND ((status IN ('received', 'processing') AND created_at < ?) "
-            "OR (status = 'recovering' AND updated_at < ?)) AND EXISTS ("
-            " SELECT 1 FROM whatsapp_threads AS thread "
-            " WHERE thread.phone = inbound.conversation_id "
-            " AND thread.role IN ('assistant', 'operator') "
-            " AND thread.created_at > inbound.created_at"
-            ")",
-            (now, cutoff, cutoff),
-        )
-        rows = conn.execute(
-            "SELECT message_id, conversation_id, channel, payload_json, "
-            "created_at, heartbeat_sent_at, attempt_count, reason, last_error "
-            "FROM inbound_processing_events AS inbound "
-            "WHERE status IN ('received', 'processing', 'recovering') "
+            "OR (status = 'recovering' AND updated_at < ?))",
+            (cutoff, cutoff),
+        ).fetchall()
+        for legacy_row in legacy_rows:
+            conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET batch_id = ?, batch_position = 0 "
+                "WHERE message_id = ? AND batch_id = ''",
+                (
+                    _inbound_processing_batch_id(str(legacy_row[0] or "")),
+                    legacy_row[0],
+                ),
+            )
+        # Supersession is a batch transition. Comparing against the newest
+        # member prevents an older outbound from terminally changing only the
+        # first row of a multi-message debounce batch.
+        stale_batches = conn.execute(
+            "SELECT batch_id, conversation_id, MAX(created_at) "
+            "FROM inbound_processing_events "
+            "WHERE batch_id != '' "
+            "AND status IN ('received', 'processing', 'recovering') "
             "AND ((status IN ('received', 'processing') AND created_at < ?) "
             "OR (status = 'recovering' AND updated_at < ?)) "
-            "AND payload_json != '{}' "
-            "AND NOT EXISTS ("
-            " SELECT 1 FROM whatsapp_threads AS thread "
-            " WHERE thread.phone = inbound.conversation_id "
-            " AND thread.role IN ('assistant', 'operator') "
-            " AND thread.created_at > inbound.created_at"
-            ") ORDER BY created_at ASC LIMIT ?",
-            (cutoff, cutoff, max(1, min(int(limit), 200))),
+            "GROUP BY batch_id, conversation_id",
+            (cutoff, cutoff),
+        ).fetchall()
+        for batch_id, conversation_id, latest_created_at in stale_batches:
+            newer_outbound = conn.execute(
+                "SELECT 1 FROM whatsapp_threads "
+                "WHERE phone = ? AND role IN ('assistant', 'operator') "
+                "AND created_at > ? LIMIT 1",
+                (conversation_id, latest_created_at),
+            ).fetchone()
+            if newer_outbound is not None:
+                conn.execute(
+                    "UPDATE inbound_processing_events "
+                    "SET status = 'superseded', "
+                    "reason = 'newer_outbound_exists', updated_at = ? "
+                    "WHERE batch_id = ? AND status IN "
+                    "('received', 'processing', 'recovering')",
+                    (now, batch_id),
+                )
+
+        # A terminal or payload-less sibling makes the original action
+        # ambiguous. Never resurrect such a partial batch; fail its stale
+        # remainder visibly instead. Atomic batch transitions below ensure new
+        # writes cannot normally enter this compatibility/corruption state.
+        incomplete_batches = conn.execute(
+            "SELECT batch_id FROM inbound_processing_events "
+            "WHERE batch_id != '' GROUP BY batch_id "
+            "HAVING SUM(CASE WHEN status NOT IN "
+            "('received', 'processing', 'recovering') OR payload_json = '{}' "
+            "THEN 1 ELSE 0 END) > 0 "
+            "AND SUM(CASE WHEN status IN "
+            "('received', 'processing', 'recovering') AND ("
+            "(status IN ('received', 'processing') AND created_at < ?) OR "
+            "(status = 'recovering' AND updated_at < ?)) "
+            "THEN 1 ELSE 0 END) > 0",
+            (cutoff, cutoff),
+        ).fetchall()
+        for incomplete_batch in incomplete_batches:
+            conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET status = 'processing_failed', "
+                "reason = 'incomplete_durable_batch', "
+                "last_error = 'A batch member was already terminal; replay suppressed.', "
+                "updated_at = ? WHERE batch_id = ? "
+                "AND status IN ('received', 'processing', 'recovering') "
+                "AND ((status IN ('received', 'processing') AND created_at < ?) "
+                "OR (status = 'recovering' AND updated_at < ?))",
+                (now, incomplete_batch[0], cutoff, cutoff),
+            )
+        rows = conn.execute(
+            "WITH eligible_batches AS ("
+            " SELECT batch_id, MIN(created_at) AS first_created "
+            " FROM inbound_processing_events "
+            " WHERE batch_id != '' "
+            " GROUP BY batch_id "
+            " HAVING SUM(CASE WHEN status IN "
+            " ('received', 'processing', 'recovering') AND ("
+            " (status IN ('received', 'processing') AND created_at < ?) OR "
+            " (status = 'recovering' AND updated_at < ?)) THEN 1 ELSE 0 END) > 0 "
+            " AND SUM(CASE WHEN status IN "
+            " ('received', 'processing', 'recovering') AND NOT ("
+            " (status IN ('received', 'processing') AND created_at < ?) OR "
+            " (status = 'recovering' AND updated_at < ?)) THEN 1 ELSE 0 END) = 0 "
+            " AND SUM(CASE WHEN status NOT IN "
+            " ('received', 'processing', 'recovering') OR payload_json = '{}' "
+            " THEN 1 ELSE 0 END) = 0 "
+            " ORDER BY first_created ASC, batch_id ASC LIMIT ?"
+            ") "
+            "SELECT inbound.message_id, inbound.conversation_id, inbound.channel, "
+            "inbound.payload_json, inbound.created_at, inbound.heartbeat_sent_at, "
+            "inbound.attempt_count, inbound.reason, inbound.last_error, "
+            "inbound.status, inbound.batch_id, inbound.batch_position "
+            "FROM inbound_processing_events AS inbound "
+            "JOIN eligible_batches AS eligible ON eligible.batch_id = inbound.batch_id "
+            "WHERE inbound.status IN ('received', 'processing', 'recovering') "
+            "AND inbound.payload_json != '{}' "
+            "ORDER BY eligible.first_created ASC, inbound.batch_position ASC, "
+            "inbound.created_at ASC, inbound.message_id ASC",
+            (
+                cutoff,
+                cutoff,
+                cutoff,
+                cutoff,
+                max(1, min(int(limit), 200)),
+            ),
         ).fetchall()
         for row in rows:
-            conn.execute(
-                "UPDATE inbound_processing_events SET status = 'recovering', "
-                "reason = 'stale_turn_reclaimed', attempt_count = attempt_count + 1, "
-                "updated_at = ? WHERE message_id = ?",
-                (now, row[0]),
-            )
+            if str(row[9] or "") in {"received", "processing", "recovering"}:
+                conn.execute(
+                    "UPDATE inbound_processing_events SET status = 'recovering', "
+                    "reason = 'stale_turn_reclaimed', "
+                    "attempt_count = attempt_count + 1, updated_at = ? "
+                    "WHERE message_id = ?",
+                    (now, row[0]),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -1579,9 +1816,13 @@ def inbound_processing_claim_recoverable(
             "message_id": row[0], "conversation_id": row[1],
             "channel": row[2], "payload": payload, "created_at": row[4],
             "heartbeat_sent_at": row[5],
-            "attempt_count": int(row[6] or 0) + 1,
+            "attempt_count": int(row[6] or 0) + (
+                1 if str(row[9] or "") in {"received", "processing", "recovering"} else 0
+            ),
             "recovery_reason": str(row[7] or ""),
             "recovery_error": str(row[8] or ""),
+            "batch_id": str(row[10] or ""),
+            "batch_position": int(row[11] or 0),
         })
     return result
 

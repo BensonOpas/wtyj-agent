@@ -865,6 +865,20 @@ def _post_recommendation_message(
     """Return ``sent``, ``rejected``, or ``ambiguous`` with status."""
     last_status = None
     for _attempt in range(2):
+        # Structured recommendations and confirmations bypass the registry
+        # sender adapter used by ordinary text replies.  Re-read the mounted
+        # tenant allowlist immediately before *every* provider attempt so an
+        # account reassignment between generation, fallback, or retry cannot
+        # send from another tenant's WhatsApp account.
+        from shared.tenant_guard import is_account_allowed
+
+        account_id = str((body or {}).get("accountId") or "").strip()
+        if not is_account_allowed(account_id, direction="outbound"):
+            bm_logger.log(
+                "zernio_structured_send_account_not_allowlisted",
+                account_id=account_id[:20],
+            )
+            return "rejected", last_status, ""
         try:
             response = http_requests.post(
                 url,

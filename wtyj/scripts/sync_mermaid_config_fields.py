@@ -16,6 +16,7 @@ import json
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,87 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _no_follow_flag(label: str) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError(f"safe no-follow {label} access is unavailable")
+    return no_follow
+
+
+def _read_regular_file_no_follow(
+    path: Path,
+    *,
+    label: str,
+) -> tuple[bytes, os.stat_result]:
+    """Read one regular file without following its final path component."""
+    flags = os.O_RDONLY | _no_follow_flag(label)
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file, not a symlink") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"{label} must be a regular file, not a symlink")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            return stream.read(), metadata
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+@contextmanager
+def _canonical_client_json_lock(target_path: Path):
+    """Use the exact sidecar lock shared by runtime and Nr3 config writers."""
+    lock_path = target_path.with_suffix(target_path.suffix + ".lock")
+    flags = os.O_RDWR | os.O_CREAT | _no_follow_flag("client.json lock")
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise ValueError("client.json lock must be a regular file, not a symlink") from exc
+    locked = False
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("client.json lock must be a regular file, not a symlink")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        locked = True
+        yield
+    finally:
+        if locked:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _assert_target_unchanged(
+    target_path: Path,
+    expected_stat: os.stat_result,
+    expected_bytes: bytes,
+) -> None:
+    """Safely reject non-cooperating replacement or in-place target edits."""
+    try:
+        current, current_stat = _read_regular_file_no_follow(
+            target_path,
+            label="target",
+        )
+    except ValueError as exc:
+        raise RuntimeError("target changed during sync; refusing replacement") from exc
+    if (
+        current_stat.st_dev != expected_stat.st_dev
+        or current_stat.st_ino != expected_stat.st_ino
+        or current != expected_bytes
+    ):
+        raise RuntimeError("target changed during sync; refusing replacement")
+
+
 def _write_backup(backup_dir: Path, original: bytes) -> Path:
     if not backup_dir.is_absolute():
         raise ValueError("backup directory must be an absolute path outside the repository")
@@ -126,37 +208,37 @@ def sync(
     *,
     apply: bool,
 ) -> tuple[list[str], Path | None]:
-    if source_path.is_symlink() or not source_path.is_file():
-        raise ValueError("source must be a regular file, not a symlink")
-    if target_path.is_symlink() or not target_path.is_file():
-        raise ValueError("target must be a regular file, not a symlink")
-    if source_path.resolve() == target_path.resolve():
+    if os.path.abspath(source_path) == os.path.abspath(target_path):
         raise ValueError("source and target must be different files")
-    source = _load_object_bytes(source_path.read_bytes(), "source")
+    source_bytes, source_stat = _read_regular_file_no_follow(
+        source_path,
+        label="source",
+    )
+    source = _load_object_bytes(source_bytes, "source")
 
-    flags = (os.O_RDWR if apply else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(target_path, flags)
-    stage_path: Path | None = None
-    try:
-        mode = "r+b" if apply else "rb"
-        lock_mode = fcntl.LOCK_EX if apply else fcntl.LOCK_SH
-        with os.fdopen(descriptor, mode, closefd=False) as locked:
-            fcntl.flock(locked.fileno(), lock_mode)
-            target_stat = os.fstat(locked.fileno())
-            if not stat.S_ISREG(target_stat.st_mode):
-                raise ValueError("target must resolve to a regular file")
-            if stat.S_IMODE(target_stat.st_mode) != 0o600:
-                raise ValueError("target client.json must have mode 0600 before sync")
-            original = locked.read()
-            target = _load_object_bytes(original, "target")
-            updated, changed = merge_reviewed_fields(source, target)
-            if not apply or not changed:
-                return changed, None
+    def synchronize_snapshot() -> tuple[list[str], Path | None]:
+        target_bytes, target_stat = _read_regular_file_no_follow(
+            target_path,
+            label="target",
+        )
+        if (
+            source_stat.st_dev == target_stat.st_dev
+            and source_stat.st_ino == target_stat.st_ino
+        ):
+            raise ValueError("source and target must be different files")
+        if stat.S_IMODE(target_stat.st_mode) != 0o600:
+            raise ValueError("target client.json must have mode 0600 before sync")
+        target = _load_object_bytes(target_bytes, "target")
+        updated, changed = merge_reviewed_fields(source, target)
+        if not apply or not changed:
+            return changed, None
 
-            backup_path = _write_backup(backup_dir, original)
-            rendered = (
-                json.dumps(updated, indent=2, ensure_ascii=False) + "\n"
-            ).encode("utf-8")
+        backup_path = _write_backup(backup_dir, target_bytes)
+        rendered = (
+            json.dumps(updated, indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+        stage_path: Path | None = None
+        try:
             stage_descriptor, stage_name = tempfile.mkstemp(
                 prefix=f".{target_path.name}.content-sync.",
                 dir=target_path.parent,
@@ -169,21 +251,21 @@ def sync(
                 os.fchown(stage.fileno(), target_stat.st_uid, target_stat.st_gid)
                 os.fsync(stage.fileno())
 
-            current_stat = target_path.stat()
-            if (
-                current_stat.st_dev != target_stat.st_dev
-                or current_stat.st_ino != target_stat.st_ino
-                or target_path.read_bytes() != original
-            ):
-                raise RuntimeError("target changed during sync; refusing replacement")
+            _assert_target_unchanged(target_path, target_stat, target_bytes)
             os.replace(stage_path, target_path)
             stage_path = None
             _fsync_directory(target_path.parent)
             return changed, backup_path
-    finally:
-        if stage_path is not None:
-            stage_path.unlink(missing_ok=True)
-        os.close(descriptor)
+        finally:
+            if stage_path is not None:
+                stage_path.unlink(missing_ok=True)
+
+    if not apply:
+        # Dry-run remains filesystem read-only. Its snapshot may become stale,
+        # but it cannot overwrite a concurrent writer.
+        return synchronize_snapshot()
+    with _canonical_client_json_lock(target_path):
+        return synchronize_snapshot()
 
 
 def main() -> int:
