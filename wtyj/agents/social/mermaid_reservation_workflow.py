@@ -408,6 +408,21 @@ def process_intake_turn(
 
 
 def handle_demo_message(message: dict, include_media: bool = False) -> str | dict:
+    # Customer prose is never payment evidence. Only the signed callback below
+    # can mutate payment state.
+    from agents.social import mermaid_reservation_store as _reservation_store
+    current = _reservation_store.latest_for_conversation(str(message.get("from") or ""))
+    lower = str(message.get("text") or "").casefold()
+    if current and current["state"] == "demo_payment_pending" and any(
+        phrase in lower for phrase in ("i paid", "paid", "betaald", "bezahlt", "pagué", "paguei", "mi a paga")
+    ):
+        text = (
+            "Thanks. A WhatsApp message cannot verify payment. Please complete the no-money demo link; "
+            "only its signed success callback can finish this demo booking."
+        )
+        if include_media:
+            return IntakeResult(text, current["language"], "demo_payment_pending").as_reply()
+        return text
     result = process_intake_turn(
         str(message.get("from") or ""),
         str(message.get("text") or ""),
@@ -415,7 +430,9 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         from_name=str(message.get("from_name") or ""),
     )
     if result.action == "summary_confirmed":
-        from agents.social import mermaid_documents, mermaid_reservation_store
+        from agents.social import (
+            mermaid_demo_payment, mermaid_documents, mermaid_reservation_store,
+        )
 
         state = state_registry.wa_get_booking_state(str(message.get("from") or ""))
         intake = (state.get("fields") or {}).get("mermaid_intake") or {}
@@ -426,6 +443,7 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
                 "confirm:" + str(message.get("message_id") or "")
                 if message.get("message_id") else "confirm:" + str(message.get("from") or "")
             ),
+            zernio_account_id=str(message.get("_zernio_account_id") or ""),
         )
         document, job = mermaid_documents.create_quote(reservation)
         reservation = mermaid_reservation_store.transition(
@@ -440,8 +458,16 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
             "url": mermaid_documents.build_signed_url(base_url, document["public_id"], secret),
             "type": "file", "filename": document["filename"], "id": document["public_id"],
         }
+        reservation = mermaid_reservation_store.transition(
+            reservation["public_id"], "demo_payment_pending",
+            idempotency_key=f"payment-pending:{reservation['public_id']}",
+            actor="system", reason="No-money demo checkout created",
+        )
+        payment_url = mermaid_demo_payment.build_payment_url(
+            base_url, reservation["public_id"], secret
+        )
         result = IntakeResult(
-            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.\n\n" + mermaid_documents.quote_message(reservation),
+            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.\n\n" + mermaid_documents.quote_message(reservation) + "\n\nComplete the no-money demo payment here: " + payment_url,
             result.locale,
             result.phase,
             action=f"reservation:{reservation['public_id']}",

@@ -232,6 +232,101 @@ def create_quote(reservation: dict) -> tuple[dict, dict]:
         conn.close()
 
 
+def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
+    """Render a one-page simulated payment receipt from persisted facts."""
+    locale = reservation["language"] if reservation["language"] in LABELS else "en"
+    labels = LABELS[locale]
+    intake = reservation["intake"]
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("ReceiptBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=10, leading=14, textColor=DEEP)
+    heading = ParagraphStyle("ReceiptHeading", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=22, leading=27, textColor=DEEP)
+    marker = ParagraphStyle("ReceiptMarker", parent=body, fontName="Helvetica-Bold", fontSize=11, leading=14, textColor=colors.white, alignment=TA_CENTER)
+    total = ParagraphStyle("ReceiptTotal", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=22, alignment=TA_RIGHT)
+    doc = SimpleDocTemplate(
+        str(target), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
+        topMargin=16 * mm, bottomMargin=16 * mm,
+        title=f"Mermaid simulated payment receipt {reservation['booking_code']}",
+        author="Mermaid Boat Trips Curaçao",
+    )
+    guest_line = f"{intake['adults']} adults, {intake['children']} children 4-12, {intake['infants']} children 0-3"
+    rows = [
+        ["Booking code", reservation["booking_code"]],
+        ["Payment reference", payment["payment_reference"]],
+        [labels["customer"], reservation["customer_name"]],
+        [labels["date"], intake["trip_date"]],
+        [labels["guests"], guest_line],
+        ["Payment time (UTC)", payment["paid_at"]],
+    ]
+    table = Table(
+        [[Paragraph(f"<b>{_safe(a)}</b>", body), Paragraph(_safe(b), body)] for a, b in rows],
+        colWidths=[52 * mm, 116 * mm],
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PALE),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B7DCDD")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story = [
+        Paragraph("MERMAID BOAT TRIPS CURAÇAO", heading),
+        Paragraph("Klein Curaçao demo reservation", body), Spacer(1, 4 * mm),
+        Table([[Paragraph("SIMULATED PAYMENT - DEMO ONLY", marker)]], colWidths=[174 * mm], style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), CORAL),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ])),
+        Spacer(1, 6 * mm), Paragraph("Payment receipt", heading), Spacer(1, 3 * mm), table,
+        Spacer(1, 6 * mm),
+        Paragraph(f"{_safe(labels['total'])}: {_money(payment['currency'], int(payment['amount']))}", total),
+        Spacer(1, 5 * mm), HRFlowable(color=TEAL, thickness=1.3), Spacer(1, 5 * mm),
+        Paragraph("This receipt records a simulated payment only. No card, bank account, or real funds were used.", body),
+        Spacer(1, 3 * mm),
+        Paragraph("Arrive at Fishermen's Pier at 06:45. Bring towels and sunscreen; Mermaid takes care of the rest of your included tropical day.", body),
+    ]
+    doc.build(story)
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+
+def create_receipt(reservation: dict, payment: dict) -> tuple[dict, dict]:
+    """Create one stable receipt and its idempotent delivery job."""
+    public_id = _doc_id(reservation["public_id"], "receipt")
+    filename = f"Mermaid-Demo-Receipt-{reservation['booking_code']}.pdf"
+    target = _root() / reservation["public_id"] / filename
+    conn = _conn()
+    try:
+        existing = conn.execute(
+            "SELECT * FROM mermaid_documents WHERE tenant_slug='mermaid' "
+            "AND reservation_public_id=? AND kind='receipt'",
+            (reservation["public_id"],),
+        ).fetchone()
+        if existing is None:
+            digest = render_receipt_pdf(reservation, payment, target)
+            now = _now()
+            conn.execute(
+                "INSERT INTO mermaid_documents (public_id, tenant_slug, reservation_public_id, kind, locale, "
+                "filename, path, sha256, content_type, created_at) VALUES (?, 'mermaid', ?, 'receipt', ?, ?, ?, ?, 'application/pdf', ?)",
+                (public_id, reservation["public_id"], reservation["language"], filename, str(target), digest, now),
+            )
+            conn.commit()
+            existing = conn.execute("SELECT * FROM mermaid_documents WHERE public_id=?", (public_id,)).fetchone()
+        now = _now()
+        job_id = "mjob_" + hashlib.sha256(f"receipt:{reservation['public_id']}".encode()).hexdigest()[:24]
+        conn.execute(
+            "INSERT OR IGNORE INTO mermaid_delivery_jobs (public_id, tenant_slug, reservation_public_id, "
+            "document_public_id, conversation_id, kind, status, idempotency_key, created_at, updated_at) "
+            "VALUES (?, 'mermaid', ?, ?, ?, 'receipt', 'pending', ?, ?, ?)",
+            (job_id, reservation["public_id"], public_id, reservation["conversation_id"],
+             f"mermaid-receipt:{reservation['public_id']}", now, now),
+        )
+        conn.commit()
+        job = conn.execute("SELECT * FROM mermaid_delivery_jobs WHERE public_id=?", (job_id,)).fetchone()
+        return _document(existing), dict(job)
+    finally:
+        conn.close()
+
+
 def mark_delivery(job_id: str, delivered: bool, error: str = "") -> None:
     conn = _conn()
     try:

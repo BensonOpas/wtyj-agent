@@ -48,6 +48,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             public_id TEXT PRIMARY KEY,
             tenant_slug TEXT NOT NULL CHECK (tenant_slug = 'mermaid'),
             conversation_id TEXT NOT NULL,
+            zernio_account_id TEXT NOT NULL DEFAULT '',
             summary_version TEXT NOT NULL,
             customer_name TEXT NOT NULL,
             language TEXT NOT NULL,
@@ -84,8 +85,23 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             UNIQUE (tenant_slug, idempotency_key),
             FOREIGN KEY (reservation_public_id) REFERENCES mermaid_reservations(public_id)
         );
+        CREATE TABLE IF NOT EXISTS mermaid_demo_payments (
+            public_id TEXT PRIMARY KEY,
+            tenant_slug TEXT NOT NULL CHECK (tenant_slug='mermaid'),
+            reservation_public_id TEXT NOT NULL UNIQUE,
+            payment_reference TEXT NOT NULL UNIQUE,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            amount INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status='simulated_success'),
+            paid_at TEXT NOT NULL
+        );
         """
     )
+    try:
+        conn.execute("ALTER TABLE mermaid_reservations ADD COLUMN zernio_account_id TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _row(row: sqlite3.Row | None) -> dict | None:
@@ -156,6 +172,7 @@ def confirm_reservation(
     *,
     idempotency_key: str,
     actor: str = "tracy",
+    zernio_account_id: str = "",
 ) -> dict:
     """Create exactly one assumed-available reservation per confirmed summary."""
     required = {"trip_date", "adults", "children", "infants", "customer_name", "pickup_preference", "language"}
@@ -186,12 +203,13 @@ def confirm_reservation(
                     "INSERT INTO mermaid_reservations (public_id, tenant_slug, conversation_id, "
                     "summary_version, customer_name, language, intake_json, catalog_version, "
                     "monetary_snapshot_json, state, revision, availability_source, booking_code, "
-                    "created_at, updated_at) VALUES (?, 'mermaid', ?, ?, ?, ?, ?, ?, ?, "
-                    "'demo_availability_approved', 1, 'demo_assumed', ?, ?, ?)",
+                    "zernio_account_id, created_at, updated_at) VALUES (?, 'mermaid', ?, ?, ?, ?, ?, ?, ?, "
+                    "'demo_availability_approved', 1, 'demo_assumed', ?, ?, ?, ?)",
                     (
                         public_id, conversation_id, version, intake["customer_name"], intake["language"],
                         json.dumps(intake, ensure_ascii=False, sort_keys=True), catalog["version"],
-                        json.dumps(snapshot, ensure_ascii=False, sort_keys=True), code, now, now,
+                        json.dumps(snapshot, ensure_ascii=False, sort_keys=True), code,
+                        str(zernio_account_id or ""), now, now,
                     ),
                 )
                 break
@@ -347,6 +365,118 @@ def freeze_for_human(public_id: str) -> dict:
         conn.execute(
             "UPDATE mermaid_reservations SET human_takeover=1, updated_at=? "
             "WHERE tenant_slug='mermaid' AND public_id=?", (_now(), public_id)
+        )
+        conn.commit()
+        result = get_reservation(public_id, connection=conn)
+        if result is None:
+            raise MermaidReservationError("reservation not found")
+        return result
+    finally:
+        conn.close()
+
+
+def complete_demo_payment(
+    public_id: str,
+    *,
+    payment_reference: str,
+    idempotency_key: str,
+    actor: str = "demo_checkout",
+) -> tuple[dict, dict]:
+    """Atomically record the simulated payment and the paid/booked transitions."""
+    conn = _conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = conn.execute(
+            "SELECT * FROM mermaid_demo_payments WHERE tenant_slug='mermaid' AND idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        if replay:
+            reservation = conn.execute(
+                "SELECT * FROM mermaid_reservations WHERE tenant_slug='mermaid' AND public_id=?",
+                (replay["reservation_public_id"],),
+            ).fetchone()
+            conn.commit()
+            return _row(reservation), dict(replay)
+        row = conn.execute(
+            "SELECT * FROM mermaid_reservations WHERE tenant_slug='mermaid' AND public_id=?",
+            (public_id,),
+        ).fetchone()
+        if row is None:
+            raise MermaidReservationError("reservation not found")
+        reservation = _row(row)
+        if reservation["human_takeover"]:
+            raise MermaidReservationError("reservation is frozen for human takeover")
+        if reservation["state"] == "booked":
+            payment = conn.execute(
+                "SELECT * FROM mermaid_demo_payments WHERE tenant_slug='mermaid' AND reservation_public_id=?",
+                (public_id,),
+            ).fetchone()
+            if payment:
+                conn.commit()
+                return reservation, dict(payment)
+        if reservation["state"] != "demo_payment_pending":
+            raise MermaidReservationError(
+                f"invalid transition {reservation['state']} -> demo_paid"
+            )
+        paid_at = _now()
+        money = reservation["monetary_snapshot"]
+        payment_id = "mpay_" + uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO mermaid_demo_payments (public_id, tenant_slug, reservation_public_id, "
+            "payment_reference, idempotency_key, amount, currency, status, paid_at) "
+            "VALUES (?, 'mermaid', ?, ?, ?, ?, ?, 'simulated_success', ?)",
+            (payment_id, public_id, payment_reference, idempotency_key,
+             int(money["total"]), money["currency"], paid_at),
+        )
+        first_revision = int(reservation["revision"]) + 1
+        final_revision = first_revision + 1
+        changed = conn.execute(
+            "UPDATE mermaid_reservations SET state='booked', revision=?, payment_reference=?, updated_at=? "
+            "WHERE tenant_slug='mermaid' AND public_id=? AND revision=?",
+            (final_revision, payment_reference, paid_at, public_id, reservation["revision"]),
+        ).rowcount
+        if changed != 1:
+            raise MermaidReservationError("concurrent reservation update")
+        conn.execute(
+            "INSERT INTO mermaid_reservation_events (reservation_public_id, tenant_slug, event_type, "
+            "from_state, to_state, actor, reason, idempotency_key, revision, payload_json, created_at) "
+            "VALUES (?, 'mermaid', 'state_transition', 'demo_payment_pending', 'demo_paid', ?, "
+            "'Signed demo payment callback verified', ?, ?, ?, ?)",
+            (public_id, actor, idempotency_key + ":paid", first_revision,
+             json.dumps({"payment_reference": payment_reference}), paid_at),
+        )
+        conn.execute(
+            "INSERT INTO mermaid_reservation_events (reservation_public_id, tenant_slug, event_type, "
+            "from_state, to_state, actor, reason, idempotency_key, revision, payload_json, created_at) "
+            "VALUES (?, 'mermaid', 'state_transition', 'demo_paid', 'booked', ?, "
+            "'Demo booking completed', ?, ?, '{}', ?)",
+            (public_id, actor, idempotency_key + ":booked", final_revision, paid_at),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM mermaid_reservations WHERE tenant_slug='mermaid' AND public_id=?",
+            (public_id,),
+        ).fetchone()
+        payment = conn.execute(
+            "SELECT * FROM mermaid_demo_payments WHERE tenant_slug='mermaid' AND public_id=?",
+            (payment_id,),
+        ).fetchone()
+        return _row(updated), dict(payment)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def attach_receipt(public_id: str, receipt_public_id: str) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE mermaid_reservations SET receipt_public_id=?, updated_at=? "
+            "WHERE tenant_slug='mermaid' AND public_id=? AND state='booked' "
+            "AND (receipt_public_id IS NULL OR receipt_public_id=?)",
+            (receipt_public_id, _now(), public_id, receipt_public_id),
         )
         conn.commit()
         result = get_reservation(public_id, connection=conn)
