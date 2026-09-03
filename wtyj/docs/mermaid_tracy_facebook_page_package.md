@@ -4,6 +4,11 @@ This package is for a fictional, clearly disclosed demonstration Page. It must
 not replace, rename, claim, or connect Mermaid Boat Trips Curaçao's existing
 public Page.
 
+Status rule: this file is a content and asset package, not evidence that a Page
+has been created or connected. Call it `prepared` until an authorized Meta
+administrator creates it in the owning business, publishes the disclosure, and
+verifies the dedicated number. Until then, any Page preview is simulated.
+
 ## Page settings
 
 | Field | Value |
@@ -73,3 +78,14 @@ connection and leave the tenant paused with a strict empty allowlist.
 
 Facebook native instant replies and other automated-message rules must remain
 off so a guest can receive at most one automated response.
+
+Creating the Page, accepting Meta terms, completing MFA or business ownership
+checks, assigning assets, and verifying the phone number are owner-only actions.
+The operator must record only a sanitized pass/fail result. Never copy a login,
+verification code, token, callback URL, provider account ID, or Meta business
+document into Git or demo evidence.
+
+After authorization, keep `facebook_dms` off until Facebook messaging itself
+has a separate tenant-ownership check, strict account binding, inbox-only
+isolation test, and one-message/one-reply canary. A WhatsApp connection or a
+Page action button does not prove that Facebook DMs are connected.

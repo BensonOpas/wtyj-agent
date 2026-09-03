@@ -3,6 +3,18 @@
 This runbook covers the real Unboks demo tenant. It does not create or serve a
 Mermaid website.
 
+Use this document for technical operation, the
+[Monday demo runbook](mermaid_tracy_monday_demo_script.md) for the
+presentation, and the [go-live checklist](mermaid_tracy_go_live_checklist.md)
+for external authorization and cutover.
+
+`Real tenant` means Mermaid has its own versioned identity, configuration,
+runtime boundary, dashboard workspace, and controls. It does not mean a Meta
+asset or provider is connected. Until Meta/Zernio authorization, exact-number
+selection, strict account persistence, and canaries have all passed, describe
+the Facebook Page, WhatsApp number, and Zernio connection as prepared or
+simulated, never live.
+
 ## Asset map
 
 | Asset | Required value |
@@ -20,6 +32,21 @@ Mermaid website.
 
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
 profiles are out of scope for connection or mutation.
+
+## Integration truth gate
+
+| Layer | Proof required before it is called ready |
+|---|---|
+| Tenant package | Reviewed revision contains the `mermaid` identity, fail-closed configuration, tests, and runbooks |
+| Runtime | `wtyj-mermaid` is healthy, canonical Mermaid routing passes, and unknown/cross-tenant requests fail closed |
+| Operator workspace | The authenticated profile is `mermaid` and only Mermaid synthetic test data is visible |
+| WhatsApp/Zernio | Nr3 proves the unique account/profile, exact normalized number `+59996865665`, and exact strict allowlist persistence |
+| Facebook Page | The authorized owner created `Klein Curaçao Trip Desk Demo`, published the disclosure, and changed no public Mermaid asset |
+| Automated replies | Inbox-only isolation passes before one controlled AI reply; duplicate delivery still produces at most one reply |
+
+A configured name, a generated link, a screenshot, a callback, or a visible
+phone option is not connection proof. If any layer lacks its proof, keep the
+affected channel off and use the clearly labelled rehearsal flow.
 
 ## Safe state progression
 
@@ -63,6 +90,10 @@ Use a tester number that is not any tenant's own business number.
    Confirm the AI remains muted until hand-back.
 5. Hand the conversation back and ask one published-fact question. Confirm AI
    resumes for only that conversation.
+6. Replay one inbound event identifier. Confirm the guest receives at most one
+   automated reply and the operator sees no duplicate conversation state.
+7. Trigger one recoverable delivery failure in the test path. Confirm retry does
+   not duplicate the reply, expose an internal error, or cross a tenant boundary.
 
 ## Operational checks
 
@@ -77,6 +108,8 @@ Use a tester number that is not any tenant's own business number.
 - No provider event for Ali, Roberto, or Unboks appears in Mermaid's data.
 - No Mermaid event appears in another tenant's data.
 - No secret, callback state, OTP, or raw provider token is captured in evidence.
+- Desktop and mobile operator/customer views have no console error, failed
+  request, obstructing overlay, stuck loading state, or broken recovery action.
 
 Run `wtyj/scripts/smoke_unboks_domain.sh` for the public, read-only route
 checks. To add authenticated profile and cross-tenant token checks, supply all
@@ -88,6 +121,30 @@ A legacy revision of the smoke script contained a dashboard credential. This
 branch removes it, but Git history is not a secret store. Rotate that Unboks
 dashboard credential through the normal protected operator workflow before the
 demo; do not record the old or replacement value in this runbook or the PR.
+
+## First-party fact check
+
+The Mermaid content snapshot was rechecked on 2 September 2026 against these
+first-party pages:
+
+- [Home and published sailing schedule](https://www.mermaidboattrips.com/)
+- [Current rates and inclusions](https://www.mermaidboattrips.com/Rates-Daytrip-Klein-Curacao/)
+- [FAQ and practical details](https://www.mermaidboattrips.com/frequently-asked-questions-about-Klein-Curacao/)
+- [Public contact details](https://www.mermaidboattrips.com/Contact/)
+- [Official reservation form](https://reservations.mermaidboattrips.com/Reservations/)
+
+The checked current rates are USD 150 / EUR 130 / XCG 270 for adults, USD 75 /
+EUR 65 / XCG 135 for ages 4 through 12, free for ages 0 through 3, and USD 110 /
+EUR 95 / XCG 195 for Sedula residents. The homepage publishes 06:45 departures
+on Monday, Tuesday, Wednesday, Friday, Saturday, and Sunday, with 15:20 return
+boarding. The reservation form, not TRACY, is authoritative for a particular
+date, live seats, and payable total.
+
+The public pages still conflict on outbound travel time, scuba wording, and NAF
+versus current XCG resident pricing. The linked cancellation wording is not a
+reliable Mermaid refund promise. Keep the conservative conflict and escalation
+rules in `clients/mermaid/config/client.json`; never silently choose the most
+sales-friendly version.
 
 ## Canonical API routing
 
