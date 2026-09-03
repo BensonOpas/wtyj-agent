@@ -45,13 +45,13 @@ accounts, every other Unboks tenant number, and Mermaid's existing Facebook or
 Instagram profiles must not be connected, renamed, disconnected, migrated, or
 otherwise mutated as part of the demo.
 
-The normal public trial form was submitted for `Mermaid Demo` and its email was
-verified on `2026-09-03`. Nr3 shows that signup as awaiting review with slug
-hint `mermaid-demo`, while the intended `mermaid` tenant already exists and is
-active. Do not approve, onboard, or create a `mermaid-demo` workspace unless
-Nr3 first gains an explicit, audited way to link the signup to the existing
-`mermaid` tenant. The current approval path would start a second onboarding
-flow rather than reconcile the existing workspace.
+The normal public trial form was submitted for `Mermaid Demo`, email-verified,
+approved in Nr3, and its eight-step business intake completed on `2026-09-03`.
+The approval note explicitly says to use the existing `mermaid` tenant and not
+create a duplicate. Nr3 still offers a final `Create workspace` action with
+slug hint `mermaid-demo`, while the intended `mermaid` tenant already exists
+and is active. Do not run that final action unless Nr3 first gains an explicit,
+audited way to link this completed signup to the existing `mermaid` tenant.
 
 ## Gate 1 - reviewed Unboks release
 
