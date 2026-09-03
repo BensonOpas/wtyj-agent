@@ -414,4 +414,38 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         message_id=str(message.get("message_id") or ""),
         from_name=str(message.get("from_name") or ""),
     )
+    if result.action == "summary_confirmed":
+        from agents.social import mermaid_reservation_store
+
+        state = state_registry.wa_get_booking_state(str(message.get("from") or ""))
+        intake = (state.get("fields") or {}).get("mermaid_intake") or {}
+        reservation = mermaid_reservation_store.confirm_reservation(
+            str(message.get("from") or ""),
+            intake,
+            idempotency_key=(
+                "confirm:" + str(message.get("message_id") or "")
+                if message.get("message_id") else "confirm:" + str(message.get("from") or "")
+            ),
+        )
+        result = IntakeResult(
+            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.",
+            result.locale,
+            result.phase,
+            action=f"reservation:{reservation['public_id']}",
+        )
+    elif result.action == "cancel":
+        from agents.social import mermaid_reservation_store
+
+        current = mermaid_reservation_store.latest_for_conversation(str(message.get("from") or ""))
+        if current and current["state"] not in {"cancelled", "booked", "demo_paid"}:
+            mermaid_reservation_store.cancel(
+                current["public_id"],
+                idempotency_key="cancel:" + str(message.get("message_id") or current["public_id"]),
+            )
+    elif result.action == "human_takeover":
+        from agents.social import mermaid_reservation_store
+
+        current = mermaid_reservation_store.latest_for_conversation(str(message.get("from") or ""))
+        if current:
+            mermaid_reservation_store.freeze_for_human(current["public_id"])
     return result.as_reply() if include_media else result.text
