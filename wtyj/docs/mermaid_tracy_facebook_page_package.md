@@ -18,9 +18,10 @@ WhatsApp, Zernio, or the Unboks production channel is connected.
 | Created | `2026-09-02` |
 | Profile and cover | Generic original demo artwork uploaded. |
 | Disclosure | Published as the first post and pinned. |
-| WhatsApp | Disconnected. Owner cutover number remains `+599 9 686 5665` (`+59996865665`). |
+| Public phone | `+599 9 686 5665` (`+59996865665`), the only real contact datum on the fictional Page. |
+| WhatsApp | Disconnected. Meta's connection screen is prefilled with `+599 9 686 5665`; no verification code has been sent. |
 | Action button | Disconnected. |
-| Contact fields | Website, phone, email, address, and hours left empty. |
+| Demo contact fields | Fictional address `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`; reserved email `tracy-demo@example.com`; reserved non-live link `https://tracy-demo.example`. Hours left empty. |
 | Marketing emails | Off. |
 | Page notifications | On. |
 
@@ -35,10 +36,12 @@ owner completes the explicit cutover steps below.
 | Category | `Travel service` |
 | Secondary category | Not set; `Product/service` is optional after owner review. |
 | Bio | `Private demo of TRACY, an AI-assisted guest-service concept for Klein Curaçao trips. Not an official Mermaid social Page.` |
-| WhatsApp | Owner cutover target: `+599 9 686 5665` (`+59996865665`); not connected. |
-| Website | Leave empty; this demo does not create a website. |
-| Email | Leave empty; do not imply that the fictional Page owns Mermaid's public inbox. |
-| Address and hours | Leave empty. |
+| Public phone | `+599 9 686 5665` (`+59996865665`). |
+| WhatsApp | Owner cutover target: `+599 9 686 5665` (`+59996865665`); prefilled in Meta but not verified or connected. |
+| Website | `TRACY Demo Website (fictional)` → `https://tracy-demo.example`. The reserved `.example` domain is intentionally non-live; no website was created. |
+| Email | `tracy-demo@example.com`. The reserved `example.com` address is fictional and is not monitored. |
+| Address | `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`. This is not a pickup point or operating address. |
+| Hours | Leave empty; the Page does not advertise real operating hours. |
 | Action button | Leave disconnected until the dedicated number is verified. Then configure `Send WhatsApp message`. |
 | Messaging greeting | `Hi, I’m TRACY, a virtual assistant in a private demo. I can answer published Klein Curaçao trip questions. For live availability, payment, changes, cancellations, safety, accessibility, or anything uncertain, I’ll involve a person.` |
 | Instant reply | Off. Zernio and Unboks must be the single automated reply path. |
