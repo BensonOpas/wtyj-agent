@@ -5,7 +5,77 @@
 
 import os
 from late import Late, LateAPIError
-from shared import bm_logger
+from shared import bm_logger, config_loader, tenant_guard
+
+
+def _strict_publication_platforms() -> set[str] | None:
+    """Return strict post opt-ins, or None for legacy/permissive tenants.
+
+    Use the tenant guard's validated policy so an unavailable/mismatched
+    required config can never be mistaken for a legacy tenant. Messaging
+    accounts and social profile URLs do not authorize public posting.
+    """
+    try:
+        policy = tenant_guard._get_allowlist_config()
+        if policy.get("_invalid"):
+            return set()
+        if policy.get("mode") != "strict":
+            return None
+        raw = config_loader.get_raw()
+        social = raw.get("social_content") if isinstance(raw, dict) else None
+        platforms = social.get("platforms") if isinstance(social, dict) else None
+        if not isinstance(platforms, list) or any(
+            not isinstance(value, str) or not value.strip() for value in platforms
+        ):
+            return set()
+        # Do not combine platform settings with a different ownership snapshot.
+        if tenant_guard._get_allowlist_config() != policy:
+            return set()
+        if not policy.get("zernio_accounts"):
+            return set()
+        return set(platforms) - _EXCLUDED_PLATFORMS
+    except Exception:
+        return set()
+
+
+def is_publish_platform_allowed(platform: str) -> bool:
+    """Fail closed for strict tenants unless public posting is explicitly enabled."""
+    platforms = _strict_publication_platforms()
+    return platforms is None or (isinstance(platform, str) and platform in platforms)
+
+
+def _account_is_allowed(account_id: str) -> bool:
+    try:
+        return tenant_guard.account_access_state(account_id, "outbound") is True
+    except Exception:
+        return False
+
+
+def _publish_target_allowed(client, platform: str, account_id: str) -> bool:
+    """Fresh authorization fence immediately before posts.create.
+
+    Strict accounts must also be active accounts of the requested platform;
+    the flat channel allowlist may otherwise contain only a WhatsApp account.
+    Provider discovery is not an authorization cache: recheck after its I/O.
+    """
+    platforms = _strict_publication_platforms()
+    if platforms is not None and platform not in platforms:
+        return False
+    if not _account_is_allowed(account_id):
+        return False
+    if platforms is not None:
+        accounts = client.accounts.list().accounts
+        if not any(
+            acc.field_id == account_id and acc.platform == platform and acc.isActive
+            for acc in accounts
+        ):
+            return False
+    current_platforms = _strict_publication_platforms()
+    if current_platforms is not None:
+        # A transition from legacy to strict requires fresh provider validation.
+        if platforms is None or platform not in current_platforms:
+            return False
+    return _account_is_allowed(account_id)
 
 
 def _get_client():
@@ -19,13 +89,17 @@ def _get_client():
 
 def get_instagram_account_id() -> str:
     """Discover the connected Instagram account ID from Late. Returns ID or empty string."""
+    if not is_publish_platform_allowed("instagram"):
+        return ""
     client = _get_client()
     if not client:
         return ""
     try:
         resp = client.accounts.list()
         for acc in resp.accounts:
-            if acc.platform == "instagram" and acc.isActive:
+            if (acc.platform == "instagram" and acc.isActive
+                    and is_publish_platform_allowed("instagram")
+                    and _account_is_allowed(acc.field_id)):
                 bm_logger.log("late_account_found",
                               account_id=acc.field_id,
                               username=acc.username or "")
@@ -39,13 +113,17 @@ def get_instagram_account_id() -> str:
 
 def get_facebook_account_id() -> str:
     """Discover the connected Facebook page ID from Late. Returns ID or empty string."""
+    if not is_publish_platform_allowed("facebook"):
+        return ""
     client = _get_client()
     if not client:
         return ""
     try:
         resp = client.accounts.list()
         for acc in resp.accounts:
-            if acc.platform == "facebook" and acc.isActive:
+            if (acc.platform == "facebook" and acc.isActive
+                    and is_publish_platform_allowed("facebook")
+                    and _account_is_allowed(acc.field_id)):
                 bm_logger.log("late_fb_account_found",
                               account_id=acc.field_id,
                               username=acc.username or "")
@@ -70,6 +148,8 @@ _EXCLUDED_PLATFORMS = {"whatsapp", "linkedin"}
 def get_available_platforms() -> list:
     """Return list of connected platform names that can receive published posts.
     Excluded platforms (DM-only or discontinued) are filtered — see _EXCLUDED_PLATFORMS."""
+    if _strict_publication_platforms() == set():
+        return []
     client = _get_client()
     if not client:
         return []
@@ -80,6 +160,9 @@ def get_available_platforms() -> list:
             if not acc.isActive:
                 continue
             if acc.platform in _EXCLUDED_PLATFORMS:
+                continue
+            if (not is_publish_platform_allowed(acc.platform)
+                    or not _account_is_allowed(acc.field_id)):
                 continue
             if acc.platform not in platforms:
                 platforms.append(acc.platform)
@@ -124,6 +207,8 @@ def publish_to_instagram(caption: str, media_url: str, account_id: str,
         full_caption = f"{caption}\n\n{' '.join(hashtags)}"
 
     try:
+        if not _publish_target_allowed(client, "instagram", account_id):
+            return None
         result = client.posts.create(
             content=full_caption,
             platforms=[{"platform": "instagram", "accountId": account_id}],
@@ -159,6 +244,8 @@ def publish_to_facebook(caption: str, media_url: str, account_id: str,
         full_caption = f"{caption}\n\n{' '.join(hashtags)}"
 
     try:
+        if not _publish_target_allowed(client, "facebook", account_id):
+            return None
         result = client.posts.create(
             content=full_caption,
             platforms=[{"platform": "facebook", "accountId": account_id}],
@@ -180,14 +267,15 @@ def publish_to_facebook(caption: str, media_url: str, account_id: str,
 
 
 def get_account_id(platform: str) -> str:
-    """Get the active account ID for any connected platform."""
+    """Get an owned active account, including DM-only platforms used by routing."""
     client = _get_client()
     if not client:
         return ""
     try:
         resp = client.accounts.list()
         for acc in resp.accounts:
-            if acc.platform == platform and acc.isActive:
+            if (acc.platform == platform and acc.isActive
+                    and _account_is_allowed(acc.field_id)):
                 return str(acc.field_id)
         return ""
     except Exception:
@@ -224,6 +312,8 @@ def publish_to_platform(platform: str, caption: str, media_url: str,
                       final_len=len(full_caption))
 
     try:
+        if not _publish_target_allowed(client, platform, account_id):
+            return None
         result = client.posts.create(
             content=full_caption,
             platforms=[{"platform": platform, "accountId": account_id}],
@@ -245,7 +335,11 @@ def publish_to_platform(platform: str, caption: str, media_url: str,
 
 
 def delete_post(late_post_id: str) -> bool:
-    """Delete a published post from Instagram via Late. Returns True on success."""
+    """Delete a legacy tenant's post; strict callers lack an owned receipt here.
+
+    A bare provider post ID proves neither tenant ownership nor platform. Until
+    this API accepts a tenant-bound receipt, strict deployments deny deletion.
+    """
     if not late_post_id:
         bm_logger.log("late_delete_no_post_id")
         return False
@@ -253,6 +347,8 @@ def delete_post(late_post_id: str) -> bool:
     if not client:
         return False
     try:
+        if _strict_publication_platforms() is not None:
+            return False
         client.posts.delete(late_post_id)
         bm_logger.log("late_post_deleted", post_id=late_post_id)
         return True

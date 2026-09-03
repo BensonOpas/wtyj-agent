@@ -68,12 +68,18 @@ Unboks delivery owner:
 - [ ] The Mermaid container is healthy and the dashboard profile identifies
   only `mermaid`.
 - [ ] The live Mermaid content sync, if still needed, changes only the reviewed
-  gluten-free FAQ/persona fields and preserves generated credentials and
-  provider state.
+  gluten-free FAQ/persona and unsupported-attachment handoff fields, preserves
+  credentials/provider state, and runs with Mermaid stopped and concurrent
+  config writers paused (`--apply --service-stopped`).
 - [ ] A protected rollback snapshot covers Mermaid's config, environment,
   compose, state database, Nginx site, and running image.
 - [ ] The legacy dashboard credential identified during review has been rotated
   through the protected operator process.
+- [ ] The old-revision model rehearsal's `password`, `access_key`, and
+  `whatsapp_connect_token` exposure has been remediated through protected
+  rotation or confirmed expiry/non-auth status, with prior access rejected.
+  Password reset alone does not invalidate persisted dashboard bearer sessions;
+  coordinate session invalidation and operator re-login before activation.
 - [ ] After the hardening release, `whatsapp_inbox` is deliberately enabled,
   `ai_auto_reply` and `facebook_dms` are false, and Mermaid's provider
   allowlist remains strict with exactly the already verified account.
@@ -212,6 +218,8 @@ Named Unboks operator and one tester:
   most one automated reply.
 - [ ] Exercise a safe failure/retry path and confirm no duplicate reply, stale
   spinner, cross-tenant record, or secret appears.
+- [ ] Verify operator reply/guidance retries retain their original `request_id`,
+  including a lost HTTP response after a provider-confirmed send.
 - [ ] Run desktop and mobile browser checks with no console error, failed
   request, obstructing overlay, or broken responsive layout.
 

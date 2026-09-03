@@ -13,6 +13,12 @@ from shared import state_registry, config_loader, bm_logger, auto_block, agent_i
 
 _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
+
+
+class HandoffPersistenceError(RuntimeError):
+    """A customer handoff promise must not outlive its operator work item."""
+
+
 _EMOJI_RE = re.compile(
     "["
     "\U0001F1E6-\U0001F1FF"
@@ -258,14 +264,44 @@ def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
   Message: {text}"""
 
 
-def handle_incoming_dm(message: dict) -> str:
+def _handoff_reply(message: dict, reply: str, *, defer_handoff: bool):
+    business = config_loader.get_business()
+    agent = business.get("agent_name", "CSA")
+    notification = {
+        "notification_type": "escalation",
+        "channel": message["channel"],
+        "customer_id": message["conversation_id"],
+        "customer_name": message.get("sender_name") or "Unknown contact",
+        "subject": f"{agent} escalated a {message['channel']} conversation",
+        "body": (
+            f"Customer message:\n{message.get('text') or '[Attachment received]'}\n\n"
+            f"{agent}'s reply:\n{reply}\n\n"
+            f"({business.get('name', 'the business')} — auto-escalated by {agent} "
+            "based on conversation context.)"
+        ),
+        "mode": "soft",
+    }
+    if defer_handoff:
+        # The durable webhook owns the authoritative account/processing-token
+        # fence and commits this intent before making a customer promise.
+        return {"text": reply, "handoff_notification": notification}
+    try:
+        state_registry.create_pending_notification(**notification)
+    except Exception as exc:
+        raise HandoffPersistenceError("handoff persistence unavailable") from exc
+    return reply
+
+
+def handle_incoming_dm(message: dict, *, defer_handoff: bool = False) -> str | dict:
     """Process an incoming IG/FB DM. Own Claude call, Q&A only.
 
     Args:
         message: normalized dict with keys:
             conversation_id, platform, channel, sender_name, text, account_id
 
-    Returns: reply text, or empty string if rate limited or error.
+    Returns: reply text, or a text/handoff intent when deferral is requested.
+    Handoff persistence failures propagate instead of silently promising a
+    notification that was never saved.
     """
     conversation_id = message["conversation_id"]
     channel = message["channel"]
@@ -308,6 +344,21 @@ def handle_incoming_dm(message: dict) -> str:
         bm_logger.log("dm_rate_limited", conversation_id=conversation_id[:20],
                        channel=channel)
         return ""
+
+    attachment_policy = (
+        (config_loader.get_raw().get("agent_persona") or {}).get(
+            "unsupported_attachment_handoff"
+        ) or {}
+    )
+    attachment_reply = str(attachment_policy.get("reply") or "").strip()
+    if (
+        attachment_policy.get("enabled") is True
+        and attachment_reply
+        and message.get("attachments")
+    ):
+        # Q&A tenants explicitly opt into metadata-only human routing. Never
+        # fetch, transcribe, or infer the contents of an unsupported attachment.
+        return _handoff_reply(message, attachment_reply, defer_handoff=defer_handoff)
 
     # Get conversation history
     history = state_registry.dm_get_history(conversation_id, channel, limit=10)
@@ -353,38 +404,11 @@ def handle_incoming_dm(message: dict) -> str:
             reply = reply.replace("  ", " ")
         reply = reply.strip()
 
-        # Brief 206: detect [ESCALATE] sentinel from master prompt's ESCALATION
-        # SCRIPT. If present, strip it from the visible reply AND create a
-        # pending_notifications row so the escalation surfaces in the operator
-        # dashboard. The visible reply is unchanged (sans sentinel line).
+        # Sentinel detection produces an intent for durable webhook callers;
+        # notification persistence happens only after their final fences.
         escalate_requested = "[ESCALATE]" in reply
         if escalate_requested:
             reply = reply.replace("[ESCALATE]", "").rstrip()
-            try:
-                _company = config_loader.get_business().get("name", "the business")
-                _agent = config_loader.get_business().get("agent_name", "CSA")
-                state_registry.create_pending_notification(
-                    notification_type="escalation",
-                    channel=channel,
-                    customer_id=conversation_id,
-                    customer_name=sender_name or "Unknown contact",
-                    subject=f"{_agent} escalated a {channel} conversation",
-                    body=(
-                        f"Customer message:\n{text}\n\n"
-                        f"{_agent}'s reply:\n{reply}\n\n"
-                        f"({_company} — auto-escalated by {_agent} based on "
-                        f"conversation context.)"
-                    ),
-                    mode="soft",
-                )
-                bm_logger.log("dm_escalation_created",
-                               conversation_id=conversation_id[:20],
-                               channel=channel)
-            except Exception as e:
-                bm_logger.log("dm_escalation_create_failed",
-                               conversation_id=conversation_id[:20],
-                               channel=channel,
-                               error=str(e)[:200])
 
         if not reply:
             bm_logger.log("dm_empty_reply", conversation_id=conversation_id[:20],
@@ -393,8 +417,12 @@ def handle_incoming_dm(message: dict) -> str:
 
         bm_logger.log("dm_reply_generated", conversation_id=conversation_id[:20],
                        channel=channel)
+        if escalate_requested:
+            return _handoff_reply(message, reply, defer_handoff=defer_handoff)
         return reply
 
+    except HandoffPersistenceError:
+        raise
     except Exception as e:
         bm_logger.log("dm_agent_error", conversation_id=conversation_id[:20],
                        channel=channel, error=str(e)[:200])

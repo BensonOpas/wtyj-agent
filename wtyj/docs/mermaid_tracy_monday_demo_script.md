@@ -62,8 +62,8 @@ callback, or visible phone number is not enough to enable replies.
   not the workspace heading.
 - Confirm the channel status matches the chosen mode. In Mode A, confirm the
   exact normalized number and strict account. In Mode B, confirm every channel
-  toggle is off and the connection card truthfully says that WhatsApp is not
-  connected.
+  toggle is off and the connection card reflects the actual provider state.
+  A connected but paused channel must remain labelled connected and paused.
 - In Mode A, clear only the dedicated tester conversation through the supported
   retention control. In Mode B, there is no conversation to clear. Never
   delete live customer data for presentation hygiene.
@@ -88,9 +88,9 @@ Say:
 If using Mode B, immediately add:
 
 > The dedicated tenant is real, but no customer message will be sent in this
-> walkthrough because Meta and Zernio authorization belongs to the account
-> owner. I will show the tested response boundaries without presenting them as
-> a live WhatsApp connection.
+> walkthrough because the final release or same-day checks have not passed.
+> I will show the tested response boundaries without presenting this
+> walkthrough as live WhatsApp traffic.
 
 ### 0:40 - Prove the tenant and identity
 

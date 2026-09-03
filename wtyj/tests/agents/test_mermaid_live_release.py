@@ -108,6 +108,22 @@ def test_marina_mermaid_contract_is_one_forced_tool_call(monkeypatch):
     assert "Current Curaçao date" in args["system"]
 
 
+def test_mermaid_contract_excludes_live_credentials_at_model_boundary(monkeypatch):
+    import json
+    raw = config_loader.get_raw()
+    raw.update(password="private-password-sentinel", access_key="private-access-sentinel", whatsapp_connect_token="private-connect-sentinel")
+    raw["agent_persona"]["freeform_notes"] += " Copied private-password-sentinel"
+    monkeypatch.setattr(config_loader, "get_raw", lambda: raw)
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="tool_use", input=interpretation())], usage=None)
+    monkeypatch.setattr(marina_agent.anthropic, "Anthropic", lambda **kwargs: client)
+    marina_agent.process_message("synthetic", "demo", "Hi", {}, {}, channel="whatsapp", response_contract="mermaid_reservation_demo")
+    client.messages.create.assert_called_once()
+    payload = json.dumps(client.messages.create.call_args.kwargs)
+    for secret in (raw["password"], raw["access_key"], raw["whatsapp_connect_token"]):
+        assert secret not in payload
+
+
 @pytest.mark.parametrize("accepted", [True, False])
 def test_real_debounce_sends_pdf_as_file_and_commits_delivery(accepted, monkeypatch):
     phone = "pdf-live-path"
@@ -120,11 +136,15 @@ def test_real_debounce_sends_pdf_as_file_and_commits_delivery(accepted, monkeypa
         "mermaid_delivery_commit": {"job_id": "mjob_test"},
     })
     monkeypatch.setattr("shared.tenant_guard.is_account_allowed", lambda *args, **kwargs: True)
-    webhook_server._buffer_message({
+    monkeypatch.setattr("shared.tenant_guard.account_access_state", lambda *args, **kwargs: True)
+    monkeypatch.setattr(webhook_server.icp_overrides, "fetch_overrides_fresh", lambda: {"available": True, "feature_toggles": {"ai_auto_reply": {"value": True}, "whatsapp_inbox": {"value": True}}})
+    message = {
         "from": phone, "text": "yes", "from_name": "Synthetic", "message_id": "pdf-live-message",
         "_zernio_conversation_id": phone, "_zernio_account_id": "test-account",
         "_zernio_channel": "whatsapp", "_zernio_sender_name": "Synthetic",
-    })
+    }
+    state_registry.wa_claim_inbound_processing(message["message_id"], phone, "whatsapp", payload=message)
+    webhook_server._buffer_message(message)
     with webhook_server._buffer_lock:
         webhook_server._message_buffers[phone]["timer"].cancel()
     webhook_server._flush_buffer(phone)

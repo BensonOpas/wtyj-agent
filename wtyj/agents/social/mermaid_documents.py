@@ -225,7 +225,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         [Paragraph(_safe(labels["date"]), body), Paragraph(_safe(intake["trip_date"]), body), Paragraph(_safe(labels["transport"]), body), Paragraph(_safe(transport, 160), body)],
         [Paragraph(_safe(labels["guests"]), body), Paragraph(_safe(copy["party"].format(adults=intake["adults"], children=intake["children"], infants=intake["infants"])), body), Paragraph(_safe(copy["catalog"]), body), Paragraph(_safe(reservation["catalog_version"]), body)],
     ]
-    detail = Table(detail_rows, colWidths=[26 * mm, 61 * mm, 25 * mm, 68 * mm])
+    detail = Table(detail_rows, colWidths=[32 * mm, 55 * mm, 25 * mm, 68 * mm])
     detail.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), PALE), ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7DCDD")),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica"), ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),

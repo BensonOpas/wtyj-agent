@@ -1,5 +1,6 @@
 """Issue 178: premium catalog-grounded Ali vehicle discovery."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -507,6 +508,16 @@ def _valid_vehicle_media_preflight(monkeypatch):
     monkeypatch.setattr(zernio_dm_client, "_preflight_vehicle_media", lambda _url: True)
 
 
+@pytest.fixture
+def confirmed_provider(monkeypatch):
+    """Isolate payload/causal-scope tests from separately tested status polling."""
+    def confirm(_url, _headers, _account, provider_message_id, **_kwargs):
+        assert provider_message_id
+        return "sent"
+
+    monkeypatch.setattr(zernio_dm_client, "_confirm_recommendation_status", confirm)
+
+
 def _incoming(hours_ago=1, message_id="trigger-message-1"):
     return {
         "id": message_id,
@@ -529,7 +540,7 @@ def _carousel_plan(trigger_message_id="trigger-message-1", trigger_sent_at=""):
     )
 
 
-def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch):
+def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     posts = []
     monkeypatch.setattr(
@@ -542,7 +553,7 @@ def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"url": url, "headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"schema-message-{len(posts)}"})
         ),
     )
     plan = _carousel_plan()
@@ -551,7 +562,8 @@ def test_zernio_carousel_uses_official_schema_and_idempotency(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert len(posts) == 2
     assert posts[0]["headers"]["Idempotency-Key"] == (
         f"{plan['idempotency_key']}-primary"
@@ -640,7 +652,7 @@ def test_closed_session_attempts_no_interactive_or_free_text(monkeypatch):
 
 
 def test_fresh_signed_trigger_opens_session_before_history_catches_up(
-    monkeypatch,
+    monkeypatch, confirmed_provider,
 ):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan(
@@ -658,7 +670,7 @@ def test_fresh_signed_trigger_opens_session_before_history_catches_up(
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"fresh-trigger-{len(posts)}"})
         ),
     )
 
@@ -666,7 +678,8 @@ def test_fresh_signed_trigger_opens_session_before_history_catches_up(
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert [post["json"]["interactive"]["type"] for post in posts] == [
         "carousel", "list",
     ]
@@ -676,7 +689,11 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     gets = iter([
         _Response(200, {"messages": [_incoming()]}),
-        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "fallback-message",
+            "direction": "outgoing",
+            "status": "sent",
+        }]}),
     ])
     posts = []
     monkeypatch.setattr(
@@ -687,7 +704,11 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
 
     def fake_post(url, headers, json, timeout):
         posts.append({"headers": headers, "json": json})
-        return _Response(400 if len(posts) == 1 else 201)
+        return (
+            _Response(400)
+            if len(posts) == 1
+            else _Response(201, {"id": "fallback-message"})
+        )
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
     confirmation = {
@@ -717,7 +738,10 @@ def test_quote_confirmation_rejection_sends_exact_text_fallback(monkeypatch):
         "conversation-1", "account-1", confirmation,
     )
 
-    assert result == {"success": True, "delivery": "text_fallback"}
+    assert result == {
+        "success": True, "delivery": "text_fallback",
+        "provider_message_ids": ["fallback-message"],
+    }
     assert posts[0]["json"]["buttons"] == confirmation["buttons"]
     assert posts[1]["json"] == {
         "accountId": "account-1",
@@ -771,7 +795,7 @@ def test_every_localized_quote_confirmation_passes_provider_contract(
     )
 
 
-def test_specific_vehicle_posts_one_image_message(monkeypatch):
+def test_specific_vehicle_posts_one_image_message(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     posts = []
     monkeypatch.setattr(
@@ -784,7 +808,7 @@ def test_specific_vehicle_posts_one_image_message(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": "specific-image"})
         ),
     )
     plan = recommendations.build_vehicle_recommendation(
@@ -799,7 +823,8 @@ def test_specific_vehicle_posts_one_image_message(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "image"}
+    assert result["success"] is True
+    assert result["delivery"] == "image"
     assert len(posts) == 1
     assert posts[0]["json"] == {
         "accountId": "account-1",
@@ -862,6 +887,11 @@ def test_late_image_rejection_before_commit_uses_visible_text_fallback(monkeypat
             "direction": "outgoing",
             "status": "failed",
         }]}),
+        _Response(200, {"messages": [{
+            "id": "provider-fallback-1",
+            "direction": "outgoing",
+            "status": "sent",
+        }]}),
     ])
     posts = iter([
         _Response(201, {"data": {"id": "provider-image-1"}}),
@@ -891,7 +921,7 @@ def test_late_image_rejection_before_commit_uses_visible_text_fallback(monkeypat
     }
 
 
-def test_failed_visible_message_never_acknowledges_current_trigger(monkeypatch):
+def test_failed_visible_message_never_acknowledges_current_trigger(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = recommendations.build_vehicle_recommendation(
         _action("specific", ["Kia Picanto or similar"]),
@@ -989,7 +1019,9 @@ def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatc
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     gets = iter([
         _Response(200, {"messages": [_incoming()]}),
-        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "fallback-message", "direction": "outgoing", "status": "sent",
+        }]}),
     ])
     posts = []
     monkeypatch.setattr(
@@ -1000,7 +1032,7 @@ def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatc
 
     def fake_post(url, headers, json, timeout):
         posts.append({"headers": headers, "json": json})
-        return _Response(400 if len(posts) == 1 else 201)
+        return _Response(400) if len(posts) == 1 else _Response(201, {"id": "fallback-message"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
     plan = _carousel_plan()
@@ -1009,7 +1041,12 @@ def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatc
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "fallback"}
+    assert result == {
+        "success": True,
+        "delivery": "fallback",
+        "provider_message_ids": ["fallback-message"],
+        "provider_parts": {"picker_fallback": ["fallback-message"]},
+    }
     assert len(posts) == 2
     assert "interactive" in posts[0]["json"]
     assert posts[1]["json"] == {
@@ -1021,15 +1058,84 @@ def test_rejected_carousel_sends_exactly_one_idempotent_text_fallback(monkeypatc
     )
 
 
+def test_vehicle_fallback_http_success_without_id_or_history_is_ambiguous(
+    monkeypatch,
+):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [_incoming()]}),
+    ])
+    posts = iter([
+        _Response(400),
+        _Response(201),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *args, **kwargs: next(posts),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", _carousel_plan(),
+    )
+
+    assert result == {"success": False, "delivery": "ambiguous"}
+
+
+def test_vehicle_fallback_accepted_then_failed_is_not_reported_sent(monkeypatch):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    gets = iter([
+        _Response(200, {"messages": [_incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "failed-fallback",
+            "direction": "outgoing",
+            "status": "failed",
+        }]}),
+    ])
+    posts = iter([
+        _Response(400),
+        _Response(201, {"id": "failed-fallback"}),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *args, **kwargs: next(posts),
+    )
+
+    result = zernio_dm_client.send_dm_vehicle_recommendation(
+        "conversation-1", "account-1", _carousel_plan(),
+    )
+
+    assert result == {"success": False, "delivery": "failed"}
+
+
 def test_ambiguous_send_reconciles_visible_carousel_without_fallback(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan()
     gets = iter([
         _Response(200, {"messages": [_incoming()]}),
         _Response(200, {"messages": [{
+            "id": "reconciled-carousel",
             "direction": "outgoing",
+            "status": "delivered",
             "interactive": {"body": {"text": plan["text"]}},
         }, _incoming()]}),
+        _Response(200, {"messages": [{
+            "id": "picker-after-reconcile",
+            "direction": "outgoing",
+            "status": "sent",
+        }]}),
     ])
     post_attempts = []
     monkeypatch.setattr(
@@ -1042,7 +1148,7 @@ def test_ambiguous_send_reconciles_visible_carousel_without_fallback(monkeypatch
         post_attempts.append((args, kwargs))
         if len(post_attempts) <= 2:
             raise zernio_dm_client.http_requests.Timeout("synthetic timeout")
-        return _Response(201)
+        return _Response(201, {"id": "picker-after-reconcile"})
 
     monkeypatch.setattr(
         zernio_dm_client.http_requests,
@@ -1054,7 +1160,9 @@ def test_ambiguous_send_reconciles_visible_carousel_without_fallback(monkeypatch
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
+    assert result["provider_message_ids"] == ["reconciled-carousel", "picker-after-reconcile"]
     assert len(post_attempts) == 3
 
 
@@ -1067,11 +1175,15 @@ def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeyp
         lambda *args, **kwargs: _Response(200, {"messages": [
             # Zernio returns newest first: picker follows carousel.
             {
+                "id": "reconciled-picker",
                 "direction": "outgoing",
+                "status": "delivered",
                 "interactive": {"body": {"text": plan["picker"]["text"]}},
             },
             {
+                "id": "reconciled-carousel",
                 "direction": "outgoing",
+                "status": "delivered",
                 "interactive": {"body": {"text": plan["text"]}},
             },
             _incoming(),
@@ -1088,11 +1200,13 @@ def test_replay_reconciles_complete_carousel_picker_bundle_without_posts(monkeyp
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
+    assert result["provider_message_ids"] == ["reconciled-carousel", "reconciled-picker"]
     assert posts == []
 
 
-def test_prior_same_text_bundle_cannot_acknowledge_new_trigger(monkeypatch):
+def test_prior_same_text_bundle_cannot_acknowledge_new_trigger(monkeypatch, confirmed_provider):
     """Regression for production incident #268."""
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan(trigger_message_id="trigger-current")
@@ -1120,7 +1234,7 @@ def test_prior_same_text_bundle_cannot_acknowledge_new_trigger(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"new-trigger-{len(posts)}"})
         ),
     )
 
@@ -1128,13 +1242,14 @@ def test_prior_same_text_bundle_cannot_acknowledge_new_trigger(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert [post["json"]["interactive"]["type"] for post in posts] == [
         "carousel", "list",
     ]
 
 
-def test_provider_history_lag_uses_trigger_time_not_old_same_text(monkeypatch):
+def test_provider_history_lag_uses_trigger_time_not_old_same_text(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     now = datetime.now(timezone.utc)
     trigger_time = now - timedelta(minutes=5)
@@ -1173,7 +1288,7 @@ def test_provider_history_lag_uses_trigger_time_not_old_same_text(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"history-lag-{len(posts)}"})
         ),
     )
 
@@ -1181,11 +1296,12 @@ def test_provider_history_lag_uses_trigger_time_not_old_same_text(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert len(posts) == 2
 
 
-def test_missing_trigger_anchors_disable_visible_text_reconciliation(monkeypatch):
+def test_missing_trigger_anchors_disable_visible_text_reconciliation(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan(trigger_message_id="", trigger_sent_at="")
     monkeypatch.setattr(
@@ -1211,7 +1327,7 @@ def test_missing_trigger_anchors_disable_visible_text_reconciliation(monkeypatch
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"unanchored-trigger-{len(posts)}"})
         ),
     )
 
@@ -1219,11 +1335,12 @@ def test_missing_trigger_anchors_disable_visible_text_reconciliation(monkeypatch
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert len(posts) == 2
 
 
-def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
+def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan()
     monkeypatch.setattr(
@@ -1243,7 +1360,7 @@ def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": f"current-picker-{len(posts)}"})
         ),
     )
 
@@ -1251,7 +1368,8 @@ def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
     assert [post["json"]["interactive"]["type"] for post in posts] == [
         "carousel", "list",
     ]
@@ -1263,16 +1381,26 @@ def test_old_picker_never_suppresses_picker_for_new_carousel(monkeypatch):
 def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan()
-    monkeypatch.setattr(
-        zernio_dm_client.http_requests,
-        "get",
-        lambda *args, **kwargs: _Response(200, {"messages": [
+    gets = iter([
+        _Response(200, {"messages": [
             {
+                "id": "reconciled-carousel",
                 "direction": "outgoing",
+                "status": "delivered",
                 "interactive": {"body": {"text": plan["text"]}},
             },
             _incoming(),
         ]}),
+        _Response(200, {"messages": [{
+            "id": "missing-picker",
+            "direction": "outgoing",
+            "status": "sent",
+        }]}),
+    ])
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *args, **kwargs: next(gets),
     )
     posts = []
     monkeypatch.setattr(
@@ -1280,7 +1408,7 @@ def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
         "post",
         lambda url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or _Response(201)
+            or _Response(201, {"id": "missing-picker"})
         ),
     )
 
@@ -1288,7 +1416,9 @@ def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "carousel_picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker"
+    assert result["provider_message_ids"] == ["reconciled-carousel", "missing-picker"]
     assert len(posts) == 1
     assert posts[0]["json"]["interactive"]["type"] == "list"
     assert posts[0]["headers"]["Idempotency-Key"] == (
@@ -1296,7 +1426,7 @@ def test_restart_after_carousel_sends_only_missing_picker(monkeypatch):
     )
 
 
-def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
+def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = _carousel_plan()
     gets = iter([
@@ -1314,7 +1444,7 @@ def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
         posts.append({"headers": headers, "json": json})
         if len(posts) == 2:
             return _Response(400)
-        return _Response(201)
+        return _Response(201, {"id": f"picker-fallback-{len(posts)}"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
 
@@ -1322,10 +1452,8 @@ def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {
-        "success": True,
-        "delivery": "carousel_picker_fallback",
-    }
+    assert result["success"] is True
+    assert result["delivery"] == "carousel_picker_fallback"
     assert len(posts) == 3
     assert posts[0]["json"]["interactive"]["type"] == "carousel"
     assert posts[1]["json"]["interactive"]["type"] == "list"
@@ -1338,7 +1466,7 @@ def test_rejected_picker_uses_one_idempotent_instruction_fallback(monkeypatch):
     )
 
 
-def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatch):
+def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = recommendations.build_vehicle_picker_recovery(
         _catalog(),
@@ -1357,7 +1485,8 @@ def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatc
         zernio_dm_client.http_requests,
         "post",
         lambda url, headers, json, timeout: (
-            posts.append({"headers": headers, "json": json}) or _Response(201)
+            posts.append({"headers": headers, "json": json})
+            or _Response(201, {"id": "recovery-picker"})
         ),
     )
 
@@ -1365,7 +1494,8 @@ def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatc
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "picker"}
+    assert result["success"] is True
+    assert result["delivery"] == "picker"
     assert len(posts) == 1
     assert posts[0]["json"]["interactive"]["type"] == "list"
     assert posts[0]["json"]["interactive"]["action"]["sections"] == (
@@ -1376,7 +1506,7 @@ def test_recovery_sends_only_native_picker_without_repeating_carousel(monkeypatc
     )
 
 
-def test_recovery_picker_provider_failure_uses_numbered_text_once(monkeypatch):
+def test_recovery_picker_provider_failure_uses_numbered_text_once(monkeypatch, confirmed_provider):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     plan = recommendations.build_vehicle_picker_recovery(
         _catalog(),
@@ -1396,7 +1526,7 @@ def test_recovery_picker_provider_failure_uses_numbered_text_once(monkeypatch):
 
     def fake_post(url, headers, json, timeout):
         posts.append({"headers": headers, "json": json})
-        return _Response(400 if len(posts) == 1 else 201)
+        return _Response(400) if len(posts) == 1 else _Response(201, {"id": "recovery-fallback"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
 
@@ -1404,7 +1534,8 @@ def test_recovery_picker_provider_failure_uses_numbered_text_once(monkeypatch):
         "conversation-1", "account-1", plan,
     )
 
-    assert result == {"success": True, "delivery": "picker_fallback"}
+    assert result["success"] is True
+    assert result["delivery"] == "picker_fallback"
     assert len(posts) == 2
     assert posts[1]["json"] == {
         "accountId": "account-1",
@@ -1657,6 +1788,80 @@ def test_sparse_carousel_failure_claim_is_idempotent_and_retry_failure_advances(
     )
     assert retry_failure["stage"] == "individual"
     assert retry_failure["picker_present"] is True
+
+
+def test_vehicle_failure_recovery_reclaims_expired_lease_and_fences_stale_owner(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    plan = _carousel_plan()
+    state_registry.wa_save_booking_state(
+        "conversation-lease",
+        {"conversation_language": "en"},
+        {"ali_vehicle_recommendation_deliveries": [{
+            "hash": plan["state_hash"],
+            "delivery": "carousel_picker",
+            "vehicle_ids": [item["id"] for item in plan["options"]],
+            "provider_parts": {
+                "carousel": ["provider-carousel-lease"],
+                "picker": ["provider-picker-lease"],
+            },
+            "snapshot": {
+                "kind": "carousel",
+                "mode": "curated",
+                "locale": "en",
+                "state_hash": plan["state_hash"],
+                "text": plan["text"],
+                "vehicle_ids": [item["id"] for item in plan["options"]],
+            },
+            "account_id": "account-lease",
+        }]},
+    )
+
+    first = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-lease", "provider-carousel-lease",
+    )
+    active_duplicate = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-lease", "provider-carousel-lease",
+    )
+    assert first["already_handled"] is False
+    assert first["claim_token"]
+    assert active_duplicate["already_handled"] is True
+    assert active_duplicate["recovery_in_progress"] is True
+
+    conn = state_registry._get_conn()
+    row = conn.execute(
+        "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+        ("conversation-lease",),
+    ).fetchone()
+    flags = json.loads(row[0])
+    flags["ali_vehicle_recommendation_recovery_in_progress"][0][
+        "lease_expires_at"
+    ] = "2000-01-01T00:00:00+00:00"
+    conn.execute(
+        "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
+        (json.dumps(flags), "conversation-lease"),
+    )
+    conn.commit()
+    conn.close()
+
+    reclaimed = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-lease", "provider-carousel-lease",
+    )
+    assert reclaimed["already_handled"] is False
+    assert reclaimed["claim_token"] != first["claim_token"]
+    result = {"success": False, "delivery": "media_recovery_failed"}
+    assert state_registry.wa_complete_vehicle_recommendation_recovery(
+        "conversation-lease", first, result,
+    ) is False
+    assert state_registry.wa_complete_vehicle_recommendation_recovery(
+        "conversation-lease", reclaimed, result,
+    ) is True
+    completed = state_registry.wa_claim_vehicle_recommendation_failure(
+        "conversation-lease", "provider-carousel-lease",
+    )
+    assert completed["already_handled"] is True
+    assert not completed.get("recovery_in_progress")
 
 
 def test_failed_preflight_skips_carousel_and_sends_images_plus_one_picker(monkeypatch):

@@ -19,12 +19,31 @@ from agents.social import mermaid_demo_payment as payment
 from agents.social import mermaid_documents as documents
 from agents.social import mermaid_reservation_store as reservations
 from shared import config_loader, state_registry
+from agents.marina import marina_agent
+from shared.public_business_config import _secret_values
 
 
 def main():
     if os.environ.get("MERMAID_ISOLATED_CANARY") != "synthetic-no-provider-send" or not Path("/app/data/.isolated-canary").is_file():
         raise RuntimeError("Disposable isolated canary data required; never use live data")
     assert config_loader.get_raw().get("slug") == "mermaid"
+    protected_values = _secret_values(config_loader.get_raw())
+    original_factory = marina_agent.anthropic.Anthropic
+
+    def guarded_factory(**kwargs):
+        client = original_factory(**kwargs)
+        original_create = client.messages.create
+
+        def guarded_create(**payload):
+            serialized = json.dumps(payload, ensure_ascii=False)
+            if any(value in serialized for value in protected_values):
+                raise RuntimeError("Sensitive configuration reached model boundary; request blocked")
+            return original_create(**payload)
+
+        client.messages.create = guarded_create
+        return client
+
+    marina_agent.anthropic.Anthropic = guarded_factory
     today = datetime.now(timezone(timedelta(hours=-4))).date()
     date = (today + timedelta(days=(5 - today.weekday()) % 7 or 7)).isoformat()
     transcripts = []

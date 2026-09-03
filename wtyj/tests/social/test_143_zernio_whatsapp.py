@@ -1,5 +1,6 @@
 # test_143_zernio_whatsapp.py — Zernio WhatsApp: Route WhatsApp Through Zernio
 import sys, os, time
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
@@ -11,6 +12,41 @@ os.environ.setdefault("ZERNIO_WEBHOOK_SECRET", "test")
 
 from unittest.mock import patch, MagicMock
 from shared import state_registry, config_loader
+
+
+@pytest.fixture(autouse=True)
+def _isolated_provider_state(monkeypatch, tmp_path):
+    """Do not drain another test run's durable provider event queue."""
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "test-phone-143")
+    monkeypatch.setenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "test-waba-143")
+    config_loader._cache["channel_account_allowlist"] = {
+        "mode": "strict",
+        "zernio_accounts": ["wa_acc_123", "account-1", "ig_acc"],
+    }
+
+
+def _durable_buffer(conversation_id, buffer):
+    """Build a buffer whose members were accepted by the real durable ledger."""
+    batch_id = ""
+    for position, message in enumerate(buffer["messages"]):
+        message.setdefault("message_id", f"test_143_{conversation_id}_{position}")
+        message.setdefault("platform", "whatsapp")
+        message.setdefault("channel", "whatsapp")
+        if not message.get("_zernio_conversation_id"):
+            message.setdefault("business_account_id", "test-waba-143")
+            message.setdefault("phone_number_id", "test-phone-143")
+        assert state_registry.wa_claim_inbound_processing(
+            message["message_id"], conversation_id, "whatsapp", message,
+        ) is True
+        assigned = state_registry.inbound_processing_join_batch(
+            message["message_id"], batch_id, position,
+        )
+        assert assigned and (not batch_id or assigned == batch_id)
+        batch_id = assigned
+    buffer["phone"] = conversation_id
+    buffer["batch_id"] = batch_id
+    return buffer
 
 
 def _cleanup(conv_id):
@@ -127,7 +163,6 @@ def test_zernio_empty_text_native_picker_reply_is_not_ignored(
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_zernio_whatsapp_reply_via_zernio(mock_orchestrator, mock_meta_send, mock_zernio_send):
     from agents.social.webhook_server import _flush_buffer, _message_buffers, _buffer_lock
-    import threading
 
     conv_id = "conv_143_reply"
     _cleanup(conv_id)
@@ -135,7 +170,7 @@ def test_zernio_whatsapp_reply_via_zernio(mock_orchestrator, mock_meta_send, moc
 
     # Simulate a buffered Zernio WhatsApp message
     with _buffer_lock:
-        _message_buffers[conv_id] = {
+        _message_buffers[conv_id] = _durable_buffer(conv_id, {
             "messages": [{
                 "from": conv_id,
                 "text": "Book sunset cruise",
@@ -147,7 +182,7 @@ def test_zernio_whatsapp_reply_via_zernio(mock_orchestrator, mock_meta_send, moc
             }],
             "timer": None,
             "started": time.time(),
-        }
+        })
 
     _flush_buffer(conv_id)
 
@@ -172,7 +207,7 @@ def test_zernio_whatsapp_debounce_batches(mock_orchestrator, mock_send):
 
     # Simulate 2 buffered messages
     with _buffer_lock:
-        _message_buffers[conv_id] = {
+        _message_buffers[conv_id] = _durable_buffer(conv_id, {
             "messages": [
                 {
                     "from": conv_id, "text": "hey",
@@ -193,7 +228,7 @@ def test_zernio_whatsapp_debounce_batches(mock_orchestrator, mock_send):
             ],
             "timer": None,
             "started": time.time(),
-        }
+        })
 
     _flush_buffer(conv_id)
 
@@ -224,7 +259,7 @@ def test_zernio_whatsapp_booking_flow_off_uses_dm_agent(mock_orchestrator, mock_
     raw["workflow"] = {"type": "qa_only"}
     try:
         with _buffer_lock:
-            _message_buffers[conv_id] = {
+            _message_buffers[conv_id] = _durable_buffer(conv_id, {
                 "messages": [{
                     "from": conv_id, "text": "What trips do you have?",
                     "from_name": "WA Tester",
@@ -235,7 +270,7 @@ def test_zernio_whatsapp_booking_flow_off_uses_dm_agent(mock_orchestrator, mock_
                 }],
                 "timer": None,
                 "started": time.time(),
-            }
+            })
 
         _flush_buffer(conv_id)
 
@@ -307,11 +342,14 @@ def test_ali_quote_zernio_ingress_uses_orchestrator_and_final_safety(
             "booking_flow": False,
             "ali_quote_automation": True,
         },
+        "channel_account_allowlist": {
+            "mode": "strict", "zernio_accounts": ["wa_acc_123"],
+        },
     }
 
     with patch.object(config_loader, "get_raw", return_value=raw):
         with _buffer_lock:
-            _message_buffers[conv_id] = {
+            _message_buffers[conv_id] = _durable_buffer(conv_id, {
                 "messages": [{
                     "from": conv_id,
                     "text": "My complete synthetic rental details",
@@ -323,7 +361,7 @@ def test_ali_quote_zernio_ingress_uses_orchestrator_and_final_safety(
                 }],
                 "timer": None,
                 "started": time.time(),
-            }
+            })
 
         _flush_buffer(conv_id)
 
@@ -369,7 +407,7 @@ def test_ali_quote_legacy_meta_outbound_boundary_sanitizes(
 
     with patch.object(config_loader, "get_raw", return_value=raw):
         with _buffer_lock:
-            _message_buffers[phone] = {
+            _message_buffers[phone] = _durable_buffer(phone, {
                 "messages": [{
                     "from": phone,
                     "text": "Complete synthetic rental details",
@@ -378,7 +416,7 @@ def test_ali_quote_legacy_meta_outbound_boundary_sanitizes(
                 }],
                 "timer": None,
                 "started": time.time(),
-            }
+            })
 
         _flush_buffer(phone)
 
@@ -431,7 +469,12 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
     monkeypatch.setattr(
         webhook_server.config_loader,
         "get_raw",
-        lambda: {"workflow": {"type": "ali_quote"}},
+        lambda: {
+            "workflow": {"type": "ali_quote"},
+            "channel_account_allowlist": {
+                "mode": "strict", "zernio_accounts": ["account-1"],
+            },
+        },
     )
     monkeypatch.setattr(
         webhook_server,
@@ -458,6 +501,7 @@ def test_late_message_failed_event_reconciles_without_entering_nick(monkeypatch)
         "message": {
             "id": "provider-image-1",
             "conversationId": "conversation-1",
+            "accountId": "account-1",
         },
     })
 
@@ -504,7 +548,7 @@ def test_ali_structured_delivery_failure_never_creates_human_escalation(
     monkeypatch.setattr(
         webhook_server.state_registry,
         "inbound_processing_bulk_update",
-        lambda *args, **kwargs: processing_updates.append((args, kwargs)),
+        lambda *args, **kwargs: processing_updates.append((args, kwargs)) or True,
     )
     monkeypatch.setattr(
         webhook_server.state_registry,

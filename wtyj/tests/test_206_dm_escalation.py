@@ -1,6 +1,7 @@
 """Brief 206: dm_agent escalation handler + booking_redirect suppression."""
 
 import os
+import pytest
 
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
@@ -203,12 +204,10 @@ def test_no_sentinel_no_escalation_created(
 @patch("agents.social.dm_agent.state_registry")
 @patch("agents.social.dm_agent.config_loader")
 @patch("agents.social.dm_agent.anthropic.Anthropic")
-def test_escalation_db_failure_does_not_break_reply(
+def test_escalation_db_failure_prevents_unbacked_handoff_reply(
     mock_anthropic, mock_config, mock_state
 ):
-    """If create_pending_notification raises (e.g., DB transient), the
-    customer-facing reply still ships (with sentinel stripped). Escalation
-    failures are logged but never blocking."""
+    """A persistence failure must not silently send a false handoff promise."""
     from agents.social import dm_agent
 
     mock_config.get_business.return_value = {
@@ -233,17 +232,14 @@ def test_escalation_db_failure_does_not_break_reply(
     mock_msg.usage = None
     mock_anthropic.return_value.messages.create.return_value = mock_msg
 
-    reply = dm_agent.handle_incoming_dm({
-        "conversation_id": "test-206-dbfail",
-        "platform": "whatsapp",
-        "channel": "whatsapp",
-        "sender_name": "Customer",
-        "text": "complaint",
-        "account_id": "acct-1",
-    })
-
-    # Reply still shipped (with sentinel stripped)
-    assert "[ESCALATE]" not in reply
-    assert "Got it, getting to the team" in reply
+    with pytest.raises(dm_agent.HandoffPersistenceError):
+        dm_agent.handle_incoming_dm({
+            "conversation_id": "test-206-dbfail",
+            "platform": "whatsapp",
+            "channel": "whatsapp",
+            "sender_name": "Customer",
+            "text": "complaint",
+            "account_id": "acct-1",
+        })
     # Escalation attempt was made (even though it failed)
     mock_state.create_pending_notification.assert_called_once()

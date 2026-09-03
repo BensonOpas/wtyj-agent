@@ -1,7 +1,7 @@
 # BRIEF 327 — Provision Mermaid TRACY as a real Unboks demo tenant
 
 **Status:** In progress | **Tenant:** `mermaid` | **Runtime port:** `8102` |
-**WhatsApp:** dedicated Zernio-provisioned `+1 223 276 0075`, purchased; Meta connection pending |
+**WhatsApp:** dedicated Zernio-provisioned `+1 223 276 0075`, connected; hardening release pending |
 **Provider:** Zernio
 
 ## Outcome
@@ -24,7 +24,8 @@ Facebook Page or public WhatsApp number.
 - AI assistant: `TRACY`.
 - Dedicated demo WhatsApp Business number: buy the cheapest suitable available
   Zernio number exclusively for Mermaid; `+1 223 276 0075` was purchased on
-  `2026-09-03` at `$3/month`. Meta registration is still pending.
+  `2026-09-03` at `$3/month`. Meta/Zernio authorization and controlled canaries
+  completed that day; repeat them after the hardening release.
 - Existing Mermaid public contact: `+599 9 560 1530`. It is a sourced business
   fact only and must not be migrated or connected during the demo setup.
 - Runtime: `/root/clients/mermaid`, container `wtyj-mermaid`, loopback port
@@ -70,16 +71,37 @@ Facebook Page or public WhatsApp number.
 
 - Nr3 already contains the intended `mermaid` tenant and reports it active with
   agent name `TRACY`.
-- The public `Mermaid Demo` trial intake was submitted and email-verified, but
-  its slug hint is `mermaid-demo`. Leave it awaiting review: the deployed
-  approval flow cannot link it to the existing tenant and would start a
-  duplicate onboarding path.
-- Meta Embedded Signup displayed the purchased BSP number but failed twice with
-  a generic phone-number error. Nr3 still reports no connected phone or provider
-  account and a strict-empty allowlist.
+- The public `Mermaid Demo` trial intake was submitted, email-verified, approved,
+  and completed. Its final `Create workspace` action remains unused because the
+  slug hint is `mermaid-demo` and the intended active tenant already exists.
+- Meta's original portfolio number limit required a dedicated portfolio. The
+  purchased number then had to move from Zernio's Default Profile to Mermaid's
+  profile. After provider authorization, Nr3's status refresh and exact-account
+  repair reconciled a callback-format mismatch. The technical runbook records
+  one strict bound account and the inbox-only/controlled-reply canaries.
 - The deployed Nr3 UI briefly accepted WhatsApp On while the connection was
   pending. It was immediately reset to Off. Deploy and verify the fail-closed
   activation guard in control-panel PR #94 before enabling Mermaid traffic.
+
+## Final runtime hardening
+
+The independent review identified credential-bearing raw configuration entering
+model context and an unguarded team-wide social publishing path. Use one public
+business-data projection before model/API serialization and enforce ownership
+immediately at provider mutations. UI-only hiding and after-the-fact redaction
+were rejected because background senders and model requests bypass them.
+
+The release also includes durable inbound recovery, failed-event/attachment
+handoffs, worker fencing, and an operator delivery outbox. A retry must preserve
+the prepared text, provider key, and request identity. The content-sync tool now
+copies three reviewed fields with the service stopped and preserves displaced
+configuration on interrupted/raced exchange.
+
+Use the [runtime release evidence](../docs/mermaid_runtime_release_evidence.md)
+for test results and the handoff to Reservations PR #334. This foundation alone
+does not resolve the production Reservations route or prove the final browser
+journey. Success requires the combined revision, desktop/mobile rehearsal, and
+repeat live canaries.
 
 ## Verification
 

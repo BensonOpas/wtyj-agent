@@ -102,6 +102,50 @@ def test_download_uses_authenticated_endpoint_without_redirects(
     assert kwargs["allow_redirects"] is False
 
 
+@pytest.mark.parametrize("state,code,retryable", [
+    (False, "media_account_not_allowed", False),
+    (None, "media_account_control_unavailable", True),
+])
+@patch("agents.social.zernio_whatsapp_media.requests.get")
+def test_download_blocks_unowned_or_unavailable_account_before_get(
+    mock_get, monkeypatch, state, code, retryable,
+):
+    from shared import tenant_guard
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(tenant_guard, "account_access_state", lambda *_a, **_k: state)
+    with pytest.raises(ZernioMediaError, match=code) as error:
+        download_whatsapp_media("media-1", "mermaid-account")
+    assert error.value.retryable is retryable
+    mock_get.assert_not_called()
+
+
+@pytest.mark.parametrize("changed_state", [False, None])
+@patch("agents.social.zernio_whatsapp_media.requests.get")
+def test_download_discards_bytes_when_account_changes_mid_stream(
+    mock_get, monkeypatch, changed_state,
+):
+    from shared import tenant_guard
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    ownership = {"state": True}
+    monkeypatch.setattr(
+        tenant_guard, "account_access_state", lambda *_a, **_k: ownership["state"],
+    )
+
+    def chunks():
+        yield b"first-private-chunk"
+        ownership["state"] = changed_state
+        yield b"second-private-chunk"
+
+    response = _response(headers={"Content-Type": "application/pdf"})
+    response.iter_content.return_value = chunks()
+    mock_get.return_value = response
+    with pytest.raises(ZernioMediaError, match="media_account_"):
+        download_whatsapp_media("media-1", "mermaid-account")
+    mock_get.assert_called_once()
+
+
 @pytest.mark.parametrize("status,retryable", [(400, False), (429, True), (503, True)])
 @patch("agents.social.zernio_whatsapp_media.requests.get")
 def test_download_classifies_provider_failures(mock_get, status, retryable):

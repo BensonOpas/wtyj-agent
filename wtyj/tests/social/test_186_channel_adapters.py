@@ -27,6 +27,7 @@ def _cleanup(conversation_id):
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (conversation_id,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (conversation_id,))
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id LIKE 'test_186_%'")
+    conn.execute("DELETE FROM inbound_processing_events WHERE message_id LIKE 'test_186_%'")
     conn.commit()
     conn.close()
 
@@ -142,7 +143,11 @@ def test_process_zernio_event_dispatches_via_registry(mock_orch, mock_typing, mo
     original = raw.get("features", {}).get("booking_flow", True)
     raw.setdefault("features", {})["booking_flow"] = True
     try:
-        _process_zernio_event(payload)
+        with patch(
+            "shared.tenant_guard.is_account_allowed",
+            return_value=True,
+        ):
+            _process_zernio_event(payload)
 
         # Orchestrator was called once, with the adapter-produced dict
         mock_orch.assert_called_once()

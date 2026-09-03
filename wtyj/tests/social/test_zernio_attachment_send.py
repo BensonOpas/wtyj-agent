@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from agents.social import zernio_dm_client
 
 
@@ -24,8 +26,20 @@ def _incoming(hours_ago=1):
     }
 
 
+def _legacy_attachment_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "get",
+        lambda *_args, **_kwargs: _Resp(200, {"messages": [{
+            "id": "attachment-confirmed", "status": "delivered",
+            "direction": "outgoing",
+        }]}),
+    )
+
+
 def test_send_dm_reply_with_attachment_posts_zernio_payload(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
+    _legacy_attachment_confirmation(monkeypatch)
     calls = []
 
     def fake_post(url, headers, json, timeout):
@@ -35,7 +49,7 @@ def test_send_dm_reply_with_attachment_posts_zernio_payload(monkeypatch):
             "json": json,
             "timeout": timeout,
         })
-        return _Resp()
+        return _Resp(201, {"id": "attachment-confirmed"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
 
@@ -64,6 +78,32 @@ def test_send_dm_reply_with_attachment_posts_zernio_payload(monkeypatch):
     }]
 
 
+def test_no_key_attachment_rechecks_account_before_provider_post(monkeypatch):
+    from shared import tenant_guard
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(
+        tenant_guard,
+        "is_account_allowed",
+        lambda account_id, direction: False,
+    )
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests,
+        "post",
+        lambda *_args, **_kwargs: posts.append(True),
+    )
+
+    assert zernio_dm_client.send_dm_reply_with_attachment(
+        "conv_123",
+        "revoked-account",
+        "",
+        "https://api.unboks.org/media/brand.jpg",
+        attachment_type="image",
+    ) is False
+    assert posts == []
+
+
 def test_send_dm_reply_with_attachment_rejects_invalid_attachment_type(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
 
@@ -80,11 +120,12 @@ def test_send_dm_reply_with_attachment_rejects_invalid_attachment_type(monkeypat
 
 def test_whatsapp_file_attachment_includes_recipient_visible_name(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
+    _legacy_attachment_confirmation(monkeypatch)
     calls = []
 
     def fake_post(url, headers, json, timeout):
         calls.append(json)
-        return _Resp()
+        return _Resp(201, {"id": "attachment-confirmed"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
 
@@ -103,11 +144,12 @@ def test_whatsapp_file_attachment_includes_recipient_visible_name(monkeypatch):
 
 def test_attachment_name_is_omitted_for_non_file_and_legacy_calls(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
+    _legacy_attachment_confirmation(monkeypatch)
     calls = []
 
     def fake_post(url, headers, json, timeout):
         calls.append(json)
-        return _Resp()
+        return _Resp(201, {"id": "attachment-confirmed"})
 
     monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
 
@@ -122,6 +164,102 @@ def test_attachment_name_is_omitted_for_non_file_and_legacy_calls(monkeypatch):
 
     assert "attachmentName" not in calls[0]
     assert "attachmentName" not in calls[1]
+
+
+@pytest.mark.parametrize("status", ["failed", "queued", "pending", "", "unknown"])
+def test_no_key_attachment_requires_terminal_provider_success(monkeypatch, status):
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(zernio_dm_client.time, "sleep", lambda _seconds: None)
+    posts = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "post",
+        lambda *_args, **_kwargs: (
+            posts.append(True) or _Resp(201, {"id": "attachment-pending"})
+        ),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "get",
+        lambda *_args, **_kwargs: _Resp(200, {"messages": [{
+            "id": "attachment-pending", "direction": "outgoing", "status": status,
+        }]}),
+    )
+
+    assert zernio_dm_client.send_dm_reply_with_attachment(
+        "conv_123", "account_123", "Photo", "https://example.test/photo.jpg",
+    ) is False
+    assert posts == [True]
+
+
+def test_mermaid_operator_attachment_without_key_or_provider_id_is_not_sent(
+    monkeypatch,
+):
+    from agents.social import whatsapp_client
+    from shared import tenant_guard
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(tenant_guard, "is_account_allowed", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        whatsapp_client, "_candidate_zernio_account_ids", lambda _publisher: ["mermaid-account"],
+    )
+    monkeypatch.setattr(whatsapp_client, "_zernio_account_cache", {})
+    posts = []
+    gets = []
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "post",
+        lambda *_a, **_k: posts.append(True) or _Resp(201),
+    )
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "get",
+        lambda *_a, **_k: gets.append(True),
+    )
+
+    assert whatsapp_client.send_whatsapp_message(
+        "a" * 24, "Your departure point",
+        attachment_url="https://example.test/mermaid-pier.jpg",
+    ) is False
+    assert posts == [True]
+    assert gets == []
+
+
+@pytest.mark.parametrize("new_message_id", ["", "current-action-message"])
+def test_mermaid_operator_attachment_action_cannot_reuse_old_identical_media(
+    monkeypatch, new_message_id,
+):
+    from agents.social import whatsapp_client
+    from shared import tenant_guard
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(tenant_guard, "is_account_allowed", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        whatsapp_client, "_candidate_zernio_account_ids", lambda _: ["mermaid-account"],
+    )
+    monkeypatch.setattr(whatsapp_client, "_zernio_account_cache", {})
+    attachment_url = "https://example.test/mermaid-pier.jpg"
+    old_message = {
+        "id": "old-action-message", "direction": "outgoing", "status": "delivered",
+        "message": "Your departure point", "attachmentUrl": attachment_url,
+        "createdAt": _incoming(hours_ago=2)["createdAt"],
+    }
+    posts = []
+
+    def get_history(*_args, **_kwargs):
+        if posts and new_message_id:
+            return _Resp(200, {"messages": [{
+                "id": new_message_id, "direction": "outgoing", "status": "delivered",
+            }]})
+        return _Resp(200, {"messages": [_incoming(), old_message]})
+
+    monkeypatch.setattr(zernio_dm_client.http_requests, "get", get_history)
+    monkeypatch.setattr(
+        zernio_dm_client.http_requests, "post",
+        lambda *_a, **_k: posts.append(True) or _Resp(201, {"id": new_message_id}),
+    )
+
+    assert whatsapp_client.send_whatsapp_message(
+        "a" * 24, "Your departure point", attachment_url=attachment_url,
+        confirm_delivery=True, idempotency_key="mermaid-operator-new-action",
+    ) is bool(new_message_id)
+    assert posts == [True]
 
 
 def test_idempotent_attachment_requires_terminal_provider_confirmation(monkeypatch):

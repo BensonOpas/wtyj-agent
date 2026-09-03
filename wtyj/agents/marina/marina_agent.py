@@ -11,6 +11,10 @@ from shared import config_loader
 from shared import agent_identity
 from shared import bm_logger
 from shared import tenant_hard_rules
+from shared.public_business_config import (
+    get_public_business_identity, public_business_config,
+    redact_config_credentials, render_public_business_context,
+)
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
 
@@ -388,8 +392,6 @@ LANGUAGE_CORRECTION_TOOL = {
 }
 
 
-# Keys to exclude from the client context (internal system config, not customer-facing)
-_INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature", "calendar_id"}
 # Top-level keys to skip (already injected elsewhere or handled separately)
 _SKIP_TOP_LEVEL = {
     "service_aliases",      # Already in system prompt via _build_service_alias_text()
@@ -412,53 +414,15 @@ _LANGUAGE_HINTS = {
 }
 
 
-def _strip_verify(obj):
-    """Recursively strip [VERIFY...] placeholder values from nested structures."""
-    if isinstance(obj, dict):
-        return {k: _strip_verify(v) for k, v in obj.items()
-                if not (isinstance(v, str) and v.startswith("[VERIFY"))}
-    if isinstance(obj, list):
-        return [_strip_verify(i) for i in obj
-                if not (isinstance(i, str) and i.startswith("[VERIFY"))]
-    return obj
-
-
 def _build_client_context() -> str:
-    """Auto-generate labeled sections from all customer-facing data in client.json.
-    Filters internal keys and [VERIFY] placeholders. New sections are automatically included."""
-    raw = config_loader.get_raw()
-    sections = []
-    for key, value in raw.items():
-        if key in _SKIP_TOP_LEVEL:
-            continue
-        # Clean internal keys from nested structures
-        if isinstance(value, dict):
-            clean = {}
-            for k, v in value.items():
-                if k in _INTERNAL_KEYS:
-                    continue
-                # Strip calendar_id from service departures
-                if isinstance(v, dict) and "slots" in v:
-                    v = dict(v)
-                    v["slots"] = [
-                        {dk: dv for dk, dv in dep.items() if dk not in _INTERNAL_KEYS}
-                        for dep in v.get("slots", [])
-                    ]
-                clean[k] = v
-            clean = _strip_verify(clean)
-            if clean:
-                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
-        elif isinstance(value, list):
-            clean = _strip_verify(value)
-            sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
-        elif isinstance(value, str) and key not in _INTERNAL_KEYS:
-            if not value.startswith("[VERIFY"):
-                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{value}")
-    return "\n\n".join(sections)
+    """Render reviewed public business facts, excluding credentials recursively."""
+    return render_public_business_context(
+        config_loader.get_raw(), exclude=_SKIP_TOP_LEVEL,
+    )
 
 
 def _build_service_alias_text() -> str:
-    aliases = config_loader.get_service_aliases()
+    aliases = public_business_config(config_loader.get_raw()).get("service_aliases", {})
     grouped: dict[str, list[str]] = {}
     for alias, service_key in aliases.items():
         grouped.setdefault(service_key, []).append(alias)
@@ -617,7 +581,7 @@ def _build_agent_persona_block(envelope: dict = None) -> str:
     Tenant isolation: envelope tenant_id is resolved locally in
     icp_overrides; no cross-tenant data can land in this prompt.
     """
-    persona = config_loader.get_raw().get("agent_persona", {}) or {}
+    persona = public_business_config(config_loader.get_raw()).get("agent_persona", {}) or {}
     if envelope is None:
         envelope = _icp_envelope_for_prompt()
     icp_ai = envelope.get("ai_agent_settings") or {}
@@ -1371,7 +1335,7 @@ Current published catalog, supplied digitally by Ali and containing no customer 
 def _build_system_prompt(thread_flags: dict, channel: str = "email",
                          customer_file=None) -> str:
     """Build the system prompt: persona, writing style, behavioral rules, JSON format."""
-    business = config_loader.get_business()
+    business = get_public_business_identity()
     csk = config_loader.get_common_sense_knowledge()
     signature = config_loader.get_agent_signature()
     terminology = config_loader.get_raw().get("terminology", {})
@@ -1899,7 +1863,7 @@ def _build_user_prompt(
         if messages:
             history_lines = []
             for m in messages:
-                role_label = "Customer" if m.get("role") == "user" else config_loader.get_business().get("agent_name", "CSA")
+                role_label = "Customer" if m.get("role") == "user" else get_public_business_identity().get("agent_name", "CSA")
                 history_lines.append(f"  {role_label}: {m.get('text', '')}")
             history_section = (
                 "CONVERSATION HISTORY (recent messages):\n"
@@ -2075,6 +2039,9 @@ def _correct_reply_language(
         ),
     }
     try:
+        prompt_config = config_loader.get_raw()
+        target_language = redact_config_credentials(target_language, prompt_config)
+        reply = redact_config_credentials(reply, prompt_config)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1536,
@@ -2155,6 +2122,7 @@ def process_message(
         party_label=_party_label,
     )
     fallback = {
+        "generation_failed": True,
         "intents": ["inquiry"],
         "fields": {},
         "confidence": "low",
@@ -2180,6 +2148,11 @@ def process_message(
             system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
+        # Other legacy prompt blocks inject individual config fields. Do not
+        # let a credential copied into those fields bypass the public context.
+        prompt_config = config_loader.get_raw()
+        system_prompt = redact_config_credentials(system_prompt, prompt_config)
+        user_prompt = redact_config_credentials(user_prompt, prompt_config)
 
         response = client.messages.create(
             model="claude-sonnet-4-6",

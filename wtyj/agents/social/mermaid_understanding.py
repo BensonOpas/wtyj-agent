@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from shared import config_loader, mermaid_catalog
+from shared.public_business_config import public_business_config
 
 
 MERMAID_TOOL = {
@@ -41,7 +42,7 @@ MERMAID_TOOL = {
 
 
 def system_prompt() -> str:
-    raw = config_loader.get_raw() or {}
+    raw = public_business_config(config_loader.get_raw() or {})
     persona = raw.get("agent_persona") or {}
     today = datetime.now(timezone(timedelta(hours=-4))).date().isoformat()
     return "\n\n".join([

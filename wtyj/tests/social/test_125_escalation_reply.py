@@ -9,10 +9,19 @@ os.environ.setdefault("META_ACCESS_TOKEN", "test")
 os.environ.setdefault("LATE_API_KEY", "test")
 
 from unittest.mock import patch, MagicMock
+import pytest
 from fastapi.testclient import TestClient
 from agents.social.webhook_server import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolated_reply_state(monkeypatch, tmp_path):
+    from shared import state_registry
+
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+
 
 def _login():
     r = client.post("/dashboard/api/login", json={"password": "testpass"})
@@ -85,7 +94,7 @@ def test_generate_mode(mock_anthropic_module):
 
 
 # --- Test 3: Escalation reply sends WhatsApp message ---
-@patch("dashboard.api.send_whatsapp_message")
+@patch("dashboard.api.send_whatsapp_message", return_value=True)
 @patch("dashboard.api.marina_agent")
 def test_escalation_reply_sends_whatsapp(mock_marina, mock_wa_send):
     from shared import state_registry

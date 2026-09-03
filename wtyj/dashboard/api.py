@@ -23,6 +23,7 @@ from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules, rental_catalog, mermaid_catalog
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
+from dashboard import operator_delivery
 from agents.social import (
     content_agent,
     social_publisher,
@@ -3320,6 +3321,38 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
 
 class WhatsAppConversationReplyRequest(BaseModel):
     message: str
+    request_id: str = Field(default="", max_length=128)
+
+
+def _deliver_operator_whatsapp(**kwargs) -> tuple[dict, bool]:
+    """Translate durable outbox outcomes without claiming an unconfirmed send."""
+    try:
+        return operator_delivery.deliver(sender=send_whatsapp_message, **kwargs)
+    except (operator_delivery.OperatorDeliveryBusy, operator_delivery.OperatorDeliveryConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WhatsAppWindowClosedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No se ha enviado ningún mensaje. Han pasado más de 24 horas "
+                "desde el último mensaje del contacto y WhatsApp no permite "
+                "enviar este texto libre."
+            ),
+        ) from exc
+    except (ZernioReplyError, operator_delivery.OperatorDeliveryUnconfirmed) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        bm_logger.log(
+            "dashboard_operator_delivery_failed",
+            conversation_id=str(kwargs.get("conversation_id") or "")[:60],
+            error=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo confirmar el envío por WhatsApp. Reintenta la misma solicitud.",
+        ) from exc
 
 
 @router.post("/messages/conversations/{conversation_id:path}/whatsapp/reply",
@@ -3342,81 +3375,30 @@ async def reply_to_whatsapp_conversation(
     if len(message) > 4096:
         raise HTTPException(status_code=400, detail="WhatsApp messages cannot exceed 4096 characters")
 
-    try:
-        sent_ok = send_whatsapp_message(
-            customer_id,
-            message,
-            confirm_delivery=True,
-        )
-    except WhatsAppWindowClosedError as exc:
-        # Never substitute a human reply with a template. The operator must
-        # choose an explicit template action in a future dedicated workflow.
-        bm_logger.log(
-            "dashboard_conversation_reply_not_sent_window_closed",
-            conversation_id=customer_id[:60],
-            channel="whatsapp",
-        )
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "No se ha enviado ningún mensaje. Han pasado más de 24 horas "
-                "desde el último mensaje del contacto y WhatsApp no permite "
-                "enviar este texto libre."
-            ),
-        ) from exc
-    except ZernioReplyError as exc:
-        bm_logger.log(
-            "dashboard_conversation_reply_send_failed",
-            conversation_id=customer_id[:60],
-            channel="whatsapp",
-            error=str(exc)[:200],
-        )
-        raise HTTPException(status_code=502, detail=str(exc))
-    except Exception as exc:
-        bm_logger.log(
-            "dashboard_conversation_reply_send_failed",
-            conversation_id=customer_id[:60],
-            channel="whatsapp",
-            error=str(exc)[:200],
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="No se pudo confirmar el envío por WhatsApp.",
-        )
-
-    if not sent_ok:
-        bm_logger.log(
-            "dashboard_conversation_reply_send_failed",
-            conversation_id=customer_id[:60],
-            channel="whatsapp",
-            error="provider returned false",
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="WhatsApp no confirmó el envío.",
-        )
-
-    state_registry.wa_store_message(customer_id, "operator", message)
-    bm_logger.log(
-        "dashboard_conversation_reply_sent",
-        conversation_id=customer_id[:60],
-        channel="whatsapp",
-        role="operator",
-        delivery_mode="free_text",
+    result, replayed = _deliver_operator_whatsapp(
+        conversation_id=customer_id,
+        scope="inbox:reply",
+        original={"message": message},
+        request_id=req.request_id,
+        prepare=lambda: {
+            "text": message,
+            "role": "operator",
+            "response": {
+                "ok": True, "reply": message, "channel": "whatsapp",
+                "role": "operator", "delivery_mode": "free_text",
+                "original_message_sent": True,
+            },
+        },
     )
-    return {
-        "ok": True,
-        "reply": message,
-        "channel": "whatsapp",
-        "role": "operator",
-        "delivery_mode": "free_text",
-        "original_message_sent": True,
-    }
+    bm_logger.log("dashboard_conversation_reply_confirmed",
+                  conversation_id=customer_id[:60], replayed=replayed)
+    return result
 
 
 class DirectWhatsAppConversationReplyRequest(BaseModel):
     conversation_id: str
     message: str
+    request_id: str = Field(default="", max_length=128)
 
 
 @router.post("/messages/whatsapp/reply",
@@ -3432,7 +3414,7 @@ async def reply_to_whatsapp_conversation_direct(
     """
     return await reply_to_whatsapp_conversation(
         req.conversation_id,
-        WhatsAppConversationReplyRequest(message=req.message),
+        WhatsAppConversationReplyRequest(message=req.message, request_id=req.request_id),
     )
 
 
@@ -7071,19 +7053,64 @@ class EscalationReplyRequest(BaseModel):
     guidance: str = ""
     mediaId: str | None = None
     media_id: str | None = None
+    request_id: str = Field(default="", max_length=128)
 
     @property
     def text(self) -> str:
-        return (self.guidance or self.message or self.answer or "").strip()
+        return self.guidance or self.message or self.answer or ""
 
     @property
     def selected_media_id(self) -> str:
         return str(self.mediaId or self.media_id or "").strip()
 
+
+def _prepare_whatsapp_operator_payload(
+    customer_id: str, escalation_id: int, req: EscalationReplyRequest,
+    *, hard: bool, guidance: bool = False,
+) -> dict:
+    """Resolve media and generate relay text once, before any provider attempt."""
+    attachment_url = _resolve_media_attachment_url(req.selected_media_id)
+    if hard:
+        reply = req.text
+    else:
+        wa_state = state_registry.wa_get_booking_state(customer_id)
+        agent_flags = dict(wa_state.get("flags", {}))
+        # Both soft reply routes carry operator guidance, including legacy
+        # escalations without a persisted relay flag. Never parse that guidance
+        # as a new customer booking request.
+        agent_flags["awaiting_relay"] = True
+        for name in ("relay_token", "reply_times"):
+            agent_flags.pop(name, None)
+        relay_result = marina_agent.process_message(
+            customer_id, "", req.text,
+            wa_state.get("fields", {}), agent_flags,
+            channel="whatsapp", messages=state_registry.wa_get_history(customer_id, limit=10),
+        )
+        if not isinstance(relay_result, dict) or relay_result.get("generation_failed"):
+            raise ValueError("Assistant generation failed; no operator reply was prepared")
+        reply = relay_result.get("reply", "")
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("Assistant returned an empty reply")
+    stored_reply = reply or "[Image sent]"
+    response = {"ok": True, "reply": stored_reply}
+    if hard:
+        response.update(channel="whatsapp", role="operator", mediaSent=bool(attachment_url))
+    elif guidance:
+        response.update(channel="whatsapp", mediaSent=bool(attachment_url))
+    return {
+        "text": reply, "role": "operator" if hard else "assistant",
+        "attachment_url": attachment_url,
+        "media_id": req.selected_media_id,
+        "notification_id": escalation_id,
+        "clear_relay": not hard,
+        "image_notice": guidance,
+        "response": response,
+    }
+
 @router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
 async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     """Reply to a semi escalation. Marina reformulates and sends to customer."""
-    if not req.text and not req.selected_media_id:
+    if not req.text.strip() and not req.selected_media_id:
         raise HTTPException(
             status_code=400,
             detail="Reply text or image required (field: 'message', 'answer', or 'mediaId')")
@@ -7100,89 +7127,29 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         # Brief 246: hard mode = operator IS the author. Send verbatim.
         # Soft/legacy mode = relay (Marina reformulates).
         # Mirrors the email branch at lines 2470-2511 (Brief 210).
-        if esc.get("mode") == "hard":
-            operator_reply = req.text
-            attachment_url = _resolve_media_attachment_url(req.selected_media_id)
-            if attachment_url:
-                sent_ok = send_whatsapp_message(
-                    customer_id,
-                    operator_reply,
-                    attachment_url=attachment_url,
-                    attachment_type="image",
-                )
-            else:
-                sent_ok = send_whatsapp_message(customer_id, operator_reply)
-            if not sent_ok:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to send WhatsApp reply or image (Zernio account missing or send failed)")
-            stored_text = operator_reply or "[Image sent]"
-            state_registry.wa_store_message(customer_id, "operator", stored_text)
-            bm_logger.log("dashboard_hard_reply_sent",
-                          phone=customer_id, escalation_id=escalation_id,
-                          mode="hard", channel="whatsapp",
-                          media_attached=bool(attachment_url))
-            state_registry.update_notification_status(escalation_id, "replied")
-
-            # Brief 215 + Brief 266: toggle-aware learning create.
-            _create_learning_from_operator_reply(
-                conversation_id=customer_id, channel="whatsapp",
-                answer=stored_text, source="reply_whatsapp_hard",
-                escalation_id=escalation_id)
-
-            return {"ok": True, "reply": stored_text,
-                    "channel": "whatsapp", "role": "operator",
-                    "mediaSent": bool(attachment_url)}
-
-        # Soft / legacy / no-mode path: existing relay behavior unchanged
-        if req.selected_media_id:
+        hard = esc.get("mode") == "hard"
+        if not hard and req.selected_media_id:
             raise HTTPException(
                 status_code=400,
                 detail="Image replies require human takeover mode")
-        wa_state = state_registry.wa_get_booking_state(customer_id)
-        wa_fields = wa_state.get("fields", {})
-        wa_flags = wa_state.get("flags", {})
-        wa_history = state_registry.wa_get_history(customer_id, limit=10)
-
-        agent_flags = dict(wa_flags)
-        # Brief 159: keep awaiting_relay so Marina enters RELAY MODE and
-        # reformulates the operator's answer instead of generating a fresh reply.
-        # Mirrors email_poller.py:661-663 which does the same.
-        for rk in ("relay_token", "reply_times"):
-            agent_flags.pop(rk, None)
-
-        relay_result = marina_agent.process_message(
-            customer_id, "", req.text,
-            wa_fields, agent_flags,
-            channel="whatsapp", messages=wa_history,
+        result, replayed = _deliver_operator_whatsapp(
+            conversation_id=customer_id,
+            scope=f"escalation:{escalation_id}:reply:{'hard' if hard else 'soft'}",
+            original={"text": req.text, "media_id": req.selected_media_id},
+            request_id=req.request_id,
+            prepare=lambda: _prepare_whatsapp_operator_payload(
+                customer_id, escalation_id, req, hard=hard,
+            ),
         )
-        relay_reply = relay_result.get("reply", "")
-
-        if not relay_reply:
-            raise HTTPException(status_code=500, detail="Marina returned empty reply")
-        sent_ok = send_whatsapp_message(customer_id, relay_reply)
-        if not sent_ok:
-            raise HTTPException(status_code=500, detail="Failed to send WhatsApp reply (Zernio account missing or send failed)")
-        state_registry.wa_store_message(customer_id, "assistant", relay_reply)
-        bm_logger.log("dashboard_relay_sent", phone=customer_id, escalation_id=escalation_id)
-
-        wa_flags.pop("awaiting_relay", None)
-        wa_flags.pop("relay_token", None)
-        wa_flags.pop("relay_question", None)
-        state_registry.wa_save_booking_state(
-            customer_id, wa_fields, wa_flags,
-            wa_state.get("completed_bookings", []))
-
-        state_registry.update_notification_status(escalation_id, "replied")
-
-        # Brief 215 + Brief 266: toggle-aware learning create. Never blocks
-        # the customer reply on a write failure (helper handles try/except).
-        _create_learning_from_operator_reply(
-            conversation_id=customer_id, channel="whatsapp",
-            answer=req.text, source="reply_whatsapp",
-            escalation_id=escalation_id)
-
-        return {"ok": True, "reply": relay_reply}
+        if not replayed:
+            _create_learning_from_operator_reply(
+                conversation_id=customer_id, channel="whatsapp",
+                answer=result["reply"] if hard else req.text,
+                source="reply_whatsapp_hard" if hard else "reply_whatsapp",
+                escalation_id=escalation_id)
+        bm_logger.log("dashboard_escalation_reply_confirmed", phone=customer_id,
+                      escalation_id=escalation_id, mode="hard" if hard else "soft", replayed=replayed)
+        return result
 
     elif channel == "email":
         if req.selected_media_id:
@@ -7243,7 +7210,7 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
     Marina reformulates into a customer-facing reply in her own voice and
     sends it. Mirrors the relay pattern in /reply WhatsApp + email_poller
     relay-receive at email_poller.py:588-612."""
-    if not req.text:
+    if not req.text.strip():
         raise HTTPException(status_code=400, detail="Guidance text required (field: 'message' or 'answer')")
 
     esc = next((e for e in state_registry.get_all_escalations()
@@ -7259,71 +7226,23 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
     customer_id = esc.get("customer_id", "")
 
     if channel == "whatsapp" and customer_id:
-        attachment_url = _resolve_media_attachment_url(req.selected_media_id)
-        wa_state = state_registry.wa_get_booking_state(customer_id)
-        wa_fields = wa_state.get("fields", {})
-        wa_flags = wa_state.get("flags", {})
-        wa_history = state_registry.wa_get_history(customer_id, limit=10)
-
-        # Mirror /reply's relay-mode flag setup: explicitly set awaiting_relay
-        # so Marina enters RELAY MODE; clear ephemeral token/timing keys so
-        # the prompt doesn't see stale relay metadata.
-        agent_flags = dict(wa_flags)
-        agent_flags["awaiting_relay"] = True
-        for rk in ("relay_token", "reply_times"):
-            agent_flags.pop(rk, None)
-
-        relay_result = marina_agent.process_message(
-            customer_id, "", req.text,
-            wa_fields, agent_flags,
-            channel="whatsapp", messages=wa_history,
+        result, replayed = _deliver_operator_whatsapp(
+            conversation_id=customer_id,
+            scope=f"escalation:{escalation_id}:guidance",
+            original={"text": req.text, "media_id": req.selected_media_id},
+            request_id=req.request_id,
+            prepare=lambda: _prepare_whatsapp_operator_payload(
+                customer_id, escalation_id, req, hard=False, guidance=True,
+            ),
         )
-        relay_reply = relay_result.get("reply", "")
-        if not relay_reply:
-            raise HTTPException(status_code=500, detail="Marina returned empty reply")
-
-        if attachment_url:
-            sent_ok = send_whatsapp_message(
-                customer_id,
-                relay_reply,
-                attachment_url=attachment_url,
-                attachment_type="image",
-            )
-        else:
-            sent_ok = send_whatsapp_message(customer_id, relay_reply)
-        if not sent_ok:
-            raise HTTPException(status_code=500,
-                detail="Failed to send WhatsApp reply or image (Zernio account missing or send failed)")
-
-        state_registry.wa_store_message(customer_id, "assistant", relay_reply)
-        if req.selected_media_id:
-            try:
-                state_registry.increment_photo_used_count(int(req.selected_media_id))
-            except (TypeError, ValueError):
-                pass
-            state_registry.wa_store_message(customer_id, "system", "Image sent")
-        bm_logger.log("dashboard_guidance_sent_whatsapp",
-                      phone=customer_id, escalation_id=escalation_id,
-                      media_attached=bool(attachment_url))
-
-        # Clear relay flags from persistent state (one guidance = one relay)
-        wa_flags.pop("awaiting_relay", None)
-        wa_flags.pop("relay_token", None)
-        wa_flags.pop("relay_question", None)
-        state_registry.wa_save_booking_state(
-            customer_id, wa_fields, wa_flags,
-            wa_state.get("completed_bookings", []))
-
-        state_registry.update_notification_status(escalation_id, "replied")
-
-        # Brief 215 + Brief 266: toggle-aware learning create.
-        _create_learning_from_operator_reply(
-            conversation_id=customer_id, channel="whatsapp",
-            answer=req.text, source="guidance_whatsapp",
-            escalation_id=escalation_id)
-
-        return {"ok": True, "reply": relay_reply, "channel": "whatsapp",
-                "mediaSent": bool(attachment_url)}
+        if not replayed:
+            _create_learning_from_operator_reply(
+                conversation_id=customer_id, channel="whatsapp",
+                answer=req.text, source="guidance_whatsapp",
+                escalation_id=escalation_id)
+        bm_logger.log("dashboard_guidance_confirmed", phone=customer_id,
+                      escalation_id=escalation_id, replayed=replayed)
+        return result
 
     elif channel == "email":
         if req.selected_media_id:

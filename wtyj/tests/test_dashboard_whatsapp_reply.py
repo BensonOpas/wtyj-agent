@@ -8,10 +8,17 @@ from fastapi import HTTPException
 from dashboard import api
 
 
+@pytest.fixture(autouse=True)
+def isolated_outbox(monkeypatch, tmp_path):
+    monkeypatch.setattr(api.state_registry, "DB_PATH", str(tmp_path / "state.db"))
+
+
 def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
     events = []
 
-    def fake_send(conversation_id, message, confirm_delivery=False):
+    def fake_send(conversation_id, message, confirm_delivery=False, idempotency_key=""):
+        assert idempotency_key.startswith("unboks-operator-")
+        assert api.state_registry.wa_get_full_history(conversation_id) == []
         events.append(("send", conversation_id, message, confirm_delivery))
         return True
 
@@ -30,8 +37,9 @@ def test_whatsapp_conversation_reply_sends_before_storing(monkeypatch):
 
     assert events == [
         ("send", "0123456789abcdef01234567", "  Hola, Lucia  ", True),
-        ("store", "0123456789abcdef01234567", "operator", "  Hola, Lucia  "),
     ]
+    history = api.state_registry.wa_get_full_history("0123456789abcdef01234567")
+    assert [(row["role"], row["text"]) for row in history] == [("operator", "  Hola, Lucia  ")]
     assert result == {
         "ok": True,
         "reply": "  Hola, Lucia  ",
@@ -93,7 +101,7 @@ def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
     monkeypatch.setattr(
         api,
         "send_whatsapp_message",
-        lambda conversation_id, message, confirm_delivery=False: events.append(
+        lambda conversation_id, message, confirm_delivery=False, idempotency_key="": events.append(
             ("send", conversation_id, message, confirm_delivery)
         ) or True,
     )
@@ -122,13 +130,9 @@ def test_stable_whatsapp_reply_delegates_to_provider_send(monkeypatch):
             "Hola desde recepción",
             True,
         ),
-        (
-            "store",
-            "0123456789abcdef01234567",
-            "operator",
-            "Hola desde recepción",
-        ),
     ]
+    history = api.state_registry.wa_get_full_history("0123456789abcdef01234567")
+    assert [(row["role"], row["text"]) for row in history] == [("operator", "Hola desde recepción")]
 
 def test_whatsapp_window_closed_is_not_reported_as_sent(monkeypatch):
     stored = []
@@ -225,4 +229,3 @@ def test_closed_window_never_substitutes_a_template(monkeypatch):
     assert "No se ha enviado ningún mensaje" in str(exc_info.value.detail)
     assert template_calls == []
     assert stored == []
-

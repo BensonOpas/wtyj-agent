@@ -26,6 +26,7 @@ def _cleanup(conversation_id):
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (conversation_id,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (conversation_id,))
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id LIKE 'test_187_%'")
+    conn.execute("DELETE FROM inbound_processing_events WHERE message_id LIKE 'test_187_%'")
     conn.commit()
     conn.close()
 
@@ -134,7 +135,11 @@ def test_process_zernio_event_calls_send_reply(mock_orch, mock_typing, mock_send
     original = raw.get("features", {}).get("booking_flow", True)
     raw.setdefault("features", {})["booking_flow"] = True
     try:
-        _process_zernio_event(payload)
+        with patch(
+            "shared.tenant_guard.is_account_allowed",
+            return_value=True,
+        ):
+            _process_zernio_event(payload)
 
         # send_reply called (not send_dm_reply directly)
         mock_send.assert_called_once()
