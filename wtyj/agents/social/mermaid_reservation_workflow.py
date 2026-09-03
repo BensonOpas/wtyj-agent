@@ -415,7 +415,7 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
         from_name=str(message.get("from_name") or ""),
     )
     if result.action == "summary_confirmed":
-        from agents.social import mermaid_reservation_store
+        from agents.social import mermaid_documents, mermaid_reservation_store
 
         state = state_registry.wa_get_booking_state(str(message.get("from") or ""))
         intake = (state.get("fields") or {}).get("mermaid_intake") or {}
@@ -427,12 +427,30 @@ def handle_demo_message(message: dict, include_media: bool = False) -> str | dic
                 if message.get("message_id") else "confirm:" + str(message.get("from") or "")
             ),
         )
+        document, job = mermaid_documents.create_quote(reservation)
+        reservation = mermaid_reservation_store.transition(
+            reservation["public_id"], "quote_ready",
+            idempotency_key=f"quote-ready:{reservation['public_id']}",
+            actor="system", reason="Localized demo quote rendered",
+            updates={"quote_public_id": document["public_id"]},
+        )
+        base_url = __import__("os").environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001")
+        secret = __import__("os").environ.get("MERMAID_DEMO_SIGNING_SECRET", "local-mermaid-demo-secret")
+        media = {
+            "url": mermaid_documents.build_signed_url(base_url, document["public_id"], secret),
+            "type": "file", "filename": document["filename"], "id": document["public_id"],
+        }
         result = IntakeResult(
-            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.",
+            result.text + "\n\nFor this demo, seats are available. No live inventory system was checked.\n\n" + mermaid_documents.quote_message(reservation),
             result.locale,
             result.phase,
             action=f"reservation:{reservation['public_id']}",
         )
+        if include_media:
+            reply = result.as_reply()
+            reply["media"] = media
+            reply["mermaid_delivery_commit"] = {"job_id": job["public_id"]}
+            return reply
     elif result.action == "cancel":
         from agents.social import mermaid_reservation_store
 

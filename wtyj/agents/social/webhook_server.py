@@ -176,6 +176,13 @@ async def download_ali_quote(public_id: str, expires: int, signature: str):
     from agents.social.ali_quote_download import quote_download_response
     return quote_download_response(public_id, expires, signature)
 
+
+@app.get("/api/public/mermaid-document/{public_id}")
+async def download_mermaid_document(public_id: str, expires: int, signature: str):
+    """Serve a private Mermaid quote or receipt through an expiring HMAC URL."""
+    from agents.social.mermaid_documents import document_response
+    return document_response(public_id, expires, signature)
+
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
 
@@ -2209,8 +2216,13 @@ def _process_zernio_event(
                 if isinstance(reply_result, dict):
                     reply_text = str(reply_result.get("text") or "")
                     reply_media = reply_result.get("media") if isinstance(reply_result.get("media"), dict) else None
+                    mermaid_delivery_commit = (
+                        reply_result.get("mermaid_delivery_commit")
+                        if isinstance(reply_result.get("mermaid_delivery_commit"), dict) else None
+                    )
                 else:
                     reply_text = reply_result
+                    mermaid_delivery_commit = None
             else:
                 # Q&A only — use DM agent
                 # DM agent reads dm_get_history which is separate, so store before is fine
@@ -2234,9 +2246,17 @@ def _process_zernio_event(
                     account_id,
                     reply_text,
                     attachment_url=attachment_url,
-                    attachment_type="image" if attachment_url else "image",
+                    attachment_type=str((reply_media or {}).get("type") or "image"),
+                    confirm_delivery=bool(mermaid_delivery_commit),
+                    idempotency_key=(
+                        f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"
+                        if mermaid_delivery_commit else ""
+                    ),
                 )
                 if not ok:
+                    if mermaid_delivery_commit:
+                        from agents.social.mermaid_documents import mark_delivery
+                        mark_delivery(mermaid_delivery_commit["job_id"], False, "provider returned false")
                     log("zernio_reply_send_failed",
                         channel=channel,
                         conversation_id=conversation_id[:20],
@@ -2245,6 +2265,9 @@ def _process_zernio_event(
                         channel, conversation_id, msg.get("sender_name", ""),
                         [message_id], "provider returned false")
                     return
+                if mermaid_delivery_commit:
+                    from agents.social.mermaid_documents import mark_delivery
+                    mark_delivery(mermaid_delivery_commit["job_id"], True)
                 # Store assistant reply
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,
@@ -2253,12 +2276,16 @@ def _process_zernio_event(
                     text=reply_text,
                 )
                 if attachment_url:
-                    state_registry.increment_photo_used_count(int(reply_media["id"]))
+                    if str((reply_media or {}).get("type") or "image") == "image":
+                        try:
+                            state_registry.increment_photo_used_count(int(reply_media["id"]))
+                        except (KeyError, TypeError, ValueError):
+                            pass
                     state_registry.dm_store_message(
                         conversation_id=conversation_id,
                         channel=channel,
                         role="system",
-                        text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                        text=f"Attachment sent: {reply_media.get('caption') or reply_media.get('filename')}",
                     )
                 state_registry.inbound_processing_update(
                     message_id, "replied", reason="provider_send_ok")
