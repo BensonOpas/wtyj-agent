@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, StrictBool, Field, field_validator
 from PIL import Image
 
-from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules, rental_catalog
+from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules, rental_catalog, mermaid_catalog
 from shared.dashboard_prompts import build_suggest_reply_system_prompt
 from agents.social import (
     content_agent,
@@ -5355,6 +5355,14 @@ async def list_mermaid_reservations_endpoint(response: Response, query: str = ""
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["X-Unboks-Tenant"] = "mermaid"
     return {"items": items, "demo": True, "remindersEnabled": False}
+
+
+@router.get("/mermaid-reservations/catalog", dependencies=[Depends(_check_auth)])
+async def get_mermaid_reservation_catalog_endpoint(response: Response):
+    _require_mermaid_reservation_dashboard()
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+    return {"catalog": mermaid_catalog.get_catalog(), "demo": True, "remindersEnabled": False}
 
 
 @router.get("/mermaid-reservations/{public_id}", dependencies=[Depends(_check_auth)])
