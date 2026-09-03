@@ -13,10 +13,22 @@ os.environ.setdefault("META_ACCESS_TOKEN", "test")
 os.environ.setdefault("LATE_API_KEY", "test")
 
 from unittest.mock import patch, MagicMock
+import pytest
 from fastapi.testclient import TestClient
 from agents.social.webhook_server import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolated_legacy_learning_settings(monkeypatch, tmp_path):
+    from shared import state_registry
+    from dashboard import api
+
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    # These are the legacy auto-approval contract tests, independent of a
+    # prior test or tenant's opt-in pending-learning setting.
+    state_registry.set_setting(api._AGENT_LEARNING_SETTING_CREATE_PENDING, "false")
 
 
 def _login():

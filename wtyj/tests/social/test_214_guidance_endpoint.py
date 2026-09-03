@@ -288,10 +288,10 @@ def test_guidance_unsupported_channel_returns_501():
     _cleanup(esc_id, customer_id)
 
 
-# --- Test 6: Marina failure returns 500, status NOT flipped
+# --- Test 6: Provider/generation failure returns 502, status NOT flipped
 @patch("dashboard.api.send_whatsapp_message")
 @patch("dashboard.api.marina_agent")
-def test_guidance_marina_failure_returns_500_and_status_unchanged(mock_marina, mock_wa_send):
+def test_guidance_marina_failure_returns_502_and_status_unchanged(mock_marina, mock_wa_send):
     from shared import state_registry
     customer_id = "214_marina_fail_phone"
     esc_id = _seed_escalation("whatsapp", customer_id, mode="soft")
@@ -304,8 +304,8 @@ def test_guidance_marina_failure_returns_500_and_status_unchanged(mock_marina, m
     token = _login()
     r = client.post(f"/dashboard/api/escalations/{esc_id}/guidance",
                      json={"message": "test"}, headers=_auth(token))
-    assert r.status_code == 500
-    assert "marina returned empty reply" in r.json()["detail"].lower()
+    assert r.status_code == 502
+    assert "confirmar" in r.json()["detail"].lower()
 
     # Whatsapp send was NOT called
     mock_wa_send.assert_not_called()

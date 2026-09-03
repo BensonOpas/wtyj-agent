@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from fastapi import Response
 
 from agents.social.channels.whatsapp_zernio import WhatsAppZernioChannel
@@ -63,6 +65,94 @@ def test_zernio_contact_resolver_reads_participant_metadata(monkeypatch):
 
     assert result[conversation_id]["phone"] == "+34612345678"
     assert result[conversation_id]["name"] == "Lucía Carrillo"
+
+
+@pytest.mark.parametrize("decisions", [[False], [True, False]])
+def test_zernio_contact_cache_reassignment_invalidates_private_metadata(
+    monkeypatch, decisions,
+):
+    conversation_id = "a" * 24
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_cache", {
+        conversation_id: {"account_id": "former-account", "phone": "+15551234567"},
+    })
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_attempted_at", {})
+    states = iter(decisions)
+    monkeypatch.setattr(
+        tenant_guard, "is_account_allowed", lambda *_a, **_k: next(states, False),
+    )
+    monkeypatch.setattr(whatsapp_client, "_candidate_zernio_account_ids", lambda _: [])
+
+    assert whatsapp_client.resolve_zernio_conversation_contacts([conversation_id]) == {}
+    assert conversation_id not in whatsapp_client._zernio_contact_cache
+
+
+@pytest.mark.parametrize("row_account_id", [None, "foreign-account", " mermaid-account "])
+def test_zernio_contact_rows_require_exact_account_identity(monkeypatch, row_account_id):
+    conversation_id = "a" * 24
+    payload = {"data": [{
+        "id": conversation_id, "participantId": "+15551234567",
+        **({"accountId": row_account_id} if row_account_id is not None else {}),
+    }]}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_cache", {})
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_attempted_at", {})
+    monkeypatch.setattr(
+        whatsapp_client, "_candidate_zernio_account_ids", lambda _: ["mermaid-account"],
+    )
+    monkeypatch.setattr(tenant_guard, "is_account_allowed", lambda *_a, **_k: True)
+    monkeypatch.setattr(whatsapp_client.urllib.request, "urlopen", lambda *_a, **_k: Response())
+
+    assert whatsapp_client.resolve_zernio_conversation_contacts([conversation_id]) == {}
+    assert whatsapp_client._zernio_contact_cache == {}
+
+
+def test_zernio_contact_pagination_rechecks_ownership_before_next_get(monkeypatch):
+    first, second = "a" * 24, "b" * 24
+    payload = {"data": [{
+        "id": first, "accountId": "mermaid-account", "participantId": "+15551234567",
+    }], "pagination": {"hasMore": True, "nextCursor": "next-page"}}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_cache", {})
+    monkeypatch.setattr(whatsapp_client, "_zernio_contact_attempted_at", {})
+    monkeypatch.setattr(
+        whatsapp_client, "_candidate_zernio_account_ids", lambda _: ["mermaid-account"],
+    )
+    # Candidate, page preflight, response, first row; then ownership is revoked.
+    decisions = iter([True, True, True, True])
+    monkeypatch.setattr(
+        tenant_guard, "is_account_allowed", lambda *_a, **_k: next(decisions, False),
+    )
+    gets = []
+    monkeypatch.setattr(
+        whatsapp_client.urllib.request, "urlopen",
+        lambda *_a, **_k: gets.append(True) or Response(),
+    )
+
+    assert whatsapp_client.resolve_zernio_conversation_contacts([first, second]) == {}
+    assert gets == [True]
+    assert whatsapp_client._zernio_contact_cache == {}
 
 
 def test_follow_up_hydration_persists_phone_and_name(monkeypatch):

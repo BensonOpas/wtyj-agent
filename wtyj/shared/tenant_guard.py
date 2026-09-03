@@ -76,13 +76,20 @@ def _get_allowlist_config() -> dict:
     }
 
 
-def is_account_allowed(account_id: str, direction: str) -> bool:
-    """Check whether the current tenant is permitted to handle this account_id.
+def account_access_state(account_id: str, direction: str) -> bool | None:
+    """Return the authoritative account decision, or ``None`` if unavailable.
+
+    Webhook endpoints need to distinguish a known foreign account (which should
+    be acknowledged and ignored) from a strict tenant whose mounted identity or
+    allowlist cannot currently be read (which must remain retryable).  Ordinary
+    callers should continue to use :func:`is_account_allowed` for a fail-closed
+    boolean decision.
 
     direction: "inbound" or "outbound" — used in the log entry only.
 
-    Returns True when the event/send should proceed, False when it should be
-    blocked. Modes:
+    Returns ``True`` when the event/send should proceed, ``False`` for a known
+    strict-mode mismatch, and ``None`` when strict configuration is invalid or
+    unavailable. Modes:
       - block absent: legacy behaviour unless the deployment requires strict
         enforcement
       - mode "permissive": logs WARN on unknown account_id but returns True
@@ -91,6 +98,8 @@ def is_account_allowed(account_id: str, direction: str) -> bool:
     cfg = _get_allowlist_config()
     if not cfg:
         return True
+    if cfg.get("_invalid") is True:
+        return None
     mode = cfg.get("mode", "strict")
     allowed = set(cfg.get("zernio_accounts", []))
     if account_id and account_id in allowed:
@@ -105,3 +114,8 @@ def is_account_allowed(account_id: str, direction: str) -> bool:
     if mode == "strict":
         return False
     return True
+
+
+def is_account_allowed(account_id: str, direction: str) -> bool:
+    """Return a fail-closed boolean account-ownership decision."""
+    return account_access_state(account_id, direction) is True

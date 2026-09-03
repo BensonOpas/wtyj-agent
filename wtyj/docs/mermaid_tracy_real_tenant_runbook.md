@@ -224,11 +224,13 @@ then verifies authenticated Mermaid, Ali, and Unboks profiles, rejects tokens
 used against a different tenant, and proves that an authenticated unknown slug
 still returns 404.
 
-## Live gluten-field drift and credential-preserving sync
+## Reviewed content and credential-preserving sync
 
 The pre-merge live verification found that Mermaid's generated `client.json`
 was missing the reviewed `faq.gluten_free` field and the corresponding bounded
-gluten-free wording in `agent_persona.freeform_notes`. The live file also
+gluten-free wording in `agent_persona.freeform_notes`. The hardening release also
+adds `agent_persona.unsupported_attachment_handoff` so attachments that cannot
+be interpreted safely become durable operator work. The live file also
 contains generated dashboard credentials, a WhatsApp connection token, and
 provider state that do not belong in Git and must not be replaced by the
 tracked template.
@@ -243,24 +245,62 @@ python3 /root/wtyj-agent-source/wtyj/scripts/sync_mermaid_config_fields.py \
   --backup-dir /root/backups/mermaid-content-sync
 ```
 
-It must report only `agent_persona.freeform_notes` and `faq.gluten_free` as
-changed, or `none` if another reviewed process already synchronized them. To
-apply the same two-field update, repeat the command with `--apply`. The tool:
+It must report only these reviewed paths as changed, or `none` if already
+synchronized:
+
+- `agent_persona.freeform_notes`
+- `agent_persona.unsupported_attachment_handoff`
+- `faq.gluten_free`
+
+Before applying, pause Mermaid traffic, stop only `wtyj-mermaid`, and prevent
+concurrent Nr3 configuration writes for this tenant. Verify the container is
+stopped. Repeat the command with `--apply --service-stopped`; the latter flag
+is an operator acknowledgement, not an automatic service-status check. The tool:
 
 - requires both documents to identify the `mermaid` tenant;
 - requires the live target to be a real mode-0600 file;
-- copies only those two reviewed content fields;
+- copies only those three reviewed content fields;
 - preserves every other live field, including credentials, connection tokens,
   account allowlists, Facebook state, and provider identifiers;
 - writes a mode-0600 backup under the mode-0700 backup directory; and
-- aborts if the target changes during the operation.
+- uses the canonical `client.json.lock` shared with cooperating writers;
+- verifies atomic exchange receipts and fails closed on a concurrent writer
+  or interrupted commit, preserving displaced files for protected recovery.
 
 The backup is credential-bearing. Keep it outside the repository and never
 attach it to an issue, PR, log, or demo record. Do not use `cp` to replace the
 live `client.json`, and do not export the live file for comparison. After an
-approved apply, recreate only `wtyj-mermaid`, then repeat the health, paused
+successful apply, recreate only `wtyj-mermaid`, then repeat the health, paused
 state, allowlist, dashboard profile, and isolation checks before enabling any
 channel.
+
+If apply reports an uncommitted target or preserved recovery file, leave the
+container stopped. The target may deliberately contain an invalid staging
+marker rather than stale credentials. A protected operator must reconcile the
+latest provider/configuration state with the preserved file and backup before
+restart; do not blindly overwrite it with the earlier snapshot or rerun apply.
+
+## Runtime recovery and operator retries
+
+Inbound events, attachment handoffs, and operator replies use durable local
+records. For operator outbox replies, a confirmed send commits transcript and
+operator effects atomically; an unconfirmed result remains retryable with the
+same prepared payload and provider idempotency key. Generic automated
+unconfirmed sends instead require an operator attention item; do not force
+reprocessing their inbound events. The dashboard must retain the same `request_id` for
+each logical operator action across retries and lost responses, and allocate a
+new ID only for a new action.
+
+Expired workers are fenced at provider boundaries. A crashed in-flight worker
+may take up to 22 minutes to become recoverable; do not promise instant recovery.
+Provider acceptance and local SQLite commit cannot be one transaction. Zernio
+retries reuse the idempotency key; ambiguous direct-Meta sends require operator
+attention rather than an unsafe automatic resend. Never clear the durable event
+or outbox ledger merely to force another attempt.
+
+This runtime foundation is separate from Reservations PR #334. Its committed
+SHA must be merged into that release, retested, and deployed with the matching
+dashboard revision before the production Reservations 404 can be called fixed.
 
 ## Rollback checkpoints
 

@@ -8,6 +8,8 @@ import os
 import re
 import time
 import urllib.parse
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
 import requests as http_requests
@@ -18,6 +20,27 @@ from shared import bm_logger, state_registry
 
 _VEHICLE_MEDIA_PATH = re.compile(r"^/api/v1/vehicle-media/[A-Za-z0-9._~:%-]+$")
 _MAX_VEHICLE_MEDIA_BYTES = 10 * 1024 * 1024
+_provider_mutation_guard = ContextVar("zernio_provider_mutation_guard", default=None)
+
+
+def set_provider_mutation_guard(check):
+    """Scope an automated worker's fresh controls/claim check to this context."""
+    return _provider_mutation_guard.set(check)
+
+
+def reset_provider_mutation_guard(token):
+    _provider_mutation_guard.reset(token)
+
+
+@contextmanager
+def provider_mutation_scope(check):
+    token = set_provider_mutation_guard(check)
+    try:
+        yield
+    finally:
+        reset_provider_mutation_guard(token)
+
+
 def _get_client():
     """Create a Late/Zernio API client. Returns None if no API key."""
     api_key = os.environ.get("LATE_API_KEY", "")
@@ -388,6 +411,113 @@ class WhatsAppWindowClosedError(ZernioReplyError):
     """WhatsApp free-text window is closed for this conversation."""
 
 
+def _provider_account_allowed(
+    account_id: str,
+    operation: str,
+    *,
+    boundary: str,
+) -> bool:
+    """Re-read tenant ownership at a Zernio provider boundary."""
+    raw_account_id = str(account_id or "")
+    if not raw_account_id.strip() or raw_account_id != raw_account_id.strip():
+        bm_logger.log(
+            "zernio_provider_account_missing",
+            operation=operation,
+            boundary=boundary,
+        )
+        return False
+    try:
+        from shared.tenant_guard import is_account_allowed
+
+        allowed = is_account_allowed(account_id, direction="outbound")
+    except Exception as exc:
+        bm_logger.log(
+            "zernio_provider_account_control_unavailable",
+            operation=operation,
+            boundary=boundary,
+            error=type(exc).__name__,
+        )
+        return False
+    if allowed is not True:
+        bm_logger.log(
+            "zernio_provider_account_not_allowlisted",
+            operation=operation,
+            boundary=boundary,
+            account_id=str(account_id or "")[:20],
+        )
+        return False
+    return True
+
+
+def _provider_mutation_account_allowed(account_id: str, operation: str) -> bool:
+    """Re-read tenant ownership at the final boundary of a Zernio mutation."""
+    guard = _provider_mutation_guard.get()
+    if guard is not None and guard() is not True:
+        bm_logger.log("zernio_automation_mutation_stopped", operation=operation)
+        return False
+    return _provider_account_allowed(
+        account_id,
+        operation,
+        boundary="mutation",
+    )
+
+
+def _provider_account_get(
+    url: str,
+    *,
+    account_id: str,
+    operation: str,
+    headers: dict,
+    params: dict | None = None,
+    timeout: int = 15,
+):
+    """Perform one account-scoped provider read while ownership is current.
+
+    Zernio API keys can see team-wide inbox data.  Check the mounted tenant
+    allowlist immediately before the request and again before exposing its
+    response to reconciliation logic.  ``None`` deliberately means that the
+    caller must fail closed without trusting any provider data.
+    """
+    request_params = dict(params or {})
+    normalized_account_id = str(account_id or "").strip()
+    requested_account_id = str(request_params.get("accountId") or "").strip()
+    if not normalized_account_id or requested_account_id != normalized_account_id:
+        bm_logger.log(
+            "zernio_provider_read_account_mismatch",
+            operation=operation,
+        )
+        return None
+    request_params["accountId"] = normalized_account_id
+    if not _provider_account_allowed(
+        account_id,
+        operation,
+        boundary="read_preflight",
+    ):
+        return None
+    response = http_requests.get(
+        url,
+        headers=headers,
+        params=request_params,
+        timeout=timeout,
+    )
+    if not _provider_account_allowed(
+        account_id,
+        operation,
+        boundary="read_response",
+    ):
+        return None
+    return response
+
+
+def _provider_history_still_owned(account_id: str, operation: str) -> bool:
+    """Fence success/reconciliation derived from an earlier provider read."""
+    return _provider_account_allowed(
+        account_id,
+        operation,
+        boundary="history_reconcile",
+    )
+
+
 def _response_json(response) -> dict:
     try:
         payload = response.json()
@@ -421,6 +551,8 @@ def _confirmed_text_reply(
     idempotency_key: str = "",
 ) -> bool:
     """Send free text only inside WhatsApp's active window and confirm status."""
+    if not _provider_mutation_account_allowed(account_id, "confirmed_text_preflight"):
+        return False
     base_url = (
         "https://zernio.com/api/v1/inbox/conversations/"
         f"{urllib.parse.quote(conversation_id)}"
@@ -432,12 +564,16 @@ def _confirmed_text_reply(
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
 
-    detail_response = http_requests.get(
+    detail_response = _provider_account_get(
         base_url,
+        account_id=account_id,
+        operation="confirmed_text_detail",
         headers=headers,
         params={"accountId": account_id},
         timeout=15,
     )
+    if detail_response is None:
+        return False
     if detail_response.status_code == 404:
         return False
     if not 200 <= detail_response.status_code < 300:
@@ -451,14 +587,28 @@ def _confirmed_text_reply(
 
     detail_payload = _response_json(detail_response)
     detail = detail_payload.get("data", detail_payload)
-    platform = str(detail.get("platform") or "").lower() if isinstance(detail, dict) else ""
+    platform = (
+        str(detail.get("platform") or "").strip().lower()
+        if isinstance(detail, dict) else ""
+    )
+    if platform != "whatsapp":
+        bm_logger.log(
+            "zernio_dm_confirmation_platform_unverified",
+            conversation_id=conversation_id[:20],
+            platform=platform[:40],
+        )
+        return False
 
-    messages_response = http_requests.get(
+    messages_response = _provider_account_get(
         f"{base_url}/messages",
+        account_id=account_id,
+        operation="confirmed_text_history",
         headers=headers,
         params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
         timeout=15,
     )
+    if messages_response is None:
+        return False
     if not 200 <= messages_response.status_code < 300:
         bm_logger.log(
             "zernio_dm_confirmation_history_failed",
@@ -466,6 +616,11 @@ def _confirmed_text_reply(
             status=messages_response.status_code,
             error=messages_response.text[:200],
         )
+        return False
+    if not _provider_history_still_owned(
+        account_id,
+        "confirmed_text_history",
+    ):
         return False
 
     existing_messages = _payload_messages(_response_json(messages_response))
@@ -490,6 +645,8 @@ def _confirmed_text_reply(
                 "primero o se debe usar una plantilla aprobada."
             )
 
+    if not _provider_mutation_account_allowed(account_id, "confirmed_text_reply"):
+        return False
     send_response = http_requests.post(
         f"{base_url}/messages",
         headers=headers,
@@ -514,42 +671,50 @@ def _confirmed_text_reply(
             "WhatsApp rechazó el mensaje. Inténtalo de nuevo o usa una plantilla aprobada."
         )
 
-    data = send_payload.get("data", send_payload)
-    message_id = ""
-    if isinstance(data, dict):
-        message_id = str(data.get("messageId") or data.get("id") or "")
+    message_id = _response_message_id(send_response)
+    if not message_id:
+        bm_logger.log(
+            "zernio_dm_delivery_unconfirmed",
+            conversation_id=conversation_id[:20],
+            outcome="missing_provider_message_id",
+        )
+        raise ZernioReplyError(
+            "Zernio aceptó el mensaje, pero no devolvió una referencia verificable. "
+            "No se mostrará como enviado."
+        )
     terminal_success = {"sent", "delivered", "read"}
     terminal_failure = {"failed", "rejected", "undeliverable"}
 
     for attempt in range(8):
         if attempt:
             time.sleep(0.5)
-        status_response = http_requests.get(
+        status_response = _provider_account_get(
             f"{base_url}/messages",
+            account_id=account_id,
+            operation="confirmed_text_delivery_status",
             headers=headers,
             params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
             timeout=15,
         )
+        if status_response is None:
+            break
         if not 200 <= status_response.status_code < 300:
             continue
         candidates = _payload_messages(_response_json(status_response))
         matched = next(
             (
                 item for item in candidates
-                if (
-                    message_id
-                    and str(item.get("id") or item.get("messageId") or "") == message_id
-                )
-                or (
-                    not message_id
-                    and str(item.get("direction") or "").lower() == "outgoing"
-                    and str(item.get("message") or item.get("text") or "") == text
-                )
+                if str(item.get("id") or item.get("messageId") or "") == message_id
             ),
             None,
         )
         if not matched:
             continue
+        if not _provider_history_still_owned(
+            account_id,
+            "confirmed_text_delivery_status",
+        ):
+            break
         status = str(
             matched.get("status") or matched.get("deliveryStatus") or ""
         ).lower()
@@ -598,12 +763,16 @@ def _recommendation_session_open(
     account_id: str,
     trigger_sent_at: str = "",
 ) -> tuple[bool, list[dict]]:
-    response = http_requests.get(
+    response = _provider_account_get(
         f"{base_url}/messages",
+        account_id=account_id,
+        operation="recommendation_session_history",
         headers=headers,
         params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
         timeout=15,
     )
+    if response is None:
+        return False, []
     if not 200 <= response.status_code < 300:
         bm_logger.log(
             "ali_vehicle_recommendation_window_check_failed",
@@ -624,6 +793,11 @@ def _recommendation_session_open(
     if trigger_time is not None:
         incoming_times.append(trigger_time)
     latest = max((item for item in incoming_times if item is not None), default=None)
+    if not _provider_history_still_owned(
+        account_id,
+        "recommendation_session_history",
+    ):
+        return False, []
     return (
         latest is not None
         and datetime.now(timezone.utc) - latest <= timedelta(hours=24),
@@ -655,8 +829,10 @@ def whatsapp_customer_service_window(
         f"{urllib.parse.quote(conversation_id)}/messages"
     )
     try:
-        response = http_requests.get(
+        response = _provider_account_get(
             base_url,
+            account_id=account_id,
+            operation="customer_service_window_history",
             headers=headers,
             params={"accountId": account_id, "limit": 100, "sortOrder": "desc"},
             timeout=15,
@@ -668,11 +844,11 @@ def whatsapp_customer_service_window(
             error=type(exc).__name__,
         )
         return {"open": False, "reason": "provider_unavailable"}
-    if not 200 <= response.status_code < 300:
+    if response is None or not 200 <= response.status_code < 300:
         bm_logger.log(
             "ali_lead_follow_up_window_check_failed",
             conversation_id=conversation_id[:20],
-            status=response.status_code,
+            status=getattr(response, "status_code", None),
         )
         return {"open": False, "reason": "provider_unavailable"}
     messages = _payload_messages(_response_json(response))
@@ -685,6 +861,11 @@ def whatsapp_customer_service_window(
     if trigger_time is not None:
         incoming_times.append(trigger_time)
     latest = max((item for item in incoming_times if item is not None), default=None)
+    if not _provider_history_still_owned(
+        account_id,
+        "customer_service_window_history",
+    ):
+        return {"open": False, "reason": "provider_unavailable"}
     if latest is None:
         return {"open": False, "reason": "missing_inbound"}
     expires_at = latest + timedelta(hours=24)
@@ -870,10 +1051,8 @@ def _post_recommendation_message(
         # tenant allowlist immediately before *every* provider attempt so an
         # account reassignment between generation, fallback, or retry cannot
         # send from another tenant's WhatsApp account.
-        from shared.tenant_guard import is_account_allowed
-
-        account_id = str((body or {}).get("accountId") or "").strip()
-        if not is_account_allowed(account_id, direction="outbound"):
+        account_id = str((body or {}).get("accountId") or "")
+        if not _provider_mutation_account_allowed(account_id, "structured_message"):
             bm_logger.log(
                 "zernio_structured_send_account_not_allowlisted",
                 account_id=account_id[:20],
@@ -890,7 +1069,12 @@ def _post_recommendation_message(
             continue
         last_status = response.status_code
         if 200 <= response.status_code < 300:
-            return "sent", response.status_code, _response_message_id(response)
+            provider_message_id = _response_message_id(response)
+            return (
+                "sent" if provider_message_id else "ambiguous",
+                response.status_code,
+                provider_message_id,
+            )
         if response.status_code not in {408, 409, 429} and response.status_code < 500:
             return "rejected", response.status_code, ""
     return "ambiguous", last_status, ""
@@ -904,6 +1088,8 @@ def _confirm_recommendation_status(
     require_delivered: bool = False,
 ) -> str:
     """Return sent, rejected, or ambiguous for an accepted provider message."""
+    if not str(provider_message_id or "").strip():
+        return "ambiguous"
     terminal_success = (
         {"delivered", "read"}
         if require_delivered else {"sent", "delivered", "read"}
@@ -914,14 +1100,18 @@ def _confirm_recommendation_status(
         if attempt:
             time.sleep(0.5)
         try:
-            response = http_requests.get(
+            response = _provider_account_get(
                 request_url,
+                account_id=account_id,
+                operation="recommendation_delivery_status",
                 headers=headers,
                 params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
                 timeout=15,
             )
         except http_requests.RequestException:
             continue
+        if response is None:
+            return "ambiguous"
         if not 200 <= response.status_code < 300:
             continue
         matched = next(
@@ -934,6 +1124,11 @@ def _confirm_recommendation_status(
         )
         if not matched:
             continue
+        if not _provider_history_still_owned(
+            account_id,
+            "recommendation_delivery_status",
+        ):
+            return "ambiguous"
         status = str(
             matched.get("status") or matched.get("deliveryStatus") or ""
         ).lower()
@@ -960,6 +1155,15 @@ def _send_recommendation_part(
     require_delivered: bool = False,
 ) -> tuple[str, int | None, bool, str]:
     """Send or reconcile one idempotent visible part of a discovery bundle."""
+    terminal_history_success = (
+        {"delivered", "read"}
+        if require_delivered else {"sent", "delivered", "read"}
+    )
+    if not _provider_history_still_owned(
+        account_id,
+        "recommendation_existing_history",
+    ):
+        return "ambiguous", None, False, ""
     if reconcile_after_trigger:
         reconciliation_messages = _messages_after_trigger(
             existing_messages, trigger_message_id, trigger_sent_at,
@@ -974,10 +1178,12 @@ def _send_recommendation_part(
         reconciliation_messages, visible_text,
     )
     if visible:
-        visible_id = str(visible.get("id") or visible.get("messageId") or "")
+        visible_id = str(visible.get("id") or visible.get("messageId") or "").strip()
         visible_status = str(
             visible.get("status") or visible.get("deliveryStatus") or ""
         ).lower()
+        if not visible_id:
+            return "ambiguous", None, True, ""
         if visible_status in {
             "failed", "rejected", "undeliverable",
         }:
@@ -992,6 +1198,13 @@ def _send_recommendation_part(
             )
             if confirmed != "sent":
                 return confirmed, None, True, visible_id
+        elif visible_status not in terminal_history_success:
+            return "ambiguous", None, True, visible_id
+        if not _provider_history_still_owned(
+            account_id,
+            "recommendation_existing_visible",
+        ):
+            return "ambiguous", None, False, ""
         return "sent", None, True, visible_id
     headers = dict(base_headers)
     headers["Idempotency-Key"] = idempotency_key
@@ -1000,6 +1213,8 @@ def _send_recommendation_part(
         headers,
         body,
     )
+    if outcome == "sent" and not provider_message_id:
+        outcome = "ambiguous"
     if outcome == "sent" and provider_message_id:
         outcome = _confirm_recommendation_status(
             request_url,
@@ -1010,11 +1225,13 @@ def _send_recommendation_part(
         )
     if outcome == "sent":
         return outcome, status, False, provider_message_id
-    if outcome == "rejected" and provider_message_id:
+    if outcome == "rejected":
         return outcome, status, False, provider_message_id
     try:
-        response = http_requests.get(
+        response = _provider_account_get(
             request_url,
+            account_id=account_id,
+            operation="recommendation_retry_history",
             headers=base_headers,
             params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
             timeout=15,
@@ -1033,12 +1250,14 @@ def _send_recommendation_part(
         if visible:
             visible_id = str(
                 visible.get("id") or visible.get("messageId") or ""
-            )
+            ).strip()
             visible_status = str(
                 visible.get("status")
                 or visible.get("deliveryStatus")
                 or ""
             ).lower()
+            if not visible_id:
+                return "ambiguous", status, True, ""
             if visible_status in {"failed", "rejected", "undeliverable"}:
                 return "rejected", status, True, visible_id
             if require_delivered and visible_status == "sent" and visible_id:
@@ -1051,6 +1270,13 @@ def _send_recommendation_part(
                 )
                 if confirmed != "sent":
                     return confirmed, status, True, visible_id
+            elif visible_status not in terminal_history_success:
+                return "ambiguous", status, True, visible_id
+            if not _provider_history_still_owned(
+                account_id,
+                "recommendation_retry_visible",
+            ):
+                return "ambiguous", status, False, ""
             return "sent", status, True, visible_id
     return outcome, status, False, ""
 
@@ -1239,6 +1465,11 @@ def send_dm_post_quote_actions(
             actions_hash=state_hash[:12],
         )
         return {"success": False, "delivery": "window_closed"}
+    if not _provider_history_still_owned(
+        account_id,
+        "post_quote_existing_history",
+    ):
+        return {"success": False, "delivery": "ambiguous"}
 
     current_messages = _messages_after_latest_incoming(existing_messages)
     visible = _recommendation_visible_message(current_messages, text)
@@ -1250,6 +1481,11 @@ def send_dm_post_quote_actions(
             visible.get("id") or visible.get("messageId") or ""
         ).strip()
         if visible_id and visible_status in {"sent", "delivered", "read"}:
+            if not _provider_history_still_owned(
+                account_id,
+                "post_quote_existing_visible",
+            ):
+                return {"success": False, "delivery": "ambiguous"}
             bm_logger.log(
                 "ali_post_quote_actions_reconciled",
                 actions_hash=state_hash[:12],
@@ -1293,8 +1529,10 @@ def send_dm_post_quote_actions(
     # is not proof of WhatsApp delivery. Reconcile once by the visible body and
     # still require a terminal provider status before reporting success.
     try:
-        reconcile_response = http_requests.get(
+        reconcile_response = _provider_account_get(
             request_url,
+            account_id=account_id,
+            operation="post_quote_reconcile_history",
             headers=base_headers,
             params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
             timeout=15,
@@ -1317,6 +1555,11 @@ def send_dm_post_quote_actions(
                 visible.get("id") or visible.get("messageId") or ""
             ).strip()
             if visible_id and visible_status in {"sent", "delivered", "read"}:
+                if not _provider_history_still_owned(
+                    account_id,
+                    "post_quote_reconcile_visible",
+                ):
+                    return {"success": False, "delivery": "ambiguous"}
                 bm_logger.log(
                     "ali_post_quote_actions_reconciled",
                     actions_hash=state_hash[:12],
@@ -1738,6 +1981,13 @@ def send_dm_vehicle_recommendation(
             fallback_headers,
             {"accountId": account_id, "message": fallback_text},
         )
+        if fallback_outcome == "sent" and fallback_provider_id:
+            fallback_outcome = _confirm_recommendation_status(
+                request_url,
+                base_headers,
+                account_id,
+                fallback_provider_id,
+            )
         if fallback_outcome == "sent":
             bm_logger.log(
                 "ali_vehicle_recommendation_fallback_sent",
@@ -1751,6 +2001,15 @@ def send_dm_vehicle_recommendation(
                 fallback_provider_id,
                 provider_parts={"picker_fallback": [fallback_provider_id]},
             )
+        if fallback_outcome == "ambiguous":
+            bm_logger.log(
+                "ali_vehicle_recommendation_fallback_ambiguous",
+                mode=kind,
+                primary_status=status,
+                fallback_status=fallback_status,
+                recommendation_hash=state_hash[:12],
+            )
+            return {"success": False, "delivery": "ambiguous"}
         bm_logger.log(
             "ali_vehicle_recommendation_failed",
             mode=kind,
@@ -1893,6 +2152,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
             attachment_url=attachment_url,
             attachment_type=attachment_type,
             idempotency_key=idempotency_key,
+            reconcile_existing=not (confirm_delivery or idempotency_key),
         )
 
     api_key = os.environ.get("LATE_API_KEY", "")
@@ -1900,7 +2160,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
         bm_logger.log("zernio_dm_no_api_key")
         return False
 
-    if confirm_delivery:
+    if confirm_delivery or idempotency_key:
         return _confirmed_text_reply(
             conversation_id=conversation_id,
             account_id=account_id,
@@ -1913,6 +2173,8 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
     if not client:
         return False
     try:
+        if not _provider_mutation_account_allowed(account_id, "sdk_text_reply"):
+            return False
         client.inbox.send_inbox_message(
             conversation_id=conversation_id,
             account_id=account_id,
@@ -1935,17 +2197,28 @@ def send_dm_template(
     api_key = os.environ.get("LATE_API_KEY", "")
     if not api_key:
         raise ZernioReplyError("No está configurada la conexión con WhatsApp.")
+    if not _provider_mutation_account_allowed(account_id, "whatsapp_template_preflight"):
+        return False
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    templates_response = http_requests.get(
+    templates_response = _provider_account_get(
         "https://zernio.com/api/v1/whatsapp/templates",
+        account_id=account_id,
+        operation="whatsapp_template_catalog",
         headers=headers,
         params={"accountId": account_id},
         timeout=15,
     )
+    if templates_response is None:
+        return False
+    if not _provider_history_still_owned(
+        account_id,
+        "whatsapp_template_catalog",
+    ):
+        return False
     templates_payload = _response_json(templates_response)
     templates = templates_payload.get("templates", [])
     selected = next(
@@ -1977,6 +2250,8 @@ def send_dm_template(
         "https://zernio.com/api/v1/inbox/conversations/"
         f"{urllib.parse.quote(conversation_id)}/messages"
     )
+    if not _provider_mutation_account_allowed(account_id, "whatsapp_template"):
+        return False
     send_response = http_requests.post(
         base_url,
         headers=headers,
@@ -2009,20 +2284,25 @@ def send_dm_template(
             "WhatsApp rechazó la plantilla de seguimiento. No se ha enviado."
         )
 
-    data = payload.get("data", payload)
-    message_id = ""
-    if isinstance(data, dict):
-        message_id = str(data.get("messageId") or data.get("id") or "")
+    message_id = _response_message_id(send_response)
+    if not message_id:
+        raise ZernioReplyError(
+            "WhatsApp no devolvió una referencia verificable de la plantilla."
+        )
 
     for attempt in range(8):
         if attempt:
             time.sleep(0.5)
-        status_response = http_requests.get(
+        status_response = _provider_account_get(
             base_url,
+            account_id=account_id,
+            operation="whatsapp_template_delivery_status",
             headers=headers,
             params={"accountId": account_id, "limit": 20, "sortOrder": "desc"},
             timeout=15,
         )
+        if status_response is None:
+            break
         if not 200 <= status_response.status_code < 300:
             continue
         messages = _payload_messages(_response_json(status_response))
@@ -2036,6 +2316,11 @@ def send_dm_template(
         )
         if not matched:
             continue
+        if not _provider_history_still_owned(
+            account_id,
+            "whatsapp_template_delivery_status",
+        ):
+            break
         status = str(
             matched.get("status") or matched.get("deliveryStatus") or ""
         ).lower()
@@ -2065,11 +2350,15 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                                   attachment_url: str,
                                   attachment_type: str = "image",
                                   attachment_name: str = "",
-                                  idempotency_key: str = "") -> bool:
+                                  idempotency_key: str = "",
+                                  reconcile_existing: bool = True) -> bool:
     """Send a Zernio inbox message with a public attachment URL.
 
     The current Python SDK wrapper only exposes text parameters for
     send_inbox_message, so attachment sends use Zernio's documented REST shape.
+    Resource-specific callers (for example a unique quote PDF URL) may reconcile
+    an existing identical attachment. Operator actions disable that shortcut:
+    a new action must prove its own provider message, even if content repeats.
     """
     api_key = os.environ.get("LATE_API_KEY", "")
     if not api_key:
@@ -2115,8 +2404,30 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                 )
                 return False
 
-            def matching_attachment(messages: list[dict]) -> dict | None:
+            existing_ids = {
+                str(item.get("id") or item.get("messageId") or "").strip()
+                for item in existing_messages
+            }
+            send_started_at = datetime.now(timezone.utc)
+
+            def matching_attachment(
+                messages: list[dict], *, after_send: bool = False,
+            ) -> dict | None:
+                if not reconcile_existing and not after_send:
+                    return None
                 for item in messages:
+                    if not reconcile_existing:
+                        provider_id = str(
+                            item.get("id") or item.get("messageId") or ""
+                        ).strip()
+                        created_at = _parse_provider_time(
+                            item.get("createdAt") or item.get("created_at")
+                        )
+                        if (
+                            not provider_id or provider_id in existing_ids
+                            or created_at is None or created_at < send_started_at
+                        ):
+                            continue
                     if (
                         str(item.get("direction") or "").lower() != "outgoing"
                         or _recommendation_message_text(item) != body["message"]
@@ -2144,6 +2455,11 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
             def confirmed_attachment(item: dict | None) -> str:
                 if not item:
                     return "missing"
+                if not _provider_history_still_owned(
+                    account_id,
+                    "attachment_history_reconcile",
+                ):
+                    return "ambiguous"
                 provider_id = str(
                     item.get("id") or item.get("messageId") or ""
                 ).strip()
@@ -2166,6 +2482,11 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                     )
                 return "ambiguous"
 
+            if not _provider_history_still_owned(
+                account_id,
+                "attachment_existing_history",
+            ):
+                return False
             existing = matching_attachment(existing_messages)
             if existing:
                 existing_outcome = confirmed_attachment(existing)
@@ -2231,8 +2552,10 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                 return False
 
             try:
-                reconcile_response = http_requests.get(
+                reconcile_response = _provider_account_get(
                     url,
+                    account_id=account_id,
+                    operation="attachment_reconcile_history",
                     headers=headers,
                     params={
                         "accountId": account_id,
@@ -2249,7 +2572,8 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
                 and 200 <= reconcile_response.status_code < 300
             ):
                 reconciled = matching_attachment(
-                    _payload_messages(_response_json(reconcile_response))
+                    _payload_messages(_response_json(reconcile_response)),
+                    after_send=True,
                 )
             reconcile_outcome = confirmed_attachment(reconciled)
             if reconcile_outcome == "sent":
@@ -2268,22 +2592,57 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
             )
             return False
 
+        # Legacy/no-key attachment sends bypass the idempotent structured
+        # transport above. Keep the same final tenant boundary immediately at
+        # their sole provider POST so a stored quote/account route cannot send
+        # after that Zernio account has been reassigned.
+        if not _provider_mutation_account_allowed(account_id, "legacy_attachment"):
+            bm_logger.log("zernio_attachment_send_account_not_allowlisted")
+            return False
         resp = http_requests.post(
             url,
             headers=headers,
             json=body,
             timeout=15,
         )
-        if 200 <= resp.status_code < 300:
-            bm_logger.log("zernio_dm_attachment_sent",
+        if not 200 <= resp.status_code < 300:
+            bm_logger.log("zernio_dm_attachment_send_failed",
                           conversation_id=conversation_id[:20],
-                          attachment_type=attachment_type)
-            return True
-        bm_logger.log("zernio_dm_attachment_send_failed",
-                      conversation_id=conversation_id[:20],
-                      status=resp.status_code,
-                      error=resp.text[:200])
-        return False
+                          status=resp.status_code,
+                          error=resp.text[:200])
+            return False
+        provider_id = _response_message_id(resp)
+        if not provider_id:
+            bm_logger.log(
+                "zernio_dm_attachment_delivery_unconfirmed",
+                conversation_id=conversation_id[:20],
+                attachment_type=attachment_type,
+                outcome="missing_provider_message_id",
+                status=resp.status_code,
+            )
+            return False
+        outcome = _confirm_recommendation_status(
+            url,
+            headers,
+            account_id,
+            provider_id,
+            require_delivered=attachment_type == "file",
+        )
+        if outcome != "sent":
+            bm_logger.log(
+                "zernio_dm_attachment_delivery_unconfirmed",
+                conversation_id=conversation_id[:20],
+                attachment_type=attachment_type,
+                outcome=outcome,
+                status=resp.status_code,
+            )
+            return False
+        bm_logger.log(
+            "zernio_dm_attachment_delivery_confirmed",
+            conversation_id=conversation_id[:20],
+            attachment_type=attachment_type,
+        )
+        return True
     except Exception as e:
         bm_logger.log("zernio_dm_attachment_send_failed",
                       conversation_id=conversation_id[:20],
@@ -2297,6 +2656,8 @@ def send_typing_indicator(conversation_id: str, account_id: str):
     if not client:
         return
     try:
+        if not _provider_mutation_account_allowed(account_id, "typing_indicator"):
+            return
         client.messages.send_typing_indicator(
             conversation_id=conversation_id,
             account_id=account_id,

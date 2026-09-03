@@ -136,12 +136,14 @@ def _load() -> dict:
                     signature_before = signature_after
                     continue
                 # Two consecutive moving inodes are a detected transient;
-                # retain the last complete document and retry next access.
-                return _cache
+                # strict tenant ownership must fail closed instead of
+                # authorizing a stale warm allowlist. Legacy deployments keep
+                # their historical last-good compatibility behavior.
+                return _failed_config_read()
             _cache = loaded
             _cache_signature = signature_after
             return _cache
-        return _cache
+        return _failed_config_read()
 
 
 def _first_text(*values) -> str:

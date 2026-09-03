@@ -1704,14 +1704,18 @@ def test_live_browse_turn_reaches_ordered_carousel_and_picker_transport(
             "createdAt": (
                 datetime.now(timezone.utc) - timedelta(minutes=1)
             ).isoformat(),
-        }]}),
+        }, *[{
+            "id": f"provider-part-{index + 1}",
+            "direction": "outgoing",
+            "status": "delivered",
+        } for index in range(len(posts))]]}),
     )
     monkeypatch.setattr(
         zernio_dm_client.http_requests,
         "post",
         lambda _url, headers, json, timeout: (
             posts.append({"headers": headers, "json": json})
-            or Response(201)
+            or Response(201, {"data": {"id": f"provider-part-{len(posts)}"}})
         ),
     )
 
@@ -1724,7 +1728,12 @@ def test_live_browse_turn_reaches_ordered_carousel_and_picker_transport(
     assert response["ali_turn_commit"]["outbound_kind"] == (
         "vehicle_recommendation"
     )
-    assert delivery == {"success": True, "delivery": "carousel_picker"}
+    assert delivery == {
+        "success": True,
+        "delivery": "carousel_picker",
+        "provider_message_ids": ["provider-part-1", "provider-part-2"],
+        "provider_parts": {"carousel": ["provider-part-1"], "picker": ["provider-part-2"]},
+    }
     assert [post["json"]["interactive"]["type"] for post in posts] == [
         "carousel", "list",
     ]

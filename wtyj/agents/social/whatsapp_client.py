@@ -157,12 +157,46 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
     if not wanted:
         return {}
 
+    from agents.social import social_publisher
+    from shared.tenant_guard import is_account_allowed
+
+    def account_allowed(account_id: str) -> bool:
+        raw_account_id = str(account_id or "")
+        account_id = raw_account_id.strip()
+        if not account_id or raw_account_id != account_id:
+            return False
+        try:
+            return is_account_allowed(account_id, direction="outbound") is True
+        except Exception as exc:
+            log(
+                "zernio_contact_resolution_account_control_unavailable",
+                error=type(exc).__name__,
+            )
+            return False
+
+    def current_contacts(contacts: dict[str, dict]) -> dict[str, dict]:
+        current = {}
+        for conversation_id, contact in contacts.items():
+            if account_allowed(contact.get("account_id")):
+                current[conversation_id] = contact
+            else:
+                _zernio_contact_cache.pop(conversation_id, None)
+                _zernio_contact_attempted_at.pop(conversation_id, None)
+        return current
+
     now = time.monotonic()
-    resolved = {
-        conversation_id: _zernio_contact_cache[conversation_id]
-        for conversation_id in wanted
-        if conversation_id in _zernio_contact_cache
-    }
+    resolved = {}
+    for conversation_id in wanted:
+        cached = _zernio_contact_cache.get(conversation_id)
+        cached_account_id = (
+            str(cached.get("account_id") or "")
+            if isinstance(cached, dict) else ""
+        )
+        if cached and account_allowed(cached_account_id):
+            resolved[conversation_id] = cached
+        elif cached is not None:
+            _zernio_contact_cache.pop(conversation_id, None)
+            _zernio_contact_attempted_at.pop(conversation_id, None)
     unresolved = {
         conversation_id for conversation_id in wanted
         if conversation_id not in resolved
@@ -172,20 +206,20 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
         )
     }
     if not unresolved:
-        return resolved
+        return current_contacts(resolved)
 
     api_key = os.environ.get("LATE_API_KEY", "")
     if not api_key:
-        return resolved
+        return current_contacts(resolved)
 
-    from agents.social import social_publisher
-    from shared.tenant_guard import is_account_allowed
-
-    for account_id in _candidate_zernio_account_ids(social_publisher):
-        if not unresolved or not is_account_allowed(account_id, direction="outbound"):
+    for candidate_account_id in _candidate_zernio_account_ids(social_publisher):
+        account_id = str(candidate_account_id or "")
+        if not unresolved or not account_allowed(account_id):
             continue
         cursor = ""
         for _page in range(5):
+            if not account_allowed(account_id):
+                break
             params = {"accountId": account_id, "limit": "100", "sortOrder": "desc"}
             if cursor:
                 params["cursor"] = cursor
@@ -208,6 +242,8 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
                     error=str(exc)[:200],
                 )
                 break
+            if not account_allowed(account_id):
+                break
 
             rows = payload.get("data", []) if isinstance(payload, dict) else []
             for row in rows if isinstance(rows, list) else []:
@@ -216,8 +252,8 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
                 conversation_id = str(row.get("id") or "").strip()
                 if conversation_id not in unresolved:
                     continue
-                row_account_id = str(row.get("accountId") or "").strip()
-                if row_account_id and row_account_id != account_id:
+                row_account_id = str(row.get("accountId") or "")
+                if row_account_id != account_id or not account_allowed(account_id):
                     continue
                 contact = {
                     "phone": str(row.get("participantId") or "").strip(),
@@ -235,13 +271,14 @@ def resolve_zernio_conversation_contacts(conversation_ids: list[str]) -> dict[st
 
     for conversation_id in unresolved:
         _zernio_contact_attempted_at[conversation_id] = now
-    return resolved
+    return current_contacts(resolved)
 
 
 def send_whatsapp_message(customer_id: str, text: str,
                           attachment_url: str = "",
                           attachment_type: str = "image",
-                          confirm_delivery: bool = False) -> bool:
+                          confirm_delivery: bool = False,
+                          idempotency_key: str = "") -> bool:
     """Send a DM via Zernio Inbox API if customer_id is a Zernio conversation_id,
     otherwise fall back to the legacy Meta WhatsApp Cloud API. Returns True on success.
 
@@ -252,6 +289,12 @@ def send_whatsapp_message(customer_id: str, text: str,
     the winning account so repeat sends bypass the fan-out on the fast path.
     """
     if not _is_zernio_conversation_id(customer_id):
+        if confirm_delivery or idempotency_key:
+            # The legacy Meta helper only observes HTTP acceptance and has no
+            # idempotent/confirmed-delivery contract. Do not silently downgrade
+            # a durable operator action to an unverified send.
+            log("whatsapp_confirmed_legacy_meta_unsupported", to=customer_id[:20])
+            return False
         if attachment_url:
             log("whatsapp_attachment_legacy_meta_unsupported",
                 to=customer_id[:20],
@@ -266,14 +309,16 @@ def send_whatsapp_message(customer_id: str, text: str,
 
     # Fast path: cache hit
     cached = _zernio_account_cache.get(customer_id)
+    attempted_accounts = set()
     if cached:
         if not is_account_allowed(cached, direction="outbound"):
             _zernio_account_cache.pop(customer_id, None)
-        elif _send_zernio_candidate(send_dm_reply, customer_id, cached, text,
-                                    attachment_url, attachment_type,
-                                    confirm_delivery):
-            return True
         else:
+            attempted_accounts.add(cached)
+            if _send_zernio_candidate(send_dm_reply, customer_id, cached, text,
+                                      attachment_url, attachment_type,
+                                      confirm_delivery, idempotency_key):
+                return True
             # Cache miss (account may have been reconnected with a new id) — fall through
             _zernio_account_cache.pop(customer_id, None)
 
@@ -281,11 +326,14 @@ def send_whatsapp_message(customer_id: str, text: str,
     # strict tenants where Late's generic active account lookup may return a
     # different account than the one that received the inbound conversation.
     for account_id in _candidate_zernio_account_ids(social_publisher):
+        if account_id in attempted_accounts:
+            continue
         if not is_account_allowed(account_id, direction="outbound"):
             continue
+        attempted_accounts.add(account_id)
         if _send_zernio_candidate(send_dm_reply, customer_id, account_id, text,
                                   attachment_url, attachment_type,
-                                  confirm_delivery):
+                                  confirm_delivery, idempotency_key):
             _zernio_account_cache[customer_id] = account_id
             log("zernio_send_platform_resolved",
                 conversation_id=customer_id[:20],
@@ -334,16 +382,27 @@ def send_whatsapp_template_message(
 def _send_zernio_candidate(send_dm_reply, customer_id: str, account_id: str,
                            text: str, attachment_url: str,
                            attachment_type: str,
-                           confirm_delivery: bool = False) -> bool:
+                           confirm_delivery: bool = False,
+                           idempotency_key: str = "") -> bool:
     if attachment_url:
+        kwargs = {
+            "attachment_url": attachment_url,
+            "attachment_type": attachment_type,
+        }
+        if confirm_delivery or idempotency_key:
+            kwargs["confirm_delivery"] = True
+        if idempotency_key:
+            kwargs["idempotency_key"] = idempotency_key
         return send_dm_reply(customer_id, account_id, text,
-                             attachment_url=attachment_url,
-                             attachment_type=attachment_type)
-    if confirm_delivery:
+                             **kwargs)
+    if confirm_delivery or idempotency_key:
+        kwargs = {"confirm_delivery": True}
+        if idempotency_key:
+            kwargs["idempotency_key"] = idempotency_key
         return send_dm_reply(
             customer_id,
             account_id,
             text,
-            confirm_delivery=True,
+            **kwargs,
         )
     return send_dm_reply(customer_id, account_id, text)

@@ -66,11 +66,14 @@ def test_non_ignored_phone_proceeds(mock_typing, mock_parse, mock_config, mock_s
     # this otherwise-allowed message. Mock state defaults to MagicMock,
     # which is truthy — this stub is required for the regression guard.
     mock_state.get_blocked.return_value = False
+    mock_state.get_ai_muted.return_value = False
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
-    _process_zernio_event({"event": "message.received", "data": {}})
+    with patch("agents.social.webhook_server._buffer_message") as buffer:
+        _process_zernio_event({"event": "message.received", "data": {}})
 
     mock_typing.assert_called_once()
+    buffer.assert_called_once()
 
 
 def test_normalize_phone_digits_strips_unicode_and_extension():
