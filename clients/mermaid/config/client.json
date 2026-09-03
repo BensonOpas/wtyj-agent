@@ -29,6 +29,7 @@
       "Dutch",
       "German",
       "Spanish",
+      "Papiamentu",
       "Portuguese"
     ],
     "operating_days": "Monday, Tuesday, Wednesday, Friday, Saturday, and Sunday",
@@ -37,7 +38,7 @@
     "agent_internal_id": "tracy-mermaid",
     "spreadsheet_id": "",
     "support_email": "info@mermaidboattrips.com",
-    "operating_mode": "answer_and_external_booking",
+    "operating_mode": "whatsapp_reservation_demo",
     "slug": "mermaid",
     "dashboard_url": "https://dashboard.unboks.org"
   },
@@ -89,10 +90,20 @@
   "payment": {
     "timing": "external_reservation_checkout",
     "methods": [],
-    "policy": "TRACY does not take or verify payment in chat. The official reservation checkout controls payable totals and available payment methods."
+    "policy": "The demo sends a signed payment-only simulation link. It accepts no card or bank data and moves no money."
+  },
+  "workflow": {
+    "type": "mermaid_reservation_demo",
+    "catalog_version": "mermaid-demo-v1-2026-09-03",
+    "availability_source": "demo_assumed"
   },
   "features": {
     "booking_flow": false,
+    "mermaid_reservation_demo": true,
+    "mermaid_quote_delivery": true,
+    "mermaid_demo_payment": true,
+    "mermaid_dashboard_projection": true,
+    "mermaid_reminders": false,
     "approved_learnings_in_prompt": false,
     "info_updates_in_prompt": false,
     "knowledge_files_in_prompt": false

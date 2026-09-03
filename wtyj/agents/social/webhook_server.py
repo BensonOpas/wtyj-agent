@@ -123,7 +123,9 @@ def _use_whatsapp_orchestrator(channel: str) -> bool:
     workflow = raw.get("workflow") or {}
     return (
         str(channel or "").strip().lower() == "whatsapp"
-        and workflow.get("type") in {"callback_follow_up", "ali_quote"}
+        and workflow.get("type") in {
+            "callback_follow_up", "ali_quote", "mermaid_reservation_demo"
+        }
     )
 
 

@@ -1,0 +1,55 @@
+{
+  "version": "mermaid-demo-v1-2026-09-03",
+  "tenant_slug": "mermaid",
+  "service": {
+    "key": "klein_curacao_day_trip",
+    "name": "Klein Curaçao Day Trip",
+    "operating_weekdays": [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "friday",
+      "saturday",
+      "sunday"
+    ],
+    "meeting_point": "Fishermen's Pier, Curaçao",
+    "arrival_time": "06:45",
+    "island_departure_time": "15:20"
+  },
+  "pricing": {
+    "currencies": {
+      "USD": {"adult": 150, "child_4_12": 75, "infant_0_3": 0, "sedula": 110},
+      "EUR": {"adult": 130, "child_4_12": 65, "infant_0_3": 0, "sedula": 95},
+      "XCG": {"adult": 270, "child_4_12": 135, "infant_0_3": 0, "sedula": 195}
+    },
+    "default_currency": "USD",
+    "pickup_price": null
+  },
+  "included": [
+    "Breakfast",
+    "Soft drinks and juices",
+    "BBQ lunch",
+    "Mermaid beach house",
+    "Restrooms and fresh-water shower",
+    "Snorkeling masks",
+    "Beach chairs"
+  ],
+  "extras": [
+    "Beer and wine are available at an additional charge",
+    "Optional pickup and return can be requested; demo pricing is not included"
+  ],
+  "bring": [
+    "Towel",
+    "Sunscreen",
+    "Swimwear",
+    "Personal medication",
+    "Hat or cap"
+  ],
+  "policies": {
+    "demo_marker": "DEMO POLICY - REPLACE BEFORE GO-LIVE",
+    "cancellation": "DEMO POLICY - REPLACE BEFORE GO-LIVE: Cancel or request a change at least 48 hours before departure. Later cancellations and no-shows are non-refundable in this demonstration.",
+    "safety": "DEMO POLICY - REPLACE BEFORE GO-LIVE: Participation is at the guest's own risk and instructions from the captain and crew must be followed. This demonstration does not state or verify insurance coverage.",
+    "insurance": "Insurance coverage is not verified in this demonstration. Mermaid must approve final insurance wording before go-live.",
+    "quote_validity_minutes": 60
+  }
+}
