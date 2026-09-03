@@ -30,13 +30,13 @@ must not repeat the reservation form.
 
 ## Ordered delivery issues
 
-- [ ] [#327 Mermaid demo catalog and tenant feature controls](https://github.com/BensonOpas/wtyj-agent/issues/327)
-- [ ] [#328 Multilingual natural reservation intake and canonical confirmation](https://github.com/BensonOpas/wtyj-agent/issues/328)
-- [ ] [#329 Demo-assumed availability and durable reservation state machine](https://github.com/BensonOpas/wtyj-agent/issues/329)
-- [ ] [#330 Mermaid quote PDF generation and same-chat delivery](https://github.com/BensonOpas/wtyj-agent/issues/330)
-- [ ] [#331 Simulated payment checkout, verified callback and receipt/booking code](https://github.com/BensonOpas/wtyj-agent/issues/331)
-- [ ] [dashboard #152 Mermaid reservation visibility](https://github.com/unboks-org/unboks-dashboard-api/issues/152)
-- [ ] [#333 Full synthetic WhatsApp journey, safety verification and controlled rollout](https://github.com/BensonOpas/wtyj-agent/issues/333)
+- [x] [#327 Mermaid demo catalog and tenant feature controls](https://github.com/BensonOpas/wtyj-agent/issues/327) — implemented in PR #334
+- [x] [#328 Multilingual natural reservation intake and canonical confirmation](https://github.com/BensonOpas/wtyj-agent/issues/328) — implemented in PR #334
+- [x] [#329 Demo-assumed availability and durable reservation state machine](https://github.com/BensonOpas/wtyj-agent/issues/329) — implemented in PR #334
+- [x] [#330 Mermaid quote PDF generation and same-chat delivery](https://github.com/BensonOpas/wtyj-agent/issues/330) — implemented in PR #334
+- [x] [#331 Simulated payment checkout, verified callback and receipt/booking code](https://github.com/BensonOpas/wtyj-agent/issues/331) — implemented in PR #334
+- [x] [dashboard #152 Mermaid reservation visibility](https://github.com/unboks-org/unboks-dashboard-api/issues/152) — implemented in dashboard PR #153
+- [x] [#333 Full synthetic WhatsApp journey, safety verification and controlled rollout](https://github.com/BensonOpas/wtyj-agent/issues/333) — implemented in PR #334
 
 ## Mermaid demo lifecycle
 
