@@ -4,10 +4,28 @@ This package is for a fictional, clearly disclosed demonstration Page. It must
 not replace, rename, claim, or connect Mermaid Boat Trips Curaçao's existing
 public Page.
 
-Status rule: this file is a content and asset package, not evidence that a Page
-has been created or connected. Call it `prepared` until an authorized Meta
-administrator creates it in the owning business, publishes the disclosure, and
-verifies the dedicated number. Until then, any Page preview is simulated.
+## Current Facebook demo state
+
+The fictional Page was created on 2026-09-02 by an authorized administrator.
+This records the resulting public demo surface; it does not claim that Meta,
+WhatsApp, Zernio, or the Unboks production channel is connected.
+
+| Item | Recorded state |
+|---|---|
+| Page | `Klein Curaçao Trip Desk Demo` |
+| URL | https://www.facebook.com/profile.php?id=61593777912590 |
+| Facebook profile ID | `61593777912590` |
+| Created | `2026-09-02` |
+| Profile and cover | Generic original demo artwork uploaded. |
+| Disclosure | Published as the first post and pinned. |
+| WhatsApp | Disconnected. Owner cutover number remains `+599 9 686 5665` (`+59996865665`). |
+| Action button | Disconnected. |
+| Contact fields | Website, phone, email, address, and hours left empty. |
+| Marketing emails | Off. |
+| Page notifications | On. |
+
+The Page is real, but its assistant/channel behavior remains a demo until the
+owner completes the explicit cutover steps below.
 
 ## Page settings
 
@@ -15,13 +33,13 @@ verifies the dedicated number. Until then, any Page preview is simulated.
 |---|---|
 | Page name | `Klein Curaçao Trip Desk Demo` |
 | Category | `Travel service` |
-| Secondary category | `Product/service` |
+| Secondary category | Not set; `Product/service` is optional after owner review. |
 | Bio | `Private demo of TRACY, an AI-assisted guest-service concept for Klein Curaçao trips. Not an official Mermaid social Page.` |
-| WhatsApp | `+599 9 686 5665` (`+59996865665`) |
+| WhatsApp | Owner cutover target: `+599 9 686 5665` (`+59996865665`); not connected. |
 | Website | Leave empty; this demo does not create a website. |
 | Email | Leave empty; do not imply that the fictional Page owns Mermaid's public inbox. |
 | Address and hours | Leave empty. |
-| Action button | `Send WhatsApp message` after the dedicated number is verified. |
+| Action button | Leave disconnected until the dedicated number is verified. Then configure `Send WhatsApp message`. |
 | Messaging greeting | `Hi, I’m TRACY, a virtual assistant in a private demo. I can answer published Klein Curaçao trip questions. For live availability, payment, changes, cancellations, safety, accessibility, or anything uncertain, I’ll involve a person.` |
 | Instant reply | Off. Zernio and Unboks must be the single automated reply path. |
 
@@ -42,10 +60,12 @@ Place this text in the About section and pin it as the first post:
 
 ## Visual assets
 
-- Profile: `assets/mermaid-tracy/facebook-profile-tracy-demo.png`
-- Cover: `assets/mermaid-tracy/facebook-cover-klein-curacao-trip-desk-demo.png`
+- Profile: `assets/mermaid-tracy/facebook-profile-generic-v2.png`
+- Cover: `assets/mermaid-tracy/facebook-cover-generic-v2.png`
 
 Both are original demo artwork. They deliberately omit Mermaid's name and logo.
+The v2 cover also contains no text, so the Page's visible name and pinned
+disclosure remain the authoritative identification.
 
 ## Launch posts
 
@@ -79,11 +99,11 @@ connection and leave the tenant paused with a strict empty allowlist.
 Facebook native instant replies and other automated-message rules must remain
 off so a guest can receive at most one automated response.
 
-Creating the Page, accepting Meta terms, completing MFA or business ownership
-checks, assigning assets, and verifying the phone number are owner-only actions.
-The operator must record only a sanitized pass/fail result. Never copy a login,
-verification code, token, callback URL, provider account ID, or Meta business
-document into Git or demo evidence.
+Accepting further Meta terms, completing MFA or business ownership checks,
+assigning production assets, and verifying the phone number are owner-only
+actions. The operator must record only a sanitized pass/fail result. Never copy
+a login, verification code, token, callback URL, provider account ID, or Meta
+business document into Git or demo evidence.
 
 After authorization, keep `facebook_dms` off until Facebook messaging itself
 has a separate tenant-ownership check, strict account binding, inbox-only
