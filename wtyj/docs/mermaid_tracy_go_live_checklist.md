@@ -28,7 +28,8 @@ live connection.
 ## Fixed identities
 
 - Tenant slug: `mermaid`
-- Internal display name: `Mermaid Boat Trips Demo`
+- Tenant package label: `Mermaid Boat Trips Demo`
+- Visible workspace business name: `Mermaid Boat Trips Curaçao`
 - Assistant: `TRACY`
 - Demo WhatsApp number: `+599 9 686 5665`
 - Exact normalized number: `+59996865665`

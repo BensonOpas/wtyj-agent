@@ -20,7 +20,8 @@ simulated, never live.
 | Asset | Required value |
 |---|---|
 | Tenant slug | `mermaid` |
-| Internal display name | `Mermaid Boat Trips Demo` |
+| Tenant package label | `Mermaid Boat Trips Demo` |
+| Visible workspace business name | `Mermaid Boat Trips Curaçao` |
 | Assistant | `TRACY` |
 | Container | `wtyj-mermaid` |
 | Loopback port | `8102` |

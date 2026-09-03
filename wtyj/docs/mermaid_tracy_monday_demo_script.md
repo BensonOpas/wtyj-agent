@@ -55,8 +55,10 @@ callback, or visible phone number is not enough to enable replies.
 
 ## T-15 minute reset
 
-- Confirm the visible workspace name is `Mermaid Boat Trips Demo` and the
-  assistant is `TRACY`.
+- Confirm the visible workspace business name is `Mermaid Boat Trips Curaçao`,
+  the tenant slug is `mermaid`, and the assistant is `TRACY`. The versioned
+  package label `Mermaid Boat Trips Demo` is internal configuration metadata,
+  not the workspace heading.
 - Confirm the channel status matches the chosen mode. In Mode A, confirm the
   exact normalized number and strict account. In Mode B, confirm every channel
   toggle is off and the connection card truthfully says that WhatsApp is not

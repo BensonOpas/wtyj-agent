@@ -18,7 +18,8 @@ Facebook Page or public WhatsApp number.
 
 ## Fixed identities
 
-- Unboks tenant: `mermaid`, displayed internally as `Mermaid Boat Trips Demo`.
+- Unboks tenant: `mermaid`, package-labelled `Mermaid Boat Trips Demo` and
+  displayed in the workspace as `Mermaid Boat Trips Curaçao`.
 - AI assistant: `TRACY`.
 - Dedicated demo WhatsApp Business number: `+599 9 686 5665`
   (`+59996865665` in E.164-normalized comparisons).
