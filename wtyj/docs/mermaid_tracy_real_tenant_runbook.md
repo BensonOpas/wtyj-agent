@@ -28,7 +28,7 @@ simulated, never live.
 | Public API prefix | `https://api.unboks.org/api/mermaid/` |
 | Dashboard | `https://dashboard.unboks.org/login?workspace=mermaid` |
 | Zernio channel | WhatsApp |
-| Demo number | New dedicated Zernio-provisioned number; purchase pending, US `+1` preferred only if cheapest suitable inventory |
+| Demo number | `+1 223 276 0075`; dedicated US number purchased from Zernio on `2026-09-03`, Meta/WABA authorization pending |
 | Demo Facebook Page | `Klein Curaçao Trip Desk Demo` |
 | Demo Page phone state | Empty; superseded `+599 9 686 5665` removed and verified on `2026-09-03` |
 

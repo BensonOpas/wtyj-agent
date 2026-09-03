@@ -16,7 +16,7 @@ labelled rehearsal view and say that the channel is simulated.
 | Mermaid workspace, TRACY configuration, tenant isolation, operator controls | `Implemented as a dedicated Unboks tenant` after the checked-out revision and runtime health are verified |
 | Trip facts | `Grounded in Mermaid's first-party pages, checked 2 September 2026` |
 | Facebook Page | `Real, clearly disclosed fictional demo Page` — the Page exists, but its WhatsApp action and Facebook messaging are not connected |
-| Mermaid WhatsApp number | `New dedicated Zernio-provisioned number; purchase pending` until Zernio assigns it and Meta shows it as connected |
+| Mermaid WhatsApp number | Dedicated Zernio-provisioned `+1 223 276 0075`; purchased, but not live until Meta shows it as connected and the isolation canaries pass |
 | Zernio | `Connection flow prepared` until Nr3 proves the selected provider account and exact number |
 | Any scripted example conversation | `Rehearsal evidence only`; it was not sent through WhatsApp |
 | Booking and payment | `Handled by Mermaid's existing reservation system`; TRACY never claims to book, hold seats, or take payment |

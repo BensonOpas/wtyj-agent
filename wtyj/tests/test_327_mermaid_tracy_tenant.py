@@ -49,14 +49,15 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
     assert cfg["name"] == "Mermaid Boat Trips Demo"
     assert cfg["status"] == "active"
     assert cfg["host_port"] == 8102
-    assert cfg["whatsapp"] == ""
+    assert cfg["whatsapp"] == "+1 223 276 0075"
     assert cfg["deployment"] == {
         "mode": "real_demo_tenant",
         "channel_provider": "zernio",
-        "whatsapp_display_number": "",
+        "whatsapp_display_number": "+1 223 276 0075",
         "whatsapp_number_strategy": "zernio_provisioned_dedicated",
         "whatsapp_country_preference": "US",
-        "whatsapp_purchase_status": "owner_action_required",
+        "whatsapp_purchase_status": "purchased",
+        "whatsapp_connection_status": "purchased_pending_meta_authorization",
         "facebook_page_name": "Klein Curaçao Trip Desk Demo",
         "facebook_page_disclosure": cfg["deployment"]["facebook_page_disclosure"],
     }
@@ -66,13 +67,20 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
         "name": "Mermaid Boat Trips Curaçao",
         "email": "info@mermaidboattrips.com",
         "phone": "+599 9 560 1530",
-        "whatsapp": "",
+        "whatsapp": "+1 223 276 0075",
         "agent_name": "TRACY",
         "slug": "mermaid",
     }
     assert cfg["business"]["languages"] == [
         "English", "Dutch", "German", "Spanish", "Portuguese",
     ]
+    assert cfg["contact_methods"]["demo_whatsapp"] == "+1 223 276 0075"
+    assert cfg["social_profiles"]["demo_facebook"] == {
+        "page_name": "Klein Curaçao Trip Desk Demo",
+        "url": "https://www.facebook.com/profile.php?id=61593777912590",
+        "connection_status": "page_created_whatsapp_pending_meta_authorization",
+        "disclosure": "Fictional demo page; not Mermaid's existing public Facebook Page.",
+    }
 
     faq = cfg["faq"]
     for amount in ("USD 150", "EUR 130", "XCG 270", "USD 75", "EUR 65",
@@ -157,9 +165,9 @@ def test_mermaid_whatsapp_uses_source_bound_tracy_qa_prompt(
     assert "You are TRACY, answering WhatsApp messages" in prompt
     assert "Mermaid Boat Trips Curaçao" in prompt
     assert (
-        "new Zernio-provisioned number assigned exclusively to Mermaid" in prompt
+        "Zernio-provisioned number is +1 223 276 0075" in prompt
     )
-    assert "Never guess or display a demo channel number" in prompt
+    assert "must not be described as live" in prompt
     assert "+599 9 686 5665" not in prompt
     assert "Klein Curaçao Trip Desk Demo" in prompt
     assert "not Mermaid's existing public Facebook Page" in prompt

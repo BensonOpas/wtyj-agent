@@ -1,7 +1,7 @@
 # BRIEF 327 — Provision Mermaid TRACY as a real Unboks demo tenant
 
 **Status:** In progress | **Tenant:** `mermaid` | **Runtime port:** `8102` |
-**WhatsApp:** new dedicated Zernio-provisioned number, purchase pending |
+**WhatsApp:** dedicated Zernio-provisioned `+1 223 276 0075`, purchased; Meta connection pending |
 **Provider:** Zernio
 
 ## Outcome

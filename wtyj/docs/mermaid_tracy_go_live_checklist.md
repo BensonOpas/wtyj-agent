@@ -78,11 +78,13 @@ Mermaid owner:
 - [x] Approve a newly purchased Zernio number dedicated exclusively to Mermaid;
   no existing WhatsApp, WhatsApp Business app, Cloud API, personal, or other
   tenant number will be migrated or reused.
-- [ ] At Zernio checkout, confirm the displayed recurring price, country,
+- [x] At Zernio checkout, confirm the displayed recurring price, country,
   capabilities, billing terms, and any KYC requirement. Prefer a US `+1`
   number only if it is still the cheapest suitable option at purchase time.
-- [ ] Complete the paid number purchase using the Mermaid Zernio profile and
+  Confirmed US local, WhatsApp-capable, `$3/month`, no KYC shown.
+- [x] Complete the paid number purchase using the Mermaid Zernio profile and
   retain the exact assigned E.164 number in protected operator records.
+  Purchased `+1 223 276 0075` on `2026-09-03`.
 - [ ] Approve the fictional Page name and its required `PRIVATE DEMO`
   disclosure. The Page must not use Mermaid's public Page name or imply it is an
   official profile.
@@ -137,8 +139,10 @@ Unboks operator prepares the tenant-bound request; Mermaid's authorized Meta or
 Zernio administrator completes authorization in their own browser:
 
 - [ ] Open the Mermaid tenant workspace, not Ali, Roberto, or Unboks.
-- [ ] In the Mermaid-bound Zernio profile, choose `Get a new number`, review the
+- [x] In the Mermaid-bound Zernio profile, choose `Get a new number`, review the
   current price and capabilities, and complete the owner-approved purchase.
+  Zernio now lists `+1 223 276 0075` as Purchased and Active; WhatsApp remains
+  Off pending Meta authorization.
 - [ ] Continue from that purchase into Meta Embedded Signup. Do not create or
   reuse a consumer WhatsApp or WhatsApp Business mobile-app account.
 - [ ] The owner opens the link, signs in, completes MFA and business ownership

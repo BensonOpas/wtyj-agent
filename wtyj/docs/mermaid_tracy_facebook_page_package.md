@@ -18,8 +18,8 @@ WhatsApp, Zernio, or the Unboks production channel is connected.
 | Created | `2026-09-02` |
 | Profile and cover | Premium original passenger-ship artwork uploaded and verified on the Page. |
 | Disclosure | Published as the first post and pinned. |
-| Public phone | Empty. The superseded `+599 9 686 5665` proposal was removed and the empty Contact info state was verified on `2026-09-03`. Leave empty until Mermaid's dedicated Zernio number is purchased. |
-| WhatsApp | Disconnected. The earlier unverified number proposal was abandoned; no existing WhatsApp account is in scope. |
+| Public phone | Empty. The superseded `+599 9 686 5665` proposal was removed and the empty Contact info state was verified on `2026-09-03`. Dedicated replacement `+1 223 276 0075` is purchased but must not be published until Meta/WABA authorization succeeds. |
+| WhatsApp | Disconnected. Dedicated `+1 223 276 0075` is purchased in Zernio; Meta/WABA authorization is pending. No existing WhatsApp account is in scope. |
 | Action button | Disconnected. |
 | Demo contact fields | Fictional address `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`; reserved email `tracy-demo@example.com`; reserved non-live link `https://tracy-demo.example`. Hours left empty. |
 | Marketing emails | Off. |
@@ -36,8 +36,8 @@ owner completes the explicit cutover steps below.
 | Category | `Travel service` |
 | Secondary category | Not set; `Product/service` is optional after owner review. |
 | Bio | `Private demo of TRACY, an AI-assisted guest-service concept for Klein Curaçao trips. Not an official Mermaid social Page.` |
-| Public phone | Empty; keep it empty until Mermaid's dedicated Zernio number has been purchased and verified. |
-| WhatsApp | Owner cutover target: the new Zernio-provisioned number assigned exclusively to Mermaid; not yet purchased or connected. |
+| Public phone | Empty; after Meta/WABA authorization, publish dedicated `+1 223 276 0075`. |
+| WhatsApp | Owner cutover target: dedicated Zernio-provisioned `+1 223 276 0075`; purchased but not yet connected. |
 | Website | `TRACY Demo Website (fictional)` → `https://tracy-demo.example`. The reserved `.example` domain is intentionally non-live; no website was created. |
 | Email | `tracy-demo@example.com`. The reserved `example.com` address is fictional and is not monitored. |
 | Address | `DEMO LOCATION - Harbor Desk 12 (fictional), Willemstad, Curaçao`. This is not a pickup point or operating address. |
