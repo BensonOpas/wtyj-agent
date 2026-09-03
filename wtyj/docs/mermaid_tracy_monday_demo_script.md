@@ -18,7 +18,7 @@ labelled rehearsal view and say that the channel is simulated.
 | Facebook Page | `Prepared demo Page package` until the Page is created and visible in Meta |
 | WhatsApp number `+599 9 686 5665` | `Dedicated intended demo number` until Meta/Zernio shows it as connected |
 | Zernio | `Connection flow prepared` until Nr3 proves the selected provider account and exact number |
-| Any browser phone mock-up | `Simulated channel for rehearsal` |
+| Any scripted example conversation | `Rehearsal evidence only`; it was not sent through WhatsApp |
 | Booking and payment | `Handled by Mermaid's existing reservation system`; TRACY never claims to book, hold seats, or take payment |
 
 Never imply that the Page or channel is connected because its name or number is
@@ -44,10 +44,11 @@ record one of these modes:
 - **Mode A, live channel:** Meta authorization is complete; Nr3 identifies
   Zernio and exactly `+59996865665`; the strict allowlist contains exactly the
   selected account; the inbox-only and controlled-reply canaries passed.
-- **Mode B, safe rehearsal:** any live-channel gate is incomplete. Keep
-  `whatsapp_inbox`, `ai_auto_reply`, and `facebook_dms` off. Use only the local
-  simulated conversation and introduce it as a simulation of the real tenant's
-  customer experience.
+- **Mode B, safe evidence walkthrough:** any live-channel gate is incomplete.
+  Keep `whatsapp_inbox`, `ai_auto_reply`, and `facebook_dms` off. Show the real
+  tenant and operator controls, then walk through the labelled example prompts
+  and expected response boundaries in this runbook. Do not imply that a
+  customer message was sent or delivered.
 
 There is no partial-live mode. A logo, Page draft, generated authorization link,
 callback, or visible phone number is not enough to enable replies.
@@ -58,9 +59,11 @@ callback, or visible phone number is not enough to enable replies.
   assistant is `TRACY`.
 - Confirm the channel status matches the chosen mode. In Mode A, confirm the
   exact normalized number and strict account. In Mode B, confirm every channel
-  toggle is off and the simulator displays `Simulated channel`.
-- Clear only the dedicated rehearsal conversation through the supported demo
-  reset. Never delete live customer data for presentation hygiene.
+  toggle is off and the connection card truthfully says that WhatsApp is not
+  connected.
+- In Mode A, clear only the dedicated tester conversation through the supported
+  retention control. In Mode B, there is no conversation to clear. Never
+  delete live customer data for presentation hygiene.
 - Close unrelated tenants, chats, notifications, browser tabs, and password
   manager pop-ups.
 - Check desktop and mobile layouts and make sure no console error, failed
@@ -81,9 +84,10 @@ Say:
 
 If using Mode B, immediately add:
 
-> The phone surface is a labelled simulation today because Meta and Zernio
-> authorization belongs to the account owner. I will not present it as a live
-> WhatsApp connection.
+> The dedicated tenant is real, but no customer message will be sent in this
+> walkthrough because Meta and Zernio authorization belongs to the account
+> owner. I will show the tested response boundaries without presenting them as
+> a live WhatsApp connection.
 
 ### 0:40 - Prove the tenant and identity
 
@@ -95,8 +99,14 @@ In Mode A, first keep AI off. Send `Channel check` from the tester to
 automatic reply. Turn AI on deliberately, then send `Hi, who are you?` as a new
 message. TRACY should identify herself as a virtual assistant.
 
-In Mode B, reset the simulator and enter `Hi, who are you?`. The simulated
-channel label must stay visible.
+In Mode B, point to the fail-closed connection card and use `Hi, who are you?`
+as the first labelled example prompt. Explain that the automated tests verify
+TRACY's identity prompt and tenant isolation, but do not claim delivery.
+
+For the remaining prompts, Mode A means send and observe the real message.
+Mode B means read the prompt and expected response boundary from this runbook
+as evidence; do not type it into a phone mock-up or imply that it traversed a
+customer channel.
 
 ### 1:40 - Show source-grounded selling
 
@@ -196,8 +206,9 @@ Recovery order:
    is uncertain.
 3. Preserve the audit trail and note the exact message and time without copying
    secrets or customer content into public evidence.
-4. Continue in Mode B only if the tenant UI is healthy and the simulated label
-   is visible. Otherwise show static evidence and the go-live checklist.
+4. Continue in Mode B only if the tenant UI is healthy, all live channel
+   toggles remain off, and the evidence walkthrough is clearly labelled.
+   Otherwise show only the static evidence and go-live checklist.
 5. Never switch to Mermaid's public number as an improvised fallback.
 
 ## Post-meeting reset

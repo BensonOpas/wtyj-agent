@@ -108,8 +108,10 @@ Use a tester number that is not any tenant's own business number.
 - No provider event for Ali, Roberto, or Unboks appears in Mermaid's data.
 - No Mermaid event appears in another tenant's data.
 - No secret, callback state, OTP, or raw provider token is captured in evidence.
-- Desktop and mobile operator/customer views have no console error, failed
-  request, obstructing overlay, stuck loading state, or broken recovery action.
+- Desktop and mobile operator views have no console error, failed request,
+  obstructing overlay, stuck loading state, or broken recovery action. Verify
+  the real customer surface only after the provider channel is owner-authorized;
+  an evidence walkthrough is never counted as delivered WhatsApp traffic.
 
 Run `wtyj/scripts/smoke_unboks_domain.sh` for the public, read-only route
 checks. To add authenticated profile and cross-tenant token checks, supply all
