@@ -99,13 +99,16 @@ routine Unboks configuration edit.
 
 Authorized Meta administrator, in the owner's browser session:
 
-- [ ] Create `Klein Curaçao Trip Desk Demo` as a new Page. Do not rename or
+- [x] Create `Klein Curaçao Trip Desk Demo` as a new Page. Do not rename or
   replace Mermaid's public Page.
-- [ ] Use the bio, disclosure, greeting, categories, and original artwork from
+- [x] Use the bio, disclosure, category, and original artwork from
   the [Facebook Page package](mermaid_tracy_facebook_page_package.md).
-- [ ] Leave website, email, address, and hours empty so the Page does not imply
-  ownership of Mermaid's public assets.
-- [ ] Publish and pin the `PRIVATE DEMO` disclosure before any messaging test.
+- [x] Add only clearly fictional demo contact data, using reserved `.example`
+  email/link values and an address literally labelled `DEMO LOCATION` and
+  `(fictional)`. The only real public contact datum is `+59996865665`.
+- [x] Publish and pin the `PRIVATE DEMO` disclosure before any messaging test.
+- [ ] Configure the messaging greeting from the Page package after the owning
+  business and messaging path are verified.
 - [ ] Keep Meta/Facebook native instant replies and automated rules off. Zernio
   and Unboks must remain the only intended automated reply path.
 - [ ] Add the `Send WhatsApp message` action only after Meta has verified the

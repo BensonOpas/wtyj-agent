@@ -15,7 +15,7 @@ labelled rehearsal view and say that the channel is simulated.
 |---|---|
 | Mermaid workspace, TRACY configuration, tenant isolation, operator controls | `Implemented as a dedicated Unboks tenant` after the checked-out revision and runtime health are verified |
 | Trip facts | `Grounded in Mermaid's first-party pages, checked 2 September 2026` |
-| Facebook Page | `Prepared demo Page package` until the Page is created and visible in Meta |
+| Facebook Page | `Real, clearly disclosed fictional demo Page` — the Page exists, but its WhatsApp action and Facebook messaging are not connected |
 | WhatsApp number `+599 9 686 5665` | `Dedicated intended demo number` until Meta/Zernio shows it as connected |
 | Zernio | `Connection flow prepared` until Nr3 proves the selected provider account and exact number |
 | Any scripted example conversation | `Rehearsal evidence only`; it was not sent through WhatsApp |
