@@ -33,6 +33,8 @@ from agents.social import (
     ali_reservation_v2,
     ali_reservation_v2_automation,
     ali_reservation_workflow,
+    mermaid_documents,
+    mermaid_reservation_store,
 )
 from agents.social.whatsapp_client import send_whatsapp_message, send_whatsapp_template_message, resolve_zernio_conversation_contacts
 from agents.social.zernio_dm_client import ZernioReplyError, WhatsAppWindowClosedError
@@ -5265,6 +5267,122 @@ async def list_ali_reservations_endpoint(response: Response, status: str = None)
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return {"items": items, "reservations": items}
+
+
+def _require_mermaid_reservation_dashboard() -> None:
+    raw = config_loader.get_raw() or {}
+    if (
+        _current_tenant_slug() != "mermaid"
+        or not (raw.get("features") or {}).get("mermaid_dashboard_projection", False)
+    ):
+        raise HTTPException(status_code=404, detail="Reservation dashboard is not enabled")
+
+
+def _mermaid_stage(state: str) -> str:
+    return {
+        "demo_availability_approved": "details",
+        "quote_ready": "quote",
+        "demo_payment_pending": "payment",
+        "demo_paid": "payment",
+        "booked": "booked",
+        "cancelled": "cancelled",
+    }.get(state, "details")
+
+
+def _mermaid_primary_action(item: dict) -> dict | None:
+    """Server-authorized action; the client never infers transition legality."""
+    if item["human_takeover"]:
+        return {"id": "open_conversation", "label": "Continue as human", "href": "/conversations"}
+    return {
+        "details": {"id": "review_details", "label": "Review reservation", "href": f"/reservations/{item['public_id']}"},
+        "quote": {"id": "view_quote", "label": "View quote evidence", "href": f"/reservations/{item['public_id']}"},
+        "payment": {"id": "open_conversation", "label": "Open conversation", "href": "/conversations"},
+        "booked": {"id": "view_receipt", "label": "View receipt evidence", "href": f"/reservations/{item['public_id']}"},
+        "cancelled": None,
+    }.get(_mermaid_stage(item["state"]))
+
+
+def _mermaid_projection(item: dict) -> dict:
+    intake = item["intake"]
+    money = item["monetary_snapshot"]
+    return {
+        "publicId": item["public_id"],
+        "conversationId": item["conversation_id"],
+        "customerName": item["customer_name"],
+        "language": item["language"],
+        "tripDate": intake["trip_date"],
+        "adults": intake["adults"],
+        "children": intake["children"],
+        "infants": intake["infants"],
+        "pickupPreference": intake["pickup_preference"],
+        "pickupLocation": intake.get("pickup_location"),
+        "dietaryRequirements": intake.get("dietary_requirements"),
+        "accessibilityNotes": intake.get("accessibility_notes"),
+        "specialRequests": intake.get("special_requests"),
+        "catalogVersion": item["catalog_version"],
+        "currency": money["currency"],
+        "total": money["total"],
+        "items": money["items"],
+        "state": item["state"],
+        "stage": _mermaid_stage(item["state"]),
+        "availabilitySource": item["availability_source"],
+        "bookingCode": item["booking_code"] if item["state"] == "booked" else None,
+        "quotePublicId": item["quote_public_id"],
+        "paymentReference": item["payment_reference"],
+        "receiptPublicId": item["receipt_public_id"],
+        "humanTakeover": item["human_takeover"],
+        "revision": item["revision"],
+        "createdAt": item["created_at"],
+        "updatedAt": item["updated_at"],
+        "primaryAction": _mermaid_primary_action(item),
+        "demo": True,
+    }
+
+
+@router.get("/mermaid-reservations", dependencies=[Depends(_check_auth)])
+async def list_mermaid_reservations_endpoint(response: Response, query: str = ""):
+    _require_mermaid_reservation_dashboard()
+    needle = str(query or "").strip().casefold()
+    items = [_mermaid_projection(item) for item in mermaid_reservation_store.list_reservations(limit=500)]
+    if needle:
+        items = [item for item in items if any(
+            needle in str(value or "").casefold()
+            for value in (
+                item["customerName"], item["conversationId"], item["quotePublicId"],
+                item["bookingCode"], item["paymentReference"],
+            )
+        )]
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+    return {"items": items, "demo": True, "remindersEnabled": False}
+
+
+@router.get("/mermaid-reservations/{public_id}", dependencies=[Depends(_check_auth)])
+async def get_mermaid_reservation_endpoint(public_id: str, response: Response):
+    _require_mermaid_reservation_dashboard()
+    reservation = mermaid_reservation_store.get_reservation(public_id)
+    if reservation is None:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    result = _mermaid_projection(reservation)
+    result["documents"] = mermaid_documents.documents_for_reservation(public_id)
+    result["events"] = [
+        {
+            "id": event["id"], "type": event["event_type"],
+            "fromState": event["from_state"], "toState": event["to_state"],
+            "actor": event["actor"], "reason": event["reason"],
+            "revision": event["revision"], "createdAt": event["created_at"],
+        }
+        for event in mermaid_reservation_store.events(public_id)
+    ]
+    try:
+        result["conversation"] = state_registry.wa_get_full_history(
+            reservation["conversation_id"], limit=200
+        )
+    except Exception:
+        result["conversation"] = []
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+    return result
 
 
 @router.get("/ali-reservations/{public_id}", dependencies=[Depends(_check_auth)])

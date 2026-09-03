@@ -349,6 +349,22 @@ def delivery_job(job_id: str) -> dict | None:
         conn.close()
 
 
+def documents_for_reservation(reservation_public_id: str) -> list[dict]:
+    conn = _conn()
+    try:
+        return [dict(row) for row in conn.execute(
+            "SELECT d.public_id, d.kind, d.locale, d.filename, d.sha256, d.content_type, "
+            "d.created_at, j.public_id AS delivery_job_id, j.status AS delivery_status, "
+            "j.attempts AS delivery_attempts, j.last_error AS delivery_error "
+            "FROM mermaid_documents d LEFT JOIN mermaid_delivery_jobs j "
+            "ON j.document_public_id=d.public_id AND j.tenant_slug='mermaid' "
+            "WHERE d.tenant_slug='mermaid' AND d.reservation_public_id=? ORDER BY d.created_at",
+            (reservation_public_id,),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
 def sign_download(public_id: str, expires: int, secret: str) -> str:
     return hmac.new(secret.encode(), f"mermaid:{public_id}:{int(expires)}".encode(), hashlib.sha256).hexdigest()
 
