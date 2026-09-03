@@ -113,9 +113,10 @@ Authorized Meta administrator, in the owner's browser session:
 - [x] Add only clearly fictional demo contact data, using reserved `.example`
   email/link values and an address literally labelled `DEMO LOCATION` and
   `(fictional)`.
-- [ ] Remove the superseded `+599 9 686 5665` public-phone entry, then leave the
+- [x] Remove the superseded `+599 9 686 5665` public-phone entry, then leave the
   public phone and WhatsApp action empty until the newly purchased Mermaid
-  number exists and passes Meta/Zernio verification.
+  number exists and passes Meta/Zernio verification. Removed and verified in
+  Facebook Contact info on `2026-09-03`.
 - [x] Publish and pin the `PRIVATE DEMO` disclosure before any messaging test.
 - [ ] Configure the messaging greeting from the Page package after the owning
   business and messaging path are verified.

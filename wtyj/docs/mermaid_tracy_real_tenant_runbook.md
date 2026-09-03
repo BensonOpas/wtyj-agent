@@ -30,6 +30,7 @@ simulated, never live.
 | Zernio channel | WhatsApp |
 | Demo number | New dedicated Zernio-provisioned number; purchase pending, US `+1` preferred only if cheapest suitable inventory |
 | Demo Facebook Page | `Klein Curaçao Trip Desk Demo` |
+| Demo Page phone state | Empty; superseded `+599 9 686 5665` removed and verified on `2026-09-03` |
 
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
 profiles are out of scope for connection or mutation.
