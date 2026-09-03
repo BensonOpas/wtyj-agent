@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
@@ -539,6 +540,259 @@ def test_recovered_inbound_history_is_idempotent_by_provider_message_batch():
         ]
     finally:
         _cleanup(prefix)
+
+
+def test_recovery_claim_limit_never_splits_or_merges_durable_batches(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    conversation_id = "durable-batch-conversation"
+    message_ids = ["durable-batch-1", "durable-batch-2", "durable-batch-3"]
+    for index, message_id in enumerate(message_ids):
+        assert state_registry.wa_claim_inbound_processing(
+            message_id,
+            conversation_id,
+            "whatsapp",
+            {
+                "message_id": message_id,
+                "conversation_id": conversation_id,
+                "platform": "whatsapp",
+                "channel": "whatsapp",
+                "account_id": "account-1",
+                "text": f"message {index + 1}",
+            },
+        ) is True
+
+    first_batch_id = state_registry.inbound_processing_join_batch(message_ids[0])
+    assert state_registry.inbound_processing_join_batch(
+        message_ids[1], first_batch_id, 1,
+    ) == first_batch_id
+    second_batch_id = state_registry.inbound_processing_join_batch(message_ids[2])
+    assert second_batch_id != first_batch_id
+    _stale(message_ids[0], minutes=20)
+    _stale(message_ids[1], minutes=20)
+    _stale(message_ids[2], minutes=10)
+
+    first_claim = state_registry.inbound_processing_claim_recoverable(
+        max_age_seconds=40, limit=1,
+    )
+    second_claim = state_registry.inbound_processing_claim_recoverable(
+        max_age_seconds=40, limit=1,
+    )
+
+    assert [item["message_id"] for item in first_claim] == message_ids[:2]
+    assert {item["batch_id"] for item in first_claim} == {first_batch_id}
+    assert [item["batch_position"] for item in first_claim] == [0, 1]
+    assert [item["message_id"] for item in second_claim] == message_ids[2:]
+    assert {item["batch_id"] for item in second_claim} == {second_batch_id}
+
+
+def test_recovery_never_resurrects_terminal_member_of_partial_batch(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    conversation_id = "partial-terminal-conversation"
+    message_ids = ["partial-terminal-1", "partial-terminal-2"]
+    for message_id in message_ids:
+        assert state_registry.wa_claim_inbound_processing(
+            message_id,
+            conversation_id,
+            "whatsapp",
+            {"message_id": message_id, "text": message_id},
+        ) is True
+    batch_id = state_registry.inbound_processing_join_batch(message_ids[0])
+    state_registry.inbound_processing_join_batch(message_ids[1], batch_id, 1)
+    _stale(message_ids[0])
+    _stale(message_ids[1])
+    conn = state_registry._get_conn()
+    conn.execute(
+        "UPDATE inbound_processing_events SET status = 'replied' "
+        "WHERE message_id = ?",
+        (message_ids[0],),
+    )
+    conn.commit()
+    conn.close()
+
+    claimed = state_registry.inbound_processing_claim_recoverable(
+        max_age_seconds=40,
+    )
+
+    assert claimed == []
+    conn = state_registry._get_conn()
+    rows = conn.execute(
+        "SELECT message_id, status, reason FROM inbound_processing_events "
+        "ORDER BY batch_position",
+    ).fetchall()
+    conn.close()
+    assert [tuple(row) for row in rows] == [
+        (message_ids[0], "replied", ""),
+        (message_ids[1], "processing_failed", "incomplete_durable_batch"),
+    ]
+
+
+def test_recovery_batch_claim_is_atomic_across_workers(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    conversation_id = "atomic-batch-claim-conversation"
+    message_ids = ["atomic-batch-claim-1", "atomic-batch-claim-2"]
+    for message_id in message_ids:
+        assert state_registry.wa_claim_inbound_processing(
+            message_id,
+            conversation_id,
+            "whatsapp",
+            {"message_id": message_id, "text": message_id},
+        ) is True
+    batch_id = state_registry.inbound_processing_join_batch(message_ids[0])
+    state_registry.inbound_processing_join_batch(message_ids[1], batch_id, 1)
+    _stale(message_ids[0])
+    _stale(message_ids[1])
+
+    start = threading.Barrier(3)
+    outcomes = []
+    failures = []
+
+    def claim():
+        try:
+            start.wait(timeout=5)
+            outcomes.append(state_registry.inbound_processing_claim_recoverable(
+                max_age_seconds=40, limit=1,
+            ))
+        except Exception as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    workers = [threading.Thread(target=claim) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    start.wait(timeout=5)
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert not failures
+    assert all(not worker.is_alive() for worker in workers)
+    nonempty = [outcome for outcome in outcomes if outcome]
+    assert len(nonempty) == 1
+    assert [item["message_id"] for item in nonempty[0]] == message_ids
+    assert len([outcome for outcome in outcomes if not outcome]) == 1
+
+
+def test_debounce_buffer_persists_one_identity_for_every_original_member(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    conversation_id = "buffer-membership-conversation"
+    message_ids = ["buffer-membership-1", "buffer-membership-2"]
+    for message_id in message_ids:
+        assert state_registry.wa_claim_inbound_processing(
+            message_id,
+            conversation_id,
+            "whatsapp",
+            {"message_id": message_id, "text": message_id},
+        ) is True
+
+    try:
+        for message_id in message_ids:
+            _buffer_message({
+                "from": conversation_id,
+                "text": message_id,
+                "from_name": "Batch Test",
+                "message_id": message_id,
+            })
+        with _buffer_lock:
+            buffered = _message_buffers[conversation_id]
+            buffered["timer"].cancel()
+            in_memory_batch_id = buffered["batch_id"]
+        conn = state_registry._get_conn()
+        rows = conn.execute(
+            "SELECT message_id, batch_id, batch_position "
+            "FROM inbound_processing_events ORDER BY batch_position",
+        ).fetchall()
+        conn.close()
+
+        assert in_memory_batch_id
+        assert [tuple(row) for row in rows] == [
+            (message_ids[0], in_memory_batch_id, 0),
+            (message_ids[1], in_memory_batch_id, 1),
+        ]
+    finally:
+        with _buffer_lock:
+            buffered = _message_buffers.pop(conversation_id, None)
+            if buffered and buffered.get("timer") is not None:
+                buffered["timer"].cancel()
+
+
+def test_recovery_keeps_two_batches_for_same_conversation_isolated():
+    conversation_id = "two-recovery-batches-conversation"
+
+    def recovered_item(message_id, batch_id, position):
+        payload = {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "platform": "whatsapp",
+            "channel": "whatsapp",
+            "account_id": "account-1",
+            "sender_id": "15550000000",
+            "sender_name": "Batch Test",
+            "text": message_id,
+        }
+        return {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "channel": "whatsapp",
+            "payload": payload,
+            "created_at": f"2026-09-03T10:00:0{position}+00:00",
+            "heartbeat_sent_at": "",
+            "attempt_count": 1,
+            "recovery_reason": "",
+            "recovery_error": "",
+            "batch_id": batch_id,
+            "batch_position": position,
+        }
+
+    claimed = [
+        recovered_item("batch-a-1", "a" * 64, 0),
+        recovered_item("batch-a-2", "a" * 64, 1),
+        recovered_item("batch-b-1", "b" * 64, 0),
+    ]
+    with (
+        patch.object(
+            state_registry, "inbound_processing_claim_recoverable",
+            return_value=claimed,
+        ),
+        patch("shared.tenant_guard.is_account_allowed", return_value=True),
+        patch(
+            "agents.social.webhook_server.icp_overrides.fetch_overrides_fresh",
+            return_value={"available": True},
+        ),
+        patch(
+            "agents.social.webhook_server.icp_overrides.whatsapp_inbox_state",
+            return_value=True,
+        ),
+        patch(
+            "agents.social.webhook_server.icp_overrides.auto_reply_state",
+            return_value=True,
+        ),
+        patch.object(state_registry, "get_ai_muted", return_value=False),
+        patch.object(state_registry, "get_blocked", return_value=False),
+        patch("agents.social.webhook_server._stage_recovered_batch") as stage,
+        patch("agents.social.webhook_server._flush_buffer") as flush,
+        patch("agents.social.webhook_server.send_reply") as heartbeat,
+    ):
+        stage.side_effect = lambda phone, batch_id, messages: (
+            f"{phone}\x1erecovery-batch:{batch_id}"
+        )
+        recovered = _recover_stale_ali_inbound_once(
+            max_age_seconds=40, ali_workflow=False,
+        )
+
+    assert recovered == 3
+    assert [(call.args[1], len(call.args[2])) for call in stage.call_args_list] == [
+        ("a" * 64, 2),
+        ("b" * 64, 1),
+    ]
+    assert [call.args[0] for call in flush.call_args_list] == [
+        f"{conversation_id}\x1erecovery-batch:{'a' * 64}",
+        f"{conversation_id}\x1erecovery-batch:{'b' * 64}",
+    ]
+    heartbeat.assert_not_called()
 
 
 def test_outbound_dashboard_event_is_exactly_once_by_source_key():

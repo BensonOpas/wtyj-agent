@@ -19,6 +19,11 @@ def _cleanup(conv_id):
     conn.execute("DELETE FROM whatsapp_booking_state WHERE phone = ?", (conv_id,))
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (conv_id,))
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id LIKE 'test_143_%'")
+    conn.execute(
+        "DELETE FROM inbound_processing_events "
+        "WHERE conversation_id = ? OR message_id LIKE 'test_143_%'",
+        (conv_id,),
+    )
     conn.commit()
     conn.close()
 

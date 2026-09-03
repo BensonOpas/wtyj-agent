@@ -24,6 +24,28 @@ def _zernio_message(message_id="mermaid-hardening-1"):
     }
 
 
+def _zernio_operator_sent_message(message_id="mermaid-operator-echo-1"):
+    return {
+        "id": f"event-{message_id}",
+        "event": "message.sent",
+        "message": {
+            "id": message_id,
+            "conversationId": "mermaid-operator-conversation",
+            "accountId": "mermaid-account",
+            "platform": "whatsapp",
+            "direction": "outgoing",
+            "source": "whatsappbusinessapp",
+            "text": "Operator follow-up for the demo guest.",
+            "createdAt": "2026-09-03T15:00:00+00:00",
+        },
+        "conversation": {
+            "id": "mermaid-operator-conversation",
+            "platform": "whatsapp",
+        },
+        "account": {"id": "mermaid-account"},
+    }
+
+
 def _meta_payload(
     message_id="wamid.mermaid-hardening",
     text="private customer payload",
@@ -453,6 +475,89 @@ def test_zernio_returns_retryable_error_before_ack_when_durable_claim_fails(
     assert response.status_code == 503
 
 
+def test_zernio_operator_echo_control_outage_is_retryable_before_ack(monkeypatch):
+    from fastapi.testclient import TestClient
+    from agents.social import webhook_server
+
+    secret = "mermaid-zernio-operator-test-secret"
+    monkeypatch.setenv("ZERNIO_WEBHOOK_SECRET", secret)
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
+    payload = _zernio_operator_sent_message()
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    unavailable = {"available": False, "feature_toggles": {}}
+    enabled = {
+        "available": True,
+        "feature_toggles": {"whatsapp_inbox": {"value": True}},
+    }
+
+    with (
+        patch("shared.tenant_guard.is_account_allowed", return_value=True),
+        patch.object(
+            webhook_server.icp_overrides,
+            "fetch_overrides_fresh",
+            side_effect=[unavailable, enabled],
+        ),
+        patch.object(
+            webhook_server.state_registry,
+            "wa_store_external_operator_message",
+            return_value=True,
+        ) as store,
+        patch.object(webhook_server.state_registry, "wa_set_archived") as unarchive,
+    ):
+        client = TestClient(webhook_server.app)
+        first = client.post(
+            "/webhooks/zernio",
+            content=body,
+            headers={"X-Zernio-Signature": signature},
+        )
+        retry = client.post(
+            "/webhooks/zernio",
+            content=body,
+            headers={"X-Zernio-Signature": signature},
+        )
+
+    assert first.status_code == 503
+    assert retry.status_code == 200
+    store.assert_called_once_with(
+        message_id="mermaid-operator-echo-1",
+        conversation_id="mermaid-operator-conversation",
+        channel="whatsapp",
+        text="Operator follow-up for the demo guest.",
+        sender_name="Secretaría",
+        created_at="2026-09-03T15:00:00+00:00",
+    )
+    unarchive.assert_called_once_with("mermaid-operator-conversation", False)
+
+
+def test_structured_zernio_transport_rechecks_account_before_every_attempt():
+    from agents.social import zernio_dm_client
+
+    with (
+        patch(
+            "shared.tenant_guard.is_account_allowed",
+            side_effect=[True, False],
+        ) as account_allowed,
+        patch.object(
+            zernio_dm_client.http_requests,
+            "post",
+            side_effect=zernio_dm_client.http_requests.RequestException(
+                "first provider attempt timed out"
+            ),
+        ) as provider_post,
+    ):
+        result = zernio_dm_client._post_recommendation_message(
+            "https://zernio.invalid/api/v1/inbox/conversations/demo/messages",
+            {"Idempotency-Key": "structured-demo"},
+            {"accountId": "mermaid-account", "message": "Demo reply"},
+        )
+
+    assert result == ("rejected", None, "")
+    assert account_allowed.call_count == 2
+    account_allowed.assert_called_with("mermaid-account", direction="outbound")
+    provider_post.assert_called_once()
+
+
 def test_foreign_zernio_failed_event_cannot_reconcile_local_state():
     from agents.social import webhook_server
 
@@ -756,7 +861,11 @@ def test_mermaid_recovery_reuses_provider_idempotency_after_post_send_crash(
 
     monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
     conversation_id = "mermaid-post-send-crash"
-    message_id = "mermaid-post-send-crash-message"
+    message_ids = [
+        "mermaid-post-send-crash-message-1",
+        "mermaid-post-send-crash-message-2",
+    ]
+    durable_batch_id = "d" * 64
     enabled = {
         "available": True,
         "feature_toggles": {
@@ -771,7 +880,7 @@ def test_mermaid_recovery_reuses_provider_idempotency_after_post_send_crash(
                 "messages": [
                     {
                         "from": conversation_id,
-                        "text": "Where do we meet?",
+                        "text": text,
                         "from_name": "Demo guest",
                         "message_id": message_id,
                         "_zernio_conversation_id": conversation_id,
@@ -779,9 +888,15 @@ def test_mermaid_recovery_reuses_provider_idempotency_after_post_send_crash(
                         "_zernio_channel": "whatsapp",
                         "_zernio_sender_name": "Demo guest",
                     }
+                    for message_id, text in zip(
+                        message_ids,
+                        ["Where do we meet?", "And at what time?"],
+                    )
                 ],
                 "timer": None,
                 "started": time.time(),
+                "phone": conversation_id,
+                "batch_id": durable_batch_id,
             }
 
     provider_attempts = []
@@ -849,7 +964,7 @@ def test_mermaid_recovery_reuses_provider_idempotency_after_post_send_crash(
     assert len(provider_attempts) == 2
     assert provider_attempts[0] == provider_attempts[1]
     assert provider_attempts[0][1] is True
-    assert provider_attempts[0][0].startswith("unboks-auto-reply-")
+    assert provider_attempts[0][0] == f"unboks-auto-reply-{durable_batch_id}"
     assert len(provider_deliveries) == 1
 
 
@@ -1174,7 +1289,7 @@ def test_non_ali_runtime_recovers_durably_accepted_message_without_heartbeat(
     ) is True
 
     with (
-        patch.object(webhook_server, "_buffer_message") as buffer,
+        patch.object(webhook_server, "_stage_recovered_batch") as stage,
         patch.object(webhook_server, "_flush_buffer") as flush,
         patch.object(webhook_server, "send_reply") as heartbeat,
     ):
@@ -1184,8 +1299,12 @@ def test_non_ali_runtime_recovers_durably_accepted_message_without_heartbeat(
         )
 
     assert recovered == 1
-    buffer.assert_called_once()
-    flush.assert_called_once_with("mermaid-recovery-conversation")
+    stage.assert_called_once()
+    staged_conversation, staged_batch_id, staged_messages = stage.call_args.args
+    assert staged_conversation == "mermaid-recovery-conversation"
+    assert len(staged_batch_id) == 64
+    assert [item["message_id"] for item in staged_messages] == [msg["message_id"]]
+    flush.assert_called_once_with(stage.return_value)
     heartbeat.assert_not_called()
 
 

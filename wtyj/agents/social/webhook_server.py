@@ -178,6 +178,10 @@ _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
 
 
+class _RetryableZernioSentControlError(RuntimeError):
+    """The operator echo cannot be accepted while strict controls are unknown."""
+
+
 def _verify_meta_webhook_signature(body: bytes, signature: str) -> bool:
     """Verify Meta's X-Hub-Signature-256 without logging request content."""
     secret = os.environ.get("META_APP_SECRET", "").strip()
@@ -230,6 +234,33 @@ def _meta_payload_matches_tenant(payload: dict) -> bool:
 
 _message_buffers = {}   # phone -> {"messages": [...], "timer": Timer, "started": float}
 _buffer_lock = threading.Lock()
+
+
+def _recovery_buffer_key(phone: str, batch_id: str) -> str:
+    """Keep a recovered durable batch isolated from newly arriving messages."""
+    return f"{phone}\x1erecovery-batch:{batch_id}"
+
+
+def _stage_recovered_batch(
+    phone: str,
+    batch_id: str,
+    messages: list[dict],
+) -> str:
+    """Publish one complete recovered batch without a partial-batch timer."""
+    if not batch_id or not messages:
+        raise ValueError("A recovered batch needs an identity and messages")
+    buffer_key = _recovery_buffer_key(phone, batch_id)
+    with _buffer_lock:
+        _message_buffers[buffer_key] = {
+            "messages": list(messages),
+            "timer": None,
+            "started": time.time(),
+            "timing": {},
+            "phone": phone,
+            "batch_id": batch_id,
+        }
+    return buffer_key
+
 
 # Brief 161: per-phone lock serializes concurrent handle_incoming_whatsapp_message
 # calls for the same phone/conversation. Fixes race where msg 2 reads stale state
@@ -290,37 +321,79 @@ def _recover_stale_ali_inbound_once(
     )
     grouped = {}
     for item in claimed:
-        payload = item.get("payload") or {}
-        # A durable turn may outlive a provider-account reassignment. Recheck
-        # the current tenant boundary before a heartbeat, buffering, history
-        # write, or provider send. Remove the stale customer payload locally
-        # while retaining the provider id as a terminal dedup marker.
-        if payload.get("conversation_id") and payload.get("account_id"):
-            from shared.tenant_guard import is_account_allowed
+        conversation_id = str(item.get("conversation_id") or "")
+        # Batch identity, rather than conversation identity, is the recovery
+        # unit. Two abandoned debounce turns for the same customer must never
+        # be merged into one newly generated action/provider idempotency key.
+        batch_id = str(item.get("batch_id") or "")
+        grouped.setdefault((conversation_id, batch_id), []).append(item)
 
-            if not is_account_allowed(
+    recovered = 0
+    for (conversation_id, durable_batch_id), items in grouped.items():
+        items.sort(key=lambda item: (
+            int(item.get("batch_position") or 0),
+            str(item.get("created_at") or ""),
+            str(item.get("message_id") or ""),
+        ))
+        message_ids = [str(item.get("message_id") or "") for item in items]
+        stable_batch_id = durable_batch_id or hashlib.sha256(
+            "\x1f".join(message_ids).encode("utf-8")
+        ).hexdigest()
+        latest_payload = items[-1].get("payload") or {}
+        payloads = [item.get("payload") or {} for item in items]
+
+        # A durable turn may outlive a provider-account reassignment. Recheck
+        # the complete batch before a heartbeat, history write, or provider
+        # send. One invalid member quarantines the whole action rather than
+        # replaying a content-changing subset.
+        from shared.tenant_guard import is_account_allowed
+
+        account_invalid = any(
+            payload.get("conversation_id")
+            and payload.get("account_id")
+            and not is_account_allowed(
                 str(payload.get("account_id") or ""), direction="inbound"
-            ):
+            )
+            for payload in payloads
+        )
+        if account_invalid:
+            if len(message_ids) == 1:
                 state_registry.inbound_processing_quarantine(
-                    str(item.get("message_id") or ""),
-                    reason="recovery_account_not_allowlisted",
+                    message_ids[0], reason="recovery_account_not_allowlisted",
                 )
-                log(
-                    "whatsapp_recovery_payload_quarantined",
-                    message_id=str(item.get("message_id") or "")[:30],
+            else:
+                state_registry.inbound_processing_quarantine_batch(
+                    message_ids, reason="recovery_account_not_allowlisted",
                 )
-                continue
-        if (
-            item.get("recovery_reason") == "provider_send_retry"
-            and int(item.get("attempt_count") or 0)
-            > _ALI_PROVIDER_SEND_MAX_RECOVERY_ATTEMPTS
-        ):
-            delivery_kind = str(item.get("recovery_error") or "ali_turn")
+            log(
+                "whatsapp_recovery_payload_quarantined",
+                conversation_id=conversation_id[:20],
+                message_count=len(message_ids),
+            )
+            continue
+        if any(payload.get("platform") != "whatsapp" for payload in payloads):
+            state_registry.inbound_processing_bulk_update(
+                message_ids,
+                "processing_failed",
+                reason="unsupported_recovery_payload",
+            )
+            continue
+
+        provider_retry_items = [
+            item for item in items
+            if item.get("recovery_reason") == "provider_send_retry"
+        ]
+        if provider_retry_items and max(
+            int(item.get("attempt_count") or 0) for item in provider_retry_items
+        ) > _ALI_PROVIDER_SEND_MAX_RECOVERY_ATTEMPTS:
+            delivery_kind = str(
+                provider_retry_items[0].get("recovery_error") or "ali_turn"
+            )
             failure_args = (
-                str(item.get("channel") or "whatsapp"),
-                str(item.get("conversation_id") or ""),
-                str(payload.get("sender_name") or ""),
-                [str(item.get("message_id") or "")],
+                str(items[0].get("channel") or "whatsapp"),
+                conversation_id,
+                str(latest_payload.get("sender_name") or ""),
+                message_ids,
             )
             if delivery_kind in {
                 "quote_confirmation", "vehicle_recommendation",
@@ -336,24 +409,15 @@ def _recover_stale_ali_inbound_once(
                 )
             log(
                 "ali_provider_send_retry_exhausted",
-                conversation_id=str(item.get("conversation_id") or "")[:20],
-                attempt_count=int(item.get("attempt_count") or 0),
+                conversation_id=conversation_id[:20],
+                attempt_count=max(
+                    int(item.get("attempt_count") or 0)
+                    for item in provider_retry_items
+                ),
                 delivery_kind=delivery_kind,
             )
             continue
-        if payload.get("platform") != "whatsapp":
-            state_registry.inbound_processing_update(
-                item.get("message_id", ""), "processing_failed",
-                reason="unsupported_recovery_payload",
-            )
-            continue
-        grouped.setdefault(item.get("conversation_id", ""), []).append(item)
 
-    recovered = 0
-    for conversation_id, items in grouped.items():
-        items.sort(key=lambda item: str(item.get("created_at") or ""))
-        message_ids = [str(item.get("message_id") or "") for item in items]
-        latest_payload = items[-1].get("payload") or {}
         account_id = str(latest_payload.get("account_id") or "")
         heartbeat_allowed = True
         if latest_payload.get("platform") == "whatsapp":
@@ -402,10 +466,7 @@ def _recover_stale_ali_inbound_once(
                 account_id,
                 _ali_recovery_heartbeat(conversation_id),
                 confirm_delivery=True,
-                idempotency_key=(
-                    "ali-turn-heartbeat-"
-                    + hashlib.sha256("\x1f".join(message_ids).encode()).hexdigest()
-                ),
+                idempotency_key="ali-turn-heartbeat-" + stable_batch_id,
             )
             if heartbeat_ok:
                 state_registry.inbound_processing_mark_heartbeat(message_ids)
@@ -415,20 +476,32 @@ def _recover_stale_ali_inbound_once(
                     message_count=len(message_ids),
                 )
 
+        recovered_messages = []
         for item in items:
             payload = item.get("payload") or {}
             if payload.get("conversation_id") and payload.get("account_id"):
                 adapter_cls = ZERNIO_CHANNELS.get(
                     payload.get("channel", "whatsapp"), DEFAULT_ZERNIO_CHANNEL,
                 )
-                _buffer_message(adapter_cls.from_zernio(payload))
+                buffered_message = adapter_cls.from_zernio(payload)
             else:
-                _buffer_message(payload)
+                buffered_message = dict(payload)
+            recovered_messages.append(buffered_message)
+        if durable_batch_id:
+            buffer_key = _stage_recovered_batch(
+                conversation_id, durable_batch_id, recovered_messages,
+            )
+        else:
+            # Compatibility for old/mocked claim records. Real claimed rows are
+            # migrated to a durable batch by the registry before being returned.
+            for buffered_message in recovered_messages:
+                _buffer_message(buffered_message)
+            buffer_key = conversation_id
         with _buffer_lock:
-            buffered = _message_buffers.get(conversation_id)
+            buffered = _message_buffers.get(buffer_key)
             if buffered and buffered.get("timer") is not None:
                 buffered["timer"].cancel()
-        _flush_buffer(conversation_id)
+        _flush_buffer(buffer_key)
         recovered += len(items)
         log(
             "ali_inbound_recovery_completed",
@@ -880,12 +953,28 @@ def _buffer_message(msg):
     with _buffer_lock:
         if phone not in _message_buffers:
             timing = response_timing.runtime_response_timing(effective_timing)
+            durable_batch_id = state_registry.inbound_processing_join_batch(
+                str(msg.get("message_id") or ""),
+            )
             _message_buffers[phone] = {
                 "messages": [],
                 "timer": None,
                 "started": now,
                 "timing": timing,
+                "phone": phone,
+                "batch_id": durable_batch_id,
             }
+        else:
+            buf = _message_buffers[phone]
+            durable_batch_id = state_registry.inbound_processing_join_batch(
+                str(msg.get("message_id") or ""),
+                str(buf.get("batch_id") or ""),
+                len(buf["messages"]),
+            )
+            if buf.get("batch_id") and durable_batch_id != buf["batch_id"]:
+                raise RuntimeError("Inbound event cannot be merged across durable batches")
+            if not buf.get("batch_id"):
+                buf["batch_id"] = durable_batch_id
         buf = _message_buffers[phone]
         timing = buf.get("timing") or response_timing.runtime_response_timing(effective_timing)
         if timing.get("mode") != "random":
@@ -1023,12 +1112,13 @@ def _automated_send_still_enabled(
     return True
 
 
-def _flush_buffer(phone):
+def _flush_buffer(buffer_key):
     """Flush buffered messages: concatenate texts, process as single message."""
     with _buffer_lock:
-        buf = _message_buffers.pop(phone, None)
+        buf = _message_buffers.pop(buffer_key, None)
     if not buf or not buf["messages"]:
         return
+    phone = str(buf.get("phone") or buffer_key)
     messages = buf["messages"]
     ids = _message_ids(messages)
     # Concatenate all text messages
@@ -1049,7 +1139,7 @@ def _flush_buffer(phone):
                 or ""
             )
             final_msg["_zernio_attachments"].append(safe_attachment)
-    final_msg["_ali_action_id"] = hashlib.sha256(
+    final_msg["_ali_action_id"] = str(buf.get("batch_id") or "") or hashlib.sha256(
         "\x1f".join(ids or [str(final_msg.get("message_id") or "")]).encode("utf-8")
     ).hexdigest()
     batched_count = len(messages)
@@ -1632,6 +1722,22 @@ async def receive_zernio_webhook(request: Request, background_tasks: BackgroundT
     if not isinstance(payload, dict):
         return PlainTextResponse(content="Bad Request", status_code=400)
     log("webhook_received", source="zernio", webhook_event=payload.get("event", "unknown"))
+    if payload.get("event") == "message.sent":
+        # WhatsApp Business app echoes are operator-authored conversation
+        # context.  Persist them before acknowledging the provider so an Nr 3
+        # outage or local database failure remains retryable instead of being
+        # silently collapsed to a disabled boolean in a background task.
+        try:
+            _process_zernio_sent_event(payload)
+        except _RetryableZernioSentControlError:
+            return PlainTextResponse(content="Unavailable", status_code=503)
+        except Exception as exc:
+            log(
+                "zernio_sent_durable_accept_failed",
+                error=type(exc).__name__,
+            )
+            return PlainTextResponse(content="Unavailable", status_code=503)
+        return PlainTextResponse(content="OK", status_code=200)
     if payload.get("event") == "message.received":
         msg = parse_zernio_webhook(payload)
         if not msg:
@@ -1754,7 +1860,18 @@ def _process_zernio_sent_event(payload: dict) -> None:
             account_id=msg.get("account_id", "")[:20],
         )
         return
-    if not icp_overrides.whatsapp_inbox_enabled():
+    envelope = icp_overrides.fetch_overrides_fresh()
+    inbox_state = icp_overrides.whatsapp_inbox_state(envelope)
+    if inbox_state is None:
+        log(
+            "whatsapp_runtime_controls_unavailable",
+            source="zernio_sent",
+            message_id=msg.get("message_id", "")[:30],
+        )
+        raise _RetryableZernioSentControlError(
+            "strict WhatsApp controls are unavailable"
+        )
+    if inbox_state is False:
         log(
             "whatsapp_inbox_disabled",
             source="zernio_sent",
@@ -1779,6 +1896,10 @@ def _process_zernio_sent_event(payload: dict) -> None:
         sender_name="Secretaría",
         created_at=msg.get("created_at") or "",
     )
+    # Always repeat the visibility repair for a provider replay.  If the first
+    # attempt stored the operator message but crashed while unarchiving, the
+    # provider's retry can still finish that second idempotent mutation.
+    state_registry.wa_set_archived(msg["conversation_id"], False)
     if not stored:
         log(
             "zernio_sent_event_duplicate",
@@ -1787,9 +1908,6 @@ def _process_zernio_sent_event(payload: dict) -> None:
         )
         return
 
-    # A fresh human reply should make an archived thread visible again without
-    # overwriting an existing escalation or takeover status.
-    state_registry.wa_set_archived(msg["conversation_id"], False)
     log(
         "zernio_whatsapp_app_reply_synced",
         conversation_id=msg["conversation_id"][:20],
