@@ -1,3 +1,4 @@
+# docker-compose.yml for tenant mermaid
 services:
   agent:
     image: wtyj-agent
@@ -9,8 +10,8 @@ services:
       - ./config/platform.env
     environment:
       - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
-      - TENANT_ACCOUNT_ALLOWLIST_REQUIRED=true
       - TENANT_RUNTIME_CONTROLS_REQUIRED=true
+      - TENANT_ACCOUNT_ALLOWLIST_REQUIRED=true
     volumes:
       - ./config:/app/config:rw
       - ./data:/app/data
@@ -18,7 +19,6 @@ services:
     networks:
       - default
       - unboks-control
-
 networks:
   unboks-control:
     external: true

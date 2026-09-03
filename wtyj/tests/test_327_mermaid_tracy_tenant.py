@@ -154,6 +154,32 @@ def test_mermaid_versioned_runtime_package_is_secret_free_and_loopback_only():
     assert "LATE_API_KEY=\n" in env_template
     assert "ZERNIO_WEBHOOK_SECRET=\n" in env_template
     assert "META_APP_SECRET=\n" in env_template
+    expected_compose = """# docker-compose.yml for tenant mermaid
+services:
+  agent:
+    image: wtyj-agent
+    container_name: wtyj-mermaid
+    restart: unless-stopped
+    ports:
+      - \"127.0.0.1:8102:8001\"
+    env_file:
+      - ./config/platform.env
+    environment:
+      - GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/config/calendar-key.json
+      - TENANT_RUNTIME_CONTROLS_REQUIRED=true
+      - TENANT_ACCOUNT_ALLOWLIST_REQUIRED=true
+    volumes:
+      - ./config:/app/config:rw
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - default
+      - unboks-control
+networks:
+  unboks-control:
+    external: true
+"""
+    assert compose == expected_compose
 
 
 @patch("shared.icp_overrides.fetch_overrides", return_value=None)
