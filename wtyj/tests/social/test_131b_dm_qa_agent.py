@@ -200,3 +200,34 @@ def test_marina_no_dm_channel():
     assert "BOOKING REDIRECT" not in prompt
     # Should have email-style writing
     assert "WRITING STYLE" in prompt
+
+
+# --- Brief 327: Q&A prompts identify the actual inbound channel ---
+@patch("agents.social.dm_agent.config_loader")
+@patch("shared.icp_overrides.fetch_overrides", return_value=None)
+def test_dm_prompt_labels_supported_channels(_mock_overrides, mock_config):
+    from agents.social.dm_agent import _build_dm_system_prompt
+
+    mock_config.get_business.return_value = {
+        "agent_name": "Tracy",
+        "name": "Mermaid Boat Trips",
+        "languages": ["English"],
+    }
+    mock_config.get_common_sense_knowledge.return_value = {}
+    mock_config.get_services.return_value = {}
+    mock_config.get_faq.return_value = {}
+    mock_config.get_raw.return_value = {
+        "agent_persona": {"freeform_notes": "Use approved facts only."},
+        "features": {"booking_flow": False},
+        "terminology": {"service_label": "boat trip"},
+    }
+
+    expected_labels = {
+        "whatsapp": "answering WhatsApp messages",
+        "instagram_dm": "answering Instagram DMs",
+        "facebook_dm": "answering Facebook DMs",
+        "twitter_dm": "answering X/Twitter DMs",
+        "future_channel": "answering messages on this channel",
+    }
+    for channel, label in expected_labels.items():
+        assert label in _build_dm_system_prompt(channel)

@@ -27,6 +27,24 @@ class ZernioMediaError(RuntimeError):
         self.retryable = retryable
 
 
+def _require_current_account(account_id: str) -> None:
+    """Fail closed unless this tenant still owns the provider account."""
+    try:
+        from shared.tenant_guard import account_access_state
+
+        state = account_access_state(account_id, direction="inbound")
+    except Exception:
+        state = None
+    if state is True:
+        return
+    if state is None:
+        raise ZernioMediaError(
+            "media_account_control_unavailable",
+            retryable=True,
+        )
+    raise ZernioMediaError("media_account_not_allowed")
+
+
 def download_whatsapp_media(
     media_id: str,
     account_id: str,
@@ -34,11 +52,15 @@ def download_whatsapp_media(
     max_bytes: int = MAX_MEDIA_BYTES,
 ) -> dict:
     """Return authenticated media bytes without following provider redirects."""
-    media_id = str(media_id or "").strip()
-    account_id = str(account_id or "").strip()
+    raw_media_id = str(media_id or "")
+    raw_account_id = str(account_id or "")
+    media_id = raw_media_id.strip()
+    account_id = raw_account_id.strip()
     api_key = str(os.environ.get("LATE_API_KEY") or "").strip()
     if (
         not api_key
+        or raw_media_id != media_id
+        or raw_account_id != account_id
         or not _PROVIDER_ID.fullmatch(media_id)
         or not _PROVIDER_ID.fullmatch(account_id)
         or isinstance(max_bytes, bool)
@@ -50,6 +72,7 @@ def download_whatsapp_media(
         f"{ZERNIO_BASE_URL}/whatsapp/media/"
         f"{urllib.parse.quote(media_id, safe='')}"
     )
+    _require_current_account(account_id)
     try:
         response = requests.get(
             url,
@@ -61,6 +84,7 @@ def download_whatsapp_media(
         )
     except requests.RequestException as exc:
         raise ZernioMediaError("media_transport_failed", retryable=True) from exc
+    _require_current_account(account_id)
 
     if 300 <= response.status_code < 400 or response.headers.get("Location"):
         raise ZernioMediaError("media_redirect_rejected")
@@ -86,10 +110,12 @@ def download_whatsapp_media(
             if total > int(max_bytes):
                 raise ZernioMediaError("media_too_large")
             chunks.append(chunk)
+            _require_current_account(account_id)
     except requests.RequestException as exc:
         raise ZernioMediaError("media_stream_failed", retryable=True) from exc
     if not total:
         raise ZernioMediaError("empty_media")
+    _require_current_account(account_id)
 
     return {
         "payload": b"".join(chunks),

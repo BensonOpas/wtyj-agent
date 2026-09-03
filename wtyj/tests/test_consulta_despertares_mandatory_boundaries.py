@@ -852,7 +852,7 @@ def test_parses_whatsapp_business_app_sent_event():
 
 def test_phone_app_reply_is_stored_as_operator_without_ai_processing():
     with (
-        patch("shared.tenant_guard.is_account_allowed", return_value=True),
+        patch("shared.tenant_guard.account_access_state", return_value=True),
         patch.object(
             state_registry,
             "wa_store_external_operator_message",

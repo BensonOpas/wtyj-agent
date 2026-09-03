@@ -30,13 +30,13 @@ def test_ignored_phone_dropped_at_webhook(
         "sender_name": "Excluir",
         "text": "yo",
     }
-    mock_state.wa_has_been_processed.return_value = False
+    mock_state.wa_claim_inbound_processing.return_value = True
     mock_state.match_ignored_contact.return_value = None
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
     _process_zernio_event({"event": "message.received", "data": {}})
 
-    mock_state.wa_mark_as_processed.assert_called_once()
+    mock_state.wa_claim_inbound_processing.assert_called_once()
     mock_typing.assert_not_called()
 
 
@@ -59,18 +59,21 @@ def test_non_ignored_phone_proceeds(mock_typing, mock_parse, mock_config, mock_s
         "sender_name": "RealCustomer",
         "text": "hello",
     }
-    mock_state.wa_has_been_processed.return_value = False
+    mock_state.wa_claim_inbound_processing.return_value = True
     mock_state.match_ignored_contact.return_value = None
     # Brief 220: state_registry.get_blocked must return False so the new
     # block check (added after the ignored_phones check) doesn't drop
     # this otherwise-allowed message. Mock state defaults to MagicMock,
     # which is truthy — this stub is required for the regression guard.
     mock_state.get_blocked.return_value = False
+    mock_state.get_ai_muted.return_value = False
     mock_config.get_raw.return_value = {"features": {"ignored_phones": ["+59995133333"]}}
 
-    _process_zernio_event({"event": "message.received", "data": {}})
+    with patch("agents.social.webhook_server._buffer_message") as buffer:
+        _process_zernio_event({"event": "message.received", "data": {}})
 
     mock_typing.assert_called_once()
+    buffer.assert_called_once()
 
 
 def test_normalize_phone_digits_strips_unicode_and_extension():
