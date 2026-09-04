@@ -8,6 +8,7 @@ from agents.social import mermaid_reservation_workflow as workflow
 from agents.social import mermaid_documents as docs, mermaid_demo_payment as payment
 from agents.social import mermaid_reservation_store as store
 from agents.social import mermaid_delivery_reconciliation as reconcile
+from agents.social import mermaid_guest_experience as guest
 from shared import config_loader, mermaid_catalog, state_registry
 
 
@@ -52,8 +53,9 @@ def test_one_summary_price_and_natural_approval(monkeypatch):
     monkeypatch.setattr(marina_agent,'process_message',model)
     result=workflow.process_model_turn({'from':'guest','message_id':'summary','text':'Keep pickup pending'},None)
     assert result.text.count('Here is what I have')==1
+    assert model.call_args.kwargs['thread_fields']['pickup_status']=='included'
     assert 'USD 525.00' in result.text and 'USD 75.00' in result.text
-    assert 'Piscadera Bay Resort' in result.text and 'Collection time still needs confirmation' in result.text
+    assert 'Piscadera Bay Resort' in result.text and '05:45' in result.text
     assert '0 children' not in result.text and '*YES*' not in result.text
     model.return_value=dict(language='en',mermaid_action='question',has_open_question=True,fields={},reply='Breakfast and lunch are included.')
     result=workflow.process_model_turn({'from':'guest','message_id':'question','text':'Is lunch included?'},None)
@@ -72,18 +74,18 @@ def test_pickup_is_consistent_in_quote_receipt_checkout_and_confirmation(locale,
     for p in (quote,receipt):
         text=' '.join(page.extract_text() for page in PdfReader(p).pages)
         assert 'Piscadera Bay Resort' in text and '525.00' in text and '75.00' in text
-        assert '06:45' not in text
+        assert '05:45' in text and '06:45' not in text
         assert item['catalog_version'] not in text
     text=payment.success_message(item,record)
-    assert 'Piscadera Bay Resort' in text and '06:45' not in text
+    assert 'Piscadera Bay Resort' in text and '05:45' in text and '06:45' not in text
     import time
     expires=int(time.time())+3600
     signature=payment.sign_payment(item['public_id'],expires,'test-only')
     page=payment.checkout_page(item['public_id'],expires,signature).body.decode()
-    assert 'Piscadera Bay Resort' in page
+    assert 'Piscadera Bay Resort' in page and '05:45' in page
     if locale=='en':
         assert 'Total incl. pickup' in page and 'USD 75.00' in page
-        assert 'Collection time still needs confirmation' in page
+        assert '05:45' in page
 
 
 def receipt_job():
@@ -149,12 +151,15 @@ def test_flat_pickup_is_one_charge_anywhere_on_island(location, adults):
     intake=fields(); intake.update(pickup_location=location, adults=adults)
     money=store._money_snapshot(intake,mermaid_catalog.get_catalog())
     assert money['pickup_amount']==75
+    assert '05:45' in guest.transport_text(intake, 'en', money)
     assert money['total']==adults*150+75
     assert [i for i in money['items'] if i['key']=='pickup']==[
         {'key':'pickup','label':'Pickup','quantity':1,'unit_amount':75,'line_total':75}]
     intake['pickup_preference']='pier'
     own=store._money_snapshot(intake,mermaid_catalog.get_catalog())
     assert own['pickup_amount'] is None and own['total']==adults*150
+    assert '06:45' in guest.transport_text(intake, 'en', own)
+    assert '05:45' not in guest.transport_text(intake, 'en', own)
     assert not any(i['key']=='pickup' for i in own['items'])
 
 
@@ -170,7 +175,7 @@ def test_current_fee_does_not_reprice_historical_reservation(monkeypatch,tmp_pat
         p=tmp_path/f'{kind}.pdf'; render(p)
         text=' '.join(page.extract_text() for page in PdfReader(p).pages)
         assert '450.00' in text and 'pickup excluded' in text
-        assert '525.00' not in text and '75.00' not in text
+        assert '525.00' not in text and '75.00' not in text and '05:45' not in text
     assert 'USD 75.00' not in payment.success_message(item,record)
     import time
     expires=int(time.time())+3600
@@ -188,4 +193,22 @@ def test_pickup_never_invents_currency_conversion():
 def test_invalid_pickup_price_is_rejected(amount):
     catalog=mermaid_catalog.get_catalog();catalog['pricing']['pickup_price']=amount
     with pytest.raises(mermaid_catalog.MermaidCatalogError,match='pickup price'):
+        mermaid_catalog.validate_catalog(catalog)
+
+
+@pytest.mark.parametrize('minutes,expected', [(60, '05:45'), (30, '06:15'), (90, '05:15')])
+def test_pickup_time_uses_configured_lead_time(minutes, expected, monkeypatch):
+    catalog=mermaid_catalog.get_catalog()
+    catalog['service']['pickup_minutes_before_arrival']=minutes
+    mermaid_catalog.validate_catalog(catalog)
+    monkeypatch.setattr(mermaid_catalog,'get_catalog',lambda:catalog)
+    assert mermaid_catalog.pickup_time()==expected
+    assert expected in guest.transport_text(fields(),'en')
+
+
+@pytest.mark.parametrize('minutes', [None, -1, 0, True, '60', 60.5, 406])
+def test_invalid_pickup_lead_time_is_rejected(minutes):
+    catalog=mermaid_catalog.get_catalog()
+    catalog['service']['pickup_minutes_before_arrival']=minutes
+    with pytest.raises(mermaid_catalog.MermaidCatalogError,match='pickup lead time'):
         mermaid_catalog.validate_catalog(catalog)

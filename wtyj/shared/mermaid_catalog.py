@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from shared import config_loader
@@ -64,6 +65,10 @@ def validate_catalog(catalog: dict) -> dict:
         raise MermaidCatalogError("operating weekdays are malformed")
     if service.get("arrival_time") != "06:45" or service.get("island_departure_time") != "15:20":
         raise MermaidCatalogError("published schedule is malformed")
+    arrival = datetime.strptime(service["arrival_time"], "%H:%M")
+    lead = service.get("pickup_minutes_before_arrival")
+    if type(lead) is not int or not 0 < lead <= arrival.hour * 60 + arrival.minute:
+        raise MermaidCatalogError("pickup lead time must be positive and on the same day as check-in")
     if "Fishermen's Pier" not in str(service.get("meeting_point") or ""):
         raise MermaidCatalogError("meeting point is missing")
 
@@ -85,6 +90,13 @@ def get_catalog() -> dict:
     except (OSError, json.JSONDecodeError) as exc:
         raise MermaidCatalogError(f"unable to load Mermaid catalog: {exc}") from exc
     return validate_catalog(payload)
+
+
+def pickup_time(catalog: dict | None = None) -> str:
+    """Derive the current demo pickup time in Curaçao local time."""
+    service = (get_catalog() if catalog is None else catalog)["service"]
+    arrival = datetime.strptime(service["arrival_time"], "%H:%M")
+    return (arrival - timedelta(minutes=service["pickup_minutes_before_arrival"])).strftime("%H:%M")
 
 
 def reservation_demo_enabled() -> bool:

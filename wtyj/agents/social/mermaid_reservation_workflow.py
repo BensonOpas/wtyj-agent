@@ -457,7 +457,13 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         context["booking_code"] = reservation["booking_code"]
     elif all(key in fields for key in ("adults", "children", "infants")):
         context["authoritative_pricing"] = guest.intake_money(fields)
-    context["pickup_status"] = "requested_unconfirmed" if fields.get("pickup_preference") == "pickup_requested" else "not_requested"
+    if fields.get("pickup_preference") == "pickup_requested":
+        context["pickup_status"] = (
+            "included" if (context.get("authoritative_pricing") or {}).get("pickup_amount") is not None
+            else "requested_unconfirmed"
+        )
+    else:
+        context["pickup_status"] = "not_requested"
     understood = marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,

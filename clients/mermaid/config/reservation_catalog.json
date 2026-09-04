@@ -1,5 +1,5 @@
 {
-  "version": "mermaid-demo-v2-2026-09-03",
+  "version": "mermaid-demo-v3-2026-09-03",
   "tenant_slug": "mermaid",
   "service": {
     "key": "klein_curacao_day_trip",
@@ -14,7 +14,8 @@
     ],
     "meeting_point": "Fishermen's Pier, Curaçao",
     "arrival_time": "06:45",
-    "island_departure_time": "15:20"
+    "island_departure_time": "15:20",
+    "pickup_minutes_before_arrival": 60
   },
   "pricing": {
     "currencies": {
@@ -54,7 +55,7 @@
   ],
   "extras": [
     "Beer and wine are available at an additional charge",
-    "Optional pickup: simulated USD 75 per booking, anywhere on Curaçao. Included in the quote and demo payment when requested. Collection time still requires confirmation."
+    "Optional pickup: simulated USD 75 per booking, anywhere on Curaçao. Included in the quote and demo payment when requested. Pickup is one hour before arrival/check-in, in Curaçao local time."
   ],
   "bring": [
     "Towel",
@@ -89,7 +90,7 @@
       "adults_one": "{count} adult fare",
       "children_one": "{count} child (4-12)",
       "infants_one": "{count} little one (0-3)",
-      "pickup_priced": "Pickup from {location}: {currency} {amount} per booking, anywhere on Curaçao, included in this total. Collection time still needs confirmation.",
+      "pickup_priced": "Pickup from {location} at {pickup_time}. Please be ready then. {currency} {amount} for your whole booking, anywhere on Curaçao, included in this total.",
       "pickup_total": "Total incl. pickup",
       "pickup_line": "Island-wide pickup",
       "checkout_link": "Finish your demo booking here:"
@@ -109,7 +110,7 @@
       "paid": "Demo betaald",
       "pickup_payment_note": "De transfer is nog niet bevestigd; deze betaling is alleen voor de trip.",
       "island_departure": "Vertrek van het eiland: {time}.",
-      "pickup_priced": "Transfer vanaf {location}: {currency} {amount} per boeking, overal op Curaçao, inbegrepen in dit totaal. De ophaaltijd moet nog worden bevestigd.",
+      "pickup_priced": "We halen je om {pickup_time} op bij {location}. Zorg dat je dan klaarstaat. {currency} {amount} voor je hele boeking, overal op Curaçao, inbegrepen in dit totaal.",
       "pickup_total": "Totaal incl. transfer",
       "pickup_line": "Transfer op heel Curaçao",
       "checkout_link": "Rond je demo-boeking hier af:"
@@ -129,7 +130,7 @@
       "paid": "Demo bezahlt",
       "pickup_payment_note": "Die Abholung ist noch offen; diese Zahlung gilt nur für den Ausflug.",
       "island_departure": "Abfahrt von der Insel: {time}.",
-      "pickup_priced": "Abholung von {location}: {currency} {amount} pro Buchung, überall auf Curaçao, in diesem Gesamtbetrag enthalten. Die Abholzeit muss noch bestätigt werden.",
+      "pickup_priced": "Abholung von {location} um {pickup_time}. Bitte seien Sie dann bereit. {currency} {amount} für Ihre gesamte Buchung, überall auf Curaçao, in diesem Gesamtbetrag enthalten.",
       "pickup_total": "Gesamt inkl. Abholung",
       "pickup_line": "Inselweite Abholung",
       "checkout_link": "Schließen Sie Ihre Demo-Buchung hier ab:"
@@ -149,7 +150,7 @@
       "paid": "Demo pagado",
       "pickup_payment_note": "La recogida sigue pendiente; este pago cubre solo el paseo.",
       "island_departure": "Salida de la isla: {time}.",
-      "pickup_priced": "Recogida en {location}: {currency} {amount} por reserva, en cualquier lugar de Curaçao, incluida en este total. Falta confirmar la hora de recogida.",
+      "pickup_priced": "Te recogemos en {location} a las {pickup_time}. Por favor, ten todo listo para esa hora. {currency} {amount} por toda tu reserva, en cualquier lugar de Curaçao, incluido en este total.",
       "pickup_total": "Total con recogida",
       "pickup_line": "Recogida en toda la isla",
       "checkout_link": "Completa tu reserva demo aquí:"
@@ -169,7 +170,7 @@
       "paid": "Demo pagá",
       "pickup_payment_note": "Pickup ta pendiente ainda; e pago aki ta kubri solamente e trip.",
       "island_departure": "Salida for di e isla: {time}.",
-      "pickup_priced": "Pickup na {location}: {currency} {amount} pa reservashon, na kualke lugá na Kòrsou, inkluí den e total aki. Ora di pickup mester wordu konfirmá ainda.",
+      "pickup_priced": "Nos ta pasa buska bo na {location} pa {pickup_time}. Por fabor, ta kla na e ora ei. {currency} {amount} pa henter bo reservashon, na kualke lugá na Kòrsou, inkluí den e total aki.",
       "pickup_total": "Total ku pickup",
       "pickup_line": "Pickup rònt Kòrsou",
       "checkout_link": "Kompletá bo reservashon demo aki:"
@@ -189,7 +190,7 @@
       "paid": "Demo pago",
       "pickup_payment_note": "O traslado continua pendente; este pagamento cobre apenas o passeio.",
       "island_departure": "Saída da ilha: {time}.",
-      "pickup_priced": "Traslado de {location}: {currency} {amount} por reserva, em qualquer lugar de Curaçao, incluído neste total. O horário da coleta ainda precisa de confirmação.",
+      "pickup_priced": "Buscamos você em {location} às {pickup_time}. Por favor, esteja pronto nesse horário. {currency} {amount} por toda a sua reserva, em qualquer lugar de Curaçao, incluído neste total.",
       "pickup_total": "Total com traslado",
       "pickup_line": "Traslado em toda a ilha",
       "checkout_link": "Conclua sua reserva demo aqui:"

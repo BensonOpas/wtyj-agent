@@ -17,6 +17,7 @@ def transport_text(intake, locale, money=None):
             return copy["pickup_priced"].format(
                 location=intake.get("pickup_location") or copy["hotel"],
                 currency=money["currency"], amount=f"{money['pickup_amount']:,.2f}",
+                pickup_time=mermaid_catalog.pickup_time(),
             )
         return copy["pickup_pending"].format(location=intake.get("pickup_location") or copy["hotel"])
     service = mermaid_catalog.get_catalog()["service"]

@@ -115,7 +115,7 @@ def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     assert cfg["features"]["booking_flow"] is False
     assert cfg["workflow"] == {
         "type": "mermaid_reservation_demo",
-        "catalog_version": "mermaid-demo-v2-2026-09-03",
+        "catalog_version": "mermaid-demo-v3-2026-09-03",
         "availability_source": "demo_assumed",
     }
     assert cfg["channel_account_allowlist"] == {
