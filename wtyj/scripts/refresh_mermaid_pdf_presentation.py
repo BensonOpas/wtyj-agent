@@ -42,7 +42,7 @@ def refresh():
                 digest = documents.render_receipt_pdf(reservation, dict(payment), target)
             pdf = PdfReader(target)
             assert pdf.pages[0].images and pdf.metadata.title.startswith('Mermaid - ')
-            assert len(pdf.pages) == (2 if row['kind'] == 'quote' else 1)
+            assert len(pdf.pages) == 1
             backup = target.parent / (row['kind'] + '-previous-record.json')
             if not backup.exists():
                 backup.write_text(json.dumps(row, indent=2), encoding='utf-8')

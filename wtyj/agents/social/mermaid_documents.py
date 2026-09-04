@@ -21,7 +21,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    HRFlowable, Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    HRFlowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
 )
 
 from agents.social import mermaid_reservation_store
@@ -194,7 +194,7 @@ def _money(currency: str, amount: int) -> str:
 
 
 def render_quote_pdf(reservation: dict, target: Path) -> str:
-    """Render only snapshotted monetary values; no price calculation occurs here."""
+    """Render a compact quote using only snapshotted monetary values."""
     locale = reservation["language"] if reservation["language"] in LABELS else "en"
     labels = LABELS[locale]
     copy = DOCUMENT_COPY[locale]
@@ -203,83 +203,89 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     styles = getSampleStyleSheet()
-    body = ParagraphStyle("MermaidBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9.4, leading=13, textColor=DEEP)
-    small = ParagraphStyle("MermaidSmall", parent=body, fontSize=7.8, leading=10.5, textColor=MUTED)
-    heading = ParagraphStyle("MermaidHeading", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=21, leading=25, textColor=DEEP)
-    section = ParagraphStyle("MermaidSection", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=TEAL, spaceBefore=3 * mm, spaceAfter=2 * mm)
-    marker = ParagraphStyle("MermaidMarker", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=13, textColor=colors.white, alignment=TA_CENTER)
-    total = ParagraphStyle("MermaidTotal", parent=body, fontName="Helvetica-Bold", fontSize=17, leading=20, alignment=TA_RIGHT)
-
+    body = ParagraphStyle("QuoteBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=11.5, textColor=DEEP, spaceBefore=0, spaceAfter=0)
+    small = ParagraphStyle("QuoteSmall", parent=body, fontSize=8, leading=10, textColor=MUTED)
+    brand = ParagraphStyle("QuoteBrand", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=21)
+    heading = ParagraphStyle("QuoteTitle", parent=brand, fontSize=15, leading=18, spaceAfter=3 * mm)
+    section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, spaceBefore=3 * mm, spaceAfter=1.5 * mm, keepWithNext=True)
+    marker = ParagraphStyle("QuoteMarker", parent=small, fontName="Helvetica-Bold", textColor=colors.white, alignment=TA_CENTER)
+    total = ParagraphStyle("QuoteTotal", parent=body, fontName="Helvetica-Bold", fontSize=15, leading=18, alignment=TA_RIGHT)
     doc = SimpleDocTemplate(
         str(target), pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm,
-        topMargin=13 * mm, bottomMargin=13 * mm,
+        topMargin=12 * mm, bottomMargin=12 * mm,
         title=f"Mermaid - {labels['title']} - {reservation['public_id'][-10:].upper()}", author="Mermaid Boat Trips Curaçao",
     )
-    story = [
-        _hero(180), Spacer(1, 4 * mm),
-        Paragraph("MERMAID BOAT TRIPS CURAÇAO", heading),
-        Paragraph(_safe(copy["tagline"]), body),
-        Spacer(1, 3 * mm),
-        Table([[Paragraph("DEMO QUOTE - NOT A VALID TICKET", marker)]], colWidths=[180 * mm], style=TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), CORAL), ("BOX", (0, 0), (-1, -1), 0.5, CORAL),
-            ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ])),
-        Spacer(1, 4 * mm), Paragraph(_safe(labels["title"]), heading),
-    ]
-    transport = guest.transport_text(intake, locale, reservation["monetary_snapshot"])
-    reference = reservation["public_id"][-10:].upper()
-    detail_rows = [
-        [Paragraph(_safe(labels["quote"]), body), Paragraph(_safe(reference), body), Paragraph(_safe(labels["customer"]), body), Paragraph(_safe(reservation["customer_name"], 100), body)],
-        [Paragraph(_safe(labels["date"]), body), Paragraph(_safe(guest.guest_date(intake["trip_date"], locale)), body), Paragraph(_safe(labels["transport"]), body), Paragraph(_safe(transport), body)],
-        [Paragraph(_safe(labels["guests"]), body), Paragraph(_safe(guest.party_text(intake, locale)), body), Paragraph("", body), Paragraph("", body)],
-    ]
-    detail = Table(detail_rows, colWidths=[32 * mm, 55 * mm, 25 * mm, 68 * mm])
-    detail.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), PALE), ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7DCDD")),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"), ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("TEXTCOLOR", (0, 0), (-1, -1), DEEP), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    header = Table([[
+        [Paragraph("MERMAID BOAT TRIPS<br/>CURAÇAO", brand), Spacer(1, 2 * mm), Paragraph(_safe(copy["tagline"]), body)],
+        _hero(58),
+    ]], colWidths=[120 * mm, 60 * mm])
+    header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0), ("ALIGN", (1, 0), (1, 0), "RIGHT"),
     ]))
-    story.extend([detail, Paragraph(labels["charges"], section)])
+    story = [header, Spacer(1, 3 * mm),
+        Table([[Paragraph("DEMO QUOTE - NOT A VALID TICKET", marker)]], colWidths=[180 * mm], style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), CORAL),
+            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ])), Spacer(1, 3 * mm), Paragraph(_safe(labels["title"]), heading),
+    ]
+
+    def detail(label, value):
+        return Paragraph(f"<b>{_safe(label)}</b><br/>{_safe(value)}", body)
+
+    detail_rows = [
+        [detail(labels["customer"], reservation["customer_name"]), detail(labels["quote"], reservation["public_id"][-10:].upper())],
+        [detail(labels["date"], guest.guest_date(intake["trip_date"], locale)), detail(labels["guests"], guest.party_text(intake, locale))],
+    ]
+    details = Table(detail_rows, colWidths=[90 * mm, 90 * mm])
+    details.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PALE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.3, colors.HexColor("#B7DCDD")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    transport = guest.transport_text(intake, locale, money)
+    departure = guest.guest_copy(locale)["island_departure"].format(time=mermaid_catalog.get_catalog()["service"]["island_departure_time"])
+    story.extend([details, Paragraph(labels["transport"], section),
+                  Paragraph(_safe(transport), body), Paragraph(_safe(departure), body),
+                  Paragraph(labels["charges"], section)])
     rows = [[labels["description"], labels["qty"], labels["unit"], labels["amount"]]]
     for item in money["items"]:
         if not item["quantity"]:
             continue
-        rows.append([
-            _safe(guest.guest_copy(locale)["pickup_line"] if item["key"] == "pickup" else copy["items"][item["key"]]), str(item["quantity"]),
-            _money(money["currency"], item["unit_amount"]),
-            _money(money["currency"], item["line_total"]),
-        ])
+        item_label = guest.guest_copy(locale)["pickup_line"] if item["key"] == "pickup" else copy["items"][item["key"]]
+        rows.append([Paragraph(_safe(item_label), body), str(item["quantity"]),
+                     _money(money["currency"], item["unit_amount"]), _money(money["currency"], item["line_total"])])
     price_table = Table(rows, colWidths=[78 * mm, 22 * mm, 38 * mm, 42 * mm])
     price_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), TEAL), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTNAME", (-1, 1), (-1, -1), "Helvetica-Bold"),
-        ("ALIGN", (1, 1), (-1, -1), "RIGHT"), ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7DCDD")),
-        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#B7DCDD")),
+        ("FONTSIZE", (0, 0), (-1, -1), 9), ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
+    story.extend([price_table, Spacer(1, 2 * mm),
+                  Paragraph(_safe(guest.price_text(money, intake, locale)), total),
+                  Spacer(1, 1.5 * mm), Paragraph(_safe(labels["available"]), small)])
+    lists = Table([[
+        [Paragraph(_safe(labels["included"]), section), Paragraph(" • ".join(_safe(x, 120) for x in copy["included_items"]), body)],
+        [Paragraph(_safe(labels["bring"]), section), Paragraph(" • ".join(_safe(x, 100) for x in copy["bring_items"]), body)],
+    ]], colWidths=[108 * mm, 72 * mm])
+    lists.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (0, 0), 12), ("RIGHTPADDING", (1, 0), (1, 0), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.extend([lists, Paragraph(labels["rules"], section)])
+    for key in ("cancellation", "safety", "insurance"):
+        story.extend([Paragraph(_safe(copy[key]), small), Spacer(1, 1.5 * mm)])
     story.extend([
-        price_table, Spacer(1, 2 * mm),
-        Table([[Paragraph(_safe(guest.price_text(money, intake, locale)), total)]], colWidths=[180 * mm]),
-        Paragraph(_safe(labels["available"]), small),
-        Paragraph(labels["included"], section),
-        Paragraph(" • ".join(_safe(x, 120) for x in copy["included_items"]), body),
-        Paragraph(labels["schedule"], section), Paragraph(_safe(transport), body),
-        Paragraph(_safe(guest.guest_copy(locale)["island_departure"].format(time=mermaid_catalog.get_catalog()["service"]["island_departure_time"])), body),
-        Paragraph(labels["bring"], section), Paragraph(" • ".join(_safe(x, 100) for x in copy["bring_items"]), body),
-        PageBreak(),
-        HRFlowable(color=TEAL, thickness=1.5),
-        Paragraph(labels["rules"], section),
-        Paragraph(_safe(copy["cancellation"]), body), Spacer(1, 3 * mm),
-        Paragraph(_safe(copy["safety"]), body), Spacer(1, 3 * mm),
-        Paragraph(_safe(copy["insurance"]), body),
-        Paragraph(_safe(copy["protocol_title"]), section),
-        Paragraph(_safe(copy["protocol"]), body),
+        Paragraph(f"<b>{_safe(copy['protocol_title'])}:</b> {_safe(copy['protocol'])}", small),
         Paragraph(labels["payment"], section), Paragraph(_safe(labels["payment_text"]), body),
-        Spacer(1, 3 * mm), Paragraph(_safe(labels["valid"]), body),
-        Spacer(1, 8 * mm), HRFlowable(color=CORAL, thickness=1), Spacer(1, 3 * mm),
-        Paragraph(_safe(copy["closing"]), body),
+        Paragraph(_safe(labels["valid"]), small), Spacer(1, 3 * mm),
+        HRFlowable(color=CORAL, thickness=0.8), Spacer(1, 2 * mm), Paragraph(_safe(copy["closing"]), small),
     ])
     doc.build(story)
     return hashlib.sha256(target.read_bytes()).hexdigest()
