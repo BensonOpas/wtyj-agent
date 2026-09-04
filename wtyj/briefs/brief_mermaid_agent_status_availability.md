@@ -1,5 +1,5 @@
 # BRIEF — Distinguish unavailable agent controls from an operator pause
-**Status:** Implemented | **Files:** dashboard/api.py; tests/dashboard/test_agent_control_availability.py | **Depends on:** live Mermaid pickup source 8053f5d | **Blocks:** truthful dashboard agent status
+**Status:** Implemented | **Files:** dashboard/api.py; shared/icp_overrides.py; tests/dashboard/test_agent_control_availability.py; tests/shared/test_icp_overrides.py | **Depends on:** live Mermaid pickup source 8053f5d | **Blocks:** truthful dashboard agent status
 
 ## Context
 The user reported that TRACY appears to pause without an operator action. The
@@ -26,10 +26,21 @@ return `active: null`, `status: unavailable`, and `available: false`. Verified
 active/paused responses retain their existing shape. Run these synchronous
 handlers in FastAPI's normal worker pool to preserve unrelated HTTP progress.
 
+Coalesce ordinary override reads per tenant and check the cache inside the
+shared read lock. Otherwise, concurrent dashboard startup requests can each
+fetch healthy controls but supersede each other through the existing freshness
+fence, falsely reporting unavailability. Pre-send and pause-verification fresh
+reads bypass this lock and retain all request-sequence/generation safeguards.
+The lock registry survives cache invalidation so overlapping callers cannot
+create different locks for the same tenant.
+
 Rejected automatically enabling replies on bridge failure: that would bypass
 operator control and tenant isolation safeguards. Also rejected presenting the
 last known enabled state as current because a pause may have occurred meanwhile.
 The runtime's strict sending checks and all control writes remain unchanged.
+Rejected reusing an older cached enabled result while a newer read is pending:
+the newer read could be an authoritative pause. Coalescing only ordinary reads
+avoids that ambiguity without relaxing the fresh-read fences.
 
 ## Instructions
 1. Update the status read at `dashboard/api.py:1007` to preserve unknown state.
@@ -39,6 +50,8 @@ The runtime's strict sending checks and all control writes remain unchanged.
    authentication and strict boolean validation.
 3. Have dashboard consumers show unavailability and disable state-changing
    controls until a boolean authoritative status returns.
+4. Coalesce ordinary reads at `shared/icp_overrides.py:345`, leaving forced reads
+   and the existing cache generation/request-sequence fences unchanged.
 
 ## Tests
 All ten new regression cases fail without their respective fixes: six because
@@ -48,7 +61,13 @@ controls, null values, unavailable responses with stale false values, recovery
 to either explicit state, and concurrent HTTP progress while the bridge waits.
 The existing client-profile and ICP override suites cover authentication,
 explicit pause persistence, strict inputs, and stale-fetch pause fencing.
-After the fix, these three suites pass: **42 tests** on local Python 3.14.
+Review additionally reproduced healthy parallel HTTP reads incorrectly returning
+unavailable before ordinary-read coalescing. The new HTTP test exercises either
+dashboard endpoint reading first; both return available with one bridge fetch.
+Two more cases verify an expired ordinary read cannot revive enabled state while
+a newer forced pause is pending or after it completes. The existing explicit
+pause generation-invalidation test remains unchanged and passes.
+After the fix, these three suites pass: **46 tests** on local Python 3.14.
 Production verification should repeat the same suites in the exact deployment
 image's Python 3.12 runtime without production mounts or network access.
 

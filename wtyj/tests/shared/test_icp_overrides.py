@@ -12,6 +12,8 @@ Asserts safety properties from the spec:
 """
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -466,6 +468,62 @@ def test_newer_fresh_pause_supersedes_older_inflight_enabled_fetch(
     assert older_result["envelope"]["available"] is False
     assert "superseded" in older_result["envelope"]["reason"]
     assert icp_overrides.auto_reply_state(older_result["envelope"]) is None
+    assert icp_overrides.auto_reply_state(icp_overrides.fetch_overrides()) is False
+
+
+@pytest.mark.parametrize("pause_finishes_first", [False, True])
+def test_fresh_pause_fences_expired_ordinary_read_in_both_orders(
+    monkeypatch, configured, pause_finishes_first,
+):
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
+    clock = [100.0]
+    monkeypatch.setattr(icp_overrides, "time", SimpleNamespace(time=lambda: clock[0]))
+    running = _bridge_envelope()
+    paused = _bridge_envelope()
+    paused["feature_toggles"]["ai_auto_reply"]["value"] = False
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _MockResponse(200, running))
+    assert icp_overrides.auto_reply_state(icp_overrides.fetch_overrides()) is True
+    clock[0] += icp_overrides.ICP_OVERRIDES_TTL_SECONDS + 1
+
+    older_started = threading.Event()
+    pause_started = threading.Event()
+    release_older = threading.Event()
+    release_pause = threading.Event()
+    calls = []
+
+    def controlled_get(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            older_started.set()
+            assert release_older.wait(timeout=5)
+            return _MockResponse(200, running)
+        pause_started.set()
+        assert release_pause.wait(timeout=5)
+        return _MockResponse(200, paused)
+
+    monkeypatch.setattr(requests, "get", controlled_get)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        older = pool.submit(icp_overrides.fetch_overrides)
+        newer = None
+        try:
+            assert older_started.wait(timeout=5)
+            newer = pool.submit(icp_overrides.fetch_overrides_fresh)
+            # Fresh pause checks must bypass the ordinary-read lock.
+            assert pause_started.wait(timeout=5)
+            if pause_finishes_first:
+                release_pause.set()
+                assert icp_overrides.auto_reply_state(newer.result(timeout=5)) is False
+            release_older.set()
+            superseded = older.result(timeout=5)
+            assert superseded["available"] is False
+            assert icp_overrides.auto_reply_state(superseded) is None
+            if not pause_finishes_first:
+                assert not newer.done()
+                release_pause.set()
+                assert icp_overrides.auto_reply_state(newer.result(timeout=5)) is False
+        finally:
+            release_older.set()
+            release_pause.set()
     assert icp_overrides.auto_reply_state(icp_overrides.fetch_overrides()) is False
 
 

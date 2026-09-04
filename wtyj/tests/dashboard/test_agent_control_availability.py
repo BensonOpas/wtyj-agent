@@ -110,3 +110,66 @@ def test_control_bridge_wait_does_not_block_other_http(monkeypatch, method, path
             assert completed.status_code == 200
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("first_path", ["agent/status", "icp-overrides"])
+def test_parallel_healthy_dashboard_reads_keep_agent_available(monkeypatch, first_path):
+    monkeypatch.setenv("TENANT_ID", "demo")
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
+    monkeypatch.setenv("NR3_INTERNAL_OVERRIDES_URL", "http://bridge.test")
+    monkeypatch.setenv("NR3_INTERNAL_API_TOKEN", "local-test-token")
+    icp_overrides.clear_cache()
+    first_started = threading.Event()
+    first_release = threading.Event()
+    calls = []
+    envelope = {"tenant_id": "demo", **_envelope(True)}
+
+    def controlled_get(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            first_started.set()
+            assert first_release.wait(timeout=5)
+        return httpx.Response(200, json=envelope)
+
+    monkeypatch.setattr(icp_overrides.requests, "get", controlled_get)
+
+    async def exercise():
+        app = _app()
+        companion_started = asyncio.Event()
+        companion_path = "icp-overrides" if first_path == "agent/status" else "agent/status"
+
+        async def observed_app(scope, receive, send):
+            if scope.get("path") == f"/dashboard/api/{companion_path}":
+                companion_started.set()
+            await app(scope, receive, send)
+
+        transport = httpx.ASGITransport(app=observed_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://tenant.test") as client:
+            first = asyncio.create_task(client.get(
+                f"/dashboard/api/{first_path}", headers=_auth(),
+            ))
+            companion = None
+            try:
+                assert await asyncio.to_thread(first_started.wait, 5)
+                companion = asyncio.create_task(client.get(
+                    f"/dashboard/api/{companion_path}", headers=_auth(),
+                ))
+                await asyncio.wait_for(companion_started.wait(), timeout=2)
+                assert not first.done()
+            finally:
+                first_release.set()
+                first_response = await asyncio.wait_for(first, timeout=5)
+                if companion is not None:
+                    companion_response = await asyncio.wait_for(companion, timeout=5)
+            assert first_response.status_code == companion_response.status_code == 200
+            assert first_response.json()["available"] is True
+            assert companion_response.json()["available"] is True
+            agent = first_response if first_path == "agent/status" else companion_response
+            assert agent.json()["active"] is True
+            assert agent.json()["status"] == "active"
+
+    try:
+        asyncio.run(exercise())
+        assert len(calls) == 1
+    finally:
+        icp_overrides.clear_cache()
