@@ -125,6 +125,19 @@ def test_pending_review_cannot_confirm_booking_decisions(review_runtime, action)
     assert "confirm it now" not in send.call_args.args[3]
 
 
+@pytest.mark.parametrize("action", ["confirm_summary", "new_booking", "cancel"])
+def test_required_review_cannot_claim_a_contradictory_model_decision(review_runtime, action):
+    model, send, _controls = review_runtime
+    contradictory = _understood(action, "Your booking change is complete.")
+    contradictory["requires_human"] = True
+    model.return_value = contradictory
+    _flush("review-contradiction", "Please check this with the team.")
+    assert send.call_count == 1
+    assert "change is complete" not in send.call_args.args[3]
+    assert reservations.latest_for_conversation(CONVERSATION) is None
+    assert state_registry.get_active_escalation_mode(CONVERSATION) == "soft"
+
+
 def test_existing_reservation_stays_frozen_during_soft_review(review_runtime):
     _model, send, _controls = review_runtime
     intake = dict(state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"])

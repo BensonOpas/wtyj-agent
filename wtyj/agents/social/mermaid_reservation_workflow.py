@@ -520,7 +520,10 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             preserve_hard_mode=True,
         )
         fields["phase"] = "human_takeover"
-        response = COPY[locale]["human"] if action == "cancel" else response or COPY[locale]["human"]
+        if action in {"confirm_summary", "new_booking", "cancel"}:
+            response = COPY[locale]["human"]
+        else:
+            response = response or COPY[locale]["human"]
         result_action = "human_takeover"
     elif review_pending:
         # Human review freezes booking decisions, not safe conversation. Only

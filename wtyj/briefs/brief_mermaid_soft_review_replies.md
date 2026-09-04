@@ -55,8 +55,11 @@ now expects a soft review without muting. No customer/provider messages are sent
 during verification; notification dispatchers are disabled in isolated tests.
 Additional cases cover later new-booking/cancel decisions, preserving saved
 details, and an already-issued short checkout link plus signed callback staying
-blocked after review freezes the reservation. The new suite has eight passing
-cases; the combined Mermaid and operator-control suites pass 301 tests locally.
+blocked after review freezes the reservation. The combined Mermaid and operator
+control suites passed 301 tests locally. Final review added three contradictory
+model-decision cases (`requires_human` with confirm/new-booking/cancel), all of
+which retain the review acknowledgement instead of claiming an action Python
+refused. The final soft-review suite has eleven passing cases.
 
 ## Success Condition
 A review question receives its acknowledgement and safe follow-ups remain
