@@ -19,6 +19,15 @@ class MermaidReservationError(RuntimeError):
     pass
 
 
+class MermaidCancellationReviewRequired(MermaidReservationError):
+    """The authoritative reservation cannot be cancelled automatically."""
+
+    def __init__(self, reservation: dict, reason: str):
+        self.reservation = reservation
+        self.reason = reason
+        super().__init__(reason)
+
+
 TERMINAL_STATES = {"cancelled", "booked"}
 _schema_lock = threading.Lock()
 TRANSITIONS = {
@@ -394,18 +403,67 @@ def transition(
         conn.close()
 
 
+def _cancellation_review_active(conn: sqlite3.Connection, conversation_id: str) -> bool:
+    """Read operator/review authority inside the cancellation write transaction."""
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('conversation_status', 'pending_notifications')"
+    ).fetchall()}
+    if "conversation_status" in tables and conn.execute(
+        "SELECT 1 FROM conversation_status WHERE conversation_id=? AND ai_muted=1",
+        (conversation_id,),
+    ).fetchone():
+        return True
+    return bool("pending_notifications" in tables and conn.execute(
+        "SELECT 1 FROM pending_notifications WHERE customer_id=? "
+        "AND notification_type IN ('escalation', 'relay') AND status!='resolved' "
+        "AND mode IN ('soft', 'hard') LIMIT 1",
+        (conversation_id,),
+    ).fetchone())
+
+
 def cancel(public_id: str, *, idempotency_key: str, actor: str = "customer") -> dict:
-    current = get_reservation(public_id)
-    if current is None:
-        raise MermaidReservationError("reservation not found")
-    if current["state"] == "cancelled":
-        return current
-    if current["state"] in {"demo_paid", "booked"}:
-        raise MermaidReservationError("paid demo reservation cannot be cancelled automatically")
-    return transition(
-        public_id, "cancelled", idempotency_key=idempotency_key,
-        actor=actor, reason="Cancelled before simulated payment",
-    )
+    """Cancel and revoke checkout tokens in the payment writer's transaction order."""
+    conn = _conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = get_reservation(public_id, connection=conn)
+        if current is None:
+            raise MermaidReservationError("reservation not found")
+        paid = conn.execute(
+            "SELECT 1 FROM mermaid_demo_payments WHERE tenant_slug='mermaid' AND reservation_public_id=?",
+            (public_id,),
+        ).fetchone()
+        if paid or current["payment_reference"] or current["state"] in {"demo_paid", "booked"}:
+            raise MermaidCancellationReviewRequired(current, "paid demo reservation cannot be cancelled automatically")
+        if current["human_takeover"] or _cancellation_review_active(conn, current["conversation_id"]):
+            raise MermaidCancellationReviewRequired(current, "reservation is frozen for human takeover")
+        if current["state"] != "cancelled":
+            if "cancelled" not in TRANSITIONS.get(current["state"], set()):
+                raise MermaidReservationError(f"invalid transition {current['state']} -> cancelled")
+            revision, now = int(current["revision"]) + 1, _now()
+            conn.execute(
+                "UPDATE mermaid_reservations SET state='cancelled', revision=?, updated_at=? "
+                "WHERE tenant_slug='mermaid' AND public_id=?",
+                (revision, now, public_id),
+            )
+            conn.execute(
+                "INSERT INTO mermaid_reservation_events (reservation_public_id, tenant_slug, event_type, "
+                "from_state, to_state, actor, reason, idempotency_key, revision, payload_json, created_at) "
+                "VALUES (?, 'mermaid', 'state_transition', ?, 'cancelled', ?, "
+                "'Cancelled before simulated payment; checkout tokens revoked', ?, ?, '{}', ?)",
+                (public_id, current["state"], actor, idempotency_key, revision, now),
+            )
+        conn.execute(
+            "DELETE FROM mermaid_checkout_links WHERE tenant_slug='mermaid' AND reservation_public_id=?",
+            (public_id,),
+        )
+        conn.commit()
+        return get_reservation(public_id, connection=conn)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def freeze_for_human(public_id: str) -> dict:

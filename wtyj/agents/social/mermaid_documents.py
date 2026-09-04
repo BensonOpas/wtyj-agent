@@ -20,8 +20,11 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import (
-    HRFlowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+from reportlab.platypus import SimpleDocTemplate, Spacer, TableStyle
+
+from agents.social.mermaid_document_copy import DOCUMENT_LANGUAGES, DOCUMENT_NOTICES
+from agents.social.mermaid_pdf_structure import (
+    HRFlowable, Image, Paragraph, Structure, Table, canvas_for,
 )
 
 from agents.social import mermaid_reservation_store
@@ -32,6 +35,7 @@ from agents.social import mermaid_guest_experience as guest
 TEAL = colors.HexColor("#007F86")
 DEEP = colors.HexColor("#063B46")
 CORAL = colors.HexColor("#F36C5B")
+MARKER_TEXT = colors.HexColor("#082B32")
 PALE = colors.HexColor("#EAF8F8")
 MUTED = colors.HexColor("#4D6870")
 HERO_IMAGE = Path(__file__).resolve().parents[2] / "assets" / "mermaid-klein-curacao.jpg"
@@ -46,7 +50,7 @@ LABELS = {
     "nl": {"title": "Je demo-offerte voor Klein Curaçao", "quote": "Offerte", "customer": "Gast", "date": "Tripdatum", "guests": "Gasten", "transport": "Vervoer", "charges": "Prijsopbouw", "description": "Omschrijving", "qty": "Aantal", "unit": "Per stuk", "amount": "Bedrag", "total": "Totaal", "included": "Alles inbegrepen", "schedule": "Jullie dag", "bring": "Zelf meenemen", "rules": "Regels en belangrijke informatie", "payment": "Volgende stap", "payment_text": "Gebruik de veilige demo-betaallink in WhatsApp. Er worden geen kaart- of bankgegevens gevraagd en er wordt geen geld verplaatst.", "arrival": "Wees om 06:45 bij Fishermen's Pier. Het gepubliceerde vertrek van het eiland is ongeveer 15:20.", "pickup": "Hoteltransfer aangevraagd; locatie en prijs moeten worden bevestigd.", "pier": "Ontmoeting bij Fishermen's Pier", "valid": "Deze demo-offerte is 60 minuten geldig.", "available": "Voor deze demo wordt beschikbaarheid aangenomen. Er is geen live voorraad gecontroleerd."},
     "de": {"title": "Ihr Demo-Angebot für Klein Curaçao", "quote": "Angebot", "customer": "Gast", "date": "Ausflugsdatum", "guests": "Gäste", "transport": "Transport", "charges": "Preisübersicht", "description": "Beschreibung", "qty": "Anzahl", "unit": "Einzelpreis", "amount": "Betrag", "total": "Gesamt", "included": "Alles inklusive", "schedule": "Ihr Tag", "bring": "Bitte mitbringen", "rules": "Regeln und wichtige Hinweise", "payment": "Nächster Schritt", "payment_text": "Nutzen Sie den sicheren Demo-Zahlungslink in WhatsApp. Er fragt keine Karten- oder Bankdaten ab und bewegt kein Geld.", "arrival": "Seien Sie um 06:45 am Fishermen's Pier. Die veröffentlichte Abfahrt von der Insel ist ungefähr um 15:20.", "pickup": "Hotelabholung angefragt; Ort und Preis müssen bestätigt werden.", "pier": "Treffpunkt Fishermen's Pier", "valid": "Dieses Demo-Angebot ist 60 Minuten gültig.", "available": "Für diese Demo wird die Verfügbarkeit angenommen. Es wurde kein Live-Bestand geprüft."},
     "es": {"title": "Tu cotización demo para Klein Curaçao", "quote": "Cotización", "customer": "Pasajero", "date": "Fecha", "guests": "Pasajeros", "transport": "Transporte", "charges": "Precio detallado", "description": "Descripción", "qty": "Cant.", "unit": "Unidad", "amount": "Importe", "total": "Total", "included": "Todo incluido", "schedule": "Tu día", "bring": "Qué llevar", "rules": "Reglas e información importante", "payment": "Siguiente paso", "payment_text": "Usa el enlace seguro de pago demo enviado por WhatsApp. No solicita datos de tarjeta o banco y no mueve dinero.", "arrival": "Llega a Fishermen's Pier a las 06:45. La salida publicada de la isla es aproximadamente a las 15:20.", "pickup": "Recogida en hotel solicitada; ubicación y precio requieren confirmación.", "pier": "Encuentro en Fishermen's Pier", "valid": "Esta cotización demo es válida por 60 minutos.", "available": "Para esta demo se asume disponibilidad. No se consultó un inventario en vivo."},
-    "pap": {"title": "Bo oferta demo pa Klein Curaçao", "quote": "Oferta", "customer": "Huésped", "date": "Fecha di trip", "guests": "Huéspednan", "transport": "Transporte", "charges": "Detaye di preis", "description": "Deskripshon", "qty": "Kant.", "unit": "Unidat", "amount": "Montante", "total": "Total", "included": "Tur kos inkluí", "schedule": "Bo dia", "bring": "Hiba ku bo", "rules": "Reglanan i informashon importante", "payment": "Siguiente paso", "payment_text": "Usa e link sigur di pago demo mandá den WhatsApp. E no ta pidi dato di karta òf banko i no ta move plaka.", "arrival": "Yega Fishermen's Pier pa 06:45. E salida publiká for di e isla ta mas o ménos 15:20.", "pickup": "Pickup na hotel ta pidi; lugá i preis mester wordu konfirmá.", "pier": "Topa na Fishermen's Pier", "valid": "E oferta demo aki ta válido pa 60 minüt.", "available": "Pa e demo aki nos ta asumí ku tin lugá. Nos no a kontrolá inventario live."},
+    "pap": {"title": "Bo oferta demo pa Klein Curaçao", "quote": "Oferta", "customer": "Huésped", "date": "Fecha di biahe", "guests": "Huéspednan", "transport": "Transporte", "charges": "Detaye di preis", "description": "Deskripshon", "qty": "Kant.", "unit": "Unidat", "amount": "Montante", "total": "Total", "included": "Tur kos inkluí", "schedule": "Bo dia", "bring": "Hiba ku bo", "rules": "Reglanan i informashon importante", "payment": "Siguiente paso", "payment_text": "Usa e link sigur di pago demo mandá den WhatsApp. E no ta pidi dato di karta òf banko i no ta move plaka.", "arrival": "Yega Fishermen's Pier pa 06:45. E salida publiká for di e isla ta mas o ménos 15:20.", "pickup": "Pickup na hotel ta pidi; lugá i preis mester wordu konfirmá.", "pier": "Topa na Fishermen's Pier", "valid": "E oferta demo aki ta válido pa 60 minüt.", "available": "Pa e demo aki nos ta asumí ku tin lugá. Nos no a kontrolá inventario live."},
     "pt": {"title": "Sua cotação demo para Klein Curaçao", "quote": "Cotação", "customer": "Passageiro", "date": "Data", "guests": "Passageiros", "transport": "Transporte", "charges": "Preço detalhado", "description": "Descrição", "qty": "Qtd.", "unit": "Unidade", "amount": "Valor", "total": "Total", "included": "Tudo incluído", "schedule": "Seu dia", "bring": "O que levar", "rules": "Regras e informações importantes", "payment": "Próximo passo", "payment_text": "Use o link seguro de pagamento demo enviado no WhatsApp. Ele não solicita cartão ou dados bancários e não movimenta dinheiro.", "arrival": "Chegue ao Fishermen's Pier às 06:45. A saída publicada da ilha é aproximadamente às 15:20.", "pickup": "Traslado do hotel solicitado; local e preço exigem confirmação.", "pier": "Encontro no Fishermen's Pier", "valid": "Esta cotação demo é válida por 60 minutos.", "available": "Para esta demo, a disponibilidade é presumida. Nenhum inventário ao vivo foi consultado."},
 }
 
@@ -86,7 +90,7 @@ DOCUMENT_COPY = {
         "bring_items": ["Handtuch", "Sonnencreme", "Badesachen", "Persönliche Medikamente", "Hut oder Kappe"],
         "cancellation": "DEMO-REGEL - VOR LIVEGANG ERSETZEN: Stornieren oder ändern Sie mindestens 48 Stunden vor Abfahrt. Spätere Stornierungen und Nichterscheinen werden in dieser Demo nicht erstattet.",
         "safety": "DEMO-REGEL - VOR LIVEGANG ERSETZEN: Die Teilnahme erfolgt auf eigenes Risiko. Befolgen Sie alle Anweisungen von Kapitän und Crew.",
-        "insurance": "Der Versicherungsschutz ist in dieser Demo nicht geprüft. Mermaid muss den endgültigen Wortlaut vor der Livegang freigeben.",
+        "insurance": "Der Versicherungsschutz ist in dieser Demo nicht geprüft. Mermaid muss den endgültigen Wortlaut vor dem Livegang freigeben.",
         "protocol_title": "Ausflugsprotokoll", "protocol": "Kommen Sie pünktlich, befolgen Sie die Anweisungen von Kapitän und Crew, beaufsichtigen Sie Kinder, nutzen Sie Sicherheitsausrüstung wie angewiesen und melden Sie relevante Mobilitäts- oder Ernährungswünsche. Tiere und genaue Seebedingungen werden nie garantiert.",
         "closing": "Bringen Sie Handtücher und Sonnencreme mit. Mermaid kümmert sich um den Rest Ihres inkludierten Tropentags.",
         "receipt_title": "Zahlungsbeleg", "booking_code": "Buchungscode", "payment_reference": "Zahlungsreferenz", "payment_time": "Zahlungszeit (UTC)",
@@ -110,12 +114,12 @@ DOCUMENT_COPY = {
     "pap": {
         "tagline": "Klein Curaçao, bon ambiente inkluí", "party": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3", "catalog": "Katálogo",
         "items": {"adult": "Adulto", "child_4_12": "Mucha di 4-12 aña", "infant_0_3": "Mucha di 0-3 aña"},
-        "included_items": ["Desayuno", "Refresko i djus", "Kuminda BBQ", "Beach house di Mermaid", "Baño i ducha di awa dushi", "Maskara di snorkel", "Stul di playa"],
+        "included_items": ["Desayuno", "Refresko i djus", "Almuerso di barbekiú", "Beach house di Mermaid", "Baño i ducha di awa dushi", "Máskara di snòrkel", "Stul di playa"],
         "bring_items": ["Handuk", "Krema solar", "Paña di landa", "Remedi personal", "Sombré òf pet"],
         "cancellation": "REGLA DEMO - KAMBIA PROMÉ KU LIVE: Kanselá òf pidi un kambio por lo ménos 48 ora promé ku salida. Kanselashon lat i no presentá no ta reembolsabel den e demo aki.",
         "safety": "REGLA DEMO - KAMBIA PROMÉ KU LIVE: Partisipashon ta na riesgo di e huésped. Sigui tur instrukshon di kapitan i tripulashon.",
         "insurance": "Kobertura di seguro no ta verifiká den e demo aki. Mermaid mester aprobá e teksto final promé ku live.",
-        "protocol_title": "Protokòl di trip", "protocol": "Yega na tempu, sigui instrukshon di kapitan i tripulashon, tene bista riba muchanan, usa ekiponan di siguridat manera indiká i bisa nos di nesesidat di movilidat òf dieta. Animalnan i kondishon eksakto di laman nunka ta garantisá.",
+        "protocol_title": "Protokòl di biahe", "protocol": "Yega na tempu, sigui instrukshon di kapitan i tripulashon, tene bista riba muchanan, usa ekiponan di siguridat manera indiká i bisa nos di nesesidat di movilidat òf dieta. Animalnan i kondishon eksakto di laman nunka ta garantisá.",
         "closing": "Hiba handuk i krema solar. Mermaid ta sòru pa e rèst di bo dia tropikal inkluí.",
         "receipt_title": "Resibu di pago", "booking_code": "Kódigo di reservashon", "payment_reference": "Referensia di pago", "payment_time": "Ora di pago (UTC)",
         "receipt_disclaimer": "E resibu aki ta registrá solamente un pago simulá. No a usa karta, kuenta di banko òf plaka real.",
@@ -193,11 +197,43 @@ def _money(currency: str, amount: int) -> str:
     return f"{currency} {amount:,.2f}"
 
 
+def _price_table(money: dict, locale: str, body: ParagraphStyle, width_mm: float) -> Table:
+    labels, copy = LABELS[locale], DOCUMENT_COPY[locale]
+    table_structure = Structure("Table")
+    header_row = Structure("TR", table_structure)
+    header_style = ParagraphStyle("PriceHeader", parent=body, fontName="Helvetica-Bold", textColor=colors.white)
+    right_header = ParagraphStyle("PriceHeaderRight", parent=header_style, alignment=TA_RIGHT)
+    right = ParagraphStyle("PriceRight", parent=body, alignment=TA_RIGHT)
+    right_bold = ParagraphStyle("PriceAmount", parent=right, fontName="Helvetica-Bold")
+    rows = [[Paragraph(_safe(labels[key]), header_style if index == 0 else right_header,
+                       role="TH", structure=header_row, scope="Column")
+             for index, key in enumerate(("description", "qty", "unit", "amount"))]]
+    for item in money["items"]:
+        if not item["quantity"]:
+            continue
+        row = Structure("TR", table_structure)
+        item_label = guest.pickup_label(money, locale) if item["key"] == "pickup" else copy["items"][item["key"]]
+        values = (item_label, str(item["quantity"]), _money(money["currency"], item["unit_amount"]),
+                  _money(money["currency"], item["line_total"]))
+        rows.append([Paragraph(_safe(value), body if index == 0 else right_bold if index == 3 else right,
+                               role="TD", structure=row) for index, value in enumerate(values)])
+    price_table = Table(rows, colWidths=[n / 180 * width_mm * mm for n in (78, 22, 38, 42)], repeatRows=1)
+    price_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), TEAL),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#B7DCDD")),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return price_table
+
+
 def render_quote_pdf(reservation: dict, target: Path) -> str:
     """Render a compact quote using only snapshotted monetary values."""
     locale = reservation["language"] if reservation["language"] in LABELS else "en"
     labels = LABELS[locale]
     copy = DOCUMENT_COPY[locale]
+    notices = DOCUMENT_NOTICES[locale]
     intake = reservation["intake"]
     money = reservation["monetary_snapshot"]
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -208,7 +244,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     brand = ParagraphStyle("QuoteBrand", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=21)
     heading = ParagraphStyle("QuoteTitle", parent=brand, fontSize=15, leading=18, spaceAfter=3 * mm)
     section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, spaceBefore=3 * mm, spaceAfter=1.5 * mm, keepWithNext=True)
-    marker = ParagraphStyle("QuoteMarker", parent=small, fontName="Helvetica-Bold", textColor=colors.white, alignment=TA_CENTER)
+    marker = ParagraphStyle("QuoteMarker", parent=small, fontName="Helvetica-Bold", textColor=MARKER_TEXT, alignment=TA_CENTER)
     total = ParagraphStyle("QuoteTotal", parent=body, fontName="Helvetica-Bold", fontSize=15, leading=18, alignment=TA_RIGHT)
     doc = SimpleDocTemplate(
         str(target), pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm,
@@ -225,7 +261,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0), ("ALIGN", (1, 0), (1, 0), "RIGHT"),
     ]))
     story = [header, Spacer(1, 3 * mm),
-        Table([[Paragraph("DEMO QUOTE - NOT A VALID TICKET", marker)]], colWidths=[180 * mm], style=TableStyle([
+        Table([[Paragraph(_safe(notices["quote_banner"]), marker)]], colWidths=[180 * mm], style=TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), CORAL),
             ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ])), Spacer(1, 3 * mm), Paragraph(_safe(labels["title"]), heading),
@@ -255,28 +291,13 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     story.extend([details, Paragraph(labels["transport"], section),
                   Paragraph(_safe(transport), body), Paragraph(_safe(departure), body),
                   Paragraph(labels["charges"], section)])
-    rows = [[labels["description"], labels["qty"], labels["unit"], labels["amount"]]]
-    for item in money["items"]:
-        if not item["quantity"]:
-            continue
-        item_label = guest.pickup_label(money, locale) if item["key"] == "pickup" else copy["items"][item["key"]]
-        rows.append([Paragraph(_safe(item_label), body), str(item["quantity"]),
-                     _money(money["currency"], item["unit_amount"]), _money(money["currency"], item["line_total"])])
-    price_table = Table(rows, colWidths=[78 * mm, 22 * mm, 38 * mm, 42 * mm])
-    price_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), TEAL), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTNAME", (-1, 1), (-1, -1), "Helvetica-Bold"),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#B7DCDD")),
-        ("FONTSIZE", (0, 0), (-1, -1), 9), ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    price_table = _price_table(money, locale, body, 180)
     story.extend([price_table, Spacer(1, 2 * mm),
                   Paragraph(_safe(guest.price_text(money, intake, locale)), total),
                   Spacer(1, 1.5 * mm), Paragraph(_safe(labels["available"]), small)])
     lists = Table([[
-        [Paragraph(_safe(labels["included"]), section), Paragraph(" • ".join(_safe(x, 120) for x in copy["included_items"]), body)],
-        [Paragraph(_safe(labels["bring"]), section), Paragraph(" • ".join(_safe(x, 100) for x in copy["bring_items"]), body)],
+        [Paragraph(_safe(labels["included"]), section), Paragraph(" · ".join(_safe(x, 120) for x in copy["included_items"]), body)],
+        [Paragraph(_safe(labels["bring"]), section), Paragraph(" · ".join(_safe(x, 100) for x in copy["bring_items"]), body)],
     ]], colWidths=[108 * mm, 72 * mm])
     lists.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -292,7 +313,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         Paragraph(_safe(labels["valid"]), small), Spacer(1, 3 * mm),
         HRFlowable(color=CORAL, thickness=0.8), Spacer(1, 2 * mm), Paragraph(_safe(copy["closing"]), small),
     ])
-    doc.build(story)
+    doc.build(story, canvasmaker=canvas_for(DOCUMENT_LANGUAGES[locale]))
     return hashlib.sha256(target.read_bytes()).hexdigest()
 
 
@@ -342,62 +363,77 @@ def create_quote(reservation: dict) -> tuple[dict, dict]:
 
 
 def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
-    """Render a one-page simulated payment receipt from persisted facts."""
+    """Render a compact simulated receipt from persisted booking/payment facts."""
     locale = reservation["language"] if reservation["language"] in LABELS else "en"
-    labels = LABELS[locale]
-    copy = DOCUMENT_COPY[locale]
-    intake = reservation["intake"]
+    labels, copy, notices = LABELS[locale], DOCUMENT_COPY[locale], DOCUMENT_NOTICES[locale]
+    intake, money = reservation["intake"], reservation["monetary_snapshot"]
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     styles = getSampleStyleSheet()
-    body = ParagraphStyle("ReceiptBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=10, leading=14, textColor=DEEP)
-    heading = ParagraphStyle("ReceiptHeading", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=22, leading=27, textColor=DEEP)
-    marker = ParagraphStyle("ReceiptMarker", parent=body, fontName="Helvetica-Bold", fontSize=11, leading=14, textColor=colors.white, alignment=TA_CENTER)
-    total = ParagraphStyle("ReceiptTotal", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=22, alignment=TA_RIGHT)
+    body = ParagraphStyle("ReceiptBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12, textColor=DEEP)
+    brand = ParagraphStyle("ReceiptBrand", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=21)
+    heading = ParagraphStyle("ReceiptHeading", parent=brand, fontSize=20, leading=24)
+    section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, keepWithNext=True)
+    marker = ParagraphStyle("ReceiptMarker", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=13, textColor=MARKER_TEXT, alignment=TA_CENTER)
+    total = ParagraphStyle("ReceiptTotal", parent=body, fontName="Helvetica-Bold", fontSize=16, leading=20, alignment=TA_RIGHT)
     doc = SimpleDocTemplate(
         str(target), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
-        topMargin=16 * mm, bottomMargin=16 * mm,
+        topMargin=14 * mm, bottomMargin=14 * mm,
         title=f"Mermaid - {copy['receipt_title']} (Demo) - {reservation['booking_code']}",
         author="Mermaid Boat Trips Curaçao",
     )
-    guest_line = guest.party_text(intake, locale)
+    header = Table([[
+        [Paragraph("MERMAID BOAT TRIPS<br/>CURAÇAO", brand), Spacer(1, 2 * mm),
+         Paragraph(_safe(notices["receipt_subtitle"]), body)], _hero(58),
+    ]], colWidths=[114 * mm, 60 * mm])
+    header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0), ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+    ]))
+    # Numeric UTC timestamp is unambiguous in every supported language; no English month names.
+    paid_at = datetime.fromisoformat(payment["paid_at"])
+    if paid_at.tzinfo is None:
+        paid_at = paid_at.replace(tzinfo=timezone.utc)
     rows = [
         [copy["booking_code"], reservation["booking_code"]],
         [copy["payment_reference"], payment["payment_reference"]],
         [labels["customer"], reservation["customer_name"]],
         [labels["date"], guest.guest_date(intake["trip_date"], locale)],
-        [labels["guests"], guest_line],
-        [copy["payment_time"], datetime.fromisoformat(payment["paid_at"]).strftime("%d %b %Y, %H:%M UTC")],
-        [labels["transport"], guest.transport_text(intake, locale, reservation["monetary_snapshot"])],
+        [labels["guests"], guest.party_text(intake, locale)],
+        [copy["payment_time"], paid_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")],
+        [labels["transport"], guest.transport_text(intake, locale, money)],
     ]
-    table = Table(
-        [[Paragraph(f"<b>{_safe(a)}</b>", body), Paragraph(_safe(b), body)] for a, b in rows],
-        colWidths=[52 * mm, 116 * mm],
-    )
+    details_structure = Structure("Table")
+    detail_rows = []
+    for label, value in rows:
+        row = Structure("TR", details_structure)
+        detail_rows.append([
+            Paragraph(f"<b>{_safe(label)}</b>", body, role="TH", structure=row, scope="Row"),
+            Paragraph(_safe(value), body, role="TD", structure=row),
+        ])
+    table = Table(detail_rows, colWidths=[52 * mm, 122 * mm])
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), PALE),
         ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B7DCDD")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     story = [
-        _hero(174), Spacer(1, 5 * mm),
-        Paragraph("MERMAID BOAT TRIPS CURAÇAO", heading),
-        Paragraph("Klein Curaçao demo reservation", body), Spacer(1, 4 * mm),
-        Table([[Paragraph("SIMULATED PAYMENT - DEMO ONLY", marker)]], colWidths=[174 * mm], style=TableStyle([
+        header, Spacer(1, 4 * mm),
+        Table([[Paragraph(_safe(notices["receipt_banner"]), marker)]], colWidths=[174 * mm], style=TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), CORAL),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ])),
-        Spacer(1, 6 * mm), Paragraph(_safe(copy["receipt_title"]), heading), Spacer(1, 3 * mm), table,
-        Spacer(1, 6 * mm),
-        Paragraph(_safe(guest.price_text({**reservation["monetary_snapshot"], "currency": payment["currency"], "total": payment["amount"]}, intake, locale)), total),
-        Spacer(1, 5 * mm), HRFlowable(color=TEAL, thickness=1.3), Spacer(1, 5 * mm),
+        Spacer(1, 5 * mm), Paragraph(_safe(copy["receipt_title"]), heading), Spacer(1, 3 * mm), table,
+        Spacer(1, 4 * mm), Paragraph(_safe(labels["charges"]), section), Spacer(1, 2 * mm),
+        _price_table(money, locale, body, 174), Spacer(1, 4 * mm),
+        Paragraph(_safe(guest.price_text({**money, "currency": payment["currency"], "total": payment["amount"]}, intake, locale)), total),
+        Spacer(1, 4 * mm), HRFlowable(color=TEAL, thickness=1.3), Spacer(1, 4 * mm),
         Paragraph(_safe(copy["receipt_disclaimer"]), body),
-        Spacer(1, 3 * mm),
-        Paragraph(_safe(guest.transport_text(intake, locale, reservation["monetary_snapshot"])), body),
     ]
-    doc.build(story)
+    doc.build(story, canvasmaker=canvas_for(DOCUMENT_LANGUAGES[locale]))
     return hashlib.sha256(target.read_bytes()).hexdigest()
 
 

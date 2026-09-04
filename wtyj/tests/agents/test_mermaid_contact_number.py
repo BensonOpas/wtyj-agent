@@ -28,12 +28,12 @@ def intake(**updates):
         pickup_location='Westpunt',language='en',phase='summary_confirmed'),**updates)
 
 
-def model_turn(monkeypatch,fields,changes,action='details',text='My contact number',phone='guest'):
+def model_turn(monkeypatch,fields,changes,action='details',text='My contact number',phone='guest',message_id='turn'):
     state_registry.wa_save_booking_state(phone,{'mermaid_intake':fields},{})
     model=Mock(return_value=dict(language=fields.get('language','en'),mermaid_action=action,
         fields=changes,reply='Saved.',has_open_question=False))
     monkeypatch.setattr(marina_agent,'process_message',model)
-    result=workflow.process_model_turn({'from':phone,'text':text,'message_id':'turn'},None)
+    result=workflow.process_model_turn({'from':phone,'text':text,'message_id':message_id},None)
     return result,model
 
 
@@ -79,7 +79,7 @@ def test_correction_needs_reconfirmation_and_invalid_correction_is_not_saved(mon
     result,_=model_turn(monkeypatch,fields,{'contact_phone':'+1 202 555 0199'},'confirm_summary')
     assert result.action is None and result.phase=='awaiting_summary_confirmation'
     assert '+12025550199' in result.text and '+12025550123' not in result.text
-    result,_=model_turn(monkeypatch,fields,{'contact_phone':'5550199'},'confirm_summary')
+    result,_=model_turn(monkeypatch,fields,{'contact_phone':'5550199'},'confirm_summary',message_id='invalid-correction')
     assert result.phase=='collecting' and result.action is None
     assert result.text==guest.guest_copy('en')['contact_phone_retry']
     assert 'contact_phone' not in state_registry.wa_get_booking_state('guest')['fields']['mermaid_intake']

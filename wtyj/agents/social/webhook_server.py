@@ -1959,6 +1959,7 @@ def _flush_buffer(buffer_key):
                 reply_quote_confirmation = None
                 ali_turn_commit = None
                 mermaid_delivery_commit = None
+                mermaid_generation_failure = None
                 ali_customer_delivery_deferred = False
                 handoff_notification = None
                 if _orchestrator_on:
@@ -1996,6 +1997,7 @@ def _flush_buffer(buffer_key):
                             if isinstance(reply_result.get("mermaid_delivery_commit"), dict)
                             else None
                         )
+                        mermaid_generation_failure = reply_result.get("mermaid_generation_failure")
                         ali_customer_delivery_deferred = bool(
                             reply_result.get("ali_customer_delivery_deferred")
                         )
@@ -2106,6 +2108,8 @@ def _flush_buffer(buffer_key):
                         ok = bool(confirmation_delivery.get("success"))
                     else:
                         delivery_idempotency_key = (
+                            "mermaid-model-status:" + str(final_msg.get("_ali_action_id") or "")
+                            if mermaid_generation_failure else
                             f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"
                             if mermaid_delivery_commit else
                             f"ali-turn-{ali_turn_commit['action_id']}"
@@ -2139,6 +2143,10 @@ def _flush_buffer(buffer_key):
                         # account-control outage. Preserve that durable retry
                         # state instead of classifying it as delivery failure.
                         if not batch_account_is_current():
+                            return
+                        if mermaid_generation_failure:
+                            from agents.social.mermaid_model_recovery import defer_inbound
+                            defer_inbound(ids, processing_token, mermaid_generation_failure)
                             return
                         log("zernio_reply_send_failed",
                             channel=_zernio_channel,
@@ -2216,6 +2224,14 @@ def _flush_buffer(buffer_key):
                             inbound_processing_token=processing_token,
                         ):
                             return
+                    elif mermaid_generation_failure:
+                        from agents.social.mermaid_model_recovery import notice_sent
+                        state_registry.dm_store_message_once(
+                            conversation_id=_zernio_conv, channel=_zernio_channel,
+                            role="assistant", text=reply_text,
+                            source_message_key=delivery_idempotency_key,
+                        )
+                        notice_sent(mermaid_generation_failure)
                     else:
                         state_registry.dm_store_message(
                             conversation_id=_zernio_conv,
@@ -2259,7 +2275,10 @@ def _flush_buffer(buffer_key):
                             role="system",
                             text=f"Attachment sent: {reply_media.get('caption') or reply_media.get('filename')}",
                         )
-                    if not ali_turn_commit:
+                    if mermaid_generation_failure:
+                        from agents.social.mermaid_model_recovery import defer_inbound
+                        defer_inbound(ids, processing_token, mermaid_generation_failure)
+                    elif not ali_turn_commit:
                         state_registry.inbound_processing_bulk_update(
                             ids,
                             "replied",
@@ -2267,7 +2286,10 @@ def _flush_buffer(buffer_key):
                             processing_token=processing_token,
                         )
                 else:
-                    if ali_customer_delivery_deferred:
+                    if mermaid_generation_failure:
+                        from agents.social.mermaid_model_recovery import defer_inbound
+                        defer_inbound(ids, processing_token, mermaid_generation_failure)
+                    elif ali_customer_delivery_deferred:
                         log(
                             "ali_customer_delivery_deferred",
                             conversation_id=_zernio_conv[:20],

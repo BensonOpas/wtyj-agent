@@ -9,6 +9,7 @@ from pypdf import PdfReader
 
 from agents.social import (
     mermaid_demo_payment,
+    mermaid_document_copy,
     mermaid_documents,
     mermaid_reservation_store,
     mermaid_reservation_workflow,
@@ -125,7 +126,7 @@ def test_full_six_language_whatsapp_journey(locale, opening, confirmation, monke
     receipt_text = _pdf_text(str(receipt_name))
     assert booked["booking_code"] in receipt_text
     assert "USD 375.00" in receipt_text
-    assert "SIMULATED PAYMENT - DEMO ONLY" in receipt_text
+    assert mermaid_document_copy.DOCUMENT_NOTICES[locale]["receipt_banner"] in receipt_text
 
 
 def test_duplicate_confirmation_cancel_retry_and_delivery_recovery(monkeypatch):

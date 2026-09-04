@@ -1,0 +1,43 @@
+{
+  "source": "final66-run/results/api-events.jsonl",
+  "source_sha256": "0571e22b67becaa311ee5d41d105aabba89cfcf60a9a5958ee0c1990ba9b555e",
+  "api_event_sha256": "8fc22a98ddd5ec8facf71987ff1717b09b9c980f6de0b8980c9c6bfff64d8352",
+  "case": "BASE-059",
+  "turn": 6,
+  "request_id": "req_011Ceih2m9LL6VsSyvyzvA3a",
+  "guest_input": "Desayuno ta inklui? Ki ora nos mester yega?",
+  "before": {
+    "fields": {
+      "language": "pap",
+      "phase": "collecting",
+      "trip_date": "2026-09-12"
+    },
+    "reservation": null,
+    "review": null
+  },
+  "after": {
+    "fields": {
+      "language": "pap",
+      "phase": "collecting",
+      "trip_date": "2026-09-12"
+    },
+    "reservation": null,
+    "review": null
+  },
+  "raw_sdk_tool_input": {
+    "language": "pap",
+    "mermaid_action": "question",
+    "fields": {},
+    "reply": "Desayuno ta inklui, si! Bo mester yega na Fishermen's Pier pa 06:45.\\n\\nKuantu hende lo bai: adultonan, yu'nan (4–12 aña) i bebinan (0–3 aña)?",
+    "confidence": "high",
+    "requires_human": false,
+    "has_open_question": true,
+    "guest_question_excerpt": "Desayuno ta inklui? Ki ora nos mester yega?",
+    "calendar_request": "none",
+    "status_request": "none",
+    "security_event": "none",
+    "other_question_reply": ""
+  },
+  "original_displayed_text": "Desayuno ta inklui, si! Bo mester yega na Fishermen's Pier pa 06:45.\\n\\nKuantu hende lo bai: adultonan, yu'nan (4–12 aña) i bebinan (0–3 aña)?",
+  "original_readable_newlines": false
+}

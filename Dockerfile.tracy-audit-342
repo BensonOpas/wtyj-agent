@@ -1,0 +1,18 @@
+# Mermaid-only overlay of the current deployed image. The release runner verifies
+# its exact sha256:6832ec8ba2e87ff7362b19367b261b631a5f07eb49a0eac5c801ccd353e75ef4.
+FROM wtyj-agent:mermaid-settings-5922be0
+COPY wtyj/agents/marina/marina_agent.py /app/agents/marina/marina_agent.py
+COPY wtyj/agents/social/mermaid_demo_payment.py /app/agents/social/mermaid_demo_payment.py
+COPY wtyj/agents/social/mermaid_document_copy.py /app/agents/social/mermaid_document_copy.py
+COPY wtyj/agents/social/mermaid_documents.py /app/agents/social/mermaid_documents.py
+COPY wtyj/agents/social/mermaid_guest_experience.py /app/agents/social/mermaid_guest_experience.py
+COPY wtyj/agents/social/mermaid_model_recovery.py /app/agents/social/mermaid_model_recovery.py
+COPY wtyj/agents/social/mermaid_pdf_structure.py /app/agents/social/mermaid_pdf_structure.py
+COPY wtyj/agents/social/mermaid_reservation_store.py /app/agents/social/mermaid_reservation_store.py
+COPY wtyj/agents/social/mermaid_reservation_workflow.py /app/agents/social/mermaid_reservation_workflow.py
+COPY wtyj/agents/social/mermaid_response_policy.py /app/agents/social/mermaid_response_policy.py
+COPY wtyj/agents/social/mermaid_understanding.py /app/agents/social/mermaid_understanding.py
+COPY wtyj/agents/social/webhook_server.py /app/agents/social/webhook_server.py
+COPY wtyj/shared/mermaid_catalog.py /app/shared/mermaid_catalog.py
+COPY wtyj/shared/state_registry.py /app/shared/state_registry.py
+COPY clients/mermaid/config/response_policy.json /app/agents/social/mermaid_response_policy.json

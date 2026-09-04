@@ -2135,7 +2135,14 @@ def process_message(
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        client = anthropic.Anthropic(api_key=api_key)
+        if response_contract == "mermaid_reservation_demo" and not api_key:
+            fallback["model_error"] = {"kind": "credentials", "retryable": False}
+            return fallback
+        client = (
+            anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=30.0)
+            if response_contract == "mermaid_reservation_demo"
+            else anthropic.Anthropic(api_key=api_key)
+        )
         tool_schema = MARINA_TOOL
         if response_contract == "mermaid_reservation_demo":
             from shared import mermaid_catalog
@@ -2144,9 +2151,13 @@ def process_message(
             from agents.social import mermaid_understanding
             system_prompt = mermaid_understanding.system_prompt()
             tool_schema = mermaid_understanding.MERMAID_TOOL
+            user_prompt = mermaid_understanding.user_prompt(
+                from_email, subject, body, thread_fields, thread_flags,
+                action_context, channel=channel, messages=messages,
+            )
         else:
             system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
-        user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
+            user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
         # Other legacy prompt blocks inject individual config fields. Do not
         # let a credential copied into those fields bypass the public context.
@@ -2186,6 +2197,11 @@ def process_message(
                           channel=channel, from_id=from_email[:50])
             return fallback
         result = dict(tool_use_block.input)
+        # A real Mermaid FAQ response used an empty string for no extracted
+        # fields. Normalize only that empty representation; malformed values
+        # containing information must still fail the recovery schema check.
+        if response_contract == "mermaid_reservation_demo" and result.get("fields") == "":
+            result["fields"] = {}
 
         # Default missing fields instead of rejecting the entire response
         for field, default in _RESPONSE_DEFAULTS.items():
@@ -2194,19 +2210,35 @@ def process_message(
                 bm_logger.log("claude_field_defaulted", field=field,
                               channel=channel, from_id=from_email[:50])
 
-        # If reply is empty after defaults, fall back (preserves email fallback reply)
-        if not result.get("reply"):
+        # Mermaid's validated critical routes render their own response later.
+        # Other contracts and ordinary unanswered questions keep the fallback.
+        server_owned_reply = (
+            response_contract == "mermaid_reservation_demo"
+            and isinstance(result.get("reply"), str)
+            and mermaid_understanding.has_server_owned_reply(result, body)
+        )
+        if not result.get("reply") and not server_owned_reply:
             bm_logger.log("claude_empty_reply",
                           intents=result.get("intents", []),
                           channel=channel, from_id=from_email[:50],
                           input_preview=str(result)[:200])
             return fallback
 
+        # Mermaid display fields may contain literal escaped paragraph breaks.
+        # Keep guest evidence, extracted fields and other contracts untouched.
+        if response_contract == "mermaid_reservation_demo":
+            for field in ("reply", "other_question_reply"):
+                if isinstance(result.get(field), str):
+                    result[field] = result[field].replace("\\n", "\n")
+
         # Brief 224: sanitize customer-facing text fields before returning.
         # Brief 244: also strip em-dashes per agent_persona.brand_voice_rules
         # (Claude ignores the prompt-side rule; mirrors dm_agent.py:253).
         result["reply"] = _strip_internal_tokens(
             result.get("reply", "")).replace("—", ",")
+        if response_contract == "mermaid_reservation_demo" and isinstance(result.get("other_question_reply"), str):
+            result["other_question_reply"] = _strip_internal_tokens(
+                result["other_question_reply"]).replace("—", ",")
         if result.get("reply_hold_failed"):
             result["reply_hold_failed"] = _strip_internal_tokens(
                 result["reply_hold_failed"]).replace("—", ",")
@@ -2229,6 +2261,12 @@ def process_message(
         return result
 
     except Exception as _exc:
+        if response_contract == "mermaid_reservation_demo":
+            from agents.social.mermaid_model_recovery import error_metadata
+            fallback["model_error"] = error_metadata(_exc)
+            bm_logger.log("claude_api_error", error_kind=fallback["model_error"]["kind"],
+                          channel=channel, from_id=from_email[:50])
+            return fallback
         bm_logger.log("claude_api_error",
                       error=str(_exc)[:200],
                       channel=channel, from_id=from_email[:50])

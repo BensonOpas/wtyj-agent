@@ -55,10 +55,11 @@ def intake_money(intake):
 
 
 def guest_date(value, locale="en"):
-    # Human-readable English dates; ISO remains unambiguous in other locales.
+    # Both weekday and date are calculated, never supplied by model prose.
     if locale == "en":
         return datetime.strptime(value, "%Y-%m-%d").strftime("%A %d %B %Y").replace(" 0", " ")
-    return value
+    from agents.social.mermaid_response_policy import date_label
+    return date_label(value, locale)
 
 
 def party_text(intake, locale):

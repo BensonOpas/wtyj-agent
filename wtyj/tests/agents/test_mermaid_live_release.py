@@ -14,6 +14,7 @@ from shared import config_loader, state_registry
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     config = Path(__file__).resolve().parents[3] / "clients/mermaid/config/client.json"
     monkeypatch.setattr(config_loader, "_CONFIG_PATH", str(config))
     monkeypatch.setattr(config_loader, "_cache", {})
@@ -87,13 +88,29 @@ def test_model_cannot_supply_money_or_approve_changed_summary(monkeypatch):
         "customer_name": "Ana Silva", "contact_phone": "+12025550123", "pickup_preference": "pier", "language": "en",
         "phase": "awaiting_summary_confirmation",
     }}, {})
-    monkeypatch.setattr(marina_agent, "process_message", lambda **kwargs: interpretation({"adults": 3, "total": 1, "payment_state": "paid", "booking_code": "FAKE"}, "confirm_summary"))
-    result = workflow.handle_demo_message({"from": "guard", "text": "yes, but 3 adults", "message_id": "change"}, include_media=True, use_model=True)
-    assert result["media"] is None
+    from agents.social import mermaid_model_recovery as recovery
+
+    model = MagicMock(side_effect=[
+        interpretation({"adults": 3, "total": 1, "payment_state": "paid", "booking_code": "FAKE"}, "confirm_summary"),
+        interpretation({"adults": 3}, "confirm_summary"),
+    ])
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    message = {"from": "guard", "text": "yes, but 3 adults", "message_id": "change"}
+    failed = workflow.handle_demo_message(message, include_media=True, use_model=True)
+    assert failed["media"] is None and failed["mermaid_generation_failure"]
+    fields = state_registry.wa_get_booking_state("guard")["fields"]["mermaid_intake"]
+    assert fields["adults"] == 2  # Reject the complete malformed response, preserving prior intake.
+    assert "total" not in fields and "payment_state" not in fields and "booking_code" not in fields
+
+    retry_time = recovery.time.time() + 10
+    monkeypatch.setattr(recovery.time, "time", lambda: retry_time)
+    recovered = workflow.handle_demo_message(message, include_media=True, use_model=True)
+    assert recovered["media"] is None and model.call_count == 2
     fields = state_registry.wa_get_booking_state("guard")["fields"]["mermaid_intake"]
     assert fields["phase"] == "awaiting_summary_confirmation"
     assert fields["adults"] == 3
     assert "total" not in fields and "payment_state" not in fields and "booking_code" not in fields
+    assert mermaid_reservation_store.latest_for_conversation("guard") is None
 
 
 def test_marina_mermaid_contract_is_one_forced_tool_call(monkeypatch):
