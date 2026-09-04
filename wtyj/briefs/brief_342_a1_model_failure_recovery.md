@@ -106,6 +106,16 @@ hidden call before the correction. No real operator notification was sent.
 The legacy deterministic Mermaid intake human-request route uses the same
 opt-in; its regression likewise asserts no model summary and one alert.
 
+### Integration correction: new structured selectors
+
+The A2/A3/A5/A6 selectors are validated before a result can be cached as
+generated. Present calendar/status/security selectors must be strings in their
+schema enums, and a present guest-question excerpt must be a string. Legacy
+results that omit the optional additions remain accepted. Sixteen new buffered
+regressions first reproduced malformed values being cached as generated; after
+the correction they are `invalid_response` failures with no business mutation,
+and the same durable event regenerates and completes successfully.
+
 ## Rollback
 
 Revert these source changes with the coordinated release. The two new Mermaid

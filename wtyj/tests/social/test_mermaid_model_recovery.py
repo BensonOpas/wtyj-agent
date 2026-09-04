@@ -339,3 +339,29 @@ def test_legacy_offline_intake_human_route_also_skips_summary_model(review_runti
         assert result.action == "human_takeover"
     assert not summary.called
     assert alert.call_count == 1
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    (field, value)
+    for field in ("calendar_request", "status_request", "security_event")
+    for value in ([], {}, None, "not_a_valid_selector")
+] + [("guest_question_excerpt", value) for value in ([], {}, None, True)])
+def test_malformed_optional_model_fields_are_not_cached_and_same_event_recovers(review_runtime, field, bad_value):
+    model, send, _controls = review_runtime
+    original = _locale("nl")
+    model.return_value = {**_understood("question", "This malformed response must not be delivered"), field: bad_value}
+    _flush("malformed-selector", "trip question")
+    assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
+    assert send.call_args.args[3] == recovery.FAILURE_COPY["nl"]
+    assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
+    assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
+    _due()
+    model.return_value = {
+        **_understood("question", "Recovered answer"), "language": "nl",
+        "calendar_request": "none", "status_request": "none", "security_event": "none", "guest_question_excerpt": "trip question",
+    }
+    assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
+    assert model.call_count == send.call_count == 2
+    assert send.call_args.args[3] == "Recovered answer"
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+    assert _rows("SELECT status FROM mermaid_model_events") == [("generated",)]

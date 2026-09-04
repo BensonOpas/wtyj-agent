@@ -17,6 +17,11 @@ TRANSIENT_DELAY_SECONDS = 5
 OPERATOR_COOLDOWN_SECONDS = 900
 GENERATION_LEASE_SECONDS = 90
 LOCALES = ("en", "nl", "de", "es", "pap", "pt")
+_OPTIONAL_SELECTORS = {
+    "calendar_request": {"none", "this_week", "next_week", "weekend", "next_seven_days", "operating_days"},
+    "status_request": {"none", "payment", "handover", "delivery", "pickup_coverage"},
+    "security_event": {"none", "blocked_override", "actionable_incident"},
+}
 
 # Accepted outage-copy exception. Papiamentu remains subject to native review.
 FAILURE_COPY = {
@@ -119,6 +124,13 @@ def _valid_result(result):
         and type(result.get("has_open_question", False)) is bool
         and isinstance(result.get("mermaid_action"), str)
         and result["mermaid_action"] in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}
+        and all(
+            field not in result
+            or (isinstance(result[field], str) and result[field] in allowed)
+            for field, allowed in _OPTIONAL_SELECTORS.items()
+        )
+        and ("guest_question_excerpt" not in result
+             or isinstance(result["guest_question_excerpt"], str))
     )
 
 
