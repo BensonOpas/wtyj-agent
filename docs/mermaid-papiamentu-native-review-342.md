@@ -47,4 +47,19 @@ Weekday spelling reference: [Curaçao government locations and opening hours](ht
 
 Weekdays, Monday through Sunday: djaluna, djamars, djárason, djaweps, djabièrnè, djasabra, djadumingu.
 
-The final document banners/subtitles and outage fallback copy are added from their implementation modules before review sign-off. Fresh conversational paraphrases and language switches are also reviewed separately; passing a locale metadata assertion is not proof of fluent language.
+
+| FAILURE_COPY meaning | Draft Papiamentu | Reviewer correction / approval |
+| --- | --- | --- |
+| I couldn't answer that just now. Your details are saved. Please try again shortly, or ask to speak to a person. | Mi no a logra kontestá bo aworaki. Bo datonan ta wardá. Purba atrobe den un ratu òf pidi pa papia ku un hende di e tim. | pending |
+
+| HUMAN_COPY meaning | Draft Papiamentu | Reviewer correction / approval |
+| --- | --- | --- |
+| Your request is queued for Mermaid's team. Your details are saved, and I can still help with general trip questions. | Bo petishon ta warda pa e tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e trip. | pending |
+
+| Document meaning | Draft Papiamentu | Reviewer correction / approval |
+| --- | --- | --- |
+| DEMO QUOTE - NOT A VALID TICKET | OFERTA DEMO - NO TA UN TIKÈT VÁLIDO | pending |
+| SIMULATED PAYMENT - DEMO ONLY | PAGO SIMULÁ - SOLAMENTE UN DEMO | pending |
+| Klein Curaçao demo reservation | Reservashon demo pa Klein Curaçao | pending |
+
+Fresh conversational paraphrases and language switches require transcript review as well; passing locale metadata checks does not establish fluent language. All copy above remains a draft until the reviewer signs the exact release version.

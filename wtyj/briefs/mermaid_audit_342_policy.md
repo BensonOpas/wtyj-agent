@@ -26,7 +26,8 @@ is separately documented by the recovery workstream.
 4. Record blocked override attempts without guest text or secrets. Escalate two
    distinct attempts within 24 hours or one actionable security report. This is
    an intentional change from the baseline's escalate-every-attempt assertion.
-5. Keep pickup journey coverage explicitly unconfirmed pending owner input.
+5. Owner clarification on 4 September 2026 confirms pickup and return are
+   included in the configured per-vehicle rate ($75 car / $125 van).
    Preserve existing prices, vehicle capacities, timing and reservation money.
 6. Prepare critical Papiamentu copy and a native-review packet; keep native
    acceptance pending until an actual qualified reviewer approves it.
