@@ -17,7 +17,7 @@ os.environ.setdefault("LATE_API_KEY", "test")
 os.environ.setdefault("ZERNIO_WEBHOOK_SECRET", "test-secret")
 
 from agents.social import dm_agent, webhook_server
-from shared import config_loader, tenant_guard
+from shared import config_loader, mermaid_catalog, tenant_guard
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +72,7 @@ def test_mermaid_config_has_pinned_identity_facts_and_provenance(mermaid_config)
         "slug": "mermaid",
     }
     assert cfg["business"]["languages"] == [
-        "English", "Dutch", "German", "Spanish", "Portuguese",
+        "English", "Dutch", "German", "Spanish", "Papiamentu", "Portuguese",
     ]
     assert cfg["contact_methods"]["demo_whatsapp"] == "+1 223 276 0075"
     assert cfg["social_profiles"]["demo_facebook"] == {
@@ -113,7 +113,11 @@ def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     cfg = mermaid_config
 
     assert cfg["features"]["booking_flow"] is False
-    assert "workflow" not in cfg
+    assert cfg["workflow"] == {
+        "type": "mermaid_reservation_demo",
+        "catalog_version": "mermaid-demo-v1-2026-09-03",
+        "availability_source": "demo_assumed",
+    }
     assert cfg["channel_account_allowlist"] == {
         "mode": "strict",
         "zernio_accounts": [],
@@ -213,7 +217,55 @@ def test_mermaid_whatsapp_uses_source_bound_tracy_qa_prompt(
     assert "Never use an emoji unless the current customer message" in prompt
     assert "Do not end with a generic offer to help" in prompt
     assert "BOOKING REDIRECT" not in prompt
-    assert webhook_server._use_whatsapp_orchestrator("whatsapp") is False
+    assert "MERMAID WHATSAPP RESERVATION DEMO - FINAL OVERRIDE" in prompt
+    assert "Demo seat availability is always assumed" in prompt
+    assert "Papiamentu" in prompt
+    assert "Reminders are disabled" in prompt
+    assert prompt.index("MERMAID WHATSAPP RESERVATION DEMO - FINAL OVERRIDE") > prompt.index("cannot see live seats")
+    assert webhook_server._use_whatsapp_orchestrator("whatsapp") is True
+
+
+def test_mermaid_reservation_catalog_is_complete_versioned_and_demo_safe(
+    mermaid_config,
+):
+    catalog = mermaid_catalog.get_catalog()
+
+    assert catalog["version"] == mermaid_config["workflow"]["catalog_version"]
+    assert set(catalog["pricing"]["currencies"]) == {"USD", "EUR", "XCG"}
+    assert catalog["pricing"]["currencies"]["USD"] == {
+        "adult": 150,
+        "child_4_12": 75,
+        "infant_0_3": 0,
+        "sedula": 110,
+    }
+    assert catalog["service"]["arrival_time"] == "06:45"
+    assert catalog["service"]["island_departure_time"] == "15:20"
+    assert catalog["pricing"]["pickup_price"] is None
+    assert "not verified" in catalog["policies"]["insurance"].lower()
+    assert mermaid_catalog.demo_features() == {
+        "intake": True,
+        "quote_delivery": True,
+        "demo_payment": True,
+        "dashboard_projection": True,
+        "reminders": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation,error",
+    [
+        (lambda c: c["pricing"]["currencies"].pop("EUR"), "currencies"),
+        (lambda c: c["pricing"]["currencies"]["USD"].pop("adult"), "bands"),
+        (lambda c: c["service"].update({"arrival_time": "07:00"}), "schedule"),
+        (lambda c: c["policies"].update({"cancellation": "48 hours"}), "demo"),
+        (lambda c: c["policies"].update({"insurance": "Insurance included"}), "neutral"),
+    ],
+)
+def test_mermaid_catalog_validation_fails_closed(mermaid_config, mutation, error):
+    catalog = mermaid_catalog.get_catalog()
+    mutation(catalog)
+    with pytest.raises(mermaid_catalog.MermaidCatalogError, match=error):
+        mermaid_catalog.validate_catalog(catalog)
 
 
 def test_mermaid_portable_template_rejects_all_zernio_accounts(

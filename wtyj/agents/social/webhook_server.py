@@ -13,6 +13,8 @@ import threading
 from requests import RequestException
 from fastapi import BackgroundTasks, FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
+from starlette.concurrency import run_in_threadpool
+from anyio import CapacityLimiter
 
 from shared.bm_logger import log
 from shared import state_registry
@@ -128,7 +130,9 @@ def _use_whatsapp_orchestrator(channel: str) -> bool:
     workflow = raw.get("workflow") or {}
     return (
         str(channel or "").strip().lower() == "whatsapp"
-        and workflow.get("type") in {"callback_follow_up", "ali_quote"}
+        and workflow.get("type") in {
+            "callback_follow_up", "ali_quote", "mermaid_reservation_demo"
+        }
     )
 
 
@@ -178,6 +182,37 @@ async def download_ali_quote(public_id: str, expires: int, signature: str):
     """Serve one private quote through a 60-minute HMAC URL."""
     from agents.social.ali_quote_download import quote_download_response
     return quote_download_response(public_id, expires, signature)
+
+
+@app.get("/api/public/mermaid-document/{public_id}")
+async def download_mermaid_document(public_id: str, expires: int, signature: str):
+    """Serve a private Mermaid quote or receipt through an expiring HMAC URL."""
+    from agents.social.mermaid_documents import document_response
+    return document_response(public_id, expires, signature)
+
+
+@app.get("/api/public/mermaid-demo-payment/{reservation_id}")
+async def mermaid_demo_checkout(reservation_id: str, expires: int, signature: str):
+    from agents.social.mermaid_demo_payment import checkout_page
+    return checkout_page(reservation_id, expires, signature)
+
+
+_mermaid_checkout_limiter = CapacityLimiter(1)
+
+
+@app.post("/api/public/mermaid-demo-payment/{reservation_id}")
+async def mermaid_demo_checkout_complete(
+    request: Request, reservation_id: str, expires: int, signature: str,
+):
+    from agents.social.mermaid_demo_payment import complete_checkout
+    form = await request.form()
+    # Serialize checkouts without blocking the PDF/health routes or occupying
+    # worker threads for queued duplicate callbacks.
+    async with _mermaid_checkout_limiter:
+        return await run_in_threadpool(
+            complete_checkout, reservation_id, expires, signature,
+            str(form.get("status") or "cancel"),
+        )
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
@@ -1904,6 +1939,7 @@ def _flush_buffer(buffer_key):
                 reply_vehicle_recommendation = None
                 reply_quote_confirmation = None
                 ali_turn_commit = None
+                mermaid_delivery_commit = None
                 ali_customer_delivery_deferred = False
                 handoff_notification = None
                 if _orchestrator_on:
@@ -1934,6 +1970,11 @@ def _flush_buffer(buffer_key):
                         ali_turn_commit = (
                             reply_result.get("ali_turn_commit")
                             if isinstance(reply_result.get("ali_turn_commit"), dict)
+                            else None
+                        )
+                        mermaid_delivery_commit = (
+                            reply_result.get("mermaid_delivery_commit")
+                            if isinstance(reply_result.get("mermaid_delivery_commit"), dict)
                             else None
                         )
                         ali_customer_delivery_deferred = bool(
@@ -2046,6 +2087,8 @@ def _flush_buffer(buffer_key):
                         ok = bool(confirmation_delivery.get("success"))
                     else:
                         delivery_idempotency_key = (
+                            f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"
+                            if mermaid_delivery_commit else
                             f"ali-turn-{ali_turn_commit['action_id']}"
                             if ali_turn_commit
                             else "unboks-auto-reply-"
@@ -2059,13 +2102,18 @@ def _flush_buffer(buffer_key):
                                 _zernio_acct,
                                 reply_text,
                                 attachment_url=attachment_url,
-                                attachment_type="image" if attachment_url else "image",
+                                attachment_type=str((reply_media or {}).get("type") or "image"),
                                 confirm_delivery=True,
                                 idempotency_key=delivery_idempotency_key,
                             )
                         except (ZernioReplyError, RequestException, TimeoutError, ConnectionError) as exc:
                             ok = False
                             delivery_error_code = type(exc).__name__
+                    if not batch_account_is_current():
+                        return
+                    if mermaid_delivery_commit:
+                        from agents.social.mermaid_documents import mark_delivery
+                        mark_delivery(mermaid_delivery_commit["job_id"], bool(ok), "" if ok else "provider returned false")
                     if not ok:
                         # Provider read/mutation guards may have rejected an
                         # account-control outage. Preserve that durable retry
@@ -2077,7 +2125,9 @@ def _flush_buffer(buffer_key):
                             conversation_id=_zernio_conv[:20],
                             media_attached=bool(attachment_url),
                             vehicle_recommendation=bool(reply_vehicle_recommendation))
-                        if ali_turn_commit:
+                        if mermaid_delivery_commit:
+                            _mark_ali_delivery_retry(_zernio_channel, _zernio_conv, ids, "mermaid_quote", processing_token=processing_token)
+                        elif ali_turn_commit:
                             _mark_ali_delivery_retry(
                                 _zernio_channel,
                                 _zernio_conv,
@@ -2181,12 +2231,13 @@ def _flush_buffer(buffer_key):
                             ),
                         )
                     if attachment_url:
-                        state_registry.increment_photo_used_count(int(reply_media["id"]))
+                        if str((reply_media or {}).get("type") or "image") == "image":
+                            state_registry.increment_photo_used_count(int(reply_media["id"]))
                         state_registry.dm_store_message(
                             conversation_id=_zernio_conv,
                             channel=_zernio_channel,
                             role="system",
-                            text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                            text=f"Attachment sent: {reply_media.get('caption') or reply_media.get('filename')}",
                         )
                     if not ali_turn_commit:
                         state_registry.inbound_processing_bulk_update(
@@ -3370,6 +3421,7 @@ def _process_zernio_event(
             # Callback-follow-up tenants need the structured WhatsApp agent
             # even though they intentionally disable booking_flow.
             _orchestrator_on = _use_whatsapp_orchestrator(channel)
+            mermaid_delivery_commit = None
 
             if _orchestrator_on:
                 # Full booking flow — route through orchestrator
@@ -3393,8 +3445,13 @@ def _process_zernio_event(
                 if isinstance(reply_result, dict):
                     reply_text = str(reply_result.get("text") or "")
                     reply_media = reply_result.get("media") if isinstance(reply_result.get("media"), dict) else None
+                    mermaid_delivery_commit = (
+                        reply_result.get("mermaid_delivery_commit")
+                        if isinstance(reply_result.get("mermaid_delivery_commit"), dict) else None
+                    )
                 else:
                     reply_text = reply_result
+                    mermaid_delivery_commit = None
             else:
                 # Q&A only — use DM agent
                 # DM agent reads dm_get_history which is separate, so store before is fine
@@ -3418,9 +3475,17 @@ def _process_zernio_event(
                     account_id,
                     reply_text,
                     attachment_url=attachment_url,
-                    attachment_type="image" if attachment_url else "image",
+                    attachment_type=str((reply_media or {}).get("type") or "image"),
+                    confirm_delivery=bool(mermaid_delivery_commit),
+                    idempotency_key=(
+                        f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"
+                        if mermaid_delivery_commit else ""
+                    ),
                 )
                 if not ok:
+                    if mermaid_delivery_commit:
+                        from agents.social.mermaid_documents import mark_delivery
+                        mark_delivery(mermaid_delivery_commit["job_id"], False, "provider returned false")
                     log("zernio_reply_send_failed",
                         channel=channel,
                         conversation_id=conversation_id[:20],
@@ -3429,6 +3494,9 @@ def _process_zernio_event(
                         channel, conversation_id, msg.get("sender_name", ""),
                         [message_id], "provider returned false")
                     return
+                if mermaid_delivery_commit:
+                    from agents.social.mermaid_documents import mark_delivery
+                    mark_delivery(mermaid_delivery_commit["job_id"], True)
                 # Store assistant reply
                 state_registry.dm_store_message(
                     conversation_id=conversation_id,
@@ -3437,12 +3505,16 @@ def _process_zernio_event(
                     text=reply_text,
                 )
                 if attachment_url:
-                    state_registry.increment_photo_used_count(int(reply_media["id"]))
+                    if str((reply_media or {}).get("type") or "image") == "image":
+                        try:
+                            state_registry.increment_photo_used_count(int(reply_media["id"]))
+                        except (KeyError, TypeError, ValueError):
+                            pass
                     state_registry.dm_store_message(
                         conversation_id=conversation_id,
                         channel=channel,
                         role="system",
-                        text=f"Image sent: {reply_media.get('caption') or reply_media.get('filename')}",
+                        text=f"Attachment sent: {reply_media.get('caption') or reply_media.get('filename')}",
                     )
                 state_registry.inbound_processing_update(
                     message_id, "replied", reason="provider_send_ok")

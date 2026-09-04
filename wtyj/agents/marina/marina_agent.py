@@ -2102,6 +2102,7 @@ def process_message(
     channel: str = "email",
     messages: list = None,
     customer_file=None,
+    response_contract: str = "",
 ) -> dict:
     signature = config_loader.get_agent_signature()
 
@@ -2135,7 +2136,16 @@ def process_message(
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
+        tool_schema = MARINA_TOOL
+        if response_contract == "mermaid_reservation_demo":
+            from shared import mermaid_catalog
+            if not mermaid_catalog.reservation_demo_enabled():
+                raise ValueError("Mermaid reservation contract is disabled")
+            from agents.social import mermaid_understanding
+            system_prompt = mermaid_understanding.system_prompt()
+            tool_schema = mermaid_understanding.MERMAID_TOOL
+        else:
+            system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
         # Other legacy prompt blocks inject individual config fields. Do not
@@ -2148,7 +2158,7 @@ def process_message(
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,
-            tools=[MARINA_TOOL],
+            tools=[tool_schema],
             tool_choice={"type": "tool", "name": "marina_response"},
             messages=[{"role": "user", "content": user_prompt}],
         )

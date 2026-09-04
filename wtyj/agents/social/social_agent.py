@@ -1053,6 +1053,14 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
         state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
         return ""
 
+    # Mermaid's demo reservation flow is deterministic and tenant-scoped.
+    # It runs before the generic model orchestrator so prices, availability,
+    # confirmations, and later payment state can never be model-invented.
+    from shared import mermaid_catalog
+    if channel == "whatsapp" and mermaid_catalog.reservation_demo_enabled():
+        from agents.social.mermaid_reservation_workflow import handle_demo_message
+        return handle_demo_message(message, include_media=include_media, use_model=True)
+
     # Consulta Despertares receives commercial proposals, supplier outreach,
     # professional referrals, and job applications on the patient WhatsApp
     # number. Route those contacts before Claude and before follow-up-card
