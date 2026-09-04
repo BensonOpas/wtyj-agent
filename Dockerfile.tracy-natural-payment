@@ -1,5 +1,7 @@
 FROM wtyj-agent:tracy-age-1b5d54f
 COPY wtyj/agents/social/mermaid_reservation_workflow.py /app/agents/social/mermaid_reservation_workflow.py
 COPY wtyj/agents/social/mermaid_understanding.py /app/agents/social/mermaid_understanding.py
+COPY clients/mermaid/config/client.json /app/clients/mermaid/config/client.json
+COPY clients/mermaid/config/reservation_catalog.json /app/clients/mermaid/config/reservation_catalog.json
 COPY clients/mermaid/config/response_policy.json /app/agents/social/mermaid_response_policy.json
 COPY wtyj/tests/agents/test_mermaid_booking_ux.py /app/tests/agents/test_mermaid_booking_ux.py
