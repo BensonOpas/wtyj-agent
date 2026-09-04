@@ -62,6 +62,9 @@ _cache: dict = {}
 _cache_lock = threading.RLock()
 _cache_generation = 0
 _cache_request_sequence: dict[str, int] = {}
+# Ordinary dashboard reads share a fetch. These locks survive clear_cache so
+# invalidation cannot let old and new callers fetch under different locks.
+_ordinary_fetch_locks: dict[str, threading.Lock] = {}
 
 
 def _resolve_tenant_id() -> Optional[str]:
@@ -340,8 +343,19 @@ def _record_observability(envelope: dict, outcome: str,
 
 
 def fetch_overrides() -> dict:
-    """Return the cached tenant envelope when it is still current."""
-    return _fetch_overrides(force_refresh=False)
+    """Coalesce ordinary tenant reads, checking the cache inside the lock.
+
+    Fresh pre-send/pause checks bypass this lock and retain their request and
+    generation fences. A dashboard startup burst cannot supersede its own
+    healthy reads simply because several consumers found the cache empty.
+    """
+    tenant_id = _resolve_tenant_id()
+    if not tenant_id:
+        return _fetch_overrides(force_refresh=False)
+    with _cache_lock:
+        fetch_lock = _ordinary_fetch_locks.setdefault(tenant_id, threading.Lock())
+    with fetch_lock:
+        return _fetch_overrides(force_refresh=False)
 
 
 def fetch_overrides_fresh() -> dict:
