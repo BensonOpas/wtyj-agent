@@ -1,5 +1,5 @@
 # Mermaid one-page quote
-**Status:** In progress | **Files:** quote renderer, presentation-refresh page-count check, quote tests, runtime overlay | **Depends on:** live pickup and soft-review release 33272b1 | **Blocks:** compact guest quote
+**Status:** Deployed and verified | **Files:** quote renderer, presentation-refresh page-count check, quote tests, runtime overlay | **Depends on:** live pickup and soft-review release 33272b1 | **Blocks:** none
 
 ## Context
 The user supplied a screenshot of a three-page quote with large blank areas and requested one page. The renderer uses a large full-width photograph, repeats the transport paragraph, and inserts a mandatory page break before the rules. Longer booking details overflow before that break, producing a nearly empty intermediate page.
@@ -27,3 +27,9 @@ Restore `wtyj-agent:tracy-soft-review-33272b1` in the Mermaid compose file and r
 - The actual Calvin quote reproduces the screenshot: three pages before, one page after. USD 600, all line items, booking details, 05:45 pickup, included/bring lists, policy text and next step are preserved.
 - All six languages fit one page with 160-character names/addresses and every fare row. Actual and dense six-language layouts were rendered and visually checked without clipping or overlap.
 - The previous presentation-refresh utility also assumed two quote pages; its check now accepts the new one-page quote. Signed-download, immutable totals, delivery and receipt behavior remain covered by the existing tests.
+
+## Live release
+- 268 Mermaid/status tests passed locally; 81 focused quote, payment, transport and soft-review checks passed inside the exact image with networking disabled.
+- Source `2eb3709`; image `wtyj-agent:tracy-one-page-2eb3709`; digest `sha256:3311810745d7cd9ebc71f8f29b724c34cd744f61d67c6af86ed868864024fa76`. Config file hashes and six peer containers are unchanged; public health and watchdog are healthy, and maintenance is cleared.
+- The current three-page quote was regenerated on the live runtime and independently checked as one page before promoting only its document path/hash. Public signed download returned the exact verified PDF. Reservation, payment and delivery rows are unchanged; no customer send occurred. The original PDF remains on disk and its record is saved beside the new presentation as `previous-document-record.json`.
+- Deployment backup: `/root/backups/tracy-one-page-2eb3709`; source archive: `/root/releases/tracy-one-page-2eb3709`. To undo the current quote refresh, restore its prior document path/hash from the saved record or deployment database backup without restoring unrelated live data.
