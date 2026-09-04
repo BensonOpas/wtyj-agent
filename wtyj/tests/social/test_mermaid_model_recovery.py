@@ -112,10 +112,11 @@ def test_permanent_outage_has_no_retries_or_alert_storm_and_new_messages_continu
     assert model.call_count == 1
     assert state_registry.get_active_escalation_mode(CONVERSATION) == "soft"
     _due()
-    model.return_value = _understood("question", "Food is included.")
+    model.return_value = {**_understood("question", "Acknowledged."), "other_question_reply": "Food is included."}
     _flush("healthy-new", "What food is included?")
     assert model.call_count == 2
-    assert send.call_args.args[3] == "Food is included."
+    from agents.social.mermaid_response_policy import copy as policy_copy
+    assert send.call_args.args[3] == "Food is included.\n\n" + policy_copy('review_queued', 'en')
     assert model.call_args.kwargs["thread_fields"]["human_review_pending"] is True
 
 

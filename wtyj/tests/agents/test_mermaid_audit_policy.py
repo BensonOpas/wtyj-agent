@@ -225,9 +225,10 @@ def _assert_review_preserved(intake):
 
 
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
-def test_plain_review_acknowledgement_uses_queue_records_without_model_status_selector(monkeypatch, locale):
+@pytest.mark.parametrize('action', ['acknowledge', 'question', 'details'])
+def test_plain_review_acknowledgement_uses_queue_records_without_model_status_selector(monkeypatch, locale, action):
     intake = _queued_accessibility_review(locale)
-    stub = model(monkeypatch, locale, mermaid_action='acknowledge',
+    stub = model(monkeypatch, locale, mermaid_action=action,
                  reply=_FALSE_REVIEW_PROSE[locale], has_open_question=False,
                  guest_question_excerpt='')
     result = workflow.process_model_turn(
@@ -235,6 +236,69 @@ def test_plain_review_acknowledgement_uses_queue_records_without_model_status_se
     assert result.text == policy.copy('review_queued', locale)
     assert result.action is None
     assert stub.call_args.kwargs['thread_fields']['recorded_status']['review'] == 'queued'
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+@pytest.mark.parametrize('action', ['acknowledge', 'question', 'details'])
+def test_review_faq_uses_dedicated_body_despite_missing_excerpt_or_generic_label(monkeypatch, locale, action):
+    intake = _queued_accessibility_review(locale)
+    model(monkeypatch, locale, mermaid_action=action,
+          reply=_SAFE_FAQ[locale] + ' ' + _FALSE_REVIEW_PROSE[locale],
+          other_question_reply=_SAFE_FAQ[locale], status_request='none',
+          guest_question_excerpt='', has_open_question=True)
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'review-faq', 'text': 'Question?'}, None)
+    assert result.text == _SAFE_FAQ[locale] + '\n\n' + policy.copy('review_queued', locale)
+    assert result.action is None
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+@pytest.mark.parametrize('other', [None, '', '   '])
+def test_missing_review_faq_never_falls_back_to_raw_active_staff_prose(monkeypatch, locale, other):
+    intake = _queued_accessibility_review(locale)
+    additions = {} if other is None else {'other_question_reply': other}
+    model(monkeypatch, locale, mermaid_action='question',
+          reply=_SAFE_FAQ[locale] + ' ' + _FALSE_REVIEW_PROSE[locale],
+          status_request='none', guest_question_excerpt='', has_open_question=False,
+          **additions)
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'missing-faq', 'text': 'Question?'}, None)
+    # This is truthful status, not a successful answer to the missing FAQ.
+    assert result.text == policy.copy('review_queued', locale)
+    assert result.action is None
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+def test_ordinary_faq_outside_review_keeps_raw_answer(monkeypatch, locale):
+    model(monkeypatch, locale, reply=_SAFE_FAQ[locale],
+          other_question_reply='UNUSED', guest_question_excerpt='Question?')
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'ordinary-faq', 'text': 'Question?'}, None)
+    assert result.text == _SAFE_FAQ[locale]
+    assert state_registry.get_active_escalation_mode('guest') is None
+    assert store.latest_for_conversation('guest') is None
+
+
+@pytest.mark.parametrize('route', ['calendar', 'wildlife_guarantee', 'pickup_coverage', 'pickup_pricing'])
+def test_review_faq_fallback_keeps_protected_fact_routes(monkeypatch, route):
+    intake = _queued_accessibility_review('en')
+    selector = {'calendar_request': 'operating_days'} if route == 'calendar' else {'status_request': route}
+    model(monkeypatch, reply=_FALSE_REVIEW_PROSE['en'],
+          other_question_reply=_SAFE_FAQ['en'], guest_question_excerpt='', **selector)
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'protected-facts', 'text': 'Question?'}, None)
+    if route == 'calendar':
+        expected = policy.calendar_reply('operating_days', 'en')
+    elif route == 'wildlife_guarantee':
+        expected = policy.wildlife_guarantee_reply('en', {'review': 'queued'})
+    elif route == 'pickup_coverage':
+        expected = policy.pickup_coverage_reply('en')
+    else:
+        expected = policy.pickup_pricing_reply('en', intake) + '\n\n' + _SAFE_FAQ['en']
+    assert result.text == expected
     _assert_review_preserved(intake)
 
 
@@ -248,10 +312,11 @@ def test_wildlife_condition_during_review_uses_facts_and_keeps_safe_followup(mon
     assert result.text == policy.copy('wildlife_guarantee', locale) + '\n\n' + policy.copy('review_queued', locale)
     assert result.action is None
     _assert_review_preserved(intake)
-    stub.return_value.update(reply=_SAFE_FAQ[locale], status_request='none', guest_question_excerpt='Question?')
+    stub.return_value.update(reply=_SAFE_FAQ[locale], other_question_reply=_SAFE_FAQ[locale],
+                             status_request='none', guest_question_excerpt='Question?')
     followup = workflow.process_model_turn(
         {'from': 'guest', 'message_id': 'safe-followup', 'text': 'Question?'}, None)
-    assert followup.text == _SAFE_FAQ[locale]
+    assert followup.text == _SAFE_FAQ[locale] + '\n\n' + policy.copy('review_queued', locale)
     assert followup.action is None
     _assert_review_preserved(intake)
 

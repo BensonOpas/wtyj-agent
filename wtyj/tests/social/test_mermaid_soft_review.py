@@ -99,10 +99,10 @@ def test_review_acknowledgement_and_safe_followup_both_deliver(review_runtime):
     assert send.call_count == 1
     from agents.social.mermaid_response_policy import copy as policy_copy
     assert send.call_args.args[3] == policy_copy('review_queued', 'en')
-    model.return_value = _understood("question", FOLLOWUP)
+    model.return_value = {**_understood("question", "Acknowledged."), "other_question_reply": FOLLOWUP}
     _flush("review-two", "What food is included?")
     assert model.call_count == send.call_count == 2
-    assert send.call_args.args[3] == FOLLOWUP
+    assert send.call_args.args[3] == FOLLOWUP + '\n\n' + policy_copy('review_queued', 'en')
     assert model.call_args.kwargs["thread_fields"]["human_review_pending"] is True
     assert _rows("SELECT status FROM inbound_processing_events ORDER BY message_id") == [("replied",), ("replied",)]
     intake = state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"]

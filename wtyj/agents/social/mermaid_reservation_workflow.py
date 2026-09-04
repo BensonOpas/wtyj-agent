@@ -689,9 +689,6 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     elif review_pending and action in {'confirm_summary', 'new_booking', 'cancel'}:
         # Informational selectors cannot conceal a review-blocked decision.
         pass
-    elif review_pending and action == 'acknowledge' and not has_question:
-        # A plain YES/acknowledgment is not evidence that queued work started.
-        response = response_policy.status_reply('handover', locale, response_policy.state_context(phone, reservation))
     elif calendar_request in response_policy.CALENDAR_REQUESTS:
         response = response_policy.calendar_reply(calendar_request, locale)
     elif understood.get('status_request') == 'wildlife_guarantee' and not (
@@ -710,6 +707,13 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         response = response_policy.pickup_coverage_reply(locale)
     elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':
         response = response_policy.status_reply(understood.get('status_request') if understood.get('status_request') in {'payment', 'handover', 'delivery'} else 'payment', locale, response_policy.state_context(phone, reservation))
+        other_answer = str(understood.get('other_question_reply') or '').strip()
+        if other_answer:
+            response = other_answer + '\n\n' + response
+    elif review_pending:
+        # Generic action labels and missing question excerpts do not prove
+        # staff activity. Only the dedicated FAQ body may accompany records.
+        response = response_policy.status_reply('handover', locale, response_policy.state_context(phone, reservation))
         other_answer = str(understood.get('other_question_reply') or '').strip()
         if other_answer:
             response = other_answer + '\n\n' + response
