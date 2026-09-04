@@ -13,6 +13,8 @@ import threading
 from requests import RequestException
 from fastapi import BackgroundTasks, FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
+from starlette.concurrency import run_in_threadpool
+from anyio import CapacityLimiter
 
 from shared.bm_logger import log
 from shared import state_registry
@@ -195,15 +197,22 @@ async def mermaid_demo_checkout(reservation_id: str, expires: int, signature: st
     return checkout_page(reservation_id, expires, signature)
 
 
+_mermaid_checkout_limiter = CapacityLimiter(1)
+
+
 @app.post("/api/public/mermaid-demo-payment/{reservation_id}")
 async def mermaid_demo_checkout_complete(
     request: Request, reservation_id: str, expires: int, signature: str,
 ):
     from agents.social.mermaid_demo_payment import complete_checkout
     form = await request.form()
-    return complete_checkout(
-        reservation_id, expires, signature, str(form.get("status") or "cancel")
-    )
+    # Serialize checkouts without blocking the PDF/health routes or occupying
+    # worker threads for queued duplicate callbacks.
+    async with _mermaid_checkout_limiter:
+        return await run_in_threadpool(
+            complete_checkout, reservation_id, expires, signature,
+            str(form.get("status") or "cancel"),
+        )
 
 _VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 _last_cleanup_ts = 0
