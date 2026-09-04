@@ -42,7 +42,7 @@ def test_six_localized_quote_pdfs_render_required_content(locale):
     assert len(reader.pages) == 2
     assert "DEMO QUOTE - NOT A VALID TICKET" in text
     assert "Ana Çosta" in text
-    assert "2026-09-05" in text
+    assert ("Saturday 5 September 2026" if locale == "en" else "2026-09-05") in text
     assert "USD 375.00" in text
     assert "Fishermen's Pier" in text
     assert "06:45" in text and "15:20" in text

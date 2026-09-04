@@ -44,12 +44,13 @@ def test_confirmation_creates_immutable_demo_assumed_snapshot():
     assert "no inventory provider called" in event["reason"]
 
 
-def test_confirmation_replay_and_concurrency_create_one_reservation():
+@pytest.mark.parametrize("workers", [2, 6, 12])
+def test_confirmation_replay_and_concurrency_create_one_reservation(workers):
     def confirm(index):
         return store.confirm_reservation("guest", intake(), idempotency_key=f"confirm-{index}")
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(confirm, range(6)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(confirm, range(workers)))
     assert len({result["public_id"] for result in results}) == 1
     assert len(store.list_reservations()) == 1
 

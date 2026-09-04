@@ -732,6 +732,11 @@ def _ali_inbound_recovery_loop(
                 error=type(exc).__name__,
             )
         try:
+            from agents.social.mermaid_delivery_reconciliation import reconcile_pending_once
+            reconcile_pending_once()
+        except Exception as exc:
+            log("mermaid_document_recovery_failed", error=type(exc).__name__)
+        try:
             _recover_stale_ali_inbound_once(ali_workflow=ali_workflow)
         except Exception as exc:
             log("ali_inbound_recovery_failed", error=type(exc).__name__)

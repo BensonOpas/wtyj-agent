@@ -130,7 +130,7 @@ def test_six_language_success_copy_is_warm_and_grounded(locale):
     payment = {"currency": "USD", "amount": 375}
     text = mermaid_demo_payment.success_message(reservation, payment)
     assert reservation["booking_code"] in text
-    assert "2026-09-05" in text
+    assert ("Saturday 5 September 2026" if locale == "en" else "2026-09-05") in text
     assert "USD 375.00" in text
     assert "06:45" in text
     assert "Mermaid" in text

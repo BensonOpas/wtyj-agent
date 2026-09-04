@@ -18,9 +18,24 @@
   },
   "pricing": {
     "currencies": {
-      "USD": {"adult": 150, "child_4_12": 75, "infant_0_3": 0, "sedula": 110},
-      "EUR": {"adult": 130, "child_4_12": 65, "infant_0_3": 0, "sedula": 95},
-      "XCG": {"adult": 270, "child_4_12": 135, "infant_0_3": 0, "sedula": 195}
+      "USD": {
+        "adult": 150,
+        "child_4_12": 75,
+        "infant_0_3": 0,
+        "sedula": 110
+      },
+      "EUR": {
+        "adult": 130,
+        "child_4_12": 65,
+        "infant_0_3": 0,
+        "sedula": 95
+      },
+      "XCG": {
+        "adult": 270,
+        "child_4_12": 135,
+        "infant_0_3": 0,
+        "sedula": 195
+      }
     },
     "default_currency": "USD",
     "pickup_price": null
@@ -51,5 +66,106 @@
     "safety": "DEMO POLICY - REPLACE BEFORE GO-LIVE: Participation is at the guest's own risk and instructions from the captain and crew must be followed. This demonstration does not state or verify insurance coverage.",
     "insurance": "Insurance coverage is not verified in this demonstration. Mermaid must approve final insurance wording before go-live.",
     "quote_validity_minutes": 60
+  },
+  "guest_copy": {
+    "en": {
+      "pickup_pending": "Pickup from {location} is requested, not confirmed. Its price and collection time still need confirmation; pickup is not included in the trip amount.",
+      "hotel": "your accommodation",
+      "pier_arrival": "Meet us at {place} at {time}.",
+      "trip_only": "Trip total (pickup excluded)",
+      "trip_total": "Trip total",
+      "confirm": "Does that look right? You can confirm in your own words or tell me what to change.",
+      "adults": "{count} adult fares",
+      "children": "{count} children (4-12)",
+      "infants": "{count} little ones (0-3)",
+      "quote_ready": "Your demo quote is attached.",
+      "booking_complete": "Your demo booking is complete with Mermaid. Your receipt is attached.",
+      "paid": "Demo paid",
+      "pickup_payment_note": "Pickup is still pending; this payment covers the trip only.",
+      "island_departure": "Departure from the island: {time}.",
+      "adults_one": "{count} adult fare",
+      "children_one": "{count} child (4-12)",
+      "infants_one": "{count} little one (0-3)"
+    },
+    "nl": {
+      "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
+      "hotel": "je accommodatie",
+      "pier_arrival": "We zien jullie bij {place} om {time}.",
+      "trip_only": "Triptotaal (exclusief transfer)",
+      "trip_total": "Triptotaal",
+      "confirm": "Klopt dit zo? Bevestig gerust in je eigen woorden of geef een wijziging door.",
+      "adults": "{count} volwassenentarieven",
+      "children": "{count} kinderen (4-12)",
+      "infants": "{count} kleintjes (0-3)",
+      "quote_ready": "Je demo-offerte is bijgevoegd.",
+      "booking_complete": "Je demo-boeking bij Mermaid is rond. Je betalingsbewijs is bijgevoegd.",
+      "paid": "Demo betaald",
+      "pickup_payment_note": "De transfer is nog niet bevestigd; deze betaling is alleen voor de trip.",
+      "island_departure": "Vertrek van het eiland: {time}."
+    },
+    "de": {
+      "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
+      "hotel": "Ihrer Unterkunft",
+      "pier_arrival": "Wir treffen uns am {place} um {time}.",
+      "trip_only": "Ausflugspreis (ohne Abholung)",
+      "trip_total": "Ausflugspreis",
+      "confirm": "Stimmt das so? Bestätigen Sie gern in eigenen Worten oder nennen Sie eine Änderung.",
+      "adults": "{count} Erwachsenentarife",
+      "children": "{count} Kinder (4-12)",
+      "infants": "{count} Kleinkinder (0-3)",
+      "quote_ready": "Ihr Demo-Angebot ist angehängt.",
+      "booking_complete": "Ihre Demo-Buchung bei Mermaid ist abgeschlossen. Ihr Zahlungsbeleg ist angehängt.",
+      "paid": "Demo bezahlt",
+      "pickup_payment_note": "Die Abholung ist noch offen; diese Zahlung gilt nur für den Ausflug.",
+      "island_departure": "Abfahrt von der Insel: {time}."
+    },
+    "es": {
+      "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
+      "hotel": "tu alojamiento",
+      "pier_arrival": "Nos encontramos en {place} a las {time}.",
+      "trip_only": "Total del paseo (sin recogida)",
+      "trip_total": "Total del paseo",
+      "confirm": "¿Está todo bien? Confírmalo con tus palabras o dime qué cambiamos.",
+      "adults": "{count} tarifas de adulto",
+      "children": "{count} niños (4-12)",
+      "infants": "{count} pequeños (0-3)",
+      "quote_ready": "Tu cotización demo está adjunta.",
+      "booking_complete": "Tu reserva demo con Mermaid está lista. Tu recibo está adjunto.",
+      "paid": "Demo pagado",
+      "pickup_payment_note": "La recogida sigue pendiente; este pago cubre solo el paseo.",
+      "island_departure": "Salida de la isla: {time}."
+    },
+    "pap": {
+      "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di trip.",
+      "hotel": "bo akomodashon",
+      "pier_arrival": "Nos ta topa na {place} pa {time}.",
+      "trip_only": "Total di trip (sin pickup)",
+      "trip_total": "Total di trip",
+      "confirm": "Esaki ta korekto? Konfirmá den bo mes palabranan òf bisa mi kiko mester kambia.",
+      "adults": "{count} tarifa di adulto",
+      "children": "{count} mucha (4-12)",
+      "infants": "{count} mucha chikitu (0-3)",
+      "quote_ready": "Bo oferta demo ta adjuntá.",
+      "booking_complete": "Bo reservashon demo ku Mermaid ta kla. Bo resibu ta adjuntá.",
+      "paid": "Demo pagá",
+      "pickup_payment_note": "Pickup ta pendiente ainda; e pago aki ta kubri solamente e trip.",
+      "island_departure": "Salida for di e isla: {time}."
+    },
+    "pt": {
+      "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
+      "hotel": "sua hospedagem",
+      "pier_arrival": "Nos encontramos em {place} às {time}.",
+      "trip_only": "Total do passeio (sem traslado)",
+      "trip_total": "Total do passeio",
+      "confirm": "Está tudo certo? Confirme com suas palavras ou diga o que devemos mudar.",
+      "adults": "{count} tarifas de adulto",
+      "children": "{count} crianças (4-12)",
+      "infants": "{count} pequenos (0-3)",
+      "quote_ready": "Sua cotação demo está anexada.",
+      "booking_complete": "Sua reserva demo com a Mermaid está pronta. Seu recibo está anexado.",
+      "paid": "Demo pago",
+      "pickup_payment_note": "O traslado continua pendente; este pagamento cobre apenas o passeio.",
+      "island_departure": "Saída da ilha: {time}."
+    }
   }
 }

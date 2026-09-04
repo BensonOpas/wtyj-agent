@@ -6,6 +6,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Iterable
@@ -18,6 +19,7 @@ class MermaidReservationError(RuntimeError):
 
 
 TERMINAL_STATES = {"cancelled", "booked"}
+_schema_lock = threading.Lock()
 TRANSITIONS = {
     "demo_availability_approved": {"quote_ready", "cancelled"},
     "quote_ready": {"demo_payment_pending", "cancelled"},
@@ -35,9 +37,17 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(state_registry.DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    _ensure_schema(conn)
+    try:
+        # Concurrent first-use callbacks must not race the journal-mode switch.
+        # Only schema initialization is serialized; reservation transactions
+        # retain their existing SQLite uniqueness and transactional authority.
+        with _schema_lock:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            _ensure_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 

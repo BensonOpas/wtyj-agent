@@ -148,15 +148,20 @@ def test_duplicate_confirmation_cancel_retry_and_delivery_recovery(monkeypatch):
     mermaid_demo_payment.complete_checkout(reservation_id, expires, signature, "success")
     documents = mermaid_documents.documents_for_reservation(reservation_id)
     receipt = next(item for item in documents if item["kind"] == "receipt")
-    assert receipt["delivery_status"] == "failed"
+    assert receipt["delivery_status"] == "pending"
     assert receipt["delivery_attempts"] == 1
 
+    from agents.social import mermaid_delivery_reconciliation
+    def reconcile(job_id):
+        mermaid_documents.mark_delivery(job_id, True, count_attempt=False)
+        return "delivered"
+    monkeypatch.setattr(mermaid_delivery_reconciliation, "reconcile_job", reconcile)
     mermaid_demo_payment.complete_checkout(reservation_id, expires, signature, "success")
     documents = mermaid_documents.documents_for_reservation(reservation_id)
     receipt = next(item for item in documents if item["kind"] == "receipt")
     assert receipt["delivery_status"] == "delivered"
-    assert receipt["delivery_attempts"] == 2
-    assert len(sends) == 2
+    assert receipt["delivery_attempts"] == 1
+    assert len(sends) == 1
 
 
 def test_demo_flags_provide_immediate_safe_rollback():

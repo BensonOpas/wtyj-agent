@@ -45,10 +45,10 @@ def test_multi_fact_message_preserves_facts_and_asks_only_one_question():
         message_id="one",
     )
     assert result.phase == "awaiting_summary_confirmation"
-    assert result.text.count("?") == 0
+    assert result.text.count("?") == 1
     assert "Ana Silva" in result.text
-    assert "2 adults, 1 children 4-12, 0 children 0-3" in result.text
-    assert "2026-09-05" in result.text
+    assert "2 adult fares, 1 child (4-12)" in result.text
+    assert "Saturday 5 September 2026" in result.text
 
 
 def test_ambiguous_party_size_asks_one_composition_question():
@@ -80,7 +80,7 @@ def test_summary_requires_explicit_confirmation_and_allows_one_field_correction(
 
     correction = workflow.process_intake_turn(phone, "Actually 3 adults", message_id="three")
     assert correction.phase == "awaiting_summary_confirmation"
-    assert "3 adults" in correction.text
+    assert "3 adult fares" in correction.text
     state = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
     assert state["children"] == 0
     assert state["customer_name"] == "Ana Silva"

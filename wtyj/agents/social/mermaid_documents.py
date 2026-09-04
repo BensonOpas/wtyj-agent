@@ -25,7 +25,8 @@ from reportlab.platypus import (
 )
 
 from agents.social import mermaid_reservation_store
-from shared import state_registry
+from shared import state_registry, mermaid_catalog
+from agents.social import mermaid_guest_experience as guest
 
 
 TEAL = colors.HexColor("#007F86")
@@ -218,12 +219,12 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         ])),
         Spacer(1, 4 * mm), Paragraph(_safe(labels["title"]), heading),
     ]
-    transport = labels["pickup"] if intake["pickup_preference"] == "pickup_requested" else labels["pier"]
+    transport = guest.transport_text(intake, locale)
     reference = reservation["public_id"][-10:].upper()
     detail_rows = [
         [Paragraph(_safe(labels["quote"]), body), Paragraph(_safe(reference), body), Paragraph(_safe(labels["customer"]), body), Paragraph(_safe(reservation["customer_name"], 100), body)],
-        [Paragraph(_safe(labels["date"]), body), Paragraph(_safe(intake["trip_date"]), body), Paragraph(_safe(labels["transport"]), body), Paragraph(_safe(transport, 160), body)],
-        [Paragraph(_safe(labels["guests"]), body), Paragraph(_safe(copy["party"].format(adults=intake["adults"], children=intake["children"], infants=intake["infants"])), body), Paragraph(_safe(copy["catalog"]), body), Paragraph(_safe(reservation["catalog_version"]), body)],
+        [Paragraph(_safe(labels["date"]), body), Paragraph(_safe(guest.guest_date(intake["trip_date"], locale)), body), Paragraph(_safe(labels["transport"]), body), Paragraph(_safe(transport), body)],
+        [Paragraph(_safe(labels["guests"]), body), Paragraph(_safe(guest.party_text(intake, locale)), body), Paragraph("", body), Paragraph("", body)],
     ]
     detail = Table(detail_rows, colWidths=[32 * mm, 55 * mm, 25 * mm, 68 * mm])
     detail.setStyle(TableStyle([
@@ -236,6 +237,8 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     story.extend([detail, Paragraph(labels["charges"], section)])
     rows = [[labels["description"], labels["qty"], labels["unit"], labels["amount"]]]
     for item in money["items"]:
+        if not item["quantity"]:
+            continue
         rows.append([
             _safe(copy["items"][item["key"]]), str(item["quantity"]),
             _money(money["currency"], item["unit_amount"]),
@@ -251,11 +254,12 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     ]))
     story.extend([
         price_table, Spacer(1, 2 * mm),
-        Table([[Paragraph(f"{_safe(labels['total'])}: {_money(money['currency'], money['total'])}", total)]], colWidths=[180 * mm]),
+        Table([[Paragraph(_safe(guest.price_text(money, intake, locale)), total)]], colWidths=[180 * mm]),
         Paragraph(_safe(labels["available"]), small),
         Paragraph(labels["included"], section),
         Paragraph(" • ".join(_safe(x, 120) for x in copy["included_items"]), body),
-        Paragraph(labels["schedule"], section), Paragraph(_safe(labels["arrival"]), body),
+        Paragraph(labels["schedule"], section), Paragraph(_safe(transport), body),
+        Paragraph(_safe(guest.guest_copy(locale)["island_departure"].format(time=mermaid_catalog.get_catalog()["service"]["island_departure_time"])), body),
         Paragraph(labels["bring"], section), Paragraph(" • ".join(_safe(x, 100) for x in copy["bring_items"]), body),
         PageBreak(),
         HRFlowable(color=TEAL, thickness=1.5),
@@ -337,14 +341,15 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         title=f"Mermaid simulated payment receipt {reservation['booking_code']}",
         author="Mermaid Boat Trips Curaçao",
     )
-    guest_line = copy["party"].format(adults=intake["adults"], children=intake["children"], infants=intake["infants"])
+    guest_line = guest.party_text(intake, locale)
     rows = [
         [copy["booking_code"], reservation["booking_code"]],
         [copy["payment_reference"], payment["payment_reference"]],
         [labels["customer"], reservation["customer_name"]],
-        [labels["date"], intake["trip_date"]],
+        [labels["date"], guest.guest_date(intake["trip_date"], locale)],
         [labels["guests"], guest_line],
-        [copy["payment_time"], payment["paid_at"]],
+        [copy["payment_time"], datetime.fromisoformat(payment["paid_at"]).strftime("%d %b %Y, %H:%M UTC")],
+        [labels["transport"], guest.transport_text(intake, locale)],
     ]
     table = Table(
         [[Paragraph(f"<b>{_safe(a)}</b>", body), Paragraph(_safe(b), body)] for a, b in rows],
@@ -367,11 +372,11 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         ])),
         Spacer(1, 6 * mm), Paragraph(_safe(copy["receipt_title"]), heading), Spacer(1, 3 * mm), table,
         Spacer(1, 6 * mm),
-        Paragraph(f"{_safe(labels['total'])}: {_money(payment['currency'], int(payment['amount']))}", total),
+        Paragraph(_safe(guest.price_text({"currency": payment["currency"], "total": payment["amount"]}, intake, locale)), total),
         Spacer(1, 5 * mm), HRFlowable(color=TEAL, thickness=1.3), Spacer(1, 5 * mm),
         Paragraph(_safe(copy["receipt_disclaimer"]), body),
         Spacer(1, 3 * mm),
-        Paragraph(_safe(copy["receipt_arrival"]), body),
+        Paragraph(_safe(guest.transport_text(intake, locale)), body),
     ]
     doc.build(story)
     return hashlib.sha256(target.read_bytes()).hexdigest()
@@ -415,13 +420,28 @@ def create_receipt(reservation: dict, payment: dict) -> tuple[dict, dict]:
         conn.close()
 
 
-def mark_delivery(job_id: str, delivered: bool, error: str = "") -> None:
+def claim_initial_delivery(job_id: str) -> bool:
+    """Reserve the initial receipt send before I/O, including concurrent callbacks."""
+    conn = _conn()
+    try:
+        result = conn.execute(
+            "UPDATE mermaid_delivery_jobs SET attempts=1, status='pending', updated_at=? "
+            "WHERE tenant_slug='mermaid' AND public_id=? AND attempts=0 AND status='pending'",
+            (_now(), job_id),
+        )
+        conn.commit()
+        return result.rowcount == 1
+    finally:
+        conn.close()
+
+
+def mark_delivery(job_id: str, delivered: bool, error: str = "", *, count_attempt: bool = True) -> None:
     conn = _conn()
     try:
         conn.execute(
-            "UPDATE mermaid_delivery_jobs SET status=?, attempts=attempts+1, last_error=?, updated_at=? "
+            "UPDATE mermaid_delivery_jobs SET status=?, attempts=attempts+?, last_error=?, updated_at=? "
             "WHERE tenant_slug='mermaid' AND public_id=? AND status!='delivered'",
-            ("delivered" if delivered else "failed", str(error or "")[:240], _now(), job_id),
+            ("delivered" if delivered else "pending", int(count_attempt), str(error or "")[:240], _now(), job_id),
         )
         conn.commit()
     finally:
@@ -496,12 +516,9 @@ def document_response(public_id: str, expires: int, signature: str):
 
 
 def quote_message(reservation: dict) -> str:
-    copy = {
-        "en": "Your complete demo quote is ready and attached. It includes the schedule, inclusions, what to bring, and the demo rules. Bring towels and sunscreen; Mermaid takes care of the rest.",
-        "nl": "Je volledige demo-offerte is klaar en bijgevoegd, met planning, inbegrepen onderdelen, meeneemlijst en demo-regels. Neem handdoeken en zonnebrand mee; Mermaid zorgt voor de rest.",
-        "de": "Ihr vollständiges Demo-Angebot ist fertig und angehängt, mit Ablauf, Leistungen, Packliste und Demo-Regeln. Bringen Sie Handtücher und Sonnencreme mit; Mermaid kümmert sich um den Rest.",
-        "es": "Tu cotización demo completa está lista y adjunta, con horario, inclusiones, qué llevar y reglas demo. Trae toallas y protector solar; Mermaid se encarga del resto.",
-        "pap": "Bo oferta demo kompleto ta kla i ta adjuntá, ku orario, tur loke ta inkluí, kiko pa hiba i reglanan demo. Hiba handuk i krema solar; Mermaid ta sòru pa e rèst.",
-        "pt": "Sua cotação demo completa está pronta e anexada, com horários, inclusões, o que levar e regras demo. Leve toalhas e protetor solar; a Mermaid cuida do resto.",
-    }
-    return copy.get(reservation["language"], copy["en"])
+    locale = reservation["language"]
+    return "\n\n".join([
+        guest.guest_copy(locale)["quote_ready"],
+        guest.price_text(reservation["monetary_snapshot"], reservation["intake"], locale),
+        guest.transport_text(reservation["intake"], locale),
+    ])

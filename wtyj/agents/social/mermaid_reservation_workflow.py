@@ -17,6 +17,7 @@ from typing import Any
 import dateparser
 
 from shared import mermaid_catalog, state_registry
+from agents.social import mermaid_guest_experience as guest
 
 
 SUPPORTED_LOCALES = ("en", "nl", "de", "es", "pap", "pt")
@@ -302,14 +303,15 @@ def _extract_fields(text: str, locale: str, current: dict) -> tuple[dict, bool]:
 
 def _summary(fields: dict, locale: str) -> str:
     labels = SUMMARY_COPY[locale]
-    pickup = labels["pickup"].format(location=fields.get("pickup_location")) if fields.get("pickup_preference") == "pickup_requested" else labels["pier"]
-    party = labels["party"].format(adults=fields["adults"], children=fields["children"], infants=fields["infants"])
+    pickup = guest.transport_text(fields, locale)
+    party = guest.party_text(fields, locale)
     return (
         f"*{labels['title']}*\n"
-        f"{labels['date']}: {fields['trip_date']}\n"
+        f"{labels['date']}: {guest.guest_date(fields['trip_date'], locale)}\n"
         f"{labels['guests']}: {party}\n"
         f"{labels['name']}: {fields['customer_name']}\n"
-        f"{labels['transport']}: {pickup}\n\n{COPY[locale]['confirm']}"
+        f"{guest.price_text(guest.intake_money(fields), fields, locale)}\n"
+        f"{labels['transport']}: {pickup}\n\n{guest.guest_copy(locale)['confirm']}"
     )
 
 
@@ -449,6 +451,13 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     history = state_registry.dm_get_history(phone, "whatsapp", limit=16)
     context = dict(fields)
     context["reservation_state"] = (reservation or {}).get("state")
+    if reservation:
+        context["reservation_intake"] = reservation["intake"]
+        context["authoritative_pricing"] = reservation["monetary_snapshot"]
+        context["booking_code"] = reservation["booking_code"]
+    elif all(key in fields for key in ("adults", "children", "infants")):
+        context["authoritative_pricing"] = guest.intake_money(fields)
+    context["pickup_status"] = "requested_unconfirmed" if fields.get("pickup_preference") == "pickup_requested" else "not_requested"
     understood = marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,
@@ -490,6 +499,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if fields.get("pickup_preference") == "pier":
         fields.pop("pickup_location", None)
     response = str(understood.get("reply") or "").strip()
+    has_question = understood.get("has_open_question") is True or action == "question"
     result_action = None
     if understood.get("requires_human") or action == "request_human" or (
         action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
@@ -524,13 +534,17 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             fields["phase"] = "collecting"
             if not response:
                 response = question
+        elif has_question:
+            # A mixed detail/question turn must keep its answer. Changed facts
+            # require a fresh summary before any later approval can book them.
+            fields["phase"] = old_phase if old_phase == "awaiting_summary_confirmation" and not changes else "collecting"
         elif action == "confirm_summary" and old_phase == "awaiting_summary_confirmation" and not changes:
             fields["phase"] = "summary_confirmed"
             response = COPY[locale]["confirmed"]
             result_action = "summary_confirmed"
         else:
             fields["phase"] = "awaiting_summary_confirmation"
-            response = ((response + "\n\n") if action == "question" and response else "") + _summary(fields, locale)
+            response = _summary(fields, locale)
     root_fields["mermaid_intake"] = fields
     if message_id:
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
@@ -613,7 +627,7 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         )
         availability_copy, payment_copy = PAYMENT_COPY[result.locale]
         result = IntakeResult(
-            result.text + "\n\n" + availability_copy + "\n\n" + mermaid_documents.quote_message(reservation) + "\n\n" + payment_copy + " " + payment_url,
+            mermaid_documents.quote_message(reservation) + "\n\n" + availability_copy + "\n\n" + payment_copy + " " + payment_url,
             result.locale,
             result.phase,
             action=f"reservation:{reservation['public_id']}",
