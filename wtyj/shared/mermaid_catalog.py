@@ -48,6 +48,8 @@ def validate_catalog(catalog: dict) -> dict:
     pricing = catalog.get("pricing") or {}
     if not isinstance(pricing, dict):
         raise MermaidCatalogError("pricing must be an object")
+    if pricing.get('pickup_journey', 'unconfirmed') not in {'unconfirmed', 'round_trip'}:
+        raise MermaidCatalogError('pickup journey must be unconfirmed or round_trip')
     currencies = pricing.get("currencies") or {}
     if not isinstance(currencies, dict) or set(currencies) != _SUPPORTED_CURRENCIES:
         raise MermaidCatalogError("catalog currencies must be USD, EUR and XCG")

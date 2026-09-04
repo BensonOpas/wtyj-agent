@@ -19,6 +19,7 @@ import dateparser
 from shared import mermaid_catalog, state_registry
 from shared.mermaid_contact import normalize_contact_phone
 from agents.social import mermaid_guest_experience as guest
+from agents.social import mermaid_response_policy as response_policy
 
 
 SUPPORTED_LOCALES = ("en", "nl", "de", "es", "pap", "pt")
@@ -470,6 +471,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     )
     context = dict(fields)
     context["human_review_pending"] = review_pending
+    context["recorded_status"] = response_policy.state_context(phone, reservation)
     context["reservation_state"] = (reservation or {}).get("state")
     if reservation:
         context["reservation_intake"] = reservation["intake"]
@@ -501,6 +503,19 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     locale = understood.get("language")
     if locale not in SUPPORTED_LOCALES:
         locale = fields.get("language", "en")
+    security_event = understood.get("security_event", "none")
+    security_review = False
+    if security_event in {"blocked_override", "actionable_incident"}:
+        security_review = response_policy.record_security_event(phone, message_id, security_event)
+        # A rejected instruction cannot supply booking changes. An independent
+        # explicit person request still gets the ordinary durable review.
+        explicit_human = understood.get("mermaid_action") == "request_human"
+        understood = {**understood, "fields": {},
+                      "mermaid_action": "request_human" if security_review or explicit_human else "acknowledge",
+                      "requires_human": security_review or explicit_human}
+    calendar_request = understood.get("calendar_request", "none")
+    if calendar_request in response_policy.CALENDAR_REQUESTS:
+        understood = {**understood, "fields": {k: v for k, v in (understood.get("fields") or {}).items() if k != "trip_date"}}
     action = understood.get("mermaid_action")
     if action not in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}:
         return IntakeResult(str(understood.get("reply") or COPY[locale]["trip_date"]), locale, fields.get("phase", "collecting"))
@@ -541,6 +556,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         fields.pop("pickup_location", None)
     response = str(understood.get("reply") or "").strip()
     has_question = understood.get("has_open_question") is True or action == "question"
+    has_question = has_question or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") != "none"
     if invalid_contact and not reservation and not review_pending:
         response = guest.guest_copy(locale)["contact_phone_retry"]
         has_question = True
@@ -556,12 +572,13 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if pickup_review or understood.get("requires_human") or action == "request_human" or (
         action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
     ):
-        state_registry.create_pending_notification(
-            "escalation", "whatsapp", phone,
-            str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
-            "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
-            preserve_hard_mode=True,
-        )
+        if security_event not in {"blocked_override", "actionable_incident"} or not review_pending:
+            state_registry.create_pending_notification(
+                "escalation", "whatsapp", phone,
+                str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
+                "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
+                preserve_hard_mode=True,
+            )
         fields["phase"] = "human_takeover"
         if action in {"confirm_summary", "new_booking", "cancel"} and not pickup_review:
             response = COPY[locale]["human"]
@@ -590,7 +607,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             day = datetime.strptime(fields["trip_date"], "%Y-%m-%d").strftime("%A").casefold()
             if day not in mermaid_catalog.get_catalog()["service"]["operating_weekdays"]:
                 fields.pop("trip_date")
-                response = COPY[locale]["invalid_day"] + "\n\n" + COPY[locale]["trip_date"]
+                response = response_policy.calendar_reply('operating_days', locale) + "\n\n" + COPY[locale]["trip_date"]
         question = _next_question(fields, locale)
         if invalid_contact:
             fields["phase"] = "collecting"
@@ -609,6 +626,19 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         else:
             fields["phase"] = "awaiting_summary_confirmation"
             response = _summary(fields, locale)
+    # These critical facts come from records/catalog, never generated prose.
+    if security_event in {"blocked_override", "actionable_incident"}:
+        response = response_policy.copy('security_blocked', locale)
+        if result_action == 'human_takeover':
+            response += '\n\n' + response_policy.copy('review_queued', locale)
+    elif result_action == 'human_takeover':
+        response = response_policy.copy('review_queued', locale)
+    elif calendar_request in response_policy.CALENDAR_REQUESTS:
+        response = response_policy.calendar_reply(calendar_request, locale)
+    elif understood.get('status_request') == 'pickup_coverage':
+        response = response_policy.pickup_coverage_reply(locale)
+    elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':
+        response = response_policy.status_reply(understood.get('status_request') if understood.get('status_request') in {'payment', 'handover', 'delivery'} else 'payment', locale, response_policy.state_context(phone, reservation))
     root_fields["mermaid_intake"] = fields
     if message_id:
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]

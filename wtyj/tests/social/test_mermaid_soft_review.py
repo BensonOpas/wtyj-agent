@@ -97,7 +97,8 @@ def test_review_acknowledgement_and_safe_followup_both_deliver(review_runtime):
     send.side_effect = verified_send
     _flush("review-one", "Can someone with limited mobility get special assistance?")
     assert send.call_count == 1
-    assert send.call_args.args[3] == ACKNOWLEDGEMENT
+    from agents.social.mermaid_response_policy import copy as policy_copy
+    assert send.call_args.args[3] == policy_copy('review_queued', 'en')
     model.return_value = _understood("question", FOLLOWUP)
     _flush("review-two", "What food is included?")
     assert model.call_count == send.call_count == 2

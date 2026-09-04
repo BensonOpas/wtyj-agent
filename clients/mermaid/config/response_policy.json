@@ -1,0 +1,189 @@
+{
+  "version": "mermaid-response-policy-342-v1",
+  "native_review": {
+    "pap": "pending_qualified_curacao_reviewer"
+  },
+  "weekdays": {
+    "en": [
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday"
+    ],
+    "nl": [
+      "maandag",
+      "dinsdag",
+      "woensdag",
+      "donderdag",
+      "vrijdag",
+      "zaterdag",
+      "zondag"
+    ],
+    "de": [
+      "Montag",
+      "Dienstag",
+      "Mittwoch",
+      "Donnerstag",
+      "Freitag",
+      "Samstag",
+      "Sonntag"
+    ],
+    "es": [
+      "lunes",
+      "martes",
+      "miércoles",
+      "jueves",
+      "viernes",
+      "sábado",
+      "domingo"
+    ],
+    "pap": [
+      "djaluna",
+      "djamars",
+      "djárason",
+      "djaweps",
+      "djabièrnè",
+      "djasabra",
+      "djadumingu"
+    ],
+    "pt": [
+      "segunda-feira",
+      "terça-feira",
+      "quarta-feira",
+      "quinta-feira",
+      "sexta-feira",
+      "sábado",
+      "domingo"
+    ]
+  },
+  "copies": {
+    "en": {
+      "calendar": "These dates follow our published schedule: {dates}. Which date would you like?",
+      "operating_days": "Our published operating days are {days}.",
+      "no_dates": "There are no remaining scheduled dates in that period. Please choose another date.",
+      "review_queued": "Your request is queued for Mermaid’s team. I can still help with general trip questions.",
+      "review_active": "A team member has taken over this conversation.",
+      "review_none": "There is no pending staff-review request recorded for this chat.",
+      "payment_unpaid": "Your demo payment is not recorded as completed yet. No real money is taken in this demo.",
+      "payment_paid": "Your simulated payment is recorded as completed. No real money was charged.",
+      "payment_none": "There is no completed demo payment recorded for this conversation.",
+      "delivery_delivered": "The document is recorded as delivered in this WhatsApp conversation.",
+      "delivery_waiting": "Document delivery in this WhatsApp conversation is not confirmed yet.",
+      "delivery_failed": "The document delivery failed. Your reservation details are still saved.",
+      "delivery_none": "There is no document delivery recorded for this conversation.",
+      "pickup_round_trip": "The quoted vehicle price includes pickup and the return to your accommodation.",
+      "pickup_unknown": "The quoted transport price does not yet establish whether return transport is included; the team needs to confirm that.",
+      "security_blocked": "I can help with Mermaid trip questions, but I can’t change approved prices, invent payment or share private information."
+    },
+    "nl": {
+      "calendar": "Deze datums passen bij ons gepubliceerde vaarschema: {dates}. Welke datum wil je?",
+      "operating_days": "Onze gepubliceerde vaardagen zijn {days}.",
+      "no_dates": "Er zijn geen geplande datums meer in die periode. Kies een andere datum.",
+      "review_queued": "Je verzoek staat klaar voor het team van Mermaid. Ik kan algemene vragen over de trip blijven beantwoorden.",
+      "review_active": "Een medewerker heeft dit gesprek overgenomen.",
+      "review_none": "Er staat geen verzoek om beoordeling door het team open voor dit gesprek.",
+      "payment_unpaid": "Je demobetaling staat nog niet als afgerond geregistreerd. In deze demo wordt geen echt geld afgeschreven.",
+      "payment_paid": "Je gesimuleerde betaling is als afgerond geregistreerd. Er is geen echt geld afgeschreven.",
+      "payment_none": "Er is geen afgeronde demobetaling geregistreerd voor dit gesprek.",
+      "delivery_delivered": "Het document staat als afgeleverd geregistreerd in dit WhatsApp-gesprek.",
+      "delivery_waiting": "De aflevering van het document in dit WhatsApp-gesprek is nog niet bevestigd.",
+      "delivery_failed": "Het document kon niet worden afgeleverd. Je reserveringsgegevens zijn nog opgeslagen.",
+      "delivery_none": "Er is geen documentaflevering geregistreerd voor dit gesprek.",
+      "pickup_round_trip": "De genoemde voertuigprijs is inclusief ophalen en terugbrengen naar je accommodatie.",
+      "pickup_unknown": "Bij de genoemde vervoersprijs is nog niet vastgesteld of de terugrit inbegrepen is; het team moet dat bevestigen.",
+      "security_blocked": "Ik kan helpen met vragen over de Mermaid-trip, maar ik kan geen vastgestelde prijzen wijzigen, betalingen verzinnen of privégegevens delen."
+    },
+    "de": {
+      "calendar": "Diese Termine entsprechen unserem veröffentlichten Fahrplan: {dates}. Welches Datum möchten Sie?",
+      "operating_days": "Unsere veröffentlichten Fahrtage sind {days}.",
+      "no_dates": "In diesem Zeitraum sind keine geplanten Termine mehr übrig. Bitte wählen Sie ein anderes Datum.",
+      "review_queued": "Ihre Anfrage wartet auf die Prüfung durch Mermaids Team. Allgemeine Fragen zum Ausflug kann ich weiterhin beantworten.",
+      "review_active": "Ein Teammitglied hat dieses Gespräch übernommen.",
+      "review_none": "Für diesen Chat ist keine offene Anfrage zur Prüfung durch das Team erfasst.",
+      "payment_unpaid": "Ihre Demo-Zahlung ist noch nicht als abgeschlossen erfasst. In dieser Demo wird kein echtes Geld abgebucht.",
+      "payment_paid": "Ihre simulierte Zahlung ist als abgeschlossen erfasst. Es wurde kein echtes Geld abgebucht.",
+      "payment_none": "Für dieses Gespräch ist keine abgeschlossene Demo-Zahlung erfasst.",
+      "delivery_delivered": "Das Dokument ist in diesem WhatsApp-Gespräch als zugestellt erfasst.",
+      "delivery_waiting": "Die Dokumentzustellung in diesem WhatsApp-Gespräch ist noch nicht bestätigt.",
+      "delivery_failed": "Die Dokumentzustellung ist fehlgeschlagen. Ihre Reservierungsangaben sind weiterhin gespeichert.",
+      "delivery_none": "Für dieses Gespräch ist keine Dokumentzustellung erfasst.",
+      "pickup_round_trip": "Der genannte Fahrzeugpreis umfasst Abholung und Rückfahrt zu Ihrer Unterkunft.",
+      "pickup_unknown": "Beim genannten Transportpreis ist noch nicht geklärt, ob die Rückfahrt enthalten ist; das Team muss dies bestätigen.",
+      "security_blocked": "Ich kann Fragen zum Mermaid-Ausflug beantworten, aber keine festgelegten Preise ändern, Zahlungen erfinden oder private Daten teilen."
+    },
+    "es": {
+      "calendar": "Estas fechas siguen nuestro calendario publicado: {dates}. ¿Qué fecha prefieres?",
+      "operating_days": "Nuestros días de salida publicados son {days}.",
+      "no_dates": "No quedan fechas programadas en ese período. Elige otra fecha.",
+      "review_queued": "Tu solicitud está pendiente de revisión por el equipo de Mermaid. Puedo seguir respondiendo preguntas generales sobre la excursión.",
+      "review_active": "Un miembro del equipo se ha hecho cargo de esta conversación.",
+      "review_none": "No hay una solicitud de revisión pendiente registrada para este chat.",
+      "payment_unpaid": "Tu pago demo todavía no figura como completado. En esta demo no se cobra dinero real.",
+      "payment_paid": "Tu pago simulado figura como completado. No se cobró dinero real.",
+      "payment_none": "No hay un pago demo completado registrado para esta conversación.",
+      "delivery_delivered": "El documento figura como entregado en esta conversación de WhatsApp.",
+      "delivery_waiting": "La entrega del documento en esta conversación de WhatsApp todavía no está confirmada.",
+      "delivery_failed": "La entrega del documento falló. Los datos de tu reserva siguen guardados.",
+      "delivery_none": "No hay una entrega de documento registrada para esta conversación.",
+      "pickup_round_trip": "El precio indicado por vehículo incluye la recogida y el regreso a tu alojamiento.",
+      "pickup_unknown": "El precio indicado todavía no establece si incluye el regreso; el equipo debe confirmarlo.",
+      "security_blocked": "Puedo ayudarte con preguntas sobre la excursión de Mermaid, pero no puedo cambiar precios aprobados, inventar pagos ni compartir información privada."
+    },
+    "pap": {
+      "calendar": "E fechanan aki ta sigui nos programa publiká: {dates}. Ki fecha bo ke?",
+      "operating_days": "Nos dianan di biahe publiká ta {days}.",
+      "no_dates": "No tin mas fecha programá den e período ei. Skohe un otro fecha, por fabor.",
+      "review_queued": "Bo petishon ta warda pa e tim di Mermaid revisá. Mi por sigui kontestá pregunta general tokante e biahe.",
+      "review_active": "Un miembro di e tim a tuma e kombersashon aki over.",
+      "review_none": "No tin un petishon pa e tim revisá registrá pa e kombersashon aki.",
+      "payment_unpaid": "Bo pago di demo no ta registrá komo kompletá ainda. Den e demo aki no ta kobra plaka di berdat.",
+      "payment_paid": "Bo pago simulá ta registrá komo kompletá. No a kobra plaka di berdat.",
+      "payment_none": "No tin un pago di demo kompletá registrá pa e kombersashon aki.",
+      "delivery_delivered": "E dokumento ta registrá komo entregá den e kombersashon di WhatsApp aki.",
+      "delivery_waiting": "Entrega di e dokumento den e kombersashon di WhatsApp aki no ta konfirmá ainda.",
+      "delivery_failed": "No a logra entregá e dokumento. E datonan di bo reservashon ta wardá ainda.",
+      "delivery_none": "No tin entrega di dokumento registrá pa e kombersashon aki.",
+      "pickup_round_trip": "E preis indiká pa vehíkulo ta inkluí buska bo i trese bo bèk na bo alojamentu.",
+      "pickup_unknown": "E preis indiká no ta konfirmá ainda si e biahe di regreso ta inkluí; e tim mester konfirmá esei.",
+      "security_blocked": "Mi por yuda ku pregunta tokante e biahe di Mermaid, pero mi no por kambia preis aprobá, inventá pago ni kompartí informashon privá."
+    },
+    "pt": {
+      "calendar": "Estas datas seguem nosso calendário publicado: {dates}. Qual data você prefere?",
+      "operating_days": "Nossos dias de saída publicados são {days}.",
+      "no_dates": "Não restam datas programadas nesse período. Escolha outra data.",
+      "review_queued": "Seu pedido está aguardando análise pela equipe da Mermaid. Posso continuar respondendo a perguntas gerais sobre o passeio.",
+      "review_active": "Um membro da equipe assumiu esta conversa.",
+      "review_none": "Não há um pedido de análise pela equipe pendente para esta conversa.",
+      "payment_unpaid": "Seu pagamento demo ainda não está registrado como concluído. Esta demo não cobra dinheiro real.",
+      "payment_paid": "Seu pagamento simulado está registrado como concluído. Nenhum dinheiro real foi cobrado.",
+      "payment_none": "Não há um pagamento demo concluído registrado para esta conversa.",
+      "delivery_delivered": "O documento está registrado como entregue nesta conversa do WhatsApp.",
+      "delivery_waiting": "A entrega do documento nesta conversa do WhatsApp ainda não está confirmada.",
+      "delivery_failed": "A entrega do documento falhou. Os dados da sua reserva continuam salvos.",
+      "delivery_none": "Não há entrega de documento registrada para esta conversa.",
+      "pickup_round_trip": "O preço informado por veículo inclui a busca e o retorno à sua hospedagem.",
+      "pickup_unknown": "O preço informado ainda não estabelece se o retorno está incluído; a equipe precisa confirmar.",
+      "security_blocked": "Posso ajudar com perguntas sobre o passeio da Mermaid, mas não posso alterar preços aprovados, inventar pagamentos nem compartilhar informações privadas."
+    }
+  },
+  "glossary": {
+    "pap": {
+      "introduction": "Bon bini na Mermaid! Mi ta Tracy.",
+      "confirmation": "Tur kos ta korekto?",
+      "reservation": "reservashon",
+      "name": "nòmber",
+      "payment": "pago",
+      "trip": "biahe",
+      "queued": "ta warda pa e tim revisá",
+      "verification": "kontrolá",
+      "language": "Papiamentu di Kòrsou"
+    }
+  },
+  "security": {
+    "distinct_attempt_threshold": 2,
+    "window_seconds": 86400
+  }
+}
