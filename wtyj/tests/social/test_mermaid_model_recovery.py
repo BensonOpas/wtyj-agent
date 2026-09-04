@@ -77,7 +77,8 @@ def test_explicit_human_request_does_not_require_model_and_deduplicates(review_r
     _flush("human-two", text)
     assert model.call_count == 0
     assert send.call_count == 2
-    assert send.call_args.args[3] == recovery.HUMAN_COPY[locale]
+    from agents.social.mermaid_response_policy import copy as policy_copy
+    assert send.call_args.args[3] == policy_copy('review_queued', locale)
     assert _rows("SELECT notification_type,mode FROM pending_notifications") == [("escalation", "soft")]
     assert not state_registry.get_ai_muted(CONVERSATION)
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"]["customer_name"] == "Test Guest"
