@@ -5337,6 +5337,62 @@ def _mermaid_projection(item: dict) -> dict:
     }
 
 
+def _mermaid_customer_access(response: Response):
+    _require_mermaid_reservation_dashboard()
+    from shared import mermaid_customers
+    if not mermaid_customers.enabled():
+        raise HTTPException(status_code=404, detail="Customer accounts are not enabled")
+    # Initialize canonical reservation tables even for a first enquiry.
+    conn = mermaid_reservation_store._conn()
+    conn.close()
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+    return mermaid_customers
+
+
+@router.get("/mermaid-customers", dependencies=[Depends(_check_auth)])
+async def list_mermaid_customers_endpoint(response: Response, query: str = "",
+        offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
+    customers = _mermaid_customer_access(response)
+    return customers.list_accounts(query, offset, limit)
+
+
+@router.get("/mermaid-customers/{customer_id}", dependencies=[Depends(_check_auth)])
+async def get_mermaid_customer_endpoint(customer_id: int, response: Response):
+    customers = _mermaid_customer_access(response)
+    result = customers.get_account(customer_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    result["reservations"] = []
+    for reservation in customers.reservations_for_account(customer_id):
+        item = _mermaid_projection(reservation)
+        item["documents"] = mermaid_documents.documents_for_reservation(reservation["public_id"])
+        result["reservations"].append(item)
+    return result
+
+
+@router.get("/mermaid-customers/{customer_id}/history", dependencies=[Depends(_check_auth)])
+async def get_mermaid_customer_history_endpoint(customer_id: int, response: Response,
+        before: int | None = Query(None, ge=1), limit: int = Query(100, ge=1, le=200),
+        changes: bool = False):
+    customers = _mermaid_customer_access(response)
+    result = customers.history(customer_id, before, limit, changes=changes)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return result
+
+
+@router.get("/mermaid-customers/{customer_id}/documents/{document_id}", dependencies=[Depends(_check_auth)])
+async def get_mermaid_customer_document_endpoint(customer_id: int, document_id: str, response: Response):
+    customers = _mermaid_customer_access(response)
+    for reservation in customers.reservations_for_account(customer_id):
+        if any(doc["public_id"] == document_id for doc in mermaid_documents.documents_for_reservation(reservation["public_id"])):
+            result = mermaid_documents.stored_document_response(document_id)
+            result.headers["X-Unboks-Tenant"] = "mermaid"
+            return result
+    raise HTTPException(status_code=404, detail="Document not found")
+
+
 @router.get("/mermaid-reservations", dependencies=[Depends(_check_auth)])
 async def list_mermaid_reservations_endpoint(response: Response, query: str = ""):
     _require_mermaid_reservation_dashboard()
@@ -5371,6 +5427,8 @@ async def get_mermaid_reservation_endpoint(public_id: str, response: Response):
     if reservation is None:
         raise HTTPException(status_code=404, detail="Reservation not found")
     result = _mermaid_projection(reservation)
+    from shared import mermaid_customers
+    result["customerId"] = mermaid_customers.account_id(reservation["conversation_id"])
     result["documents"] = mermaid_documents.documents_for_reservation(public_id)
     result["events"] = [
         {

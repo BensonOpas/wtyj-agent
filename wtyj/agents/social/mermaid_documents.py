@@ -513,6 +513,11 @@ def document_response(public_id: str, expires: int, signature: str):
     secret = os.environ.get("MERMAID_DEMO_SIGNING_SECRET", "")
     if not verify_download(public_id, expires, signature, secret):
         return Response(status_code=404)
+    return stored_document_response(public_id)
+
+
+def stored_document_response(public_id: str):
+    """Serve a verified stored PDF; caller must enforce authorization."""
     conn = _conn()
     try:
         row = conn.execute("SELECT * FROM mermaid_documents WHERE tenant_slug='mermaid' AND public_id=?", (public_id,)).fetchone()

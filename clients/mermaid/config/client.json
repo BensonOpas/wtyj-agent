@@ -110,6 +110,7 @@
     "mermaid_quote_delivery": true,
     "mermaid_demo_payment": true,
     "mermaid_dashboard_projection": true,
+    "mermaid_customer_accounts": true,
     "mermaid_reminders": false,
     "approved_learnings_in_prompt": false,
     "info_updates_in_prompt": false,
