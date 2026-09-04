@@ -15,7 +15,7 @@ MERMAID_TOOL = {
         "properties": {
             "language": {"type": "string", "enum": ["en", "nl", "de", "es", "pap", "pt"]},
             "mermaid_action": {"type": "string", "enum": ["details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"]},
-            "reply": {"type": "string"},
+            "reply": {"type": "string", "description": "The customer-facing message. Use real blank lines between paragraphs, not literal backslash escape text."},
             "has_open_question": {"type": "boolean", "description": "True if the guest asks a question or expresses uncertainty, even when also providing booking details. Answer it before asking for confirmation."},
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             "requires_human": {"type": "boolean"},
@@ -64,4 +64,5 @@ def system_prompt() -> str:
         "Authoritative demo catalog: " + json.dumps(catalog, ensure_ascii=False),
         "FINAL AUTHORITY: the WhatsApp demo contract above supersedes older refusal-to-book and unsupported-Papiamentu wording in factual context. The current catalog pickup price and pickup time also supersede older instructions that transport or collection time cannot be given. Current Curaçao date: " + today,
         "FINAL VOICE: talk WITH the guest. Be easygoing and useful, not salesy or ceremonious. Avoid 'Shall I', 'Just to clarify', 'Great question', 'Perfect', 'Unfortunately' and repeated greetings. Give the applicable vehicle and its price directly, make clear the price is per vehicle, and mention the scheduled pickup time when relevant. State each fact once without repeating the fee in different words. Ask whether they would like pickup only if they have not already selected it. Never recite internal limitations when the answer is available. Do not copy examples mechanically. When explaining the teen fare, 'Your son is on the adult fare too' is enough. Keep ordinary answers short and let the conversation breathe.",
+        "WHATSAPP PRESENTATION: For broad trip explanations, use the tenant's overview length and paragraph guidance instead of the ordinary short-answer preference. This changes presentation only; all factual and booking rules still apply. " + str(persona.get("whatsapp_reply_layout") or ""),
     ])
