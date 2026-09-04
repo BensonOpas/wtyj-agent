@@ -256,7 +256,7 @@ def test_mermaid_reservation_catalog_is_complete_versioned_and_demo_safe(
     [
         (lambda c: c["pricing"]["currencies"].pop("EUR"), "currencies"),
         (lambda c: c["pricing"]["currencies"]["USD"].pop("adult"), "bands"),
-        (lambda c: c["service"].update({"arrival_time": "07:00"}), "schedule"),
+        (lambda c: c["service"].update({"arrival_time": "27:00"}), "HH:MM"),
         (lambda c: c["policies"].update({"cancellation": "48 hours"}), "demo"),
         (lambda c: c["policies"].update({"insurance": "Insurance included"}), "neutral"),
     ],
