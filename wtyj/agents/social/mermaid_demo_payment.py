@@ -46,6 +46,8 @@ def build_payment_url(base_url: str, reservation_id: str, secret: str, now: int 
     conn = mermaid_reservation_store._conn()
     try:
         with conn:
+            # Serialize minting with cancellation's state check and revocation.
+            conn.execute("BEGIN IMMEDIATE")
             reservation = conn.execute(
                 "SELECT public_id FROM mermaid_reservations WHERE public_id=? AND tenant_slug='mermaid' AND state!='cancelled' AND human_takeover=0",
                 (reservation_id,),
@@ -109,7 +111,7 @@ def checkout_page(reservation_id: str, expires: int, signature: str, *, form_act
     if not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
-    if not reservation:
+    if not reservation or reservation["state"] == "cancelled" or reservation["human_takeover"]:
         return Response(status_code=404)
     money = reservation["monetary_snapshot"]
     intake = reservation["intake"]
@@ -147,15 +149,24 @@ def complete_checkout(reservation_id: str, expires: int, signature: str, status:
     if not mermaid_catalog.reservation_demo_enabled() or not mermaid_catalog.demo_features()["demo_payment"] or not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
-    if not reservation:
+    if not reservation or reservation["state"] == "cancelled":
         return Response(status_code=404)
     if status != "success":
+        if reservation["state"] in {"demo_paid", "booked"}:
+            return _page("Demo payment already recorded", "<p>This demo booking is already paid. Closing checkout does not cancel the booking or refund it. No money moved.</p>")
         return _page("Payment simulation cancelled", "<p>No payment was recorded. Your demo reservation remains open, so you can return to WhatsApp and try again.</p>")
     reference = "PAY-DEMO-" + hashlib.sha256(reservation_id.encode()).hexdigest()[:10].upper()
-    reservation, payment = mermaid_reservation_store.complete_demo_payment(
-        reservation_id, payment_reference=reference,
-        idempotency_key=f"demo-payment:{reservation_id}",
-    )
+    try:
+        reservation, payment = mermaid_reservation_store.complete_demo_payment(
+            reservation_id, payment_reference=reference,
+            idempotency_key=f"demo-payment:{reservation_id}",
+        )
+    except mermaid_reservation_store.MermaidReservationError:
+        # Cancellation may win after the signed callback's initial read.
+        current = mermaid_reservation_store.get_reservation(reservation_id)
+        if current and current["state"] == "cancelled":
+            return Response(status_code=404)
+        raise
     document, job = mermaid_documents.create_receipt(reservation, payment)
     reservation = mermaid_reservation_store.attach_receipt(reservation_id, document["public_id"])
     base_url = os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001")
