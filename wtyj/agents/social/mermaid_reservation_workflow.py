@@ -94,7 +94,7 @@ COPY = {
         "invalid_day": "Según la información publicada, Mermaid opera lunes, martes, miércoles, viernes, sábado y domingo. Elige uno de esos días.",
     },
     "pap": {
-        "intro": "Bon dia, mi ta TRACY, asistente virtual di reservashon di Mermaid. Mi ta regla bo trip i prepara e oferta demo kompleto aki mes den WhatsApp.",
+        "intro": "Bon bini na Mermaid! Mi ta TRACY, asistente virtual di reservashon. Mi ta yuda bo ku bo biahe i prepara bo oferta di demo aki den WhatsApp.",
         "trip_date": "Ki fecha bo ke bishitá Klein Curaçao?",
         "adults": "Kuantu adulto ta bai?",
         "children": "Kuantu mucha di 4 te ku 12 aña ta bai? Kontestá 0 si no tin.",
@@ -106,8 +106,8 @@ COPY = {
         "confirm": "Kontestá *SI* si tur kos ta korekto, òf bisa mi eksaktamente kiko mester kambia.",
         "confirmed": "Perfekto, bo datonan ta konfirmá. Awor mi ta prepara bo reservashon demo i oferta.",
         "cancelled": "Bo petishon di reservashon demo ta kanselá. No a tuma ningun pago.",
-        "human": "Mi a pasa esaki pa tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e trip.",
-        "invalid_day": "Segun e informashon publiká, Mermaid ta bai djaluna, djamars, djarason, djabièrnè, djasabra i djadumingu. Skohe un di e dianan ei.",
+        "human": "Bo petishon ta warda pa e tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e biahe.",
+        "invalid_day": "Segun e informashon publiká, Mermaid ta bai djaluna, djamars, djárason, djabièrnè, djasabra i djadumingu. Skohe un di e dianan ei.",
     },
     "pt": {
         "intro": "Olá, sou a TRACY, assistente virtual de reservas da Mermaid. Vou organizar seu passeio e preparar a cotação demo completa aqui no WhatsApp.",
@@ -143,7 +143,7 @@ FAQ_COPY = {
     "nl": {"price": "Volwassene USD {adult}; kind 4-12 USD {child}; 0-3 jaar gratis. De offerte bevat het volledige prijsoverzicht.", "included": "Ontbijt, frisdrank en sap, BBQ-lunch, het strandhuis, faciliteiten, snorkelmaskers en strandstoelen zijn inbegrepen.", "bring": "Neem handdoeken, zonnebrand en zwemkleding mee. Mermaid zorgt voor het inbegrepen eten, drinken en de eilandfaciliteiten."},
     "de": {"price": "Erwachsene USD {adult}; Kinder 4-12 USD {child}; 0-3 Jahre kostenlos. Die Einzelpreise stehen im Angebot.", "included": "Frühstück, alkoholfreie Getränke und Säfte, BBQ-Mittagessen, Strandhaus, Einrichtungen, Schnorchelmasken und Strandstühle sind inklusive.", "bring": "Bringen Sie Handtücher, Sonnencreme und Badesachen mit. Mermaid kümmert sich um inklusive Speisen, Getränke und Inseleinrichtungen."},
     "es": {"price": "Adulto USD {adult}; niño de 4-12 USD {child}; 0-3 años gratis. El total detallado estará en la cotización.", "included": "Incluye desayuno, refrescos y jugos, almuerzo BBQ, casa de playa, instalaciones, máscaras de snorkel y sillas de playa.", "bring": "Trae toallas, protector solar y traje de baño. Mermaid se encarga de la comida, bebidas e instalaciones incluidas."},
-    "pap": {"price": "Adulto USD {adult}; mucha di 4-12 USD {child}; 0-3 aña grátis. Bo oferta lo tin e total detaya.", "included": "Desayuno, refresko i djus, BBQ, beach house, fasilidatnan, maskara di snorkel i stul di playa ta inkluí.", "bring": "Hiba handuk, krema solar i paña di landa. Mermaid ta sòru pa kuminda, bebida i fasilidatnan inkluí."},
+    "pap": {"price": "Adulto USD {adult}; mucha di 4-12 USD {child}; 0-3 aña grátis. Bo oferta lo tin e total detayá.", "included": "Desayuno, refresko i djus, almuerso di barbekiú, beach house, fasilidatnan, máskara di snòrkel i stul di playa ta inkluí.", "bring": "Hiba handuk, krema solar i paña di landa. Mermaid ta sòru pa kuminda, bebida i fasilidatnan inkluí."},
     "pt": {"price": "Adulto USD {adult}; criança de 4-12 USD {child}; 0-3 anos grátis. O total detalhado estará na cotação.", "included": "Inclui café da manhã, refrigerantes e sucos, almoço BBQ, casa de praia, instalações, máscaras de snorkel e cadeiras de praia.", "bring": "Leve toalhas, protetor solar e roupa de banho. A Mermaid cuida da comida, bebidas e instalações incluídas."},
 }
 

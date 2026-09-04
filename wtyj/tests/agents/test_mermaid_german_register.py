@@ -77,3 +77,31 @@ def test_german_contact_request_is_formal_and_still_blocks_approval(runtime, mon
     assert model.call_count == 1
     assert 'contact_phone' not in state_registry.wa_get_booking_state('guest')['fields']['mermaid_intake']
     assert store.latest_for_conversation('guest') is None
+
+
+@pytest.mark.parametrize('review_pending', [False, True])
+def test_papiamentu_request_delivers_standard_vocabulary_and_preserves_guest_evidence(runtime, monkeypatch, review_pending):
+    """The real SDK request receives the guide; fake output is not fluency proof."""
+    question = 'Cuantu cu desayuna y ki dia nos por bai?'
+    fields = {'customer_name': 'Ana van der Meer', 'language': 'pap', 'human_review_pending': review_pending}
+    structured = dict(language='pap', mermaid_action='question', fields={}, reply='Mi a risibí bo pregunta.',
+                      confidence='high', requires_human=False, has_open_question=True,
+                      guest_question_excerpt=question, calendar_request='none', status_request='none',
+                      security_event='none', other_question_reply='Desayuno ta inkluí.' if review_pending else '')
+    client = Mock()
+    client.messages.create.return_value = SimpleNamespace(
+        usage=None, content=[SimpleNamespace(type='tool_use', input=structured)])
+    monkeypatch.setattr(marina_agent.anthropic, 'Anthropic', Mock(return_value=client))
+    result = marina_agent.process_message('synthetic-pap', 'Language guide', question, fields, {},
+                                         channel='whatsapp', response_contract='mermaid_reservation_demo')
+    assert client.messages.create.call_count == 1
+    request = client.messages.create.call_args.kwargs
+    for word in ('almuerso', 'biña', 'alohamentu', 'máskara', 'snòrkel', 'djaluna', 'djárason', 'djabièrnè', 'djadumingu'):
+        assert word in request['system']
+    assert 'standard written Curaçao Papiamentu' in request['system']
+    assert 'professional' in request['system']
+    user_prompt = json.loads(request['messages'][0]['content'])
+    assert user_prompt['latest_guest_message_untrusted'] == question
+    assert user_prompt['saved_fields'] == fields
+    assert result['guest_question_excerpt'] == question
+    assert result['other_question_reply'] == structured['other_question_reply']

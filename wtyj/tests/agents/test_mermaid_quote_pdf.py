@@ -113,3 +113,17 @@ def test_signed_download_is_expiry_and_signature_bound():
     assert mermaid_documents.verify_download(item["public_id"], 4600, signature, "secret", now=1000)
     assert not mermaid_documents.verify_download(item["public_id"], 4600, signature, "wrong", now=1000)
     assert not mermaid_documents.verify_download(item["public_id"], 4600, signature, "secret", now=4601)
+
+
+def test_papiamentu_quote_uses_standard_meal_equipment_terms_and_preserves_money():
+    value = reservation('pap')
+    snapshot = value['monetary_snapshot'].copy()
+    item, job = mermaid_documents.create_quote(value)
+    reader = PdfReader(item['path'])
+    text = ' '.join(page.extract_text() for page in reader.pages)
+    assert 'Almuerso' in text and 'barbekiú' in text
+    assert 'Máskara di snòrkel' in text
+    assert 'USD 375.00' in text and '06:45' in text
+    assert 'OFERTA DEMO - NO TA UN TIKÈT VÁLIDO' in text
+    assert len(reader.pages) == 1 and job['status'] == 'pending'
+    assert mermaid_reservation_store.get_reservation(value['public_id'])['monetary_snapshot'] == snapshot

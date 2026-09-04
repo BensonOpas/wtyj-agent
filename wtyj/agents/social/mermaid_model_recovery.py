@@ -32,7 +32,7 @@ HUMAN_COPY = {
     "nl": "Je verzoek staat klaar voor het team van Mermaid. Je gegevens zijn opgeslagen en ik kan algemene vragen over de trip blijven beantwoorden.",
     "de": "Ihre Anfrage wartet auf die Prüfung durch das Mermaid-Team. Ihre Angaben sind gespeichert und ich kann weiterhin allgemeine Fragen zum Ausflug beantworten.",
     "es": "Tu solicitud está en espera de revisión por el equipo de Mermaid. Tus datos están guardados y puedo seguir respondiendo preguntas generales sobre la excursión.",
-    "pap": "Bo petishon ta warda pa e tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e trip.",
+    "pap": "Bo petishon ta warda pa e tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e biahe.",
     "pt": "Seu pedido está aguardando análise da equipe da Mermaid. Seus dados estão salvos e posso continuar respondendo a perguntas gerais sobre o passeio.",
 }
 
