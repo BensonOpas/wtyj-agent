@@ -1,5 +1,5 @@
 # BRIEF342 — Render escaped model paragraph breaks
-**Status:** Implemented and locally verified; not deployed | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/tests/agents/test_mermaid_readable_newlines.py`, `wtyj/tests/fixtures/mermaid_base059_escaped_newlines.json` | **Depends on:** 6714e33 | **Blocks:** correction of final-audit BASE-059 T6 display defect
+**Status:** Deployed as aebe37f; exact-image and live verification passed | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/tests/agents/test_mermaid_readable_newlines.py`, `wtyj/tests/fixtures/mermaid_base059_escaped_newlines.json` | **Depends on:** 6714e33 | **Blocks:** correction of final-audit BASE-059 T6 display defect
 
 ## Context
 The final balanced audit's preserved BASE-059 Papiamentu turn 6 has a correct breakfast/arrival answer and unchanged saved trip date, but `readable_newlines` is false. Its actual raw SDK tool input contains literal backslash+n characters between paragraphs, and the same characters reach the displayed reply. The canonical evidence is BASE-059/n=6 in `output/remediation-342-2026-09-04/final66-run/results/final-balanced-60-results.jsonl`, with its raw tool input pinned from the matching request in `final66-run/results/api-events.jsonl`; its raw response text is “Desayuno ta inklui, si! Bo mester yega na Fishermen's Pier pa 06:45.\\n\\nKuantu hende lo bai: adultonan, yu'nan (4–12 aña) i bebinan (0–3 aña)?” (the separators denote literal escaped characters). Existing customer-text cleanup at `wtyj/agents/marina/marina_agent.py:2227` removes internal tokens and em dashes, but does not normalize those paragraph separators.
@@ -17,8 +17,10 @@ Five behaviors: (1) exact captured BASE-059 SDK response through the real workfl
 
 The corrected five-case fixture gate reproduced three formatting failures and two preservation passes before the runtime change. Afterwards, all 157 tests passed across the five new cases, German register, Marina tool-use and Mermaid model-recovery suites. Evidence is preserved at `output/remediation-342-2026-09-04/readable-newlines-{before,after}.txt`; preliminary fixture setup errors remain in separately named logs. The fixture's raw SDK tool input matches the canonical API event exactly, verified by source-file and event hashes. The paid raw 59/60 + 5/6 result remains unchanged; this is an offline display correction, not a new model-language acceptance result.
 
+Independent output review approved the seven-line Mermaid-only change and independently reran all five new cases. Source `aebe37f43c74b14feb66b4f89f05142fe8165320` is packaged as `wtyj-agent:tracy-audit-342-aebe37f`, digest `sha256:9b656e6f4c42b0c8fbf92a45c15ccd02a02fdfd26dc781532af56687f3e99a2c`; the exact image passed the same 157-test gate. The image started at 2026-09-04 16:25:03 UTC; all 19 deployment checks passed, including 15 runtime/policy file hashes, unchanged full configuration/contacts/controls and peer containers. Health and public active/available status returned 200. No live guest test sends or configuration data changes occurred. No fresh post-correction 66-case model run or native-language certification is claimed.
+
 ## Success Condition
 The saved BASE-059 T6 output becomes readable paragraphs through the actual adapter/workflow without changing its wording, booking/security state or other contracts; the original paid audit remains unchanged.
 
 ## Rollback
-Revert this source/test/fixture commit. No live configuration, data, provider call or deployment is part of this change.
+Restore the pinned prior `6714e33` image and original compose file using `/root/backups/tracy-readable-newlines-aebe37f43c74`; the configuration data was unchanged. Source rollback is a revert of `aebe37f`. No live rollback was needed.
