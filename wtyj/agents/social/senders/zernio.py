@@ -14,7 +14,7 @@ class ZernioSender(Sender):
     def send(cls, conversation_id: str, account_id: str, text: str,
              attachment_url: str = "", attachment_type: str = "image",
              confirm_delivery: bool = False,
-             idempotency_key: str = "") -> bool:
+             idempotency_key: str = "", attachment_name: str = "") -> bool:
         # Brief 238 — tenant isolation: refuse outbound sends to accounts
         # not allowlisted in this tenant's client.json. Strict mode blocks
         # the call entirely; permissive mode logs and proceeds.
@@ -28,4 +28,6 @@ class ZernioSender(Sender):
         if confirm_delivery or idempotency_key:
             kwargs["confirm_delivery"] = confirm_delivery
             kwargs["idempotency_key"] = idempotency_key
+        if attachment_name:
+            kwargs["attachment_name"] = attachment_name
         return send_dm_reply(conversation_id, account_id, text, **kwargs)

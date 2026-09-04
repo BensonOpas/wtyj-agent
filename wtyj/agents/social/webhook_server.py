@@ -2108,6 +2108,7 @@ def _flush_buffer(buffer_key):
                                 reply_text,
                                 attachment_url=attachment_url,
                                 attachment_type=str((reply_media or {}).get("type") or "image"),
+                                attachment_name=str((reply_media or {}).get("filename") or ""),
                                 confirm_delivery=True,
                                 idempotency_key=delivery_idempotency_key,
                             )
@@ -3481,6 +3482,7 @@ def _process_zernio_event(
                     reply_text,
                     attachment_url=attachment_url,
                     attachment_type=str((reply_media or {}).get("type") or "image"),
+                    attachment_name=str((reply_media or {}).get("filename") or ""),
                     confirm_delivery=bool(mermaid_delivery_commit),
                     idempotency_key=(
                         f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"

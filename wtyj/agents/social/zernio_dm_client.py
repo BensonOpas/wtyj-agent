@@ -2142,7 +2142,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
                   attachment_url: str = "",
                   attachment_type: str = "image",
                   confirm_delivery: bool = False,
-                  idempotency_key: str = "") -> bool:
+                  idempotency_key: str = "", attachment_name: str = "") -> bool:
     """Send a DM reply; optionally require provider delivery confirmation."""
     if attachment_url:
         return send_dm_reply_with_attachment(
@@ -2151,6 +2151,7 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
             text=text,
             attachment_url=attachment_url,
             attachment_type=attachment_type,
+            attachment_name=attachment_name,
             idempotency_key=idempotency_key,
             reconcile_existing=not (confirm_delivery or idempotency_key),
         )

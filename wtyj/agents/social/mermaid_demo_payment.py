@@ -123,6 +123,7 @@ def complete_checkout(reservation_id: str, expires: int, signature: str, status:
         delivered = send_reply(
             "whatsapp", reservation["conversation_id"], reservation.get("zernio_account_id") or "",
             success_message(reservation, payment), attachment_url=receipt_url, attachment_type="file",
+            attachment_name=document["filename"],
             confirm_delivery=True, idempotency_key=job["idempotency_key"],
         )
         mermaid_documents.mark_delivery(job["public_id"], delivered, "awaiting provider confirmation" if not delivered else "", count_attempt=False)

@@ -94,6 +94,8 @@ def test_success_is_atomic_replay_safe_and_sends_one_receipt(monkeypatch):
     assert booked["booking_code"] in args[3]
     assert "06:45" in args[3]
     assert kwargs["attachment_type"] == "file"
+    assert kwargs["attachment_name"].startswith("Mermaid - Demo Payment Receipt - ")
+    assert kwargs["attachment_name"].endswith(".pdf")
     assert kwargs["confirm_delivery"] is True
 
     job = mermaid_documents.delivery_job(
@@ -116,7 +118,11 @@ def test_receipt_is_a_payment_receipt_not_confirmation(monkeypatch):
         document = dict(conn.execute("SELECT * FROM mermaid_documents WHERE public_id=?", (booked["receipt_public_id"],)).fetchone())
     finally:
         conn.close()
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(document["path"]).pages)
+    reader = PdfReader(document["path"])
+    assert len(reader.pages) == 1
+    assert len(reader.pages[0].images) >= 1
+    assert "Payment receipt" in reader.metadata.title
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "SIMULATED PAYMENT - DEMO ONLY" in text
     assert "Payment receipt" in text
     assert booked["booking_code"] in text
@@ -147,3 +153,26 @@ def test_customer_text_cannot_mark_payment_paid():
 
 def test_demo_never_enables_reminders():
     assert mermaid_catalog.demo_features()["reminders"] is False
+
+
+def test_presentation_refresh_preserves_booking_payment_and_delivery(monkeypatch):
+    from scripts.refresh_mermaid_pdf_presentation import refresh
+    reservation = pending()
+    mermaid_documents.create_quote(reservation)
+    expires, signature = token(reservation)
+    monkeypatch.setattr(mermaid_demo_payment.time, "time", lambda: 1000)
+    monkeypatch.setattr(mermaid_demo_payment, "send_reply", lambda *args, **kwargs: True)
+    mermaid_demo_payment.complete_checkout(reservation["public_id"], expires, signature, "success")
+    before = mermaid_reservation_store.get_reservation(reservation["public_id"])
+    conn = mermaid_documents._conn()
+    payments = [tuple(row) for row in conn.execute("SELECT * FROM mermaid_demo_payments")]
+    jobs = [tuple(row) for row in conn.execute("SELECT * FROM mermaid_delivery_jobs")]
+    originals = [row[0] for row in conn.execute("SELECT path FROM mermaid_documents")]
+    refresh()
+    refresh()
+    assert mermaid_reservation_store.get_reservation(reservation["public_id"]) == before
+    assert [tuple(row) for row in conn.execute("SELECT * FROM mermaid_demo_payments")] == payments
+    assert [tuple(row) for row in conn.execute("SELECT * FROM mermaid_delivery_jobs")] == jobs
+    assert all(Path(path).exists() for path in originals)
+    assert all(Path(row[0]).parent.name == "presentation-v2" for row in conn.execute("SELECT path FROM mermaid_documents"))
+    conn.close()
