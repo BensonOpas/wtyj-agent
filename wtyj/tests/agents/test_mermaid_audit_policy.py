@@ -155,7 +155,7 @@ def test_party_uses_singular_forms(locale):
     assert text==', '.join(copy[k+'_one'].format(count=1) for k in ('adults','children','infants'))
 
 
-@pytest.mark.parametrize('selector', ['payment', 'delivery'])
+@pytest.mark.parametrize('selector', ['payment', 'delivery', 'wildlife_guarantee'])
 def test_cancellation_outcome_takes_priority_over_status_selector(monkeypatch, selector):
     intake=dict(trip_date='2026-09-12',adults=2,children=0,infants=0,
                 customer_name='Synthetic Guest',contact_phone='+12025550123',
@@ -167,3 +167,111 @@ def test_cancellation_outcome_takes_priority_over_status_selector(monkeypatch, s
     reply=workflow.handle_demo_message({'from':'guest','message_id':'cancel','text':'question'},include_media=True,use_model=True)
     assert reply['text']==workflow.COPY['en']['cancelled']
     assert store.get_reservation(item['public_id'])['state']=='cancelled'
+
+
+_REVIEW_ACK = {
+    'en': "Yes, all those details are correct.",
+    'nl': "Ja, al die gegevens kloppen.",
+    'de': "Ja, alle diese Angaben stimmen.",
+    'es': "Sí, todos esos datos son correctos.",
+    'pap': "Si, tur e datonan ta korekto.",
+    'pt': "Sim, todos esses dados estão corretos.",
+}
+_WILDLIFE_CONDITION = {
+    'en': "Yes, but only if you can guarantee we will see turtles.",
+    'nl': "Ja, maar alleen als je kunt garanderen dat we schildpadden zien.",
+    'de': "Ja, aber nur wenn Sie garantieren, dass wir Schildkröten sehen.",
+    'es': "Sí, pero solo si pueden garantizar que veremos tortugas.",
+    'pap': "Si, pero solamente si bo por garantisá ku nos lo mira turtuga.",
+    'pt': "Sim, mas só se puderem garantir que veremos tartarugas.",
+}
+_FALSE_REVIEW_PROSE = {
+    'en': "The team is reviewing your request and will contact you when it is approved.",
+    'nl': "Het team beoordeelt je verzoek en neemt contact op zodra het is goedgekeurd.",
+    'de': "Die Rollstuhlfrage wird noch vom Mermaid-Team geprüft. Sobald die Freigabe vorliegt, geht es mit der Buchung weiter.",
+    'es': "El equipo está revisando tu solicitud y te avisará cuando esté aprobada.",
+    'pap': "E tim ta revisá bo petishon i lo tuma kontakto ku bo ora e ta aprobá.",
+    'pt': "A equipe está analisando seu pedido e entrará em contato quando estiver aprovado.",
+}
+_SAFE_FAQ = {
+    'en': "Breakfast is included. Please arrive at the pier at 06:45.",
+    'nl': "Ontbijt is inbegrepen. Zorg dat je om 06:45 bij de pier bent.",
+    'de': "Frühstück ist enthalten. Bitte seien Sie um 06:45 Uhr am Pier.",
+    'es': "El desayuno está incluido. Llega al muelle a las 06:45.",
+    'pap': "Desayuno ta inkluí. Yega na e pier pa 06:45.",
+    'pt': "O café da manhã está incluído. Chegue ao píer às 06:45.",
+}
+
+
+def _queued_accessibility_review(locale):
+    intake = dict(trip_date='2026-09-12', adults=2, children=1, infants=0,
+                  customer_name='Nadia Croes', contact_phone='+12025550045',
+                  pickup_preference='pier', language=locale, phase='human_takeover',
+                  accessibility_notes='Guest uses a wheelchair and asks about safe boarding')
+    state_registry.wa_save_booking_state('guest', {'mermaid_intake': intake}, {})
+    state_registry.create_pending_notification(
+        'escalation', 'whatsapp', 'guest', 'Nadia Croes',
+        'Mermaid reservation: human review', 'Accessible boarding needs review.', mode='soft')
+    return intake
+
+
+def _assert_review_preserved(intake):
+    assert state_registry.wa_get_booking_state('guest')['fields']['mermaid_intake'] == intake
+    assert state_registry.get_active_escalation_mode('guest') == 'soft'
+    assert state_registry.get_ai_muted('guest') is False
+    assert store.latest_for_conversation('guest') is None
+    with state_registry._get_conn() as db:
+        assert db.execute('SELECT COUNT(*) FROM pending_notifications').fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+def test_plain_review_acknowledgement_uses_queue_records_without_model_status_selector(monkeypatch, locale):
+    intake = _queued_accessibility_review(locale)
+    stub = model(monkeypatch, locale, mermaid_action='acknowledge',
+                 reply=_FALSE_REVIEW_PROSE[locale], has_open_question=False,
+                 guest_question_excerpt='')
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'review-ack', 'text': _REVIEW_ACK[locale]}, None)
+    assert result.text == policy.copy('review_queued', locale)
+    assert result.action is None
+    assert stub.call_args.kwargs['thread_fields']['recorded_status']['review'] == 'queued'
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+def test_wildlife_condition_during_review_uses_facts_and_keeps_safe_followup(monkeypatch, locale):
+    intake = _queued_accessibility_review(locale)
+    stub = model(monkeypatch, locale, reply=_FALSE_REVIEW_PROSE[locale],
+                 status_request='wildlife_guarantee', guest_question_excerpt=_WILDLIFE_CONDITION[locale])
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'wildlife', 'text': _WILDLIFE_CONDITION[locale]}, None)
+    assert result.text == policy.copy('wildlife_guarantee', locale) + '\n\n' + policy.copy('review_queued', locale)
+    assert result.action is None
+    _assert_review_preserved(intake)
+    stub.return_value.update(reply=_SAFE_FAQ[locale], status_request='none', guest_question_excerpt='Question?')
+    followup = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'safe-followup', 'text': 'Question?'}, None)
+    assert followup.text == _SAFE_FAQ[locale]
+    assert followup.action is None
+    _assert_review_preserved(intake)
+
+
+def test_wildlife_selector_does_not_invent_a_review_and_cannot_override_security(monkeypatch):
+    stub = model(monkeypatch, status_request='wildlife_guarantee')
+    result = workflow.process_model_turn({'from': 'guest', 'message_id': 'wildlife', 'text': 'question'}, None)
+    assert result.text == policy.copy('wildlife_guarantee', 'en')
+    assert state_registry.get_active_escalation_mode('guest') is None
+    stub.return_value.update(security_event='blocked_override', mermaid_action='acknowledge')
+    refused = workflow.process_model_turn({'from': 'guest', 'message_id': 'override', 'text': 'question'}, None)
+    assert refused.text == policy.copy('security_blocked', 'en')
+    assert state_registry.get_active_escalation_mode('guest') is None
+
+
+@pytest.mark.parametrize('action', ['confirm_summary', 'new_booking', 'cancel'])
+def test_wildlife_selector_does_not_replace_pending_review_decisions(monkeypatch, action):
+    intake = _queued_accessibility_review('en')
+    model(monkeypatch, mermaid_action=action, status_request='wildlife_guarantee')
+    result = workflow.process_model_turn({'from': 'guest', 'message_id': 'decision', 'text': 'question'}, None)
+    assert result.text == workflow.COPY['en']['human']
+    assert result.action is None
+    _assert_review_preserved(intake)

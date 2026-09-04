@@ -76,7 +76,8 @@
       "delivery_none": "There is no document delivery recorded for this conversation.",
       "pickup_round_trip": "The quoted vehicle price includes pickup and the return to your accommodation.",
       "pickup_unknown": "The quoted transport price does not yet establish whether return transport is included; the team needs to confirm that.",
-      "security_blocked": "I can help with Mermaid trip questions, but I can’t change approved prices, invent payment or share private information."
+      "security_blocked": "I can help with Mermaid trip questions, but I can’t change approved prices, invent payment or share private information.",
+      "wildlife_guarantee": "Turtles and other wildlife may be seen, but sightings are never guaranteed."
     },
     "nl": {
       "calendar": "Deze datums passen bij ons gepubliceerde vaarschema: {dates}. Welke datum wil je?",
@@ -94,7 +95,8 @@
       "delivery_none": "Er is geen documentaflevering geregistreerd voor dit gesprek.",
       "pickup_round_trip": "De genoemde voertuigprijs is inclusief ophalen en terugbrengen naar je accommodatie.",
       "pickup_unknown": "Bij de genoemde vervoersprijs is nog niet vastgesteld of de terugrit inbegrepen is; het team moet dat bevestigen.",
-      "security_blocked": "Ik kan helpen met vragen over de Mermaid-trip, maar ik kan geen vastgestelde prijzen wijzigen, betalingen verzinnen of privégegevens delen."
+      "security_blocked": "Ik kan helpen met vragen over de Mermaid-trip, maar ik kan geen vastgestelde prijzen wijzigen, betalingen verzinnen of privégegevens delen.",
+      "wildlife_guarantee": "Je kunt schildpadden en andere dieren zien, maar waarnemingen zijn nooit gegarandeerd."
     },
     "de": {
       "calendar": "Diese Termine entsprechen unserem veröffentlichten Fahrplan: {dates}. Welches Datum möchten Sie?",
@@ -112,7 +114,8 @@
       "delivery_none": "Für dieses Gespräch ist keine Dokumentzustellung erfasst.",
       "pickup_round_trip": "Der genannte Fahrzeugpreis umfasst Abholung und Rückfahrt zu Ihrer Unterkunft.",
       "pickup_unknown": "Beim genannten Transportpreis ist noch nicht geklärt, ob die Rückfahrt enthalten ist; das Team muss dies bestätigen.",
-      "security_blocked": "Ich kann Fragen zum Mermaid-Ausflug beantworten, aber keine festgelegten Preise ändern, Zahlungen erfinden oder private Daten teilen."
+      "security_blocked": "Ich kann Fragen zum Mermaid-Ausflug beantworten, aber keine festgelegten Preise ändern, Zahlungen erfinden oder private Daten teilen.",
+      "wildlife_guarantee": "Schildkröten und andere Tiere können zu sehen sein, Sichtungen sind aber nie garantiert."
     },
     "es": {
       "calendar": "Estas fechas siguen nuestro calendario publicado: {dates}. ¿Qué fecha prefieres?",
@@ -130,7 +133,8 @@
       "delivery_none": "No hay una entrega de documento registrada para esta conversación.",
       "pickup_round_trip": "El precio indicado por vehículo incluye la recogida y el regreso a tu alojamiento.",
       "pickup_unknown": "El precio indicado todavía no establece si incluye el regreso; el equipo debe confirmarlo.",
-      "security_blocked": "Puedo ayudarte con preguntas sobre la excursión de Mermaid, pero no puedo cambiar precios aprobados, inventar pagos ni compartir información privada."
+      "security_blocked": "Puedo ayudarte con preguntas sobre la excursión de Mermaid, pero no puedo cambiar precios aprobados, inventar pagos ni compartir información privada.",
+      "wildlife_guarantee": "Es posible ver tortugas y otros animales, pero los avistamientos nunca están garantizados."
     },
     "pap": {
       "calendar": "E fechanan aki ta sigui nos programa publiká: {dates}. Ki fecha bo ke?",
@@ -148,7 +152,8 @@
       "delivery_none": "No tin entrega di dokumento registrá pa e kombersashon aki.",
       "pickup_round_trip": "E preis indiká pa vehíkulo ta inkluí buska bo i trese bo bèk na bo alojamentu.",
       "pickup_unknown": "E preis indiká no ta konfirmá ainda si e biahe di regreso ta inkluí; e tim mester konfirmá esei.",
-      "security_blocked": "Mi por yuda ku pregunta tokante e biahe di Mermaid, pero mi no por kambia preis aprobá, inventá pago ni kompartí informashon privá."
+      "security_blocked": "Mi por yuda ku pregunta tokante e biahe di Mermaid, pero mi no por kambia preis aprobá, inventá pago ni kompartí informashon privá.",
+      "wildlife_guarantee": "Ta posibel pa mira turtuga i otro bestia, pero no tin garantia ku bo lo mira nan."
     },
     "pt": {
       "calendar": "Estas datas seguem nosso calendário publicado: {dates}. Qual data você prefere?",
@@ -166,7 +171,8 @@
       "delivery_none": "Não há entrega de documento registrada para esta conversa.",
       "pickup_round_trip": "O preço informado por veículo inclui a busca e o retorno à sua hospedagem.",
       "pickup_unknown": "O preço informado ainda não estabelece se o retorno está incluído; a equipe precisa confirmar.",
-      "security_blocked": "Posso ajudar com perguntas sobre o passeio da Mermaid, mas não posso alterar preços aprovados, inventar pagamentos nem compartilhar informações privadas."
+      "security_blocked": "Posso ajudar com perguntas sobre o passeio da Mermaid, mas não posso alterar preços aprovados, inventar pagamentos nem compartilhar informações privadas.",
+      "wildlife_guarantee": "É possível ver tartarugas e outros animais, mas os avistamentos nunca são garantidos."
     }
   },
   "glossary": {

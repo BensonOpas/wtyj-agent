@@ -101,6 +101,13 @@ def status_reply(request: str, locale: str, context: dict) -> str:
     return copy(group + '_' + context.get(group, 'none'), locale)
 
 
+def wildlife_guarantee_reply(locale: str, context: dict) -> str:
+    response = copy('wildlife_guarantee', locale)
+    if context.get('review') in {'queued', 'active'}:
+        response += '\n\n' + status_reply('handover', locale, context)
+    return response
+
+
 def pickup_coverage_reply(locale: str) -> str:
     journey = mermaid_catalog.get_catalog()['pricing'].get('pickup_journey', 'unconfirmed')
     return copy('pickup_round_trip' if journey == 'round_trip' else 'pickup_unknown', locale)

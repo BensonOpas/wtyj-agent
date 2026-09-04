@@ -681,8 +681,15 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         # The handler commits cancellation (or replaces this with paid-review
         # wording). An optional informational selector cannot conceal that result.
         pass
+    elif review_pending and action == 'acknowledge' and not has_question:
+        # A plain YES/acknowledgment is not evidence that queued work started.
+        response = response_policy.status_reply('handover', locale, response_policy.state_context(phone, reservation))
     elif calendar_request in response_policy.CALENDAR_REQUESTS:
         response = response_policy.calendar_reply(calendar_request, locale)
+    elif understood.get('status_request') == 'wildlife_guarantee' and not (
+        review_pending and action in {'confirm_summary', 'new_booking', 'cancel'}
+    ):
+        response = response_policy.wildlife_guarantee_reply(locale, response_policy.state_context(phone, reservation))
     elif understood.get('status_request') == 'pickup_coverage':
         response = response_policy.pickup_coverage_reply(locale)
     elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':
