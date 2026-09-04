@@ -155,6 +155,8 @@ def _summary_version(intake: dict) -> str:
     # Omit the absent field to preserve identity for pre-contact reservations.
     if "contact_phone" in intake:
         owned["contact_phone"] = intake["contact_phone"]
+    if intake.get("child_ages"):
+        owned["child_ages"] = intake["child_ages"]
     encoded = json.dumps(owned, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -235,6 +237,12 @@ def confirm_reservation(
     if contact:
         intake["contact_phone"] = contact
     catalog = mermaid_catalog.get_catalog()
+    from shared.mermaid_guest_ages import normalize_child_ages
+    if "child_ages" in intake:
+        ages = normalize_child_ages(intake["child_ages"], intake)
+        if ages is None:
+            raise MermaidReservationError("Child ages must match the supplied guest counts")
+        intake = {**intake, "child_ages": ages}
     version = _summary_version(intake)
     now = _now()
     conn = _conn()

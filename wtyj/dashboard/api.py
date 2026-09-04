@@ -5302,6 +5302,7 @@ def _mermaid_primary_action(item: dict) -> dict | None:
 def _mermaid_projection(item: dict) -> dict:
     intake = item["intake"]
     money = item["monetary_snapshot"]
+    from agents.social.mermaid_guest_experience import party_text
     return {
         "publicId": item["public_id"],
         "conversationId": item["conversation_id"],
@@ -5312,6 +5313,8 @@ def _mermaid_projection(item: dict) -> dict:
         "adults": intake["adults"],
         "children": intake["children"],
         "infants": intake["infants"],
+        "childAges": intake.get("child_ages", []),
+        "partyDescription": party_text(intake, "en"),
         "pickupPreference": intake["pickup_preference"],
         "pickupLocation": intake.get("pickup_location"),
         "dietaryRequirements": intake.get("dietary_requirements"),

@@ -321,13 +321,14 @@ def _summary(fields: dict, locale: str) -> str:
     contact = (f"{guest.guest_copy(locale)['contact_phone_label']}: {fields['contact_phone']}\n"
                if fields.get("contact_phone") else "")
     return (
-        f"*{labels['title']}*\n"
+        f"*{labels['title']}*\n\n"
         f"{labels['date']}: {guest.guest_date(fields['trip_date'], locale)}\n"
         f"{labels['guests']}: {party}\n"
         f"{labels['name']}: {fields['customer_name']}\n"
-        f"{contact}"
-        f"{guest.price_text(guest.intake_money(fields), fields, locale)}\n"
-        f"{labels['transport']}: {pickup}\n\n{guest.guest_copy(locale)['confirm']}"
+        f"{contact}\n"
+        f"*{labels['transport']}*\n{pickup}\n\n"
+        f"*{guest.price_text(guest.intake_money(fields), fields, locale)}*\n\n"
+        f"{guest.guest_copy(locale)['confirm']}"
     )
 
 
@@ -570,8 +571,25 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             cleaned = " ".join(value.split())[:160]
             if cleaned:
                 changes[key] = cleaned
+    from shared.mermaid_guest_ages import normalize_child_ages, age_band
+    supplied = understood.get("fields") or {}
+    if "child_ages" in supplied:
+        ages = normalize_child_ages(supplied["child_ages"], {**fields, **changes})
+        if ages is not None:
+            changes["child_ages"] = ages
+        elif action == "confirm_summary":
+            # Invalid age corrections cannot approve an unchanged summary.
+            action = "details"
+    elif fields.get("child_ages"):
+        # A reduced group does not establish which child's age remains valid.
+        reduced = {key for key in ("children", "infants")
+                   if key in changes and key in fields and changes[key] < fields[key]}
+        if reduced:
+            changes["child_ages"] = [age for age in fields["child_ages"] if age_band(age) not in reduced]
     changes = {key: value for key, value in changes.items() if fields.get(key) != value}
     fields.update(changes)
+    if fields.get("child_ages") == []:
+        fields.pop("child_ages")
     if invalid_contact and not reservation:
         fields.pop("contact_phone", None)
     if fields.get("pickup_preference") == "pier":
