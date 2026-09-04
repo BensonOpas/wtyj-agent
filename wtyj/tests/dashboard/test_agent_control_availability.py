@@ -121,17 +121,30 @@ def test_parallel_healthy_dashboard_reads_keep_agent_available(monkeypatch, firs
     icp_overrides.clear_cache()
     first_started = threading.Event()
     first_release = threading.Event()
+    second_fetch_entered = threading.Event()
+    second_bridge_started = threading.Event()
     calls = []
+    fetch_calls = []
     envelope = {"tenant_id": "demo", **_envelope(True)}
+    fetch_overrides = icp_overrides.fetch_overrides
+
+    def observed_fetch():
+        fetch_calls.append(1)
+        if len(fetch_calls) == 2:
+            second_fetch_entered.set()
+        return fetch_overrides()
 
     def controlled_get(*_args, **_kwargs):
         calls.append(1)
         if len(calls) == 1:
             first_started.set()
             assert first_release.wait(timeout=5)
+        else:
+            second_bridge_started.set()
         return httpx.Response(200, json=envelope)
 
     monkeypatch.setattr(icp_overrides.requests, "get", controlled_get)
+    monkeypatch.setattr(icp_overrides, "fetch_overrides", observed_fetch)
 
     async def exercise():
         app = _app()
@@ -155,6 +168,10 @@ def test_parallel_healthy_dashboard_reads_keep_agent_available(monkeypatch, firs
                     f"/dashboard/api/{companion_path}", headers=_auth(),
                 ))
                 await asyncio.wait_for(companion_started.wait(), timeout=2)
+                assert await asyncio.to_thread(second_fetch_entered.wait, 5)
+                # Give the second worker a bounded chance to reveal a duplicate
+                # bridge GET while the first is held. A coalesced read waits.
+                assert not await asyncio.to_thread(second_bridge_started.wait, 0.25)
                 assert not first.done()
             finally:
                 first_release.set()
