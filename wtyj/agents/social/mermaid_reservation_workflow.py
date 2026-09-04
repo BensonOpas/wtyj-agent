@@ -685,8 +685,11 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         # wording). An optional informational selector cannot conceal that result.
         pass
     elif canonical_response:
-        # Volunteered pickup facts are not guest uncertainty and must not hide
-        # the summary the guest needs to approve, or its one approval result.
+        # Volunteered pickup facts must not hide the canonical summary or its
+        # one approval result. Review-pending paths never produce this flag.
+        pass
+    elif review_pending and action in {'confirm_summary', 'new_booking', 'cancel'}:
+        # Informational selectors cannot conceal a review-blocked decision.
         pass
     elif review_pending and action == 'acknowledge' and not has_question:
         # A plain YES/acknowledgment is not evidence that queued work started.
@@ -709,6 +712,9 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         response = response_policy.pickup_coverage_reply(locale)
     elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':
         response = response_policy.status_reply(understood.get('status_request') if understood.get('status_request') in {'payment', 'handover', 'delivery'} else 'payment', locale, response_policy.state_context(phone, reservation))
+        other_answer = str(understood.get('other_question_reply') or '').strip()
+        if other_answer:
+            response = other_answer + '\n\n' + response
     root_fields["mermaid_intake"] = fields
     if message_id and result_action != "cancel":
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]

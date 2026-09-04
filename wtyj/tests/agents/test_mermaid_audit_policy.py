@@ -127,13 +127,13 @@ def test_payment_delivery_and_takeover_follow_records(monkeypatch, locale):
                 pickup_preference='pier', language=locale, phase='summary_confirmed')
     item=store.confirm_reservation('guest',intake,idempotency_key='confirm')
     _doc,job=documents.create_quote(item)
-    stub=model(monkeypatch,locale,status_request='payment')
+    stub=model(monkeypatch,locale,status_request='payment',other_question_reply=_SAFE_FAQ[locale])
     message={'from':'guest','text':'question','message_id':'unpaid'}
-    assert workflow.process_model_turn(message,item).text==policy.copy('payment_unpaid',locale)
+    assert workflow.process_model_turn(message,item).text==_SAFE_FAQ[locale]+'\n\n'+policy.copy('payment_unpaid',locale)
     for phase in ('quote_ready','demo_payment_pending'):
         item=store.transition(item['public_id'],phase,idempotency_key=phase,actor='test',reason='test')
     item,_paid=store.complete_demo_payment(item['public_id'],payment_reference='SIMULATED',idempotency_key='paid')
-    assert workflow.process_model_turn({**message,'message_id':'paid'},item).text==policy.copy('payment_paid',locale)
+    assert workflow.process_model_turn({**message,'message_id':'paid'},item).text==_SAFE_FAQ[locale]+'\n\n'+policy.copy('payment_paid',locale)
     stub.return_value['status_request']='delivery'
     for status in ('waiting','failed','delivered'):
         if status=='failed':
@@ -142,7 +142,7 @@ def test_payment_delivery_and_takeover_follow_records(monkeypatch, locale):
             with documents._conn() as db:
                 db.execute("UPDATE mermaid_delivery_jobs SET status='failed',last_error='provider confirmed failure' WHERE public_id=?",(job['public_id'],))
         elif status=='delivered':documents.mark_delivery(job['public_id'],True)
-        assert workflow.process_model_turn({**message,'message_id':status},item).text==policy.copy('delivery_'+status,locale)
+        assert workflow.process_model_turn({**message,'message_id':status},item).text==_SAFE_FAQ[locale]+'\n\n'+policy.copy('delivery_'+status,locale)
     state_registry.set_ai_muted('guest',True,channel='whatsapp')
     assert policy.state_context('guest',item)['review']=='active'
 
@@ -275,3 +275,61 @@ def test_wildlife_selector_does_not_replace_pending_review_decisions(monkeypatch
     assert result.text == workflow.COPY['en']['human']
     assert result.action is None
     _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
+@pytest.mark.parametrize('selector,key', [('handover','review_queued'),('payment','payment_none'),('delivery','delivery_none')])
+def test_recorded_status_keeps_dedicated_food_and_arrival_answer(monkeypatch, locale, selector, key):
+    intake=_queued_accessibility_review(locale)
+    model(monkeypatch,locale,status_request=selector,
+          reply='UNVERIFIED: staff are working, paid, email delivered.',
+          other_question_reply=_SAFE_FAQ[locale], guest_question_excerpt='Question?')
+    result=workflow.process_model_turn({'from':'guest','message_id':'faq-status','text':'Question?'},None)
+    assert result.text==_SAFE_FAQ[locale]+'\n\n'+policy.copy(key,locale)
+    assert result.action is None and 'UNVERIFIED' not in result.text
+    _assert_review_preserved(intake)
+
+
+def test_followup_base045_t6_keeps_exact_faq_in_dedicated_field(monkeypatch):
+    intake=_queued_accessibility_review('de')
+    question='Ist Frühstück dabei? Wann müssen wir da sein?'
+    answer="Ja, Frühstück ist inklusive, genauso wie Softdrinks, Säfte und ein BBQ-Mittagessen.\n\nIhr Treffpunkt am Fishermen's Pier ist um 06:45 Uhr zum Check-in."
+    model(monkeypatch,'de',status_request='handover',reply=answer,
+          other_question_reply=answer, guest_question_excerpt=question)
+    result=workflow.process_model_turn({'from':'guest','message_id':'base045-t6','text':question},None)
+    assert result.text==answer+'\n\n'+policy.copy('review_queued','de')
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('selector,key', [('handover','review_queued'),('payment','payment_none'),('delivery','delivery_none')])
+@pytest.mark.parametrize('other', [None, '', '   '])
+def test_empty_or_legacy_omitted_faq_never_reuses_raw_status_prose(monkeypatch, selector, key, other):
+    _queued_accessibility_review('en')
+    additions={} if other is None else {'other_question_reply':other}
+    model(monkeypatch,status_request=selector,reply='UNVERIFIED RAW REPLY',**additions)
+    result=workflow.process_model_turn({'from':'guest','message_id':'empty','text':'question'},None)
+    assert result.text==policy.copy(key,'en')
+
+
+@pytest.mark.parametrize('selector', ['handover','payment','delivery'])
+@pytest.mark.parametrize('action', ['confirm_summary','new_booking','cancel'])
+def test_status_faq_cannot_override_review_blocked_decision(monkeypatch, selector, action):
+    intake=_queued_accessibility_review('en')
+    model(monkeypatch,mermaid_action=action,status_request=selector,
+          reply='UNVERIFIED',other_question_reply=_SAFE_FAQ['en'])
+    result=workflow.process_model_turn({'from':'guest','message_id':'blocked','text':'question'},None)
+    assert result.text==workflow.COPY['en']['human'] and result.action is None
+    _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('kind', ['security','human','cancel'])
+def test_dedicated_status_faq_does_not_leak_past_primary_action(monkeypatch, kind):
+    changes=({'security_event':'blocked_override'} if kind=='security' else
+             {'mermaid_action':'request_human'} if kind=='human' else {'mermaid_action':'cancel'})
+    model(monkeypatch,status_request='handover',reply='UNVERIFIED',
+          other_question_reply='SHOULD NOT APPEAR',**changes)
+    result=workflow.process_model_turn({'from':'guest','message_id':'primary','text':'question'},None)
+    assert 'SHOULD NOT APPEAR' not in result.text and 'UNVERIFIED' not in result.text
+    if kind=='security':assert result.text==policy.copy('security_blocked','en')
+    elif kind=='human':assert result.action=='human_takeover'
+    else:assert result.action=='cancel' and result.text==''
