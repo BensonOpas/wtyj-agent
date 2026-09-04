@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timezone, timedelta
 
 import anthropic
+from shared import ai_monitoring
 from shared import config_loader, state_registry, bm_logger
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
@@ -335,7 +336,7 @@ def generate_drafts(count: int = 3, days_ahead: int = 7) -> list:
         system_prompt = _build_system_prompt(count)
         user_prompt = _build_user_prompt(count, days_ahead)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='social_drafts',
             model="claude-sonnet-4-6",
             max_tokens=4096,
             system=system_prompt,
@@ -470,7 +471,7 @@ def distill_learnings() -> list:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='social_learning',
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,
@@ -556,7 +557,7 @@ def analyze_training_examples() -> dict:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='training_analysis',
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,
@@ -655,7 +656,7 @@ def analyze_visual_style() -> list:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='visual_analysis',
             model="claude-sonnet-4-6",
             max_tokens=2048,
             messages=[{"role": "user", "content": image_blocks}],

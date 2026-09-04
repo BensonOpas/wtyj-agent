@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
+from shared import ai_monitoring
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity
 
 _MAX_REPLIES_PER_HOUR = 30
@@ -278,7 +279,7 @@ def handle_incoming_dm(message: dict) -> str:
         system_prompt = _build_dm_system_prompt(channel)
         user_prompt = _build_dm_user_prompt(text, sender_name, messages)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='direct_message_reply', monitor_conversation=conversation_id, monitor_channel=channel,
             model="claude-sonnet-4-6",
             max_tokens=512,
             system=system_prompt,

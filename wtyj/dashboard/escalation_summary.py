@@ -21,6 +21,7 @@ import os
 from typing import Optional
 
 import anthropic
+from shared import ai_monitoring
 from shared import bm_logger
 
 
@@ -277,7 +278,7 @@ def generate_summary(channel: str, customer_id: str, customer_name: str,
             "Emit your structured operator briefing now."
         )
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='escalation_summary', monitor_conversation=customer_id, monitor_channel=channel,
             model="claude-sonnet-4-6",
             max_tokens=1024,
             system=system_prompt,

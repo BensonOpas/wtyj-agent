@@ -2005,6 +2005,8 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
     )
     conn.commit()
     conn.close()
+    from shared import ai_monitoring
+    ai_monitoring.observe_conversation(phone)
 
 
 def wa_mark_vehicle_recommendation_delivered(
@@ -5130,6 +5132,8 @@ def upsert_follow_up_request(conversation_id: str, channel: str = "whatsapp",
     ).fetchone()
     last_inbound_at = _latest_follow_up_inbound_at(conn, conversation_id)
     conn.close()
+    from shared import ai_monitoring
+    ai_monitoring.observe_conversation(conversation_id)
     return _follow_up_row(row, last_inbound_at=last_inbound_at)
 
 

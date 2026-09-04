@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 import anthropic
+from shared import ai_monitoring
 from shared import config_loader
 from shared import agent_identity
 from shared import bm_logger
@@ -2150,7 +2151,7 @@ def _correct_reply_language(
         ),
     }
     try:
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='language_correction', monitor_conversation=from_email, monitor_channel=channel,
             model="claude-sonnet-4-6",
             max_tokens=1536,
             system=(
@@ -2246,7 +2247,7 @@ def process_message(
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
 
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='customer_reply', monitor_conversation=from_email, monitor_channel=channel,
             model="claude-sonnet-4-6",
             max_tokens=2048,
             system=system_prompt,

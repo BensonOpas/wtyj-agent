@@ -13,6 +13,7 @@ import re
 import secrets
 import urllib.parse
 import anthropic
+from shared import ai_monitoring
 import requests as http_requests
 from datetime import datetime, timezone
 from typing import Literal
@@ -1683,7 +1684,7 @@ Return only JSON in this shape:
 Do not mention Anthropic, Claude, OpenAI, or internal systems."""
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='personality_examples',
             model="claude-sonnet-4-6",
             max_tokens=700,
             messages=[{"role": "user", "content": prompt}],
@@ -1874,7 +1875,7 @@ async def improve_info_update_instruction(req: InfoUpdateImproveRequest):
     system_prompt, user_prompt = _build_info_update_improvement_prompt(req)
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='instruction_improvement',
             model="claude-sonnet-4-6",
             max_tokens=1800,
             temperature=0,
@@ -6906,7 +6907,7 @@ Write an email reply from {agent_name} to this customer. Address open questions,
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = ai_monitoring.create_message(client, monitor_feature='suggest_reply', monitor_conversation=req.phone, monitor_channel='whatsapp',
             model="claude-sonnet-4-6",
             max_tokens=1024,
             system=system_prompt,
@@ -7411,7 +7412,7 @@ async def ai_editor(req: AIEditorRequest):
     )
     try:
         client = anthropic.Anthropic()
-        resp = client.messages.create(
+        resp = ai_monitoring.create_message(client, monitor_feature='ai_editor_' + req.action, monitor_conversation=req.context.get('conversationId'), monitor_channel=req.context.get('channel') or 'whatsapp',
             model=model_id,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
@@ -7426,3 +7427,14 @@ async def ai_editor(req: AIEditorRequest):
 
     bm_logger.log("ai_editor_used", action=req.action, length=len(req.text), model=model_id)
     return {"text": rewritten}
+
+
+@router.get("/monitoring/ai", dependencies=[Depends(_check_auth)])
+async def ai_monitoring_summary(month: str = Query(default="2026-09", pattern=r"^\d{4}-\d{2}$")):
+    """Content-free tenant usage and full-customer-cost report; no model call."""
+    if not ai_monitoring.enabled():
+        raise HTTPException(status_code=404, detail="Monitoring is not enabled")
+    try:
+        return ai_monitoring.report(month)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid calendar month")
