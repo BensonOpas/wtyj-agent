@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 import pytest
+from pypdf import PdfReader
 from agents.marina import marina_agent
+from agents.social import mermaid_documents as docs
 from agents.social import mermaid_guest_experience as guest
 from agents.social import mermaid_model_recovery as recovery
 from agents.social import mermaid_reservation_store as store
@@ -65,3 +67,18 @@ def test_reducing_band_discards_uncertain_age(monkeypatch):
  monkeypatch.setattr(marina_agent,'process_message',Mock(return_value=understood(fields={'infants':1})))
  workflow.process_model_turn({'from':'guest','text':'Actually one child','message_id':'shrink'},None)
  assert 'child_ages' not in state_registry.wa_get_booking_state('guest')['fields']['mermaid_intake']
+
+
+def test_known_age_appears_in_one_page_quote(tmp_path):
+ fields={'trip_date':'2026-09-13','adults':3,'children':0,'infants':1,
+         'child_ages':[{'value':9,'unit':'months'}],'customer_name':'Calvin test',
+         'contact_phone':'+59996881585','pickup_preference':'pier','language':'en',
+         'phase':'summary_confirmed'}
+ item=store.confirm_reservation('pdf-age',fields,idempotency_key='confirm')
+ target=tmp_path/'age.pdf'
+ docs.render_quote_pdf(item,target)
+ reader=PdfReader(target)
+ text=' '.join((page.extract_text() or '') for page in reader.pages)
+ assert len(reader.pages)==1
+ assert 'infant (9 months)' in text
+ assert 'little one' not in text
