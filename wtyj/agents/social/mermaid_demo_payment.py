@@ -6,8 +6,10 @@ import hashlib
 import hmac
 import html
 import os
+import re
+import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from fastapi.responses import HTMLResponse, Response
 
@@ -34,11 +36,64 @@ def verify_payment(reservation_id: str, expires: int, signature: str, secret: st
 
 
 def build_payment_url(base_url: str, reservation_id: str, secret: str, now: int | None = None) -> str:
-    if not base_url.startswith(("https://", "http://localhost", "http://127.0.0.1")) or not secret:
+    parts = urlsplit(base_url)
+    if not secret or not parts.netloc or parts.query or parts.fragment or parts.username or parts.password or not (
+        parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in {"localhost", "127.0.0.1"})
+    ):
         raise ValueError("Mermaid demo payment configuration is missing")
-    expires = int(time.time() if now is None else now) + 3600
-    signature = sign_payment(reservation_id, expires, secret)
-    return f"{base_url.rstrip('/')}/api/public/mermaid-demo-payment/{reservation_id}?{urlencode({'expires': expires, 'signature': signature})}"
+    current = int(time.time() if now is None else now)
+    token = secrets.token_urlsafe(16)
+    conn = mermaid_reservation_store._conn()
+    try:
+        with conn:
+            reservation = conn.execute(
+                "SELECT public_id FROM mermaid_reservations WHERE public_id=? AND tenant_slug='mermaid' AND state!='cancelled' AND human_takeover=0",
+                (reservation_id,),
+            ).fetchone()
+            if not reservation:
+                raise ValueError("Mermaid reservation is unavailable")
+            conn.execute("DELETE FROM mermaid_checkout_links WHERE expires_at < ?", (current,))
+            conn.execute(
+                "INSERT INTO mermaid_checkout_links VALUES (?, 'mermaid', ?, ?, ?)",
+                (_checkout_token_hash(token, secret), reservation_id, current + 3600, current),
+            )
+    finally:
+        conn.close()
+    return f"{base_url.rstrip('/')}/pay/{token}"
+
+
+def _checkout_token_hash(token: str, secret: str) -> str:
+    return hmac.new(secret.encode(), ("mermaid-short-checkout:" + token).encode(), hashlib.sha256).hexdigest()
+
+
+def resolve_checkout_token(token: str) -> tuple[str, int, str] | None:
+    secret = _secret()
+    if not secret or not re.fullmatch(r"[A-Za-z0-9_-]{22}", token) or not mermaid_catalog.reservation_demo_enabled() or not mermaid_catalog.demo_features()["demo_payment"]:
+        return None
+    conn = mermaid_reservation_store._conn()
+    try:
+        row = conn.execute(
+            "SELECT l.reservation_public_id,l.expires_at FROM mermaid_checkout_links l "
+            "JOIN mermaid_reservations r ON r.public_id=l.reservation_public_id "
+            "WHERE l.token_hash=? AND l.tenant_slug='mermaid' AND r.tenant_slug='mermaid' "
+            "AND r.state!='cancelled' AND r.human_takeover=0 AND l.expires_at>=?",
+            (_checkout_token_hash(token, secret), int(time.time())),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return row[0], row[1], sign_payment(row[0], row[1], secret)
+
+
+def short_checkout_page(token: str) -> Response:
+    payment = resolve_checkout_token(token)
+    return checkout_page(*payment, form_action="") if payment else Response(status_code=404)
+
+
+def complete_short_checkout(token: str, status: str) -> Response:
+    payment = resolve_checkout_token(token)
+    return complete_checkout(*payment, status) if payment else Response(status_code=404)
 
 
 def _page(title: str, body: str, *, actions: str = "", status: int = 200) -> HTMLResponse:
@@ -47,10 +102,10 @@ def _page(title: str, body: str, *, actions: str = "", status: int = 200) -> HTM
 <title>{html.escape(title)}</title><style>
 body{{margin:0;background:#eaf8f8;color:#063b46;font:16px/1.5 system-ui,sans-serif}}main{{max-width:620px;margin:40px auto;padding:30px;background:white;border-radius:18px;box-shadow:0 12px 36px #063b4622}}h1{{margin-top:18px}}.demo{{background:#f36c5b;color:white;padding:10px 14px;border-radius:8px;font-weight:800;text-align:center}}.summary{{background:#f4fbfb;padding:18px;border-radius:12px;margin:20px 0}}button{{border:0;border-radius:10px;padding:14px 18px;font-weight:750;cursor:pointer}}.pay{{background:#007f86;color:white}}.cancel{{background:#e9eef0;color:#203c44;margin-left:8px}}small{{display:block;margin-top:20px;color:#4d6870}}
 </style></head><body><main><div class="demo">PAYMENT SIMULATION - NO MONEY</div><h1>{html.escape(title)}</h1>{body}{actions}<small>No card number, bank account, password, or payment credential is requested or stored.</small></main></body></html>"""
-    return HTMLResponse(markup, status_code=status, headers={"Cache-Control": "private, no-store"})
+    return HTMLResponse(markup, status_code=status, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
 
-def checkout_page(reservation_id: str, expires: int, signature: str) -> Response:
+def checkout_page(reservation_id: str, expires: int, signature: str, *, form_action: str | None = None) -> Response:
     if not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
@@ -66,8 +121,9 @@ def checkout_page(reservation_id: str, expires: int, signature: str) -> Response
         f'{html.escape(guest.transport_text(intake, reservation["language"], money))}</div>'
         '<p>This page demonstrates payment completion only. Clicking success moves no money.</p>'
     )
+    action = f"?expires={int(expires)}&signature={signature}" if form_action is None else form_action
     actions = (
-        f'<form method="post" action="?expires={int(expires)}&amp;signature={html.escape(signature)}">'
+        f'<form method="post" action="{html.escape(action, quote=True)}">'
         '<button class="pay" name="status" value="success">Simulate successful payment</button>'
         '<button class="cancel" name="status" value="cancel">Cancel</button></form>'
     )

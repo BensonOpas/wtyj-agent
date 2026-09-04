@@ -200,6 +200,20 @@ async def mermaid_demo_checkout(reservation_id: str, expires: int, signature: st
 _mermaid_checkout_limiter = CapacityLimiter(1)
 
 
+@app.get("/pay/{token}")
+async def mermaid_short_checkout(token: str):
+    from agents.social.mermaid_demo_payment import short_checkout_page
+    return await run_in_threadpool(short_checkout_page, token)
+
+
+@app.post("/pay/{token}")
+async def mermaid_short_checkout_complete(request: Request, token: str):
+    from agents.social.mermaid_demo_payment import complete_short_checkout
+    form = await request.form()
+    async with _mermaid_checkout_limiter:
+        return await run_in_threadpool(complete_short_checkout, token, str(form.get("status") or "cancel"))
+
+
 @app.post("/api/public/mermaid-demo-payment/{reservation_id}")
 async def mermaid_demo_checkout_complete(
     request: Request, reservation_id: str, expires: int, signature: str,

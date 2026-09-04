@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import pytest
 from pypdf import PdfReader
@@ -41,10 +41,10 @@ JOURNEYS = [
 
 
 def _payment_token(reply: dict) -> tuple[str, int, str]:
-    url = re.search(r"https://demo\.example/api/public/mermaid-demo-payment/[^\s]+", reply["text"]).group(0)
+    url = re.search(r"https://unboks\.org/mermaid/pay/[^\s]+", reply["text"]).group(0)
     parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-    return parsed.path.rsplit("/", 1)[-1], int(query["expires"][0]), query["signature"][0]
+    assert not parsed.query and len(parsed.path.rsplit("/",1)[-1])==22
+    return mermaid_demo_payment.resolve_checkout_token(parsed.path.rsplit("/",1)[-1])
 
 
 def _pdf_text(path: str) -> str:

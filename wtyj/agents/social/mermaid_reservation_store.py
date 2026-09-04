@@ -106,6 +106,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL CHECK (status='simulated_success'),
             paid_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mermaid_checkout_links (
+            token_hash TEXT PRIMARY KEY,
+            tenant_slug TEXT NOT NULL CHECK (tenant_slug='mermaid'),
+            reservation_public_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (reservation_public_id) REFERENCES mermaid_reservations(public_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_mermaid_checkout_link_expiry ON mermaid_checkout_links(expires_at);
         """
     )
     try:

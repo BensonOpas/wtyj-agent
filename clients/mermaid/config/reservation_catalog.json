@@ -91,7 +91,8 @@
       "infants_one": "{count} little one (0-3)",
       "pickup_priced": "Pickup from {location}: {currency} {amount} per booking, anywhere on Curaçao, included in this total. Collection time still needs confirmation.",
       "pickup_total": "Total incl. pickup",
-      "pickup_line": "Island-wide pickup"
+      "pickup_line": "Island-wide pickup",
+      "checkout_link": "Finish your demo booking here:"
     },
     "nl": {
       "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
@@ -110,7 +111,8 @@
       "island_departure": "Vertrek van het eiland: {time}.",
       "pickup_priced": "Transfer vanaf {location}: {currency} {amount} per boeking, overal op Curaçao, inbegrepen in dit totaal. De ophaaltijd moet nog worden bevestigd.",
       "pickup_total": "Totaal incl. transfer",
-      "pickup_line": "Transfer op heel Curaçao"
+      "pickup_line": "Transfer op heel Curaçao",
+      "checkout_link": "Rond je demo-boeking hier af:"
     },
     "de": {
       "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
@@ -129,7 +131,8 @@
       "island_departure": "Abfahrt von der Insel: {time}.",
       "pickup_priced": "Abholung von {location}: {currency} {amount} pro Buchung, überall auf Curaçao, in diesem Gesamtbetrag enthalten. Die Abholzeit muss noch bestätigt werden.",
       "pickup_total": "Gesamt inkl. Abholung",
-      "pickup_line": "Inselweite Abholung"
+      "pickup_line": "Inselweite Abholung",
+      "checkout_link": "Schließen Sie Ihre Demo-Buchung hier ab:"
     },
     "es": {
       "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
@@ -148,7 +151,8 @@
       "island_departure": "Salida de la isla: {time}.",
       "pickup_priced": "Recogida en {location}: {currency} {amount} por reserva, en cualquier lugar de Curaçao, incluida en este total. Falta confirmar la hora de recogida.",
       "pickup_total": "Total con recogida",
-      "pickup_line": "Recogida en toda la isla"
+      "pickup_line": "Recogida en toda la isla",
+      "checkout_link": "Completa tu reserva demo aquí:"
     },
     "pap": {
       "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di trip.",
@@ -167,7 +171,8 @@
       "island_departure": "Salida for di e isla: {time}.",
       "pickup_priced": "Pickup na {location}: {currency} {amount} pa reservashon, na kualke lugá na Kòrsou, inkluí den e total aki. Ora di pickup mester wordu konfirmá ainda.",
       "pickup_total": "Total ku pickup",
-      "pickup_line": "Pickup rònt Kòrsou"
+      "pickup_line": "Pickup rònt Kòrsou",
+      "checkout_link": "Kompletá bo reservashon demo aki:"
     },
     "pt": {
       "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
@@ -186,7 +191,11 @@
       "island_departure": "Saída da ilha: {time}.",
       "pickup_priced": "Traslado de {location}: {currency} {amount} por reserva, em qualquer lugar de Curaçao, incluído neste total. O horário da coleta ainda precisa de confirmação.",
       "pickup_total": "Total com traslado",
-      "pickup_line": "Traslado em toda a ilha"
+      "pickup_line": "Traslado em toda a ilha",
+      "checkout_link": "Conclua sua reserva demo aqui:"
     }
+  },
+  "links": {
+    "checkout_base_url": "https://unboks.org/mermaid"
   }
 }
