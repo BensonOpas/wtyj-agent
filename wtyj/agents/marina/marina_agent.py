@@ -2224,6 +2224,13 @@ def process_message(
                           input_preview=str(result)[:200])
             return fallback
 
+        # Mermaid display fields may contain literal escaped paragraph breaks.
+        # Keep guest evidence, extracted fields and other contracts untouched.
+        if response_contract == "mermaid_reservation_demo":
+            for field in ("reply", "other_question_reply"):
+                if isinstance(result.get(field), str):
+                    result[field] = result[field].replace("\\n", "\n")
+
         # Brief 224: sanitize customer-facing text fields before returning.
         # Brief 244: also strip em-dashes per agent_persona.brand_voice_rules
         # (Claude ignores the prompt-side rule; mirrors dm_agent.py:253).
