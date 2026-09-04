@@ -44,3 +44,23 @@ working Open PDF button, and the paid-booking text ends by offering further help
 Restore the preceding image and client.json from the scoped release backup.
 The additive card-delivery table can remain; existing booking, payment, document
 and delivery records must not be discarded during a rollback.
+
+## Release evidence
+Deployed `wtyj-agent:tracy-cards-f30d973`, digest
+`sha256:bf56a86a366b410e491f685468874782dd4f61424dee48e1c87970791b6136db`.
+Rollback backup: `/root/backups/tracy-cards-f30d973`.
+
+120 focused card, checkout, full-journey, live-release, cancellation, durable
+handoff and sender tests passed. The built-image canary and live-configuration
+canary each passed two model-understood turns through the actual workflow,
+sender dispatcher, simulated checkout and repeat callback. Each produced one
+quote card and one receipt card, with working image/PDF routes, one-page PDFs,
+the exact nine-month infant age, USD 525 total and 05:45 pickup. Provider I/O was
+mocked and the canary used a temporary database; no customer message was sent.
+
+Live health, watchdog and externally fetched versioned artwork passed. Deployment
+preserved the two messages in the user's newly started test and its intake,
+all unrelated configuration (including the protected account allowlist), and
+six other tenant containers. There were no live reservations or payments at
+promotion. The new config section alone was merged into the protected live file;
+the tracked template's intentionally empty account allowlist was not deployed.
