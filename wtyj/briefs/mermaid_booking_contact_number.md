@@ -1,5 +1,5 @@
 # Mermaid booking contact number
-**Status:** In progress | **Files:** contact validation, tenant persona/catalog, understanding, workflow/store, quote, dashboard projection and tests | **Depends on:** reply-layout release 796d5a2 | **Blocks:** reachable booking contact
+**Status:** Deployed and verified | **Files:** contact validation, tenant persona/catalog, understanding, workflow/store, quote, dashboard projection and tests | **Depends on:** reply-layout release 796d5a2 | **Blocks:** None
 
 ## Context
 The user requires a phone number so the team can reach a guest about urgent trip changes, such as weather preventing departure. The current intake collects a name and transport but no guest-supplied contact number. A provider conversation identifier is not a verified or customer-selected callback number.
@@ -22,3 +22,9 @@ A new booking cannot be finalized without a customer-supplied contact number, an
 
 ## Rollback
 Restore the previous Mermaid image plus client/catalog configuration from the deployment backup, retaining customer data and newly saved contact fields.
+
+## Verification
+- 323 Mermaid/status tests passed locally; 96 focused checks passed in the exact release image. Existing complete-booking fixtures and replay scripts now explicitly supply the contact number or include the new collection step.
+- Seven isolated real-model turns covered the missing-contact question and purpose, a same-WhatsApp-number reply without copying metadata, formatted contact, correction/reconfirmation, a USD 300 quote, early Dutch contact and a local number without country code. One additional isolated turn checked simpler same-number wording after removing technical terminology from the guidance. No provider messages were sent.
+- The contact appears in localized summaries and quotes across all six languages. Quote pagination checks passed, including long guest/address fixtures; the German contact quote was visually inspected as one page. Authenticated API tests cover contact visibility/search and null contact on historical records.
+- Deployed source `45cfbb2` as `wtyj-agent:tracy-contact-45cfbb2`, digest `sha256:7747f2bb5bce7b7b6eee1beda452b9e04433edab0574a90d2a90e8531974414f`, catalog `mermaid-demo-v5-2026-09-03`. Backup: `/root/backups/tracy-contact-45cfbb2`. The live prompt and missing-contact gate were checked without creating a reservation. Exact runtime source hashes match, the existing reservation's monetary snapshot is unchanged, and all six peer containers are unchanged. Public health and watchdog are healthy.
