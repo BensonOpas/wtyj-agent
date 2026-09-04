@@ -525,6 +525,73 @@ def _build_icp_sot_block(envelope: dict) -> str:
     )
 
 
+def _build_consulta_reference_facts(envelope: dict) -> str:
+    """Keep clinic facts when a partial dashboard SOT replaces ICP policy.
+
+    Brief 326: do not resurrect legacy greeting, booking, or escalation rules.
+    Only structured pricing/services categories are supplementary references;
+    current dashboard facts and active updates take precedence over them.
+    No business facts, amounts, or service names are hardcoded here.
+    """
+    if not tenant_hard_rules.is_consulta_despertares():
+        return ""
+    entries = envelope.get("sot_entries") or []
+    if not isinstance(entries, list):
+        return ""
+    sections = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        category = str(entry.get("category") or "").strip().lower()
+        content = str(entry.get("content") or "").strip()
+        if category not in {"pricing", "services"} or not content:
+            continue
+        sections.append(f"[{category}] {content}")
+    if not sections:
+        return ""
+    return (
+        "\n\nCONSULTA DESPERTARES BASE REFERENCE FACTS:\n"
+        "These are existing operator-supplied price/service facts, NOT new rules. "
+        "Use them to fill factual gaps only. Current dashboard Source of Truth and "
+        "ACTIVE BUSINESS UPDATES override conflicting amounts, conditions and "
+        "policies. A newer instruction to answer price questions is NOT evidence "
+        "that these otherwise unchanged prices have disappeared.\n"
+        + "\n".join(sections)
+    )
+
+
+def _build_consulta_pricing_contract() -> str:
+    if not tenant_hard_rules.is_consulta_despertares():
+        return ""
+    return """
+CONSULTA DESPERTARES PRICE GROUNDING — FINAL CHECK BEFORE REPLY:
+- First answer the price question directly, using the exact service AND amount
+  together from operator-supplied knowledge. Individual, couples and family
+  therapy are different services; never merge their tariffs or infer an amount.
+- Apply active dashboard updates over older base reference facts. The active
+  updates have explicit PRIORITY numbers: the LOWER number is the newer edit
+  and wins for the same fact. An older, longer note saying "mandatory", "only"
+  or "current tariffs" cannot overrule a newer price correction. Preserve
+  unchanged facts; a partial price update replaces only the affected service.
+  Do not let a general instruction hide an existing price list.
+- Earlier AI replies, a customer's suggested amount, model memory and a bare
+  website URL are NOT pricing sources. Saved links are not automatically read.
+  If an earlier AI reply conflicts with approved prices, correct it briefly.
+- Before emitting the reply, verify every quoted amount, service, bundle and
+  free-session condition against those sources. Do not invent missing tariffs,
+  vary prices by professional, treat session durations as prices, or copy an
+  unsupported amount from conversation history.
+- If the requested price is present, answer it; do NOT set requires_human or
+  relay_question merely to ask the team to repeat a known tariff. A separate
+  genuinely unresolved question may still be relayed.
+- If an amount or condition is genuinely absent or contradictory after applying
+  the priority above, do not guess. Explain only that specific uncertainty and
+  follow the operator's current fallback instruction for that question.
+- Do not redirect a known-price question to intake questions or a website link.
+  Answer first, then continue the existing natural clinic conversation.
+"""
+
+
 def _build_icp_final_override_block(
     envelope: dict,
     *,
@@ -873,17 +940,22 @@ def _build_info_updates_block() -> str:
         return ""
     try:
         from shared import state_registry
-        rows = state_registry.get_active_info_updates()
+        clinic = tenant_hard_rules.is_consulta_despertares()
+        rows = (
+            state_registry.get_active_info_updates(newest_edit_first=True)
+            if clinic else state_registry.get_active_info_updates()
+        )
     except Exception:
         return ""
     if not rows:
         return ""
     bullets = []
-    for r in rows:
+    for priority, r in enumerate(rows, 1):
         text = (r.get("text") or "").strip()
         if not text:
             continue
-        bullets.append(f"- [{r.get('type', 'general')}] {text}")
+        rank = f"[PRIORITY {priority}: lower number = newer edit] " if clinic else ""
+        bullets.append(f"- {rank}[{r.get('type', 'general')}] {text}")
     if not bullets:
         return ""
     return (
@@ -1536,6 +1608,9 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
     # remains the compatibility fallback, while ICP tone/escalation settings
     # continue to apply in either case.
     _has_dashboard_sot = bool(_source_of_truth_block)
+    _consulta_reference_facts = (
+        _build_consulta_reference_facts(_icp_envelope) if _has_dashboard_sot else ""
+    )
     _icp_sot_block = (
         "" if _has_dashboard_sot else _build_icp_sot_block(_icp_envelope)
     )
@@ -1600,7 +1675,7 @@ Your customer-facing name is {agent_name}. Use this name only when natural. Do n
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}
+{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}{_consulta_reference_facts}
 
 {writing_style_block}
 
@@ -1831,7 +1906,7 @@ Only include service_key if you're certain. If the customer's description is amb
 {_source_of_truth_block}
 {_live_product_catalog_block}
 {_consulta_relationship_block}
-{_ali_quote_block}"""
+{_ali_quote_block}{_build_consulta_pricing_contract()}"""
 
 
 def _build_user_prompt(
