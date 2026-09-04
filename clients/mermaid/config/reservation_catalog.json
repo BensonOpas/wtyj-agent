@@ -172,8 +172,8 @@
       "pickup_requires_review": "Ihre Gruppe benötigt mehr als ein Abholfahrzeug. Mermaids Team muss Transport und Preis bestätigen.",
       "pickup_awaiting_guest_count": "Für den Abholpreis benötige ich die gesamte Gästezahl, einschließlich Kinder und Kleinkinder.",
       "contact_phone_label": "Telefonnummer",
-      "contact_phone_prompt": "Unter welcher Telefonnummer mit Ländervorwahl können wir dich erreichen? Sie ist für wichtige Informationen zur Fahrt, etwa bei einer wetterbedingten Absage.",
-      "contact_phone_retry": "Kannst du die vollständige Telefonnummer mit Ländervorwahl senden, beginnend mit +? So kann ich eine Kontaktnummer für Informationen zur Fahrt speichern.",
+      "contact_phone_prompt": "Unter welcher Telefonnummer mit Ländervorwahl können wir Sie erreichen? Sie ist für wichtige Informationen zur Fahrt, etwa bei einer wetterbedingten Absage.",
+      "contact_phone_retry": "Können Sie die vollständige Telefonnummer mit Ländervorwahl senden, beginnend mit +? So kann ich eine Kontaktnummer für Informationen zur Fahrt speichern.",
       "adults_one": "{count} Erwachsenentarif",
       "children_one": "{count} Kind (4-12)",
       "infants_one": "{count} Kleinkind (0-3)"
