@@ -22,7 +22,17 @@ this presentation change.
 Validation: existing localized quote and PDF accessibility checks (29 passing),
 including maximum-length customer/address fields, all price rows, one-page
 output, embedded image, complete policy text, language and structural tags.
-Render and inspect quote and receipt using the customer's existing booking.
+Rendered and visually inspected quote and receipt using the customer's existing
+booking. The exact release image also passed 12 long-field quote/receipt renders
+across six languages using production ReportLab 4.4.3.
+
+Deployed as `wtyj-agent:tracy-tropical-8fba1de`, digest
+`sha256:816a25caf5c67d7ac394166ba9e99caa8c0232bbe48bd9ec1ae283ee46bcc21d`.
+Health and watchdog checks pass. The 37 messages, reservation, payment, two
+issued-document records and two delivery jobs were preserved, along with six
+other tenant containers. Existing delivered attachments remain immutable;
+new documents use the new artwork. Rollback backup:
+`/root/backups/tracy-tropical-8fba1de`.
 
 References:
 - https://docs.zernio.com/messages/send-inbox-message
