@@ -8,7 +8,7 @@ from agents.social import mermaid_reservation_workflow as workflow
 from agents.social import mermaid_documents as docs, mermaid_demo_payment as payment
 from agents.social import mermaid_reservation_store as store
 from agents.social import mermaid_delivery_reconciliation as reconcile
-from shared import config_loader, state_registry
+from shared import config_loader, mermaid_catalog, state_registry
 
 
 @pytest.fixture(autouse=True)
@@ -52,8 +52,8 @@ def test_one_summary_price_and_natural_approval(monkeypatch):
     monkeypatch.setattr(marina_agent,'process_message',model)
     result=workflow.process_model_turn({'from':'guest','message_id':'summary','text':'Keep pickup pending'},None)
     assert result.text.count('Here is what I have')==1
-    assert 'USD 450.00' in result.text and 'pickup excluded' in result.text
-    assert 'Piscadera Bay Resort' in result.text and 'not confirmed' in result.text
+    assert 'USD 525.00' in result.text and 'USD 75.00' in result.text
+    assert 'Piscadera Bay Resort' in result.text and 'Collection time still needs confirmation' in result.text
     assert '0 children' not in result.text and '*YES*' not in result.text
     model.return_value=dict(language='en',mermaid_action='question',has_open_question=True,fields={},reply='Breakfast and lunch are included.')
     result=workflow.process_model_turn({'from':'guest','message_id':'question','text':'Is lunch included?'},None)
@@ -66,12 +66,12 @@ def test_one_summary_price_and_natural_approval(monkeypatch):
 @pytest.mark.parametrize('locale',workflow.SUPPORTED_LOCALES)
 def test_pickup_is_consistent_in_quote_receipt_checkout_and_confirmation(locale, tmp_path):
     item=store.confirm_reservation('guest',fields(locale),idempotency_key='confirm',zernio_account_id='owned-account')
-    record={'currency':'USD','amount':450,'payment_reference':'PAY-DEMO-test','paid_at':'2026-09-03T23:48:43+00:00'}
+    record={'currency':'USD','amount':525,'payment_reference':'PAY-DEMO-test','paid_at':'2026-09-03T23:48:43+00:00'}
     quote=tmp_path/'quote.pdf'; receipt=tmp_path/'receipt.pdf'
     docs.render_quote_pdf(item,quote); docs.render_receipt_pdf(item,record,receipt)
     for p in (quote,receipt):
         text=' '.join(page.extract_text() for page in PdfReader(p).pages)
-        assert 'Piscadera Bay Resort' in text and '450.00' in text
+        assert 'Piscadera Bay Resort' in text and '525.00' in text and '75.00' in text
         assert '06:45' not in text
         assert item['catalog_version'] not in text
     text=payment.success_message(item,record)
@@ -82,12 +82,13 @@ def test_pickup_is_consistent_in_quote_receipt_checkout_and_confirmation(locale,
     page=payment.checkout_page(item['public_id'],expires,signature).body.decode()
     assert 'Piscadera Bay Resort' in page
     if locale=='en':
-        assert 'pickup excluded' in page and 'not confirmed' in page
+        assert 'Total incl. pickup' in page and 'USD 75.00' in page
+        assert 'Collection time still needs confirmation' in page
 
 
 def receipt_job():
     item=store.confirm_reservation('guest',fields(),idempotency_key='confirm',zernio_account_id='owned-account')
-    doc,job=docs.create_receipt(item,{'currency':'USD','amount':450,'payment_reference':'DEMO','paid_at':'2026-09-03T23:48:43+00:00'})
+    doc,job=docs.create_receipt(item,{'currency':'USD','amount':525,'payment_reference':'DEMO','paid_at':'2026-09-03T23:48:43+00:00'})
     docs.mark_delivery(job['public_id'],False,'timeout')
     return doc,job
 
@@ -141,3 +142,50 @@ def test_repeated_payment_callback_reconciles_instead_of_resending(monkeypatch):
     finally:conn.close()
     assert job['status']=='pending' and job['attempts']==1
     assert docs.claim_initial_delivery(job['public_id']) is False
+
+
+@pytest.mark.parametrize('location,adults', [('Piscadera Bay Resort', 3), ('Westpunt', 2), ('Jan Thiel', 7)])
+def test_flat_pickup_is_one_charge_anywhere_on_island(location, adults):
+    intake=fields(); intake.update(pickup_location=location, adults=adults)
+    money=store._money_snapshot(intake,mermaid_catalog.get_catalog())
+    assert money['pickup_amount']==75
+    assert money['total']==adults*150+75
+    assert [i for i in money['items'] if i['key']=='pickup']==[
+        {'key':'pickup','label':'Pickup','quantity':1,'unit_amount':75,'line_total':75}]
+    intake['pickup_preference']='pier'
+    own=store._money_snapshot(intake,mermaid_catalog.get_catalog())
+    assert own['pickup_amount'] is None and own['total']==adults*150
+    assert not any(i['key']=='pickup' for i in own['items'])
+
+
+def test_current_fee_does_not_reprice_historical_reservation(monkeypatch,tmp_path):
+    old=mermaid_catalog.get_catalog(); old['pricing']['pickup_price']=None; old['version']='historical-demo'
+    with monkeypatch.context() as m:
+        m.setattr(mermaid_catalog,'get_catalog',lambda:old)
+        item=store.confirm_reservation('old-guest',fields(),idempotency_key='old')
+    assert mermaid_catalog.get_catalog()['pricing']['pickup_price']==75
+    assert store.get_reservation(item['public_id'])['monetary_snapshot']['total']==450
+    record={'currency':'USD','amount':450,'payment_reference':'OLD','paid_at':'2026-09-03T23:48:43+00:00'}
+    for kind,render in [('quote',lambda p:docs.render_quote_pdf(item,p)),('receipt',lambda p:docs.render_receipt_pdf(item,record,p))]:
+        p=tmp_path/f'{kind}.pdf'; render(p)
+        text=' '.join(page.extract_text() for page in PdfReader(p).pages)
+        assert '450.00' in text and 'pickup excluded' in text
+        assert '525.00' not in text and '75.00' not in text
+    assert 'USD 75.00' not in payment.success_message(item,record)
+    import time
+    expires=int(time.time())+3600
+    page=payment.checkout_page(item['public_id'],expires,payment.sign_payment(item['public_id'],expires,'test-only')).body.decode()
+    assert 'USD 450.00' in page and 'pickup excluded' in page and '75.00' not in page
+
+
+def test_pickup_never_invents_currency_conversion():
+    intake=fields(); intake['currency']='EUR'
+    with pytest.raises(store.MermaidReservationError,match='no conversion'):
+        store._money_snapshot(intake,mermaid_catalog.get_catalog())
+
+
+@pytest.mark.parametrize('amount', [-1, True, '75', 75.5])
+def test_invalid_pickup_price_is_rejected(amount):
+    catalog=mermaid_catalog.get_catalog();catalog['pricing']['pickup_price']=amount
+    with pytest.raises(mermaid_catalog.MermaidCatalogError,match='pickup price'):
+        mermaid_catalog.validate_catalog(catalog)

@@ -226,7 +226,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         ])),
         Spacer(1, 4 * mm), Paragraph(_safe(labels["title"]), heading),
     ]
-    transport = guest.transport_text(intake, locale)
+    transport = guest.transport_text(intake, locale, reservation["monetary_snapshot"])
     reference = reservation["public_id"][-10:].upper()
     detail_rows = [
         [Paragraph(_safe(labels["quote"]), body), Paragraph(_safe(reference), body), Paragraph(_safe(labels["customer"]), body), Paragraph(_safe(reservation["customer_name"], 100), body)],
@@ -247,7 +247,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         if not item["quantity"]:
             continue
         rows.append([
-            _safe(copy["items"][item["key"]]), str(item["quantity"]),
+            _safe(guest.guest_copy(locale)["pickup_line"] if item["key"] == "pickup" else copy["items"][item["key"]]), str(item["quantity"]),
             _money(money["currency"], item["unit_amount"]),
             _money(money["currency"], item["line_total"]),
         ])
@@ -356,7 +356,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         [labels["date"], guest.guest_date(intake["trip_date"], locale)],
         [labels["guests"], guest_line],
         [copy["payment_time"], datetime.fromisoformat(payment["paid_at"]).strftime("%d %b %Y, %H:%M UTC")],
-        [labels["transport"], guest.transport_text(intake, locale)],
+        [labels["transport"], guest.transport_text(intake, locale, reservation["monetary_snapshot"])],
     ]
     table = Table(
         [[Paragraph(f"<b>{_safe(a)}</b>", body), Paragraph(_safe(b), body)] for a, b in rows],
@@ -380,11 +380,11 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         ])),
         Spacer(1, 6 * mm), Paragraph(_safe(copy["receipt_title"]), heading), Spacer(1, 3 * mm), table,
         Spacer(1, 6 * mm),
-        Paragraph(_safe(guest.price_text({"currency": payment["currency"], "total": payment["amount"]}, intake, locale)), total),
+        Paragraph(_safe(guest.price_text({**reservation["monetary_snapshot"], "currency": payment["currency"], "total": payment["amount"]}, intake, locale)), total),
         Spacer(1, 5 * mm), HRFlowable(color=TEAL, thickness=1.3), Spacer(1, 5 * mm),
         Paragraph(_safe(copy["receipt_disclaimer"]), body),
         Spacer(1, 3 * mm),
-        Paragraph(_safe(guest.transport_text(intake, locale)), body),
+        Paragraph(_safe(guest.transport_text(intake, locale, reservation["monetary_snapshot"])), body),
     ]
     doc.build(story)
     return hashlib.sha256(target.read_bytes()).hexdigest()
@@ -528,5 +528,5 @@ def quote_message(reservation: dict) -> str:
     return "\n\n".join([
         guest.guest_copy(locale)["quote_ready"],
         guest.price_text(reservation["monetary_snapshot"], reservation["intake"], locale),
-        guest.transport_text(reservation["intake"], locale),
+        guest.transport_text(reservation["intake"], locale, reservation["monetary_snapshot"]),
     ])

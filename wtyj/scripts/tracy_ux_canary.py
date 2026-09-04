@@ -46,7 +46,7 @@ def main():
             assert '*Here is what I have*' not in reply['text'], reply
             assert reservations.latest_for_conversation(phone) is None
         if i==2:
-            assert 'USD 450.00' in reply['text'] and 'pickup excluded' in reply['text'], reply
+            assert 'USD 525.00' in reply['text'] and 'USD 75.00' in reply['text'], reply
         if i<4:assert reply.get('media') is None
         visible=reply['text'].split('https://')[0]
         transcript.append({'guest':text,'tracy':visible})
@@ -54,7 +54,8 @@ def main():
     item=reservations.latest_for_conversation(phone)
     assert item['state']=='demo_payment_pending'
     assert item['intake']['pickup_location']=='Piscadera Bay Resort'
-    assert item['monetary_snapshot']['total']==450
+    assert item['monetary_snapshot']['total']==525
+    assert item['monetary_snapshot']['pickup_amount']==75
     import time
     expires=int(time.time())+3600;signature=payment.sign_payment(item['public_id'],expires,os.environ['MERMAID_DEMO_SIGNING_SECRET'])
     with patch.object(payment,'send_reply',return_value=True) as sender, patch.object(payment.icp_overrides,'fetch_overrides_fresh',return_value={}), patch.object(payment.icp_overrides,'whatsapp_inbox_state',return_value=True), patch.object(payment.icp_overrides,'auto_reply_state',return_value=True):

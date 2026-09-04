@@ -9,9 +9,15 @@ def guest_copy(locale):
     return copies.get(locale, copies["en"])
 
 
-def transport_text(intake, locale):
+def transport_text(intake, locale, money=None):
     copy = guest_copy(locale)
     if intake.get("pickup_preference") == "pickup_requested":
+        money = intake_money(intake) if money is None else money
+        if money.get("pickup_amount") is not None:
+            return copy["pickup_priced"].format(
+                location=intake.get("pickup_location") or copy["hotel"],
+                currency=money["currency"], amount=f"{money['pickup_amount']:,.2f}",
+            )
         return copy["pickup_pending"].format(location=intake.get("pickup_location") or copy["hotel"])
     service = mermaid_catalog.get_catalog()["service"]
     return copy["pier_arrival"].format(place=service["meeting_point"], time=service["arrival_time"])
@@ -19,7 +25,9 @@ def transport_text(intake, locale):
 
 def price_text(money, intake, locale):
     copy = guest_copy(locale)
-    label = copy["trip_only"] if intake.get("pickup_preference") == "pickup_requested" else copy["trip_total"]
+    label = copy["trip_total"]
+    if intake.get("pickup_preference") == "pickup_requested":
+        label = copy["pickup_total"] if money.get("pickup_amount") is not None else copy["trip_only"]
     return f"{label}: {money['currency']} {int(money['total']):,.2f}"
 
 

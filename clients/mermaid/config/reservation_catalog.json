@@ -1,5 +1,5 @@
 {
-  "version": "mermaid-demo-v1-2026-09-03",
+  "version": "mermaid-demo-v2-2026-09-03",
   "tenant_slug": "mermaid",
   "service": {
     "key": "klein_curacao_day_trip",
@@ -38,7 +38,10 @@
       }
     },
     "default_currency": "USD",
-    "pickup_price": null
+    "pickup_price": 75,
+    "pickup_currency": "USD",
+    "pickup_basis": "per_booking",
+    "pickup_coverage": "island_wide"
   },
   "included": [
     "Breakfast",
@@ -51,7 +54,7 @@
   ],
   "extras": [
     "Beer and wine are available at an additional charge",
-    "Optional pickup and return can be requested; demo pricing is not included"
+    "Optional pickup: simulated USD 75 per booking, anywhere on Curaçao. Included in the quote and demo payment when requested. Collection time still requires confirmation."
   ],
   "bring": [
     "Towel",
@@ -85,7 +88,10 @@
       "island_departure": "Departure from the island: {time}.",
       "adults_one": "{count} adult fare",
       "children_one": "{count} child (4-12)",
-      "infants_one": "{count} little one (0-3)"
+      "infants_one": "{count} little one (0-3)",
+      "pickup_priced": "Pickup from {location}: {currency} {amount} per booking, anywhere on Curaçao, included in this total. Collection time still needs confirmation.",
+      "pickup_total": "Total incl. pickup",
+      "pickup_line": "Island-wide pickup"
     },
     "nl": {
       "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
@@ -101,7 +107,10 @@
       "booking_complete": "Je demo-boeking bij Mermaid is rond. Je betalingsbewijs is bijgevoegd.",
       "paid": "Demo betaald",
       "pickup_payment_note": "De transfer is nog niet bevestigd; deze betaling is alleen voor de trip.",
-      "island_departure": "Vertrek van het eiland: {time}."
+      "island_departure": "Vertrek van het eiland: {time}.",
+      "pickup_priced": "Transfer vanaf {location}: {currency} {amount} per boeking, overal op Curaçao, inbegrepen in dit totaal. De ophaaltijd moet nog worden bevestigd.",
+      "pickup_total": "Totaal incl. transfer",
+      "pickup_line": "Transfer op heel Curaçao"
     },
     "de": {
       "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
@@ -117,7 +126,10 @@
       "booking_complete": "Ihre Demo-Buchung bei Mermaid ist abgeschlossen. Ihr Zahlungsbeleg ist angehängt.",
       "paid": "Demo bezahlt",
       "pickup_payment_note": "Die Abholung ist noch offen; diese Zahlung gilt nur für den Ausflug.",
-      "island_departure": "Abfahrt von der Insel: {time}."
+      "island_departure": "Abfahrt von der Insel: {time}.",
+      "pickup_priced": "Abholung von {location}: {currency} {amount} pro Buchung, überall auf Curaçao, in diesem Gesamtbetrag enthalten. Die Abholzeit muss noch bestätigt werden.",
+      "pickup_total": "Gesamt inkl. Abholung",
+      "pickup_line": "Inselweite Abholung"
     },
     "es": {
       "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
@@ -133,7 +145,10 @@
       "booking_complete": "Tu reserva demo con Mermaid está lista. Tu recibo está adjunto.",
       "paid": "Demo pagado",
       "pickup_payment_note": "La recogida sigue pendiente; este pago cubre solo el paseo.",
-      "island_departure": "Salida de la isla: {time}."
+      "island_departure": "Salida de la isla: {time}.",
+      "pickup_priced": "Recogida en {location}: {currency} {amount} por reserva, en cualquier lugar de Curaçao, incluida en este total. Falta confirmar la hora de recogida.",
+      "pickup_total": "Total con recogida",
+      "pickup_line": "Recogida en toda la isla"
     },
     "pap": {
       "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di trip.",
@@ -149,7 +164,10 @@
       "booking_complete": "Bo reservashon demo ku Mermaid ta kla. Bo resibu ta adjuntá.",
       "paid": "Demo pagá",
       "pickup_payment_note": "Pickup ta pendiente ainda; e pago aki ta kubri solamente e trip.",
-      "island_departure": "Salida for di e isla: {time}."
+      "island_departure": "Salida for di e isla: {time}.",
+      "pickup_priced": "Pickup na {location}: {currency} {amount} pa reservashon, na kualke lugá na Kòrsou, inkluí den e total aki. Ora di pickup mester wordu konfirmá ainda.",
+      "pickup_total": "Total ku pickup",
+      "pickup_line": "Pickup rònt Kòrsou"
     },
     "pt": {
       "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
@@ -165,7 +183,10 @@
       "booking_complete": "Sua reserva demo com a Mermaid está pronta. Seu recibo está anexado.",
       "paid": "Demo pago",
       "pickup_payment_note": "O traslado continua pendente; este pagamento cobre apenas o passeio.",
-      "island_departure": "Saída da ilha: {time}."
+      "island_departure": "Saída da ilha: {time}.",
+      "pickup_priced": "Traslado de {location}: {currency} {amount} por reserva, em qualquer lugar de Curaçao, incluído neste total. O horário da coleta ainda precisa de confirmação.",
+      "pickup_total": "Total com traslado",
+      "pickup_line": "Traslado em toda a ilha"
     }
   }
 }

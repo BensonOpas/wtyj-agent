@@ -162,11 +162,22 @@ def _money_snapshot(intake: dict, catalog: dict) -> dict:
             "key": key, "label": label, "quantity": quantity,
             "unit_amount": unit, "line_total": line_total,
         })
+    pickup_amount = None
+    if intake.get("pickup_preference") == "pickup_requested":
+        pickup_amount = catalog["pricing"].get("pickup_price")
+        if pickup_amount is not None:
+            if currency != catalog["pricing"]["pickup_currency"]:
+                raise MermaidReservationError("pickup is unavailable in this currency; no conversion rate configured")
+            items.append({
+                "key": "pickup", "label": "Pickup", "quantity": 1,
+                "unit_amount": pickup_amount, "line_total": pickup_amount,
+            })
+            total += pickup_amount
     return {
         "currency": currency,
         "items": items,
         "total": total,
-        "pickup_amount": None,
+        "pickup_amount": pickup_amount,
         "catalog_version": catalog["version"],
     }
 

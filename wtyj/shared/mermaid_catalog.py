@@ -50,8 +50,14 @@ def validate_catalog(catalog: dict) -> dict:
                 raise MermaidCatalogError(f"{currency} {band} price must be a non-negative integer")
     if pricing.get("default_currency") not in _SUPPORTED_CURRENCIES:
         raise MermaidCatalogError("default currency is unsupported")
-    if pricing.get("pickup_price") is not None:
-        raise MermaidCatalogError("demo pickup price must remain unspecified")
+    pickup = pricing.get("pickup_price")
+    if pickup is not None:
+        if not isinstance(pickup, int) or isinstance(pickup, bool) or pickup < 0:
+            raise MermaidCatalogError("pickup price must be a non-negative integer")
+        if pricing.get("pickup_currency") not in _SUPPORTED_CURRENCIES:
+            raise MermaidCatalogError("pickup currency is unsupported")
+        if pricing.get("pickup_basis") != "per_booking" or pricing.get("pickup_coverage") != "island_wide":
+            raise MermaidCatalogError("pickup must be a flat island-wide charge per booking")
 
     service = catalog.get("service") or {}
     if set(service.get("operating_weekdays") or []) != _REQUIRED_WEEKDAYS:

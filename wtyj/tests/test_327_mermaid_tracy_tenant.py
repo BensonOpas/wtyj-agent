@@ -115,7 +115,7 @@ def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     assert cfg["features"]["booking_flow"] is False
     assert cfg["workflow"] == {
         "type": "mermaid_reservation_demo",
-        "catalog_version": "mermaid-demo-v1-2026-09-03",
+        "catalog_version": "mermaid-demo-v2-2026-09-03",
         "availability_source": "demo_assumed",
     }
     assert cfg["channel_account_allowlist"] == {
@@ -240,7 +240,7 @@ def test_mermaid_reservation_catalog_is_complete_versioned_and_demo_safe(
     }
     assert catalog["service"]["arrival_time"] == "06:45"
     assert catalog["service"]["island_departure_time"] == "15:20"
-    assert catalog["pricing"]["pickup_price"] is None
+    assert catalog["pricing"]["pickup_price"] == 75
     assert "not verified" in catalog["policies"]["insurance"].lower()
     assert mermaid_catalog.demo_features() == {
         "intake": True,

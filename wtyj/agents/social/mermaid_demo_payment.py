@@ -63,7 +63,7 @@ def checkout_page(reservation_id: str, expires: int, signature: str) -> Response
         f'{html.escape(intake["trip_date"])} · {intake["adults"]} adults · '
         f'{intake["children"]} children 4-12 · {intake["infants"]} children 0-3<br>'
         f'<b>{html.escape(guest.price_text(money, intake, reservation["language"]))}</b><br>'
-        f'{html.escape(guest.transport_text(intake, reservation["language"]))}</div>'
+        f'{html.escape(guest.transport_text(intake, reservation["language"], money))}</div>'
         '<p>This page demonstrates payment completion only. Clicking success moves no money.</p>'
     )
     actions = (
@@ -82,7 +82,7 @@ def success_message(reservation: dict, payment: dict) -> str:
         copy["booking_complete"],
         f"{reservation['booking_code']} · {guest.guest_date(intake['trip_date'], locale)}\n{guest.party_text(intake, locale)}",
         f"{copy['paid']}: {payment['currency']} {int(payment['amount']):,.2f}",
-        guest.transport_text(intake, locale),
+        guest.transport_text(intake, locale, reservation["monetary_snapshot"]),
     ])
 
 

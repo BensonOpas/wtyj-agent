@@ -37,7 +37,7 @@ def test_confirmation_creates_immutable_demo_assumed_snapshot():
     assert reservation["booking_code"].startswith("MER-DEMO-")
     assert reservation["monetary_snapshot"]["total"] == 375
     assert reservation["monetary_snapshot"]["currency"] == "USD"
-    assert reservation["catalog_version"] == "mermaid-demo-v1-2026-09-03"
+    assert reservation["catalog_version"] == "mermaid-demo-v2-2026-09-03"
     assert "available" not in reservation["intake"]
     event = store.events(reservation["public_id"])[0]
     assert event["to_state"] == "demo_availability_approved"
