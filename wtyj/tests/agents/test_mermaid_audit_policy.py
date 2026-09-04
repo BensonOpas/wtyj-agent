@@ -241,34 +241,62 @@ def test_plain_review_acknowledgement_uses_queue_records_without_model_status_se
 
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
 @pytest.mark.parametrize('action', ['acknowledge', 'question', 'details'])
-def test_review_faq_uses_dedicated_body_despite_missing_excerpt_or_generic_label(monkeypatch, locale, action):
+@pytest.mark.parametrize('requires_human', [False, True])
+def test_review_faq_uses_dedicated_body_despite_missing_excerpt_or_generic_label(monkeypatch, locale, action, requires_human):
     intake = _queued_accessibility_review(locale)
     model(monkeypatch, locale, mermaid_action=action,
           reply=_SAFE_FAQ[locale] + ' ' + _FALSE_REVIEW_PROSE[locale],
           other_question_reply=_SAFE_FAQ[locale], status_request='none',
-          guest_question_excerpt='', has_open_question=True)
+          guest_question_excerpt='', has_open_question=True, requires_human=requires_human)
     result = workflow.process_model_turn(
         {'from': 'guest', 'message_id': 'review-faq', 'text': 'Question?'}, None)
     assert result.text == _SAFE_FAQ[locale] + '\n\n' + policy.copy('review_queued', locale)
-    assert result.action is None
+    assert result.action == ('human_takeover' if requires_human else None)
     _assert_review_preserved(intake)
 
 
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
 @pytest.mark.parametrize('other', [None, '', '   '])
-def test_missing_review_faq_never_falls_back_to_raw_active_staff_prose(monkeypatch, locale, other):
+@pytest.mark.parametrize('requires_human', [False, True])
+def test_missing_review_faq_never_falls_back_to_raw_active_staff_prose(monkeypatch, locale, other, requires_human):
     intake = _queued_accessibility_review(locale)
     additions = {} if other is None else {'other_question_reply': other}
     model(monkeypatch, locale, mermaid_action='question',
           reply=_SAFE_FAQ[locale] + ' ' + _FALSE_REVIEW_PROSE[locale],
-          status_request='none', guest_question_excerpt='', has_open_question=False,
+          status_request='none', guest_question_excerpt='', has_open_question=False, requires_human=requires_human,
           **additions)
     result = workflow.process_model_turn(
         {'from': 'guest', 'message_id': 'missing-faq', 'text': 'Question?'}, None)
     # This is truthful status, not a successful answer to the missing FAQ.
     assert result.text == policy.copy('review_queued', locale)
-    assert result.action is None
+    assert result.action == ('human_takeover' if requires_human else None)
     _assert_review_preserved(intake)
+
+
+@pytest.mark.parametrize('boundary', ['security', 'first_review', 'request_human', 'cancel', 'confirm_summary', 'new_booking', 'pickup_review'])
+def test_repeated_review_faq_cannot_override_primary_review_reason(monkeypatch, boundary):
+    if boundary != 'first_review':
+        intake = _queued_accessibility_review('en')
+        if boundary == 'pickup_review':
+            intake.update(adults=50, pickup_preference='pickup_requested', pickup_location='Test Hotel')
+            state_registry.wa_save_booking_state('guest', {'mermaid_intake': intake}, {})
+    changes = {'requires_human': True, 'mermaid_action': 'question'}
+    if boundary == 'security':
+        changes['security_event'] = 'blocked_override'
+    elif boundary in {'request_human', 'cancel', 'confirm_summary', 'new_booking'}:
+        changes['mermaid_action'] = boundary
+    model(monkeypatch, reply='UNVERIFIED RAW STAFF CLAIM', other_question_reply='SUPPRESSED FAQ', **changes)
+    result = workflow.process_model_turn(
+        {'from': 'guest', 'message_id': 'protected-review', 'text': 'question'}, None)
+    assert 'SUPPRESSED FAQ' not in result.text and 'UNVERIFIED' not in result.text
+    if boundary == 'security':
+        assert result.text == policy.copy('security_blocked', 'en')
+    else:
+        assert result.action == 'human_takeover' and result.text == policy.copy('review_queued', 'en')
+    assert store.latest_for_conversation('guest') is None
+    assert state_registry.get_ai_muted('guest') is False
+    with state_registry._get_conn() as db:
+        assert db.execute('SELECT COUNT(*) FROM pending_notifications').fetchone()[0] == 1
 
 
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)

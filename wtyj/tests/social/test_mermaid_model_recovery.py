@@ -440,6 +440,68 @@ def _sdk_result(monkeypatch, **updates):
     return client, structured
 
 
+def _captured_review_faq_cases():
+    import json
+    from pathlib import Path
+
+    return json.loads((Path(__file__).parents[1] / 'fixtures/mermaid_review_faq_sdk_20260904.json').read_text())
+
+
+@pytest.mark.parametrize('case', _captured_review_faq_cases(), ids=lambda case: case['id'])
+def test_captured_sdk_repeated_review_keeps_faq_once(review_runtime, monkeypatch, case):
+    from agents.social import mermaid_response_policy as policy, mermaid_reservation_store as store
+
+    _model, send, _controls = review_runtime
+    fields = case['before_fields']
+    state_registry.wa_save_booking_state(CONVERSATION, {'mermaid_intake': fields}, {})
+    state_registry.create_pending_notification('escalation', 'whatsapp', CONVERSATION, 'Test Guest', 'Review', 'Saved', mode='soft')
+    client, _ = _sdk_result(monkeypatch, **case['tool_input'])
+    _flush('captured-review-faq', case['guest_text'])
+    locale = case['tool_input']['language']
+    if case['tool_input']['status_request'] == 'wildlife_guarantee':
+        expected = policy.wildlife_guarantee_reply(locale, {'review': 'queued'})
+    else:
+        expected = case['tool_input']['other_question_reply'] + '\n\n' + policy.copy('review_queued', locale)
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == expected
+    assert _rows('SELECT notification_type,mode FROM pending_notifications') == [('escalation', 'soft')]
+    assert not state_registry.get_ai_muted(CONVERSATION)
+    assert state_registry.wa_get_booking_state(CONVERSATION)['fields']['mermaid_intake'] == fields
+    assert store.latest_for_conversation(CONVERSATION) is None
+    assert _rows('SELECT status FROM inbound_processing_events') == [('replied',)]
+    duplicate = workflow.handle_demo_message(
+        {'from': CONVERSATION, 'message_id': 'captured-review-faq', 'text': case['guest_text']},
+        include_media=True, use_model=True)
+    assert duplicate['duplicate'] and duplicate['text'] == expected
+    assert client.messages.create.call_count == send.call_count == 1
+
+
+@pytest.mark.parametrize('control', ['operator', 'tenant_pause'])
+def test_repeated_review_faq_keeps_final_send_guards(review_runtime, monkeypatch, control):
+    _model, send, controls = review_runtime
+    state_registry.create_pending_notification('escalation', 'whatsapp', CONVERSATION, 'Test Guest', 'Review', 'Saved', mode='soft')
+    client, _ = _sdk_result(monkeypatch, requires_human=True, reply='Acknowledged.',
+                            other_question_reply='Breakfast is included.')
+    sdk_response = client.messages.create.return_value
+
+    def change_control(**_kwargs):
+        if control == 'operator':
+            state_registry.create_pending_notification('escalation', 'whatsapp', CONVERSATION, 'Test Guest', 'Operator', 'Handling', mode='hard')
+            state_registry.set_ai_muted(CONVERSATION, True)
+        else:
+            controls['feature_toggles']['ai_auto_reply']['value'] = False
+        return sdk_response
+
+    client.messages.create.side_effect = change_control
+    _flush('review-control-race', 'trip question')
+    assert client.messages.create.call_count == 1 and send.call_count == 0
+    if control == 'operator':
+        assert state_registry.get_ai_muted(CONVERSATION)
+        assert state_registry.get_active_escalation_mode(CONVERSATION) == 'hard'
+    else:
+        assert _rows('SELECT status,reason FROM inbound_processing_events') == [('paused', 'tenant_agent_paused')]
+
+
 @pytest.mark.parametrize("locale", HUMAN_REQUESTS)
 @pytest.mark.parametrize("selector", ["wildlife_guarantee", "handover"])
 def test_sdk_empty_critical_reply_renders_recorded_review_across_locales(review_runtime, monkeypatch, locale, selector):

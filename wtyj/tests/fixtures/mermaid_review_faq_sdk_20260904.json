@@ -1,0 +1,248 @@
+[
+  {
+    "id": "BASE-043-T6",
+    "original_jsonl_line_sha256": "88503f480c82242e6170a17029f586e509bb16dfce15b5fb80044d320dcf9c63",
+    "guest_text": "Is breakfast included? What time do we need to arrive?",
+    "before_fields": {
+      "language": "en",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550043",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and is asking about safe boarding"
+    },
+    "tool_input": {
+      "language": "en",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Your review is still queued with the team.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "Is breakfast included? What time do we need to arrive?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Yes, breakfast is included along with a BBQ lunch, soft drinks and juices. Beer and wine cost extra.\n\nCheck-in at Fishermen's Pier is at 06:45."
+    }
+  },
+  {
+    "id": "BASE-044-T6",
+    "original_jsonl_line_sha256": "5fef83fe8af06f08a3f0922542193f0c114a45da05f6b5772795f8cdadf6ca3e",
+    "guest_text": "Is ontbijt inbegrepen? Hoe laat moeten we aanwezig zijn?",
+    "before_fields": {
+      "language": "nl",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550044",
+      "pickup_preference": "pier"
+    },
+    "tool_input": {
+      "language": "nl",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Je verzoek staat klaar voor het team van Mermaid.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "Is ontbijt inbegrepen? Hoe laat moeten we aanwezig zijn?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Ja, ontbijt is inbegrepen. Ook een BBQ-lunch, frisdranken en sappen zijn bij de prijs. Bier en wijn kosten extra.\n\nCheck-in is om 06:45 bij de Fishermen's Pier in Curaçao."
+    }
+  },
+  {
+    "id": "BASE-045-T4",
+    "original_jsonl_line_sha256": "90a905189f3b4bbf9228358bcb215e1f579b87a66b0dcc80e04e1c90ad139bc5",
+    "guest_text": "Ja, aber nur wenn Sie garantieren, dass wir Schildkröten sehen.",
+    "before_fields": {
+      "language": "de",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550045",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and asks for a safety guarantee for boarding."
+    },
+    "tool_input": {
+      "language": "de",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Schildkröten-Sichtungen sind leider nie garantierbar – die Tiere leben frei in der Natur.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "nur wenn Sie garantieren, dass wir Schildkröten sehen",
+      "calendar_request": "none",
+      "status_request": "wildlife_guarantee",
+      "security_event": "none",
+      "other_question_reply": ""
+    }
+  },
+  {
+    "id": "BASE-045-T6",
+    "original_jsonl_line_sha256": "90a905189f3b4bbf9228358bcb215e1f579b87a66b0dcc80e04e1c90ad139bc5",
+    "guest_text": "Ist Frühstück dabei? Wann müssen wir da sein?",
+    "before_fields": {
+      "language": "de",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550045",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and asks for a safety guarantee for boarding."
+    },
+    "tool_input": {
+      "language": "de",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Ihre Anfrage wartet noch auf Mermaids Team.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "Ist Frühstück dabei? Wann müssen wir da sein?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Ja, Frühstück ist im Ausflug enthalten, außerdem ein BBQ-Mittagessen, Softdrinks und Säfte. Bier und Wein kosten extra.\n\nAm Fishermen's Pier seid ihr um 06:45 Uhr willkommen (Ankunft/Check-in)."
+    }
+  },
+  {
+    "id": "BASE-046-T6",
+    "original_jsonl_line_sha256": "1f78c94b166c17551d843a813ae45cc10f39d9d981d911854d628eb1794999d6",
+    "guest_text": "¿Está incluido el desayuno? ¿A qué hora tenemos que llegar?",
+    "before_fields": {
+      "language": "es",
+      "phase": "human_takeover",
+      "customer_name": "Nadia Croes",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "contact_phone": "+12025550046",
+      "pickup_preference": "pier"
+    },
+    "tool_input": {
+      "language": "es",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Tu solicitud sigue pendiente de revisión por el equipo.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "¿Está incluido el desayuno? ¿A qué hora tenemos que llegar?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Sí, el desayuno está incluido, junto con el almuerzo BBQ, bebidas sin alcohol y jugos. La llegada/check-in en el muelle es a las 06:45."
+    }
+  },
+  {
+    "id": "BASE-047-T4",
+    "original_jsonl_line_sha256": "305bbce1eb83a66cdd1884fb91cf7e6f50558bcffa64b2f65de274c644fc1e5d",
+    "guest_text": "Si, pero solamente si boso por garantisá ku nos ta mira turtuga.",
+    "before_fields": {
+      "language": "pap",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550047",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and is asking whether boarding the boat is safe/accessible."
+    },
+    "tool_input": {
+      "language": "pap",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "E tim ta warda pa kontestá bo pregunta tokante aksesibilidad.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "solamente si boso por garantisá ku nos ta mira turtuga",
+      "calendar_request": "none",
+      "status_request": "wildlife_guarantee",
+      "security_event": "none",
+      "other_question_reply": "Turtuga i otra fauna salvahe ta posibel di mira na Klein Curaçao, pero nunka nos por garantisá ku bo ta mira nan. E naturalesa ta desidí eso."
+    }
+  },
+  {
+    "id": "BASE-047-T6",
+    "original_jsonl_line_sha256": "305bbce1eb83a66cdd1884fb91cf7e6f50558bcffa64b2f65de274c644fc1e5d",
+    "guest_text": "Desayuno ta inkluí? Ki ora nos mester yega?",
+    "before_fields": {
+      "language": "pap",
+      "phase": "human_takeover",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "customer_name": "Nadia Croes",
+      "contact_phone": "+12025550047",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and is asking whether boarding the boat is safe/accessible."
+    },
+    "tool_input": {
+      "language": "pap",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Bo petishon ta warda pa e tim di Mermaid revisá.",
+      "confidence": "high",
+      "requires_human": false,
+      "has_open_question": true,
+      "guest_question_excerpt": "Desayuno ta inkluí? Ki ora nos mester yega?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Desayuno ta inkluí den e biahe, huntu ku almuerzo BBQ, refresco i jugo. Bo mester yega na Fishermen's Pier pa 06:45."
+    }
+  },
+  {
+    "id": "BASE-048-T6",
+    "original_jsonl_line_sha256": "9378659282ce35ce8a936e95f357ddcd8760d817a1f53a491e6900a4407510b4",
+    "guest_text": "O café da manhã está incluído? A que horas precisamos chegar?",
+    "before_fields": {
+      "language": "pt",
+      "phase": "human_takeover",
+      "customer_name": "Nadia Croes",
+      "trip_date": "2026-09-12",
+      "adults": 2,
+      "children": 1,
+      "infants": 0,
+      "contact_phone": "+12025550048",
+      "pickup_preference": "pier",
+      "accessibility_notes": "Guest uses a wheelchair and is asking about safe boarding."
+    },
+    "tool_input": {
+      "language": "pt",
+      "mermaid_action": "question",
+      "fields": {},
+      "reply": "Aguardando análise da equipe da Mermaid sobre o embarque.",
+      "confidence": "high",
+      "requires_human": true,
+      "has_open_question": true,
+      "guest_question_excerpt": "O café da manhã está incluído? A que horas precisamos chegar?",
+      "calendar_request": "none",
+      "status_request": "none",
+      "security_event": "none",
+      "other_question_reply": "Sim, o café da manhã está incluído, assim como almoço BBQ, refrigerantes e sucos. Cervejas e vinhos têm custo adicional.\n\nO check-in/chegada ao pier é às 06:45. O endereço é Fishermen's Pier, Curaçao."
+    }
+  }
+]

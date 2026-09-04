@@ -676,7 +676,11 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         response = response_policy.copy('security_blocked', locale)
         if result_action == 'human_takeover':
             response += '\n\n' + response_policy.copy('review_queued', locale)
-    elif result_action == 'human_takeover':
+    elif result_action == 'human_takeover' and not (
+        review_pending and action in {'question', 'details', 'acknowledge'} and not pickup_review
+    ):
+        # A repeated review flag keeps its freeze/dedup action, while an
+        # ordinary follow-up continues to the protected fact/FAQ renderers.
         response = response_policy.copy('review_queued', locale)
     elif result_action == 'cancel':
         # The handler commits cancellation (or replaces this with paid-review
