@@ -175,6 +175,35 @@ YES = {
     "pt": {"sim", "sim correto", "correto", "confirmar", "confirmado"},
 }
 
+NATURAL_APPROVAL_PREFIXES = {
+    "en": ("yes", "yes it looks good", "yes looks good", "looks good", "all good", "go ahead"),
+    "nl": ("ja", "ja het klopt", "ja klopt", "alles klopt", "helemaal goed", "ga verder"),
+    "de": ("ja", "ja das passt", "alles passt", "alles stimmt", "alles gut", "weiter"),
+    "es": ("sí", "si", "sí está bien", "si esta bien", "todo está bien", "todo esta bien", "adelante"),
+    "pap": ("si", "si ta bon", "tur kos ta bon", "tur kos ta korekto", "por sigui"),
+    "pt": ("sim", "sim está certo", "sim esta certo", "está tudo certo", "esta tudo certo", "pode continuar"),
+}
+
+APPROVAL_BLOCKERS = {
+    "en": ("not correct", "not right", "wrong", "change", "different", "instead", "unless"),
+    "nl": ("niet correct", "niet goed", "fout", "wijzig", "anders", "tenzij"),
+    "de": ("nicht korrekt", "nicht richtig", "falsch", "ändern", "anders", "außer wenn"),
+    "es": ("no es correcto", "no está bien", "incorrecto", "cambiar", "diferente", "a menos que"),
+    "pap": ("no ta korekto", "no ta bon", "robes", "kambia", "otro", "a menos ku"),
+    "pt": ("não está certo", "nao esta certo", "errado", "mudar", "diferente", "a menos que"),
+}
+
+
+def _has_natural_approval(text: str, locale: str) -> bool:
+    """Recognize a clear approval lead before a procedural payment question."""
+    normalized = " ".join(re.sub(r"[^\w\s]", " ", str(text or "").casefold()).split())
+    if not normalized or any(blocker in normalized for blocker in APPROVAL_BLOCKERS[locale]):
+        return False
+    return any(
+        normalized == phrase or normalized.startswith(phrase + " ")
+        for phrase in NATURAL_APPROVAL_PREFIXES[locale]
+    )
+
 
 @dataclass(frozen=True)
 class IntakeResult:
@@ -602,6 +631,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         has_question = True
     result_action = None
     canonical_response = False
+    natural_payment_approval = (
+        old_phase == "awaiting_summary_confirmation"
+        and not changes
+        and not invalid_contact
+        and understood.get("status_request") == "payment"
+        and action in {"confirm_summary", "payment_status", "question", "acknowledge"}
+        and _has_natural_approval(str(message.get("text") or ""), locale)
+    )
     pickup_review = (
         security_event not in {"blocked_override", "actionable_incident"}
         and (not reservation or action == "new_booking")
@@ -667,6 +704,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             fields["phase"] = "collecting"
             if not response or action == "confirm_summary":
                 response = question
+        elif natural_payment_approval:
+            # A guest can approve the displayed details and naturally ask how
+            # to pay in the same sentence. The quote and checkout answer that
+            # procedural question, so do not force a second artificial YES.
+            fields["phase"] = "summary_confirmed"
+            response = COPY[locale]["confirmed"]
+            result_action = "summary_confirmed"
+            canonical_response = True
         elif has_question:
             # A mixed detail/question turn must keep its answer. Changed facts
             # require a fresh summary before any later approval can book them.
