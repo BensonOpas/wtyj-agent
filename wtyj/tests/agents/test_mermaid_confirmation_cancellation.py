@@ -99,6 +99,50 @@ def test_guest_question_even_in_confirmation_action_prevents_booking(monkeypatch
 
 
 @pytest.mark.parametrize("locale", workflow.SUPPORTED_LOCALES)
+def test_incidental_pickup_selector_preserves_canonical_summary_and_one_confirmation(monkeypatch, locale):
+    facts = {key: value for key, value in intake(locale).items() if key not in {"phase", "language"}}
+    facts.update(adults=2, children=1, infants=0)
+    model = Mock(return_value=understood("details", language=locale, fields=facts,
+        status_request="pickup_pricing", reply="Unrequested model pickup prose"))
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    summary = workflow.handle_demo_message({"from":"guest", "message_id":"complete-pickup",
+        "text":"These are all my details. Please collect us at our hotel."}, True, use_model=True)
+    assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "awaiting_summary_confirmation"
+    assert "450.00" in summary["text"] and "Mila Tromp" in summary["text"]
+    assert "Unrequested model pickup prose" not in summary["text"]
+    assert store.latest_for_conversation("guest") is None
+    model.return_value = understood("question", language=locale, has_open_question=True,
+        guest_question_excerpt="Breakfast?", reply="Breakfast is included.")
+    faq = workflow.handle_demo_message({"from":"guest", "message_id":"faq", "text":"Breakfast?"}, True, use_model=True)
+    assert faq["text"] == "Breakfast is included."
+    assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "awaiting_summary_confirmation"
+    # A volunteered pricing selector is not another guest uncertainty on YES.
+    model.return_value = understood("confirm_summary", language=locale, status_request="pickup_pricing")
+    message = {"from":"guest", "message_id":"yes", "text":"Yes, all details are correct."}
+    quote = workflow.handle_demo_message(message, True, use_model=True)
+    repeated = workflow.handle_demo_message(message, True, use_model=True)
+    assert quote["media"] and quote["media"] == repeated["media"]
+    assert len(store.list_reservations()) == 1
+    reservation = store.latest_for_conversation("guest")
+    assert reservation["monetary_snapshot"]["total"] == 450
+    assert reservation["monetary_snapshot"]["pickup_amount"] == 75
+    assert reservation["state"] == "demo_payment_pending"
+    assert model.call_count == 3
+
+
+def test_real_pickup_question_with_complete_details_still_precedes_summary(monkeypatch):
+    facts = {key:value for key,value in intake().items() if key not in {"phase", "language"}}
+    model = Mock(return_value=understood("details", fields=facts, status_request="pickup_pricing",
+        guest_question_excerpt="How much is pickup?", has_open_question=True))
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    response = workflow.handle_demo_message({"from":"guest", "message_id":"mixed-pickup",
+        "text":"Please collect us. How much is pickup?"}, True, use_model=True)
+    assert "125.00" in response["text"]
+    assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "collecting"
+    assert store.latest_for_conversation("guest") is None
+
+
+@pytest.mark.parametrize("locale", workflow.SUPPORTED_LOCALES)
 def test_unpaid_cancel_overrides_generic_model_review_and_revokes_all_links(monkeypatch, locale):
     reservation = pending(locale)
     tokens = [checkout.build_payment_url("https://demo.example", reservation["public_id"], "test-secret").rsplit("/", 1)[1] for _ in range(2)]

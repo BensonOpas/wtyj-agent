@@ -582,11 +582,12 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         fields.pop("pickup_location", None)
     response = str(understood.get("reply") or "").strip()
     has_question = _has_guest_question(understood, str(message.get("text") or ""))
-    has_question = has_question or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") != "none" or security_event in {"blocked_override", "actionable_incident"}
+    has_question = has_question or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") not in {"none", "pickup_pricing"} or security_event in {"blocked_override", "actionable_incident"}
     if invalid_contact and not reservation and not review_pending:
         response = guest.guest_copy(locale)["contact_phone_retry"]
         has_question = True
     result_action = None
+    canonical_response = False
     pickup_review = (
         security_event not in {"blocked_override", "actionable_incident"}
         and (not reservation or action == "new_booking")
@@ -658,9 +659,11 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             fields["phase"] = "summary_confirmed"
             response = COPY[locale]["confirmed"]
             result_action = "summary_confirmed"
+            canonical_response = True
         else:
             fields["phase"] = "awaiting_summary_confirmation"
             response = _summary(fields, locale)
+            canonical_response = True
     # These critical facts come from records/catalog, never generated prose.
     if security_event in {"blocked_override", "actionable_incident"}:
         # A refused instruction cannot change a draft, validate a previously
@@ -680,6 +683,10 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     elif result_action == 'cancel':
         # The handler commits cancellation (or replaces this with paid-review
         # wording). An optional informational selector cannot conceal that result.
+        pass
+    elif canonical_response:
+        # Volunteered pickup facts are not guest uncertainty and must not hide
+        # the summary the guest needs to approve, or its one approval result.
         pass
     elif review_pending and action == 'acknowledge' and not has_question:
         # A plain YES/acknowledgment is not evidence that queued work started.
