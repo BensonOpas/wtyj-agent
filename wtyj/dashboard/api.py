@@ -207,7 +207,7 @@ def _whatsapp_connection_from_overrides(envelope: dict) -> tuple[bool, str]:
 
 
 @router.get("/onboarding/status", dependencies=[Depends(_check_auth)])
-async def get_onboarding_status():
+def get_onboarding_status():
     """Tenant onboarding state for the first-run dashboard banner.
 
     No secrets are returned. The WhatsApp URL contains only the tenant's
@@ -256,7 +256,7 @@ async def get_onboarding_status():
 
 
 @router.get("/icp-overrides", dependencies=[Depends(_check_auth)])
-async def get_icp_overrides():
+def get_icp_overrides():
     """J3-N2-01: return Nr 3 ICP override envelope for this tenant.
     
     Returns the same shape as Nr 3's get_effective_tenant_state but

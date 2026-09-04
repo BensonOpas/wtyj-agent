@@ -72,8 +72,13 @@ def test_verified_status_recovers_after_unavailable_read(monkeypatch, active):
     assert verified.json()["available"] is True
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT"])
-def test_control_bridge_wait_does_not_block_other_http(monkeypatch, method):
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/agent/status"),
+    ("PUT", "/agent/status"),
+    ("GET", "/icp-overrides"),
+    ("GET", "/onboarding/status"),
+])
+def test_control_bridge_wait_does_not_block_other_http(monkeypatch, method, path):
     bridge_started = threading.Event()
     bridge_release = threading.Event()
 
@@ -90,7 +95,7 @@ def test_control_bridge_wait_does_not_block_other_http(monkeypatch, method):
         async with httpx.AsyncClient(transport=transport, base_url="http://tenant.test") as client:
             kwargs = {"json": {"active": True}} if method == "PUT" else {}
             control = asyncio.create_task(client.request(
-                method, "/dashboard/api/agent/status", headers=_auth(), **kwargs,
+                method, f"/dashboard/api{path}", headers=_auth(), **kwargs,
             ))
             try:
                 assert await asyncio.to_thread(bridge_started.wait, 5)
