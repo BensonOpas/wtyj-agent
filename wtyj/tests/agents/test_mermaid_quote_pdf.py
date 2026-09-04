@@ -44,7 +44,7 @@ def test_six_localized_quote_pdfs_render_required_content(locale):
     assert reader.metadata.title.startswith("Mermaid - ")
     assert mermaid_documents.LABELS[locale]["title"] in reader.metadata.title
     assert item["filename"].startswith("Mermaid - Demo Trip Quote - ")
-    assert "DEMO QUOTE - NOT A VALID TICKET" in text
+    assert mermaid_documents.DOCUMENT_NOTICES[locale]["quote_banner"] in text
     assert "Ana Çosta" in text
     assert ("Saturday 5 September 2026" if locale == "en" else "2026-09-05") in text
     assert "USD 375.00" in text
