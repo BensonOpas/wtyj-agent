@@ -1,5 +1,5 @@
 # BRIEF 342 — Authoritative Mermaid responses
-**Status:** In progress | **Files:** Mermaid understanding, response policy, calendar, workflow and tenant config | **Depends on:** 5922be0 and issue #342 | **Blocks:** multilingual release acceptance
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** Mermaid understanding, response policy, calendar, workflow and tenant config | **Depends on:** 5922be0 and issue #342 | **Blocks:** multilingual release acceptance
 
 ## Context
 The unchanged 60-case baseline recorded 47 functional passes and 32 accepted

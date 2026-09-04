@@ -1,5 +1,5 @@
 # BRIEF 342 — Authoritative pickup-question facts
-**Status:** Implemented; independent review approved | **Files:** `mermaid_understanding.py`, `mermaid_response_policy.py`, `mermaid_reservation_workflow.py`, tenant `response_policy.json`, pickup-question tests | **Depends on:** 2286d9f and issue 342 | **Blocks:** candidate factual acceptance
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** `mermaid_understanding.py`, `mermaid_response_policy.py`, `mermaid_reservation_workflow.py`, tenant `response_policy.json`, pickup-question tests | **Depends on:** 2286d9f and issue 342 | **Blocks:** candidate factual acceptance
 
 ## Context
 The isolated real-model audit's Papiamentu BASE-023 turn 3 asked how much pickup

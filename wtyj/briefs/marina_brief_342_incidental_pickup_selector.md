@@ -1,5 +1,5 @@
 # BRIEF342 — Preserve canonical confirmation with incidental pickup selectors
-**Status:** Implemented; independently reviewed | **Files:** `wtyj/agents/social/mermaid_reservation_workflow.py`, `wtyj/tests/agents/test_mermaid_confirmation_cancellation.py` | **Depends on:** 535508c | **Blocks:** final candidate verification
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** `wtyj/agents/social/mermaid_reservation_workflow.py`, `wtyj/tests/agents/test_mermaid_confirmation_cancellation.py` | **Depends on:** 535508c | **Blocks:** final candidate verification
 
 ## Context
 Preserved follow-up PARA005 turn2 supplies complete details and explicit pickup consent with no guest question. The model nevertheless emits `status_request=pickup_pricing`. At `mermaid_reservation_workflow.py:585`, any status selector is treated as a question, so the canonical summary is delayed until turn6's YES. This repeats the original extra-confirmation defect despite saved fields remaining correct.

@@ -1,5 +1,5 @@
 # BRIEF342 — Accept validated server-rendered replies
-**Status:** Implemented; independently reviewed | **Files:** Mermaid understanding, Marina adapter, model recovery, reservation workflow and existing recovery tests | **Depends on:** 178ba56 | **Blocks:** final candidate verification
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** Mermaid understanding, Marina adapter, model recovery, reservation workflow and existing recovery tests | **Depends on:** 178ba56 | **Blocks:** final candidate verification
 
 ## Context
 The preserved final synthetic run has valid structured wildlife/status and confirmation tool results with `reply: ""`. Marina rejects these as `claude_empty_reply` before Python can render the authoritative response. This produces outage fallback copy even though the model selected a route that already has server-owned output. Repeated confirmation of an existing reservation also needs a recorded status response rather than relying on optional model prose.

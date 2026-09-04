@@ -1,5 +1,5 @@
 # BRIEF342 — Separate review FAQ answers from unverified staff prose
-**Status:** Implemented, independently reviewed | **Files:** `wtyj/agents/social/mermaid_understanding.py`, `wtyj/agents/social/mermaid_reservation_workflow.py`, `wtyj/tests/agents/test_mermaid_audit_policy.py`, `wtyj/tests/social/test_mermaid_model_recovery.py`, `wtyj/tests/social/test_mermaid_soft_review.py` | **Depends on:** 178ba56 | **Blocks:** final candidate verification
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** `wtyj/agents/social/mermaid_understanding.py`, `wtyj/agents/social/mermaid_reservation_workflow.py`, `wtyj/tests/agents/test_mermaid_audit_policy.py`, `wtyj/tests/social/test_mermaid_model_recovery.py`, `wtyj/tests/social/test_mermaid_soft_review.py` | **Depends on:** 178ba56 | **Blocks:** final candidate verification
 
 ## Context
 The preserved third run has two related leaks. BASE047 T5 labels a plain YES as question, bypassing the acknowledge-only queued-status guard. BASE045 T6 answers food/check-in but adds that staff are reviewing the request even though only a soft queue entry exists. Its structured status is none and its guest-question excerpt is empty. The actual record and separate semantic review remain unchanged in `output/remediation-342-2026-09-04/review-final12-en-de.md` outside this checkout.

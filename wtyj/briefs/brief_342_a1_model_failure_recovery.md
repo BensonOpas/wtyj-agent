@@ -1,6 +1,6 @@
 # BRIEF — Mermaid model failure recovery (issue #342 A1)
 
-**Status:** Implemented; integration and release verification pending.
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain
 **Base:** `5922be02aacdaeb5ae8223807de59207339404ea`.
 **Scope:** Mermaid reservation contract, existing buffered Zernio WhatsApp worker,
 durable retry state, and isolated deterministic tests. No live state changes,

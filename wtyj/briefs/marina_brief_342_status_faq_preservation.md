@@ -1,5 +1,5 @@
 # BRIEF 342 — Preserve FAQ answers beside recorded status
-**Status:** Implemented; parent brief and output reviews approved | **Files:** `mermaid_understanding.py`, `mermaid_reservation_workflow.py`, `test_mermaid_audit_policy.py` | **Depends on:** 535508c / 78c541a and issue 342 | **Blocks:** final follow-up acceptance
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** `mermaid_understanding.py`, `mermaid_reservation_workflow.py`, `test_mermaid_audit_policy.py` | **Depends on:** 535508c / 78c541a and issue 342 | **Blocks:** final follow-up acceptance
 
 ## Context
 The isolated follow-up BASE-045 turn 6 asked in German whether breakfast is

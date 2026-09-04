@@ -2954,3 +2954,14 @@ Tests: 1136 / 0 failures (1130 + 6).
 5. **Test count: 1 for a one-line wire-up is fine.** Reviewer flagged the low count as defensible because the helper's branching/dedup/empty-skip behavior is already covered by Brief 266's 6 tests. The new test exercises the new wire site end-to-end, which is what matters. Pattern: when shipping a 1-line wire that calls an already-tested helper, 1 integration test at the new site is the right test density.
 
 Tests: 1137 / 0 failures (1136 + 1).
+
+
+---
+
+## Issue 342 — Verify the SDK boundary and response routing, not only model stubs (4 September 2026)
+
+A stubbed workflow accepted structured critical replies that the real SDK adapter discarded because reply was empty. Capture raw tool inputs before adaptation, validate the complete schema before caching, and allow blank prose only when an authoritative route can produce the response. Do not convert an invalid response in one conversation into a shared provider outage.
+
+A second failure survived focused FAQ checks because they used requires_human=false. Real outputs retained requires_human=true during an existing review; an earlier queue renderer swallowed both a correct dedicated FAQ and a wildlife selector. Preserve the escalation/freeze action while letting narrowly eligible ordinary follow-ups reach authoritative renderers. Test the actual captured SDK shapes, generic action variations, duplicate events and final send controls. Never reuse raw status prose as a fallback.
+
+Preserve failed paid attempts and distinguish numeric assertions, semantic answer completeness and native-language acceptance. A deterministic replay of the same captured inputs is useful evidence for a routing fix, but cannot be relabeled as a fresh model-quality run. Pin the runtime inventory independently; deriving an expected file list only from an unpinned Dockerfile can falsely pass an empty inventory.

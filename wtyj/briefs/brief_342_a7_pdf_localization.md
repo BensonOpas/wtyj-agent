@@ -1,5 +1,5 @@
 # BRIEF 342 A7 - Localized, structured Mermaid demo documents
-**Status:** Implemented and locally verified | **Files:** mermaid_documents.py, mermaid_document_copy.py, mermaid_pdf_structure.py, PDF regression tests, render_mermaid_pdf_audit_samples.py | **Depends on:** 5922be0 | **Blocks:** Issue 342 A7/A8 document gate
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** mermaid_documents.py, mermaid_document_copy.py, mermaid_pdf_structure.py, PDF regression tests, render_mermaid_pdf_audit_samples.py | **Depends on:** 5922be0 | **Blocks:** Issue 342 A7/A8 document gate
 
 ## Context
 The preserved 60-conversation baseline contains 76 untagged quote/receipt PDFs. Quote banners remain English; receipt banners and subtitles remain English and transport is repeated. The document renderer is `wtyj/agents/social/mermaid_documents.py`; the confirmed-input limit is 160 characters in `wtyj/agents/social/mermaid_reservation_workflow.py`.

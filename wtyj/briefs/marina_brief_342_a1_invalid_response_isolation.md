@@ -1,5 +1,5 @@
 # BRIEF 342 A1 — Isolate malformed responses from provider outages
-**Status:** Implemented; independently reviewed | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/agents/social/mermaid_model_recovery.py`, `wtyj/tests/social/test_mermaid_model_recovery.py` | **Depends on:** 2286d9f | **Blocks:** candidate follow-up audit/deployment
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** `wtyj/agents/marina/marina_agent.py`, `wtyj/agents/social/mermaid_model_recovery.py`, `wtyj/tests/social/test_mermaid_model_recovery.py` | **Depends on:** 2286d9f | **Blocks:** candidate follow-up audit/deployment
 
 ## Context
 The preserved first real-model audit returned `fields: ""` with otherwise valid FAQ output in PARA006 turn 3. Schema recovery rejected it, then its global five-second provider circuit prevented model calls for another synthetic conversation (PARA005) and later fresh messages. No provider error occurred. The generic adapter currently defaults missing fields, but does not normalize this empty representation (`marina_agent.py:2199`). Recovery currently opens the provider circuit for every failure (`mermaid_model_recovery.py:241`).

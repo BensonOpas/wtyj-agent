@@ -1,5 +1,5 @@
 # BRIEF 342 A3 — One guest confirmation and atomic unpaid cancellation
-**Status:** Implemented locally; pending combined audit review and release | **Files:** agents/social/mermaid_reservation_workflow.py; agents/social/mermaid_reservation_store.py; agents/social/mermaid_demo_payment.py; tests/agents/test_mermaid_confirmation_cancellation.py | **Depends on:** 5922be0 and the companion issue 342 structured-contract change
+**Status:** Deployed and verified at f220c3e; A4/A8 acceptance holds remain | **Files:** agents/social/mermaid_reservation_workflow.py; agents/social/mermaid_reservation_store.py; agents/social/mermaid_demo_payment.py; tests/agents/test_mermaid_confirmation_cancellation.py | **Depends on:** 5922be0 and the companion issue 342 structured-contract change
 
 ## Context
 The preserved 60-conversation baseline exposed two separate booking failures.
