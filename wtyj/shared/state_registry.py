@@ -4706,7 +4706,8 @@ def create_pending_notification(notification_type: str, channel: str,
                                  subject: str, body: str,
                                  relay_token: str = None,
                                  mode: str = None,
-                                 preserve_hard_mode: bool = False) -> int:
+                                 preserve_hard_mode: bool = False,
+                                 suppress_model_summary: bool = False) -> int:
     """Insert (or, for an unresolved escalation, UPDATE) a pending
     notification. Brief 227: dedup unresolved escalations + structured
     summary persisted on the same row. Brief 239: optional `mode` param
@@ -4714,13 +4715,15 @@ def create_pending_notification(notification_type: str, channel: str,
     drives the alert email's Mode line. None preserves existing value
     on UPDATE (COALESCE). Automatic review callers can preserve an existing
     operator's hard takeover with ``preserve_hard_mode=True``; the check is
-    atomic with the update so a concurrent takeover cannot be downgraded."""
+    atomic with the update so a concurrent takeover cannot be downgraded.
+    Offline handover can opt out of model summaries; its repeated requests
+    update the durable work item without firing another identical alert."""
     if mode is None and notification_type == "relay":
         mode = "soft"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
 
-    if preserve_hard_mode:
+    if preserve_hard_mode or suppress_model_summary:
         conn.execute("BEGIN IMMEDIATE")
 
     # Brief 239: gate-safe initialization so non-escalation paths can
@@ -4792,7 +4795,8 @@ def create_pending_notification(notification_type: str, channel: str,
     # fires so the alert body can use it. Persisted regardless of whether
     # the alert ends up firing.
     summary_dict = None
-    if notification_type == "escalation" and _summary_dispatcher is not None:
+    if (notification_type == "escalation" and _summary_dispatcher is not None
+            and not suppress_model_summary):
         try:
             summary_dict = _summary_dispatcher(
                 row_id, channel, customer_id, customer_name)
@@ -4811,7 +4815,7 @@ def create_pending_notification(notification_type: str, channel: str,
     # an unchanged summary. Wrapped in try/except so a dispatcher failure
     # NEVER blocks the escalation row from being saved.
     if notification_type == "escalation" and _alert_dispatcher is not None:
-        should_fire = True
+        should_fire = not (suppress_model_summary and is_update)
         if is_update and prev_summary is not None and summary_dict is not None:
             should_fire = _summaries_materially_differ(
                 prev_summary, summary_dict)

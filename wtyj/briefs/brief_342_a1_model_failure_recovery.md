@@ -91,6 +91,21 @@ The root task owns combined-image tests, paid multilingual acceptance, language
 review, deployment and rollback verification. No provider-level delivery claim
 is made from the stubbed harness.
 
+### Review correction: offline escalation summaries
+
+Root review identified that the shared escalation creator invokes a separate
+summary model. Disabling that dispatcher in the initial harness hid the extra
+dependency. A Mermaid explicit-human-only `suppress_model_summary` opt-in now
+skips the summary model and dispatches an operator alert only when the unresolved
+work item is first created. Its insert/update decision is serialized. The
+default remains unchanged for normal model-backed soft reviews and other
+tenants. Six new buffered tests enable both dispatchers, assert zero summary or
+understanding calls, and assert one alert across repeated requests; another
+test preserves ordinary summary and alert dispatch. These tests reproduced the
+hidden call before the correction. No real operator notification was sent.
+The legacy deterministic Mermaid intake human-request route uses the same
+opt-in; its regression likewise asserts no model summary and one alert.
+
 ## Rollback
 
 Revert these source changes with the coordinated release. The two new Mermaid

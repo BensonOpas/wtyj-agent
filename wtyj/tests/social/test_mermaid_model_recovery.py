@@ -297,3 +297,45 @@ def test_malformed_structured_output_is_retryable_without_business_mutations(rev
     assert send.call_args.args[3] == recovery.FAILURE_COPY["es"]
     assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
+
+
+@pytest.mark.parametrize("locale,text", HUMAN_REQUESTS.items())
+def test_offline_human_route_skips_enabled_summary_model_and_alerts_once(review_runtime, monkeypatch, locale, text):
+    model, send, _controls = review_runtime
+    _locale(locale)
+    model.side_effect = AssertionError("No understanding model during offline handover")
+    summary = Mock(side_effect=AssertionError("No hidden summary model during offline handover"))
+    alert = Mock()
+    monkeypatch.setattr(state_registry, "_summary_dispatcher", summary)
+    monkeypatch.setattr(state_registry, "_alert_dispatcher", alert)
+    _flush("offline-human-first", text)
+    _flush("offline-human-repeated", text)
+    assert not model.called and not summary.called
+    assert send.call_count == 2
+    assert alert.call_count == 1
+    assert alert.call_args.kwargs["mode"] == "soft"
+    assert alert.call_args.kwargs["is_update"] is False
+    assert _rows("SELECT notification_type,mode FROM pending_notifications") == [("escalation", "soft")]
+
+
+def test_regular_soft_review_retains_enabled_summary_and_alert_dispatch(review_runtime, monkeypatch):
+    model, send, _controls = review_runtime
+    summary = Mock(return_value={"situation": "Accessibility needs checking"})
+    alert = Mock()
+    monkeypatch.setattr(state_registry, "_summary_dispatcher", summary)
+    monkeypatch.setattr(state_registry, "_alert_dispatcher", alert)
+    model.return_value = _understood("request_human", "The team needs to review boarding assistance.")
+    _flush("regular-human", "Can you guarantee help for a wheelchair?")
+    assert model.call_count == summary.call_count == alert.call_count == send.call_count == 1
+    assert alert.call_args.kwargs["summary_dict"] == summary.return_value
+
+
+def test_legacy_offline_intake_human_route_also_skips_summary_model(review_runtime, monkeypatch):
+    summary, alert = Mock(), Mock()
+    monkeypatch.setattr(state_registry, "_summary_dispatcher", summary)
+    monkeypatch.setattr(state_registry, "_alert_dispatcher", alert)
+    for message_id in ("legacy-human-one", "legacy-human-two"):
+        result = workflow.process_intake_turn(CONVERSATION, HUMAN_REQUESTS["en"], message_id=message_id)
+        assert result.action == "human_takeover"
+    assert not summary.called
+    assert alert.call_count == 1

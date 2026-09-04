@@ -397,6 +397,7 @@ def process_intake_turn(
             "Mermaid reservation: human requested",
             "The guest requested a person. Intake progress is saved.", mode="soft",
             preserve_hard_mode=True,
+            suppress_model_summary=True,
         )
         action = "human_takeover"
         response = COPY[locale]["human"]
@@ -609,6 +610,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
                 str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
                 "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
                 preserve_hard_mode=True,
+                suppress_model_summary=understood.get("understanding_source") == "explicit_human_request",
             )
         fields["phase"] = "human_takeover"
         if action in {"confirm_summary", "new_booking", "cancel"} and not pickup_review:
