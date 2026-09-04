@@ -1,0 +1,4 @@
+FROM wtyj-agent:tracy-natural-c3dcf95-r6
+COPY wtyj/agents/social/mermaid_documents.py /app/agents/social/mermaid_documents.py
+COPY wtyj/assets/mermaid-tropical-hero.png /app/assets/mermaid-tropical-hero.png
+COPY wtyj/assets/mermaid-tropical-hero.md /app/assets/mermaid-tropical-hero.md
