@@ -49,6 +49,29 @@ MERMAID_TOOL = {
 }
 
 
+def has_guest_question(understood: dict, text: str) -> bool:
+    """Require evidence from the guest, never the model's own next question."""
+    if "guest_question_excerpt" not in understood:
+        # Older contracts have no excerpt, so keep their conservative signal.
+        return understood.get("has_open_question") is True or understood.get("mermaid_action") == "question"
+    excerpt = understood.get("guest_question_excerpt")
+    return isinstance(excerpt, str) and bool(excerpt.strip()) and excerpt in text
+
+
+def has_server_owned_reply(understood: dict, text: str) -> bool:
+    """Route eligibility only; recovery must still validate the entire result."""
+    for selector in ("calendar_request", "status_request", "security_event"):
+        value = understood.get(selector)
+        if isinstance(value, str) and value != "none" and value in MERMAID_TOOL["input_schema"]["properties"][selector]["enum"]:
+            return True
+    action = understood.get("mermaid_action")
+    return (
+        understood.get("requires_human") is True
+        or action in ("request_human", "cancel", "payment_status")
+        or (action == "confirm_summary" and not has_guest_question(understood, text))
+    )
+
+
 def user_prompt(from_email, subject, body, thread_fields, thread_flags,
                 action_context="", channel="whatsapp", messages=None):
     """Keep generic tenant instructions out of the Mermaid demo contract."""

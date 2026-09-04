@@ -422,6 +422,172 @@ def test_actual_marina_sdk_response_with_compatibility_metadata_recovers_normall
     assert stored["mermaid_action"] == "question"
 
 
+def _sdk_result(monkeypatch, **updates):
+    """Keep the real adapter, recovery and buffered worker; stub only the SDK."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-not-a-key")
+    monkeypatch.setattr(marina_agent, "process_message", _real_process_message)
+    structured = {
+        **_understood("question", ""), "guest_question_excerpt": "trip question",
+        "calendar_request": "none", "status_request": "none", "security_event": "none",
+        "other_question_reply": "", **updates,
+    }
+    client = Mock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input=structured)], usage=None,
+    )
+    monkeypatch.setattr(marina_agent.anthropic, "Anthropic", Mock(return_value=client))
+    return client, structured
+
+
+@pytest.mark.parametrize("locale", HUMAN_REQUESTS)
+@pytest.mark.parametrize("selector", ["wildlife_guarantee", "handover"])
+def test_sdk_empty_critical_reply_renders_recorded_review_across_locales(review_runtime, monkeypatch, locale, selector):
+    from agents.social import mermaid_response_policy as policy
+
+    _model, send, _controls = review_runtime
+    saved = dict(_locale(locale))
+    state_registry.create_pending_notification("escalation", "whatsapp", CONVERSATION, "Test Guest", "Review", "Saved", mode="soft")
+    client, _ = _sdk_result(monkeypatch, language=locale, status_request=selector)
+    _flush("sdk-empty-critical", "trip question")
+    expected = policy.wildlife_guarantee_reply(locale, {"review": "queued"}) if selector == "wildlife_guarantee" else policy.copy("review_queued", locale)
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == expected
+    assert _rows("SELECT status FROM mermaid_model_events") == [("generated",)]
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+    assert not state_registry.get_ai_muted(CONVERSATION)
+    assert state_registry.get_active_escalation_mode(CONVERSATION) == "soft"
+    current = state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"]
+    assert {k: v for k, v in current.items() if k != "phase"} == {k: v for k, v in saved.items() if k != "phase"}
+
+
+@pytest.mark.parametrize("locale", HUMAN_REQUESTS)
+def test_sdk_empty_confirmation_quotes_once_then_returns_recorded_status(review_runtime, monkeypatch, tmp_path, locale):
+    from agents.social import mermaid_reservation_store as store, mermaid_response_policy as policy
+
+    _model, send, _controls = review_runtime
+    _locale(locale)
+    monkeypatch.setenv("MERMAID_DOCUMENT_ROOT", str(tmp_path / "documents"))
+    monkeypatch.setenv("MERMAID_DEMO_SIGNING_SECRET", "synthetic-test-secret")
+    monkeypatch.setenv("UNBOKS_PUBLIC_BASE_URL", "https://demo.example")
+    client, _ = _sdk_result(monkeypatch, language=locale, mermaid_action="confirm_summary", guest_question_excerpt="", has_open_question=False)
+    saved = state_registry.wa_get_booking_state(CONVERSATION)
+    saved["fields"]["mermaid_intake"]["phase"] = "collecting"
+    state_registry.wa_save_booking_state(CONVERSATION, saved["fields"], saved["flags"])
+    _flush("sdk-empty-summary", "Those are my details.")
+    assert store.latest_for_conversation(CONVERSATION) is None
+    current = state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"]
+    assert current["phase"] == "awaiting_summary_confirmation"
+    assert send.call_args.args[3] == workflow._summary(current, locale)
+    _flush("sdk-empty-yes", "Yes")
+    reservation = store.latest_for_conversation(CONVERSATION)
+    assert reservation is not None and reservation["state"] == "demo_payment_pending"
+    assert send.call_count == 2 and "/mermaid/pay/" in send.call_args.args[3]
+    assert _rows("SELECT COUNT(*) FROM mermaid_delivery_jobs") == [(1,)]
+    _flush("sdk-empty-repeat", "Yes")
+    assert client.messages.create.call_count == send.call_count == 3
+    assert send.call_args.args[3] == policy.copy("payment_unpaid", locale)
+    assert store.latest_for_conversation(CONVERSATION) == reservation
+    assert len(store.list_reservations()) == 1
+    assert _rows("SELECT COUNT(*) FROM mermaid_delivery_jobs") == [(1,)]
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)] * 3
+
+
+@pytest.mark.parametrize("reservation_state", ["booked", "cancelled"])
+def test_sdk_empty_confirmation_of_existing_reservation_uses_persisted_state(review_runtime, monkeypatch, reservation_state):
+    from agents.social import mermaid_reservation_store as store, mermaid_response_policy as policy
+
+    _model, send, _controls = review_runtime
+    intake = dict(_locale("en"), phase="summary_confirmed")
+    reservation = store.confirm_reservation(CONVERSATION, intake, idempotency_key="existing")
+    for status in ("quote_ready", "demo_payment_pending"):
+        reservation = store.transition(reservation["public_id"], status, idempotency_key=status, actor="system", reason="synthetic fixture")
+    if reservation_state == "booked":
+        reservation, _ = store.complete_demo_payment(reservation["public_id"], payment_reference="synthetic-paid", idempotency_key="synthetic-paid")
+        expected = policy.copy("payment_paid", "en")
+    else:
+        reservation = store.cancel(reservation["public_id"], idempotency_key="synthetic-cancelled")
+        expected = workflow.COPY["en"]["cancelled"]
+    client, _ = _sdk_result(monkeypatch, mermaid_action="confirm_summary", guest_question_excerpt="", has_open_question=False)
+    _flush("sdk-existing-yes", "Yes")
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == expected
+    assert store.latest_for_conversation(CONVERSATION) == reservation
+    assert len(store.list_reservations()) == 1
+    assert _rows("SELECT COUNT(*) FROM mermaid_delivery_jobs") == [(0,)]
+
+
+@pytest.mark.parametrize("structured,copy_key", [
+    ({"status_request": "payment"}, "payment_none"),
+    ({"status_request": "delivery"}, "delivery_none"),
+    ({"status_request": "pickup_coverage"}, "pickup_round_trip"),
+    ({"mermaid_action": "payment_status"}, "payment_none"),
+    ({"mermaid_action": "request_human"}, "review_queued"),
+    ({"requires_human": True}, "review_queued"),
+    ({"security_event": "blocked_override"}, "security_blocked"),
+    ({"mermaid_action": "cancel"}, None),
+    ({"calendar_request": "operating_days"}, None),
+    ({"status_request": "pickup_pricing"}, None),
+])
+def test_sdk_other_empty_server_routes_have_authoritative_output(review_runtime, monkeypatch, structured, copy_key):
+    from agents.social import mermaid_response_policy as policy
+
+    _model, send, _controls = review_runtime
+    saved = dict(_locale("en"))
+    client, _ = _sdk_result(monkeypatch, **structured)
+    _flush("sdk-other-critical", "trip question")
+    if copy_key:
+        expected = policy.copy(copy_key, "en")
+    elif structured.get("mermaid_action") == "cancel":
+        expected = workflow.COPY["en"]["cancelled"]
+    elif structured.get("calendar_request"):
+        expected = policy.calendar_reply("operating_days", "en")
+    else:
+        expected = policy.pickup_pricing_reply("en", saved)
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == expected
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+
+
+@pytest.mark.parametrize("action", ["question", "details", "acknowledge", "confirm_summary"])
+def test_sdk_blank_ordinary_answer_remains_retryable_and_same_event_recovers(review_runtime, monkeypatch, action):
+    _model, send, _controls = review_runtime
+    saved = dict(_locale("en"))
+    client, structured = _sdk_result(monkeypatch, mermaid_action=action)
+    _flush("sdk-empty-faq", "trip question")
+    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
+    assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == saved
+    assert "sdk-empty-faq" not in state_registry.wa_get_booking_state(CONVERSATION)["flags"].get("mermaid_seen_message_ids", [])
+    _due()
+    structured["reply"] = "Breakfast is included."
+    structured["mermaid_action"] = "question"
+    assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
+    assert client.messages.create.call_count == send.call_count == 2
+    assert send.call_args.args[3] == "Breakfast is included."
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+
+
+def test_sdk_blank_status_preserves_and_sanitizes_separate_faq(review_runtime, monkeypatch):
+    from agents.social import mermaid_response_policy as policy
+
+    _model, send, _controls = review_runtime
+    state_registry.create_pending_notification("escalation", "whatsapp", CONVERSATION, "Test Guest", "Review", "Saved", mode="soft")
+    client, _ = _sdk_result(monkeypatch, status_request="handover", other_question_reply="Breakfast—BBQ lunch. [HANDOFF]")
+    _flush("sdk-empty-mixed", "trip question")
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == "Breakfast,BBQ lunch.\n\n" + policy.copy("review_queued", "en")
+
+
+@pytest.mark.parametrize("malformed", [{"fields": {"adults": True}}, {"status_request": []}, {"reply": None}, {"other_question_reply": []}])
+def test_sdk_empty_critical_route_still_rejects_malformed_schema(review_runtime, monkeypatch, malformed):
+    _model, send, _controls = review_runtime
+    client, _ = _sdk_result(monkeypatch, **({"status_request": "wildlife_guarantee"} | malformed))
+    _flush("sdk-empty-malformed", "trip question")
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert _rows("SELECT status,response_json FROM mermaid_model_events") == [("failed", "{}")]
+
+
 @pytest.mark.parametrize("value,accepted", [("", True), ("passengers=5", False), ([], False), (None, False)])
 def test_actual_sdk_empty_fields_normalization_is_narrow_and_preserves_intake(review_runtime, monkeypatch, value, accepted):
     import json

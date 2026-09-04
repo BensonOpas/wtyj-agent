@@ -141,17 +141,18 @@ def _valid_schema_value(value, schema, *, allow_metadata=False):
     return "enum" not in schema or value in schema["enum"]
 
 
-def _valid_result(result):
-    from agents.social.mermaid_understanding import MERMAID_TOOL
+def _valid_result(result, guest_text=""):
+    from agents.social.mermaid_understanding import MERMAID_TOOL, has_server_owned_reply
 
     return (
         isinstance(result, dict) and not result.get("generation_failed")
-        and isinstance(result.get("reply"), str) and bool(result["reply"].strip())
+        and isinstance(result.get("reply"), str)
         and isinstance(result.get("mermaid_action"), str)
         # Marina appends compatibility metadata outside the Mermaid tool schema.
         # Only that top-level metadata is tolerated; declared/nested values
         # always use the model's single authoritative schema.
         and _valid_schema_value(result, MERMAID_TOOL["input_schema"], allow_metadata=True)
+        and (bool(result["reply"].strip()) or has_server_owned_reply(result, guest_text))
     )
 
 
@@ -214,7 +215,7 @@ def generate(message: dict, locale: str, call_model) -> dict:
         conn.close()
     try:
         result = call_model()
-        if not _valid_result(result):
+        if not _valid_result(result, str(message.get("text") or "")):
             failure = (result or {}).get("model_error") if isinstance(result, dict) else None
             failure = failure if isinstance(failure, dict) else error_metadata()
         else:

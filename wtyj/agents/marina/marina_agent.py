@@ -2210,8 +2210,14 @@ def process_message(
                 bm_logger.log("claude_field_defaulted", field=field,
                               channel=channel, from_id=from_email[:50])
 
-        # If reply is empty after defaults, fall back (preserves email fallback reply)
-        if not result.get("reply"):
+        # Mermaid's validated critical routes render their own response later.
+        # Other contracts and ordinary unanswered questions keep the fallback.
+        server_owned_reply = (
+            response_contract == "mermaid_reservation_demo"
+            and isinstance(result.get("reply"), str)
+            and mermaid_understanding.has_server_owned_reply(result, body)
+        )
+        if not result.get("reply") and not server_owned_reply:
             bm_logger.log("claude_empty_reply",
                           intents=result.get("intents", []),
                           channel=channel, from_id=from_email[:50],
@@ -2223,6 +2229,9 @@ def process_message(
         # (Claude ignores the prompt-side rule; mirrors dm_agent.py:253).
         result["reply"] = _strip_internal_tokens(
             result.get("reply", "")).replace("—", ",")
+        if response_contract == "mermaid_reservation_demo" and isinstance(result.get("other_question_reply"), str):
+            result["other_question_reply"] = _strip_internal_tokens(
+                result["other_question_reply"]).replace("—", ",")
         if result.get("reply_hold_failed"):
             result["reply_hold_failed"] = _strip_internal_tokens(
                 result["reply_hold_failed"]).replace("—", ",")

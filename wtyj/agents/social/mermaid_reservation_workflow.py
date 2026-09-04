@@ -461,13 +461,9 @@ def process_intake_turn(
 
 
 def _has_guest_question(understood: dict, text: str) -> bool:
-    """Require evidence from the guest, never the model's own next question."""
-    if "guest_question_excerpt" not in understood:
-        # Compatibility for older contracts; new structured turns always
-        # provide an excerpt (empty when the guest has no open question).
-        return understood.get("has_open_question") is True or understood.get("mermaid_action") == "question"
-    excerpt = understood.get("guest_question_excerpt")
-    return isinstance(excerpt, str) and bool(excerpt.strip()) and excerpt in text
+    from agents.social.mermaid_understanding import has_guest_question
+
+    return has_guest_question(understood, text)
 
 
 def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
@@ -638,6 +634,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         result_action = "payment_status" if action == "payment_status" else None
         if reservation["state"] == "cancelled" and action == "confirm_summary":
             response = COPY[locale]["cancelled"]
+        elif action == "confirm_summary" and not has_question:
+            response = response_policy.status_reply("payment", locale, response_policy.state_context(phone, reservation))
     else:
         if fields.get("trip_date"):
             day = datetime.strptime(fields["trip_date"], "%Y-%m-%d").strftime("%A").casefold()
