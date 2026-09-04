@@ -365,3 +365,57 @@ def test_malformed_optional_model_fields_are_not_cached_and_same_event_recovers(
     assert send.call_args.args[3] == "Recovered answer"
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     assert _rows("SELECT status FROM mermaid_model_events") == [("generated",)]
+
+
+@pytest.mark.parametrize("malformed", [
+    {"fields": {"pickup_preference": []}},
+    {"fields": {"pickup_preference": "unapproved_choice"}},
+    {"language": []}, {"language": "unsupported"},
+    {"confidence": "not_a_valid_confidence"},
+] + [
+    {"fields": {field: value}}
+    for field in ("adults", "children", "infants")
+    for value in (True, 2.5, -1, 101)
+] + [
+    {"fields": {field: []}}
+    for field in ("trip_date", "customer_name", "contact_phone", "pickup_location", "dietary_requirements", "accessibility_notes", "special_requests")
+])
+def test_malformed_nested_fields_and_language_use_schema_recovery(review_runtime, malformed):
+    model, send, _controls = review_runtime
+    original = _locale("en")
+    model.return_value = {**_understood("details", "Malformed"), **malformed}
+    _flush("nested-malformed", "synthetic")
+    assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
+    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
+    _due()
+    model.return_value = _understood("question", "Recovered answer")
+    assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
+    assert model.call_count == send.call_count == 2
+    assert send.call_args.args[3] == "Recovered answer"
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+
+
+def test_actual_marina_sdk_response_with_compatibility_metadata_recovers_normally(review_runtime, monkeypatch):
+    import json
+    _model, send, _controls = review_runtime
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-not-a-key")
+    monkeypatch.setattr(marina_agent, "process_message", _real_process_message)
+    structured = {
+        **_understood("question", "Synthetic SDK answer"),
+        "calendar_request": "none", "status_request": "none", "security_event": "none", "guest_question_excerpt": "trip question",
+    }
+    client = Mock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input=structured)], usage=None,
+    )
+    monkeypatch.setattr(marina_agent.anthropic, "Anthropic", Mock(return_value=client))
+    _flush("actual-sdk", "trip question")
+    assert client.messages.create.call_count == send.call_count == 1
+    assert send.call_args.args[3] == "Synthetic SDK answer"
+    assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+    status, raw = _rows("SELECT status,response_json FROM mermaid_model_events")[0]
+    stored = json.loads(raw)
+    assert status == "generated"
+    assert "intents" in stored and "flags" in stored
+    assert stored["mermaid_action"] == "question"

@@ -17,11 +17,6 @@ TRANSIENT_DELAY_SECONDS = 5
 OPERATOR_COOLDOWN_SECONDS = 900
 GENERATION_LEASE_SECONDS = 90
 LOCALES = ("en", "nl", "de", "es", "pap", "pt")
-_OPTIONAL_SELECTORS = {
-    "calendar_request": {"none", "this_week", "next_week", "weekend", "next_seven_days", "operating_days"},
-    "status_request": {"none", "payment", "handover", "delivery", "pickup_coverage"},
-    "security_event": {"none", "blocked_override", "actionable_incident"},
-}
 
 # Accepted outage-copy exception. Papiamentu remains subject to native review.
 FAILURE_COPY = {
@@ -115,22 +110,48 @@ def _failure(locale, metadata):
     }
 
 
+def _valid_schema_value(value, schema, *, allow_metadata=False):
+    """Validate supplied contract values; legacy omitted fields stay optional."""
+    value_type = schema.get("type")
+    if value_type == "object":
+        if not isinstance(value, dict):
+            return False
+        properties = schema.get("properties", {})
+        for key, item in value.items():
+            if key in properties:
+                if not _valid_schema_value(item, properties[key]):
+                    return False
+            elif schema.get("additionalProperties") is False and not allow_metadata:
+                return False
+    elif value_type == "string":
+        if not isinstance(value, str):
+            return False
+    elif value_type == "boolean":
+        if type(value) is not bool:
+            return False
+    elif value_type == "integer":
+        if type(value) is not int:
+            return False
+        if "minimum" in schema and value < schema["minimum"]:
+            return False
+        if "maximum" in schema and value > schema["maximum"]:
+            return False
+    else:
+        return False
+    return "enum" not in schema or value in schema["enum"]
+
+
 def _valid_result(result):
+    from agents.social.mermaid_understanding import MERMAID_TOOL
+
     return (
         isinstance(result, dict) and not result.get("generation_failed")
         and isinstance(result.get("reply"), str) and bool(result["reply"].strip())
-        and isinstance(result.get("fields", {}), dict)
-        and type(result.get("requires_human", False)) is bool
-        and type(result.get("has_open_question", False)) is bool
         and isinstance(result.get("mermaid_action"), str)
-        and result["mermaid_action"] in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}
-        and all(
-            field not in result
-            or (isinstance(result[field], str) and result[field] in allowed)
-            for field, allowed in _OPTIONAL_SELECTORS.items()
-        )
-        and ("guest_question_excerpt" not in result
-             or isinstance(result["guest_question_excerpt"], str))
+        # Marina appends compatibility metadata outside the Mermaid tool schema.
+        # Only that top-level metadata is tolerated; declared/nested values
+        # always use the model's single authoritative schema.
+        and _valid_schema_value(result, MERMAID_TOOL["input_schema"], allow_metadata=True)
     )
 
 

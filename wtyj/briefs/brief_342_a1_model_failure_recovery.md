@@ -116,6 +116,22 @@ regressions first reproduced malformed values being cached as generated; after
 the correction they are `invalid_response` failures with no business mutation,
 and the same durable event regenerates and completes successfully.
 
+### Final review correction: nested tool values
+
+A combined-code review reproduced a list-valued `fields.pickup_preference`
+being cached as generated before crashing the workflow's enum membership check;
+replaying the same event kept the malformed cached result. Validation now uses
+the authoritative `MERMAID_TOOL.input_schema` recursively rather than a second
+copy of its enums. All supplied declared values must match schema types, enums
+and count bounds; booleans are not counts. Omitted legacy fields remain allowed.
+The marina runtime's added top-level compatibility metadata is tolerated, while
+unknown nested intake fields are rejected. Twenty-four new cases cover nested
+types, count bounds, language and confidence, with same-event recovery. An
+additional mocked-SDK-to-marina-to-buffer test verifies normal runtime-added
+metadata is accepted. Combined schema/recovery/soft-review/confirmation/policy
+verification passed 169 tests before that additional SDK check.
+The separate actual-SDK compatibility check also passed (one test).
+
 ## Rollback
 
 Revert these source changes with the coordinated release. The two new Mermaid
