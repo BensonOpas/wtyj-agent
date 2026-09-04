@@ -1,5 +1,5 @@
 # Mermaid booking UX audit fixes
-**Status:** Verified; deployment pending | **Files:** Mermaid understanding, workflow, guest presentation, documents, payment, delivery reconciliation, webhook recovery loop, tenant catalog, focused tests | **Depends on:** deployed 70deced reservation demo | **Blocks:** premium demo acceptance
+**Status:** Deployed and verified | **Files:** Mermaid understanding, workflow, guest presentation, documents, payment, delivery reconciliation, webhook recovery loop, tenant catalog, focused tests | **Depends on:** deployed 70deced reservation demo | **Blocks:** premium demo acceptance
 
 ## Context
 The audited Calvin conversation ending 003 skipped a pickup-price question, promised a pickup price in a quote that excluded it, repeated summaries, and gave pier-arrival instructions after a hotel-pickup request. Zernio delivered the receipt after the synchronous check timed out; local delivery remained failed and repeated checkout callbacks retried with changing signed URLs.
@@ -30,3 +30,10 @@ Restore Mermaid's prior image reference and recreate only its agent service, ret
 - Concurrent cold-start SQLite journal initialization exposed a lock race in the full suite. Serialized connection/schema setup; reservation transactions remain protected by SQLite uniqueness. Replays with 2, 6 and 12 concurrent callbacks are covered.
 - Incorporated PDF presentation source 930ad68 (photo, titles, attachment filenames) and checkout event-loop fix e8ee096. Local webhook differs from the combined live version only by the bounded reconciliation hook. Combined feature tests: 62 passed.
 - Previously sent PDFs and messages remain historical evidence; the new rendering applies to newly generated documents. Existing receipt delivery was reconciled by the availability task without resending.
+
+## Release evidence
+- Final combined backend suite: 2,566 passed, 6 existing deprecation warnings. Isolated real-model replay passed with provider sends disabled. Quote and receipt visually verified with the integrated photo header.
+- Deployed only Mermaid on 2026-09-04 UTC from source `65825fb3703ed5fea2eb5a17cf8d0d74030c5533`, image `wtyj-agent:tracy-ux-65825fb`, digest `sha256:ced2aa0b412219c1a3176f8bd45795694f8ebedae80cfa073c978c48259d6006`.
+- Public health is OK, watchdog is healthy, inbox and auto-reply remain enabled, all six guest-copy locales are loaded, and deployed behavioral source hashes match the reviewed files. All six peer containers are unchanged; maintenance marker removed.
+- Audited reservation remains booked at USD 450, with pickup amount unknown; quote and receipt delivery records are delivered. No customer message was sent by the validation.
+- Rollback backup: `/root/backups/tracy-booking-ux-65825fb`; prior image `wtyj-agent:mermaid-pdf-checkout-e2d89f8`. Retain current customer data if rolling back code.
