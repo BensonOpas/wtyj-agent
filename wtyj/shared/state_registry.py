@@ -4691,17 +4691,23 @@ def create_pending_notification(notification_type: str, channel: str,
                                  customer_id: str, customer_name: str,
                                  subject: str, body: str,
                                  relay_token: str = None,
-                                 mode: str = None) -> int:
+                                 mode: str = None,
+                                 preserve_hard_mode: bool = False) -> int:
     """Insert (or, for an unresolved escalation, UPDATE) a pending
     notification. Brief 227: dedup unresolved escalations + structured
     summary persisted on the same row. Brief 239: optional `mode` param
     ('soft'/'hard') sets pending_notifications.mode at insert time and
     drives the alert email's Mode line. None preserves existing value
-    on UPDATE (COALESCE)."""
+    on UPDATE (COALESCE). Automatic review callers can preserve an existing
+    operator's hard takeover with ``preserve_hard_mode=True``; the check is
+    atomic with the update so a concurrent takeover cannot be downgraded."""
     if mode is None and notification_type == "relay":
         mode = "soft"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
+
+    if preserve_hard_mode:
+        conn.execute("BEGIN IMMEDIATE")
 
     # Brief 239: gate-safe initialization so non-escalation paths can
     # still compute is_update without NameError.
@@ -4740,9 +4746,9 @@ def create_pending_notification(notification_type: str, channel: str,
         conn.execute(
             "UPDATE pending_notifications "
             "SET subject = ?, body = ?, customer_name = ?, created_at = ?, "
-            "mode = COALESCE(?, mode) "
+            "mode = CASE WHEN ? AND mode = 'hard' THEN mode ELSE COALESCE(?, mode) END "
             "WHERE id = ?",
-            (subject, body, customer_name, now, mode, row_id))
+            (subject, body, customer_name, now, preserve_hard_mode, mode, row_id))
     conn.commit()
     conn.close()
 

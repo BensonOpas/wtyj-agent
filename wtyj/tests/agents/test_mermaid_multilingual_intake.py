@@ -98,7 +98,7 @@ def test_duplicate_inbound_does_not_advance_or_reply_twice():
     assert duplicate.duplicate is True
 
 
-def test_human_takeover_mutes_automation_and_preserves_progress(monkeypatch):
+def test_human_review_stays_soft_and_preserves_progress(monkeypatch):
     muted = []
     notices = []
     monkeypatch.setattr(state_registry, "set_ai_muted", lambda phone, value, channel: muted.append((phone, value, channel)))
@@ -106,8 +106,10 @@ def test_human_takeover_mutes_automation_and_preserves_progress(monkeypatch):
     workflow.process_intake_turn("guest-human", "Date 2026-09-05", message_id="one")
     result = workflow.process_intake_turn("guest-human", "I want a human", message_id="two")
     assert result.action == "human_takeover"
-    assert muted == [("guest-human", True, "whatsapp")]
+    assert muted == []
     assert len(notices) == 1
+    assert notices[0][1]["mode"] == "soft"
+    assert notices[0][1]["preserve_hard_mode"] is True
     state = state_registry.wa_get_booking_state("guest-human")["fields"]["mermaid_intake"]
     assert state["trip_date"] == "2026-09-05"
 

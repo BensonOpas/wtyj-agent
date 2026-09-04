@@ -40,7 +40,7 @@ COPY = {
         "confirm": "Please reply *YES* if everything is correct, or tell me exactly what to change.",
         "confirmed": "Perfect, I have your confirmed details. I’m preparing your demo reservation and quote now.",
         "cancelled": "Your demo reservation request is cancelled. No payment was taken.",
-        "human": "Of course. I’ve paused TRACY and passed the conversation to Mermaid’s team with your progress saved.",
+        "human": "I’ve passed this to Mermaid’s team for review. Your details are saved, and I can still help with general trip questions.",
         "invalid_day": "Mermaid’s published trips run Monday, Tuesday, Wednesday, Friday, Saturday and Sunday. Please choose one of those days.",
     },
     "nl": {
@@ -56,7 +56,7 @@ COPY = {
         "confirm": "Antwoord met *JA* als alles klopt, of zeg precies wat ik moet aanpassen.",
         "confirmed": "Perfect, ik heb je gegevens bevestigd. Ik maak nu je demo-reservering en offerte.",
         "cancelled": "Je demo-reserveringsaanvraag is geannuleerd. Er is niets betaald.",
-        "human": "Natuurlijk. Ik heb TRACY gepauzeerd en het gesprek met de opgeslagen gegevens doorgegeven aan Mermaid’s team.",
+        "human": "Ik heb dit ter beoordeling aan Mermaid’s team doorgegeven. Je gegevens zijn opgeslagen en ik kan algemene vragen over de trip blijven beantwoorden.",
         "invalid_day": "Mermaid vaart volgens de publicatie op maandag, dinsdag, woensdag, vrijdag, zaterdag en zondag. Kies een van die dagen.",
     },
     "de": {
@@ -72,7 +72,7 @@ COPY = {
         "confirm": "Antworten Sie mit *JA*, wenn alles stimmt, oder nennen Sie genau die gewünschte Änderung.",
         "confirmed": "Perfekt, Ihre Angaben sind bestätigt. Ich erstelle jetzt Ihre Demo-Reservierung und Ihr Angebot.",
         "cancelled": "Ihre Demo-Reservierungsanfrage wurde storniert. Es wurde nichts bezahlt.",
-        "human": "Natürlich. Ich habe TRACY pausiert und das Gespräch mit dem gespeicherten Stand an Mermaids Team übergeben.",
+        "human": "Ich habe dies zur Prüfung an Mermaids Team weitergegeben. Ihre Angaben sind gespeichert und ich kann weiterhin allgemeine Fragen zum Ausflug beantworten.",
         "invalid_day": "Mermaid fährt laut Veröffentlichung Montag, Dienstag, Mittwoch, Freitag, Samstag und Sonntag. Bitte wählen Sie einen dieser Tage.",
     },
     "es": {
@@ -88,7 +88,7 @@ COPY = {
         "confirm": "Responde *SÍ* si todo está correcto o dime exactamente qué debo cambiar.",
         "confirmed": "Perfecto, tus datos están confirmados. Ahora preparo tu reserva demo y cotización.",
         "cancelled": "Tu solicitud de reserva demo está cancelada. No se realizó ningún pago.",
-        "human": "Claro. He pausado a TRACY y pasé la conversación al equipo de Mermaid con tu progreso guardado.",
+        "human": "He pasado esto al equipo de Mermaid para que lo revise. Tus datos están guardados y puedo seguir respondiendo preguntas generales sobre la excursión.",
         "invalid_day": "Según la información publicada, Mermaid opera lunes, martes, miércoles, viernes, sábado y domingo. Elige uno de esos días.",
     },
     "pap": {
@@ -104,7 +104,7 @@ COPY = {
         "confirm": "Kontestá *SI* si tur kos ta korekto, òf bisa mi eksaktamente kiko mester kambia.",
         "confirmed": "Perfekto, bo datonan ta konfirmá. Awor mi ta prepara bo reservashon demo i oferta.",
         "cancelled": "Bo petishon di reservashon demo ta kanselá. No a tuma ningun pago.",
-        "human": "Sigur. Mi a pone TRACY na pausa i pasa e kombersashon ku bo progreso wardá pa tim di Mermaid.",
+        "human": "Mi a pasa esaki pa tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e trip.",
         "invalid_day": "Segun e informashon publiká, Mermaid ta bai djaluna, djamars, djarason, djabièrnè, djasabra i djadumingu. Skohe un di e dianan ei.",
     },
     "pt": {
@@ -120,7 +120,7 @@ COPY = {
         "confirm": "Responda *SIM* se estiver tudo correto ou diga exatamente o que devo alterar.",
         "confirmed": "Perfeito, seus dados estão confirmados. Agora vou preparar sua reserva demo e cotação.",
         "cancelled": "Seu pedido de reserva demo foi cancelado. Nenhum pagamento foi realizado.",
-        "human": "Claro. Pausei a TRACY e encaminhei a conversa para a equipe da Mermaid com seu progresso salvo.",
+        "human": "Encaminhei isso à equipe da Mermaid para análise. Seus dados estão salvos e posso continuar respondendo a perguntas gerais sobre o passeio.",
         "invalid_day": "Segundo as informações publicadas, a Mermaid opera segunda, terça, quarta, sexta, sábado e domingo. Escolha um desses dias.",
     },
 }
@@ -372,14 +372,18 @@ def process_intake_turn(
     lower = str(text or "").strip().casefold()
     if any(phrase in lower for phrase in ("human", "person", "real person", "medewerker", "mitarbeiter", "persona", "humano", "un hende")):
         fields["phase"] = "human_takeover"
-        state_registry.set_ai_muted(phone, True, channel="whatsapp")
         state_registry.create_pending_notification(
             "escalation", "whatsapp", phone, from_name or fields.get("customer_name") or "Mermaid guest",
             "Mermaid reservation: human requested",
             "The guest requested a person. Intake progress is saved.", mode="soft",
+            preserve_hard_mode=True,
         )
         action = "human_takeover"
         response = COPY[locale]["human"]
+    elif state_registry.get_active_escalation_mode(phone) in {"soft", "hard"}:
+        fields["phase"] = "human_takeover"
+        action = None
+        response = _question_answer(text, locale) or COPY[locale]["human"]
     elif any(phrase in lower for phrase in ("cancel", "annuleer", "stornieren", "cancelar", "kanselá")):
         fields["phase"] = "cancelled"
         action = "cancel"
@@ -449,7 +453,12 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if message_id and message_id in seen:
         return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
     history = state_registry.dm_get_history(phone, "whatsapp", limit=16)
+    review_pending = (
+        state_registry.get_active_escalation_mode(phone) in {"soft", "hard"}
+        or bool((reservation or {}).get("human_takeover"))
+    )
     context = dict(fields)
+    context["human_review_pending"] = review_pending
     context["reservation_state"] = (reservation or {}).get("state")
     if reservation:
         context["reservation_intake"] = reservation["intake"]
@@ -472,7 +481,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     action = understood.get("mermaid_action")
     if action not in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}:
         return IntakeResult(str(understood.get("reply") or COPY[locale]["trip_date"]), locale, fields.get("phase", "collecting"))
-    if action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
+    if not review_pending and action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
         fields = {}
     old_phase = fields.get("phase", "collecting")
     fields["language"] = locale
@@ -504,15 +513,22 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if understood.get("requires_human") or action == "request_human" or (
         action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
     ):
-        state_registry.set_ai_muted(phone, True, channel="whatsapp")
         state_registry.create_pending_notification(
             "escalation", "whatsapp", phone,
             str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
             "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
+            preserve_hard_mode=True,
         )
         fields["phase"] = "human_takeover"
-        response = COPY[locale]["human"]
+        response = COPY[locale]["human"] if action == "cancel" else response or COPY[locale]["human"]
         result_action = "human_takeover"
+    elif review_pending:
+        # Human review freezes booking decisions, not safe conversation. Only
+        # an operator resolves the work item; an existing reservation stays
+        # frozen independently even after that conversation item is resolved.
+        fields["phase"] = "human_takeover"
+        if action in {"confirm_summary", "new_booking", "cancel"} or not response:
+            response = COPY[locale]["human"]
     elif action == "cancel":
         fields["phase"] = "cancelled"
         response = COPY[locale]["cancelled"]
