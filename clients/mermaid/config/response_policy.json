@@ -281,7 +281,28 @@
         "djasabra",
         "djadumingu"
       ],
-      "cash": "sèn kèsh"
+      "cash": "sèn kèsh",
+      "months_january_to_december": [
+        "yanüari",
+        "febrüari",
+        "mart",
+        "aprel",
+        "mei",
+        "yüni",
+        "yüli",
+        "ougùstùs",
+        "sèptèmber",
+        "òktober",
+        "novèmber",
+        "desèmber"
+      ],
+      "hat": "sombré",
+      "cap": "pet",
+      "sunscreen": "krema solar",
+      "bring_example": "Hiba toaya, krema solar, un sombré òf pet, i paña di landa.",
+      "contact_number_example": "Na ki number di telefòn nos por alkansá bo, inkluyendo kódigo di pais? Ta pa avisunan importante di e biahe, manera un kanselashon pa mal tempu.",
+      "contact_number_retry_example": "Bo por manda e number di telefòn kompleto ku kódigo di pais, kuminsando ku +? Asina mi por warda un number di kontakto pa avisunan di e biahe.",
+      "details_acknowledgement_example": "Danki. Mi a nota e datonan."
     }
   },
   "security": {

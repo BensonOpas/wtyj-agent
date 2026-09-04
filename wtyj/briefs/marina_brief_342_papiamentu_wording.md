@@ -25,3 +25,6 @@ Reference-backed Curaçao wording and the full weekday vocabulary reach Tracy’
 
 ## Rollback
 Restore the pinned aebe37f image and only the changed live config/compose bytes from the guarded private backup, preserving conversation data and intentional controls; source rollback reverts the single wording commit. Do not replay guest messages or alter prior audit evidence.
+
+## Reviewed follow-up from the d615823 sample
+The isolated 12-case sample generated one incomplete ordinary FAQ reply (BASE-005 turn 3), three unaccented September dates, a wrong cap noun and malformed contact/packing phrases. Preserve the raw results and captures. Independently approved follow-up adds the full official month list, positive hat/cap/sunscreen and packing terms, the existing catalog contact prompts, and a restrained acknowledgement example. The register clarifies conditional use of these examples and the existing ordinary-answer field contract. No routing change, extra model call, post-generation word replacement or assertion that the captured failure is repaired. Extend the existing SDK request test to prove guide delivery, then test/build/deploy the final image. There is no new paid loop and no fresh final-source or native certification claim.
