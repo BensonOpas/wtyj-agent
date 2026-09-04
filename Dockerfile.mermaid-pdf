@@ -1,0 +1,8 @@
+# Exact deployed Mermaid base: preserve all runtime dependencies and safeguards.
+FROM wtyj-agent:mermaid-reservations-70deced
+COPY wtyj/agents/social/mermaid_documents.py /app/agents/social/mermaid_documents.py
+COPY wtyj/agents/social/mermaid_demo_payment.py /app/agents/social/mermaid_demo_payment.py
+COPY wtyj/agents/social/webhook_server.py /app/agents/social/webhook_server.py
+COPY wtyj/agents/social/zernio_dm_client.py /app/agents/social/zernio_dm_client.py
+COPY wtyj/agents/social/senders/ /app/agents/social/senders/
+COPY wtyj/assets/mermaid-klein-curacao.jpg /app/assets/mermaid-klein-curacao.jpg

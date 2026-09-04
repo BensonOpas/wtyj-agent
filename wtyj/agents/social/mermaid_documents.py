@@ -21,7 +21,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    HRFlowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    HRFlowable, Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
 )
 
 from agents.social import mermaid_reservation_store
@@ -33,6 +33,12 @@ DEEP = colors.HexColor("#063B46")
 CORAL = colors.HexColor("#F36C5B")
 PALE = colors.HexColor("#EAF8F8")
 MUTED = colors.HexColor("#4D6870")
+HERO_IMAGE = Path(__file__).resolve().parents[2] / "assets" / "mermaid-klein-curacao.jpg"
+
+
+def _hero(width_mm: float) -> Image:
+    """Bundled first-party photo: no runtime download or signed-URL dependency."""
+    return Image(str(HERO_IMAGE), width=width_mm * mm, height=width_mm * mm * 650 / 1920)
 
 LABELS = {
     "en": {"title": "Your Klein Curaçao demo quote", "quote": "Quote", "customer": "Guest", "date": "Trip date", "guests": "Guests", "transport": "Transport", "charges": "Itemized price", "description": "Description", "qty": "Qty", "unit": "Unit", "amount": "Amount", "total": "Total", "included": "Everything included", "schedule": "Your day", "bring": "Bring with you", "rules": "Rules and important notes", "payment": "Next step", "payment_text": "Use the secure demo payment link sent in WhatsApp. It asks for no card or bank details and moves no money.", "arrival": "Arrive at Fishermen's Pier at 06:45. The published island departure is approximately 15:20.", "pickup": "Hotel pickup requested; location and price require confirmation.", "pier": "Meet at Fishermen's Pier", "valid": "This demo quote is valid for 60 minutes.", "available": "For this demo experience, seats are assumed available. No live inventory was checked."},
@@ -206,9 +212,10 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     doc = SimpleDocTemplate(
         str(target), pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm,
         topMargin=13 * mm, bottomMargin=13 * mm,
-        title=f"Mermaid demo quote {reservation['public_id']}", author="Mermaid Boat Trips Curaçao",
+        title=f"Mermaid - {labels['title']} - {reservation['public_id'][-10:].upper()}", author="Mermaid Boat Trips Curaçao",
     )
     story = [
+        _hero(180), Spacer(1, 4 * mm),
         Paragraph("MERMAID BOAT TRIPS CURAÇAO", heading),
         Paragraph(_safe(copy["tagline"]), body),
         Spacer(1, 3 * mm),
@@ -285,7 +292,7 @@ def _document(row: sqlite3.Row | None) -> dict | None:
 def create_quote(reservation: dict) -> tuple[dict, dict]:
     """Create one stable quote and one pending idempotent delivery job."""
     public_id = _doc_id(reservation["public_id"], "quote")
-    filename = f"Mermaid-Demo-Quote-{reservation['public_id'][-10:].upper()}.pdf"
+    filename = f"Mermaid - Demo Trip Quote - {reservation['public_id'][-10:].upper()}.pdf"
     target = _root() / reservation["public_id"] / filename
     conn = _conn()
     try:
@@ -334,7 +341,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
     doc = SimpleDocTemplate(
         str(target), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
         topMargin=16 * mm, bottomMargin=16 * mm,
-        title=f"Mermaid simulated payment receipt {reservation['booking_code']}",
+        title=f"Mermaid - {copy['receipt_title']} (Demo) - {reservation['booking_code']}",
         author="Mermaid Boat Trips Curaçao",
     )
     guest_line = copy["party"].format(adults=intake["adults"], children=intake["children"], infants=intake["infants"])
@@ -358,6 +365,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     story = [
+        _hero(174), Spacer(1, 5 * mm),
         Paragraph("MERMAID BOAT TRIPS CURAÇAO", heading),
         Paragraph("Klein Curaçao demo reservation", body), Spacer(1, 4 * mm),
         Table([[Paragraph("SIMULATED PAYMENT - DEMO ONLY", marker)]], colWidths=[174 * mm], style=TableStyle([
@@ -380,7 +388,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
 def create_receipt(reservation: dict, payment: dict) -> tuple[dict, dict]:
     """Create one stable receipt and its idempotent delivery job."""
     public_id = _doc_id(reservation["public_id"], "receipt")
-    filename = f"Mermaid-Demo-Receipt-{reservation['booking_code']}.pdf"
+    filename = f"Mermaid - Demo Payment Receipt - {reservation['booking_code']}.pdf"
     target = _root() / reservation["public_id"] / filename
     conn = _conn()
     try:

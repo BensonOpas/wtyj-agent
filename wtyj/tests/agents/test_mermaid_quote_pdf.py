@@ -40,6 +40,10 @@ def test_six_localized_quote_pdfs_render_required_content(locale):
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     normalized_text = " ".join(text.split())
     assert len(reader.pages) == 2
+    assert len(reader.pages[0].images) >= 1
+    assert reader.metadata.title.startswith("Mermaid - ")
+    assert mermaid_documents.LABELS[locale]["title"] in reader.metadata.title
+    assert item["filename"].startswith("Mermaid - Demo Trip Quote - ")
     assert "DEMO QUOTE - NOT A VALID TICKET" in text
     assert "Ana Çosta" in text
     assert "2026-09-05" in text
