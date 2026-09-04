@@ -2361,6 +2361,7 @@ def inbound_processing_claim_recoverable(
             newer_outbound = conn.execute(
                 "SELECT 1 FROM whatsapp_threads "
                 "WHERE phone = ? AND role IN ('assistant', 'operator') "
+                "AND COALESCE(source_message_key, '') NOT LIKE 'mermaid-model-status:%' "
                 "AND created_at > ? LIMIT 1",
                 (conversation_id, latest_created_at),
             ).fetchone()

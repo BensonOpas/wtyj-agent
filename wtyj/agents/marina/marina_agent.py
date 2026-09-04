@@ -2135,7 +2135,14 @@ def process_message(
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        client = anthropic.Anthropic(api_key=api_key)
+        if response_contract == "mermaid_reservation_demo" and not api_key:
+            fallback["model_error"] = {"kind": "credentials", "retryable": False}
+            return fallback
+        client = (
+            anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=30.0)
+            if response_contract == "mermaid_reservation_demo"
+            else anthropic.Anthropic(api_key=api_key)
+        )
         tool_schema = MARINA_TOOL
         if response_contract == "mermaid_reservation_demo":
             from shared import mermaid_catalog
@@ -2144,9 +2151,13 @@ def process_message(
             from agents.social import mermaid_understanding
             system_prompt = mermaid_understanding.system_prompt()
             tool_schema = mermaid_understanding.MERMAID_TOOL
+            user_prompt = mermaid_understanding.user_prompt(
+                from_email, subject, body, thread_fields, thread_flags,
+                action_context, channel=channel, messages=messages,
+            )
         else:
             system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
-        user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
+            user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
                                           action_context, channel=channel, messages=messages)
         # Other legacy prompt blocks inject individual config fields. Do not
         # let a credential copied into those fields bypass the public context.
@@ -2229,6 +2240,12 @@ def process_message(
         return result
 
     except Exception as _exc:
+        if response_contract == "mermaid_reservation_demo":
+            from agents.social.mermaid_model_recovery import error_metadata
+            fallback["model_error"] = error_metadata(_exc)
+            bm_logger.log("claude_api_error", error_kind=fallback["model_error"]["kind"],
+                          channel=channel, from_id=from_email[:50])
+            return fallback
         bm_logger.log("claude_api_error",
                       error=str(_exc)[:200],
                       channel=channel, from_id=from_email[:50])

@@ -183,9 +183,11 @@ class IntakeResult:
     phase: str
     action: str | None = None
     duplicate: bool = False
+    generation_failure: dict | None = None
+    understanding_source: str | None = None
 
     def as_reply(self) -> dict:
-        return {
+        reply = {
             "text": self.text,
             "media": None,
             "vehicle_recommendation": None,
@@ -193,7 +195,13 @@ class IntakeResult:
             "ali_turn_commit": None,
             "mermaid_action": self.action,
             "duplicate": self.duplicate,
+            "language": self.locale,
         }
+        if self.understanding_source is not None:
+            reply["understanding_source"] = self.understanding_source
+        if self.generation_failure is not None:
+            reply["mermaid_generation_failure"] = self.generation_failure
+        return reply
 
 
 def detect_language(text: str, existing: str | None = None) -> str:
@@ -464,6 +472,7 @@ def _has_guest_question(understood: dict, text: str) -> bool:
 def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     """The single model call understands language; Python validates and owns state."""
     from agents.marina import marina_agent
+    from agents.social import mermaid_model_recovery
 
     phone = str(message.get("from") or "")
     message_id = str(message.get("message_id") or "")
@@ -502,17 +511,23 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         missing_fields.append("contact_phone")
     if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
         missing_fields.append("pickup_location")
-    understood = marina_agent.process_message(
+    understood = mermaid_model_recovery.generate(message, fields.get("language", "en"), lambda: marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,
         thread_flags={"phase": fields.get("phase", "collecting")},
         action_context=json.dumps({"required_fields": REQUIRED_FIELDS, "missing_fields": missing_fields}),
         channel="whatsapp", messages=history,
         response_contract="mermaid_reservation_demo",
-    )
+    ))
     locale = understood.get("language")
     if locale not in SUPPORTED_LOCALES:
         locale = fields.get("language", "en")
+    if understood.get("generation_failed"):
+        return IntakeResult(
+            str(understood.get("reply") or ""), locale, fields.get("phase", "collecting"),
+            generation_failure=understood["generation_failure"],
+            understanding_source="model_failure",
+        )
     security_event = understood.get("security_event", "none")
     security_review = False
     if security_event in {"blocked_override", "actionable_incident"}:
@@ -674,7 +689,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if message_id:
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
     state_registry.wa_save_booking_state(phone, root_fields, flags, state.get("completed_bookings") or [])
-    return IntakeResult(response, locale, fields["phase"], action=result_action)
+    return IntakeResult(response, locale, fields["phase"], action=result_action,
+                        understanding_source=understood.get("understanding_source", "model"))
 
 
 def handle_demo_message(message: dict, include_media: bool = False, *, use_model: bool = False) -> str | dict:
@@ -687,7 +703,8 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         state = state_registry.wa_get_booking_state(phone)
         flags = state.get("flags") or {}
         cached = (flags.get("mermaid_cached_replies") or {}).get(str(message.get("message_id") or "")) or flags.get("mermaid_cached_reply") or {}
-        if message.get("message_id") and cached.get("message_id") == message["message_id"]:
+        if (message.get("message_id") and cached.get("message_id") == message["message_id"]
+                and message["message_id"] in flags.get("mermaid_seen_message_ids", [])):
             reply = dict(cached.get("reply") or {})
             commit = reply.get("mermaid_delivery_commit") or {}
             if commit:
@@ -713,6 +730,9 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         message_id=str(message.get("message_id") or ""),
         from_name=str(message.get("from_name") or ""),
     )
+    if result.generation_failure is not None:
+        # An outage notice is not a completed model decision or cached answer.
+        return result.as_reply() if include_media else result.text
     if result.action == "summary_confirmed":
         from agents.social import (
             mermaid_demo_payment, mermaid_documents, mermaid_reservation_store,
