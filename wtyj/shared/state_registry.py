@@ -6537,18 +6537,21 @@ def info_update_update(
     return changed
 
 
-def get_active_info_updates() -> list:
+def get_active_info_updates(*, newest_edit_first: bool = False) -> list:
     """Brief 216: return currently-active info_updates ready for prompt
     injection. Active iff active=1 AND (no dates OR within [start, end]).
     Half-open windows allowed: one of start/end set, the other null,
     means 'active from X' or 'active until Y'. ISO YYYY-MM-DD format
     expected for date columns; lexicographic comparison works because
-    the format is fixed-width."""
+    the format is fixed-width. Despertares opts into edit-time ordering so an
+    edited existing instruction can supersede a previously newer note. Other
+    callers retain the original created-at order and response shape."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     conn = _get_conn()
+    order = "COALESCE(updated_at, created_at) DESC, id DESC" if newest_edit_first else "created_at DESC"
     rows = conn.execute(
         "SELECT type, text, start_date, end_date FROM info_updates "
-        "WHERE active = 1 ORDER BY created_at DESC").fetchall()
+        f"WHERE active = 1 ORDER BY {order}").fetchall()
     conn.close()
     out = []
     for type_, text, start_date, end_date in rows:
