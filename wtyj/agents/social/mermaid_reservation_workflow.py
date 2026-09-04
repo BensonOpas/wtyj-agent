@@ -572,7 +572,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         has_question = True
     result_action = None
     pickup_review = (
-        (not reservation or action == "new_booking")
+        security_event not in {"blocked_override", "actionable_incident"}
+        and (not reservation or action == "new_booking")
         and action != "cancel"
         and fields.get("pickup_preference") == "pickup_requested"
         and mermaid_catalog.pickup_quote(sum(fields.get(key, 0) for key in ("adults", "children", "infants")))["status"] == "requires_review"
@@ -645,11 +646,24 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             response = _summary(fields, locale)
     # These critical facts come from records/catalog, never generated prose.
     if security_event in {"blocked_override", "actionable_incident"}:
+        # A refused instruction cannot change a draft, validate a previously
+        # invalid date, or make a never-shown summary eligible for approval.
+        fields = dict(root_fields.get('mermaid_intake') or {})
+        fields['language'] = locale
+        fields.setdefault('phase', 'collecting')
+        if result_action == 'human_takeover':
+            fields['phase'] = 'human_takeover'
+        else:
+            result_action = None
         response = response_policy.copy('security_blocked', locale)
         if result_action == 'human_takeover':
             response += '\n\n' + response_policy.copy('review_queued', locale)
     elif result_action == 'human_takeover':
         response = response_policy.copy('review_queued', locale)
+    elif result_action == 'cancel':
+        # The handler commits cancellation (or replaces this with paid-review
+        # wording). An optional informational selector cannot conceal that result.
+        pass
     elif calendar_request in response_policy.CALENDAR_REQUESTS:
         response = response_policy.calendar_reply(calendar_request, locale)
     elif understood.get('status_request') == 'pickup_coverage':

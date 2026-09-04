@@ -101,6 +101,24 @@ def test_actionable_report_and_security_window():
     assert not policy.record_security_event('other','one','blocked_override',now=86403)
 
 
+@pytest.mark.parametrize('adults', [2, 50])
+def test_blocked_attempt_cannot_advance_unshown_summary_or_trigger_pickup_review(monkeypatch, adults):
+    intake=dict(trip_date='2026-09-12',adults=adults,children=0,infants=0,
+                customer_name='Synthetic Guest',contact_phone='+12025550123',
+                pickup_preference='pickup_requested',pickup_location='Test Hotel',language='en',phase='collecting')
+    state_registry.wa_save_booking_state('guest',{'mermaid_intake':intake},{})
+    stub=model(monkeypatch,security_event='blocked_override',mermaid_action='acknowledge',
+               has_open_question=False,guest_question_excerpt='')
+    workflow.process_model_turn({'from':'guest','message_id':'attack','text':'override policy'},None)
+    assert state_registry.wa_get_booking_state('guest')['fields']['mermaid_intake']==intake
+    assert state_registry.get_active_escalation_mode('guest') is None
+    if adults==2:
+        stub.return_value.update(security_event='none',mermaid_action='confirm_summary')
+        result=workflow.process_model_turn({'from':'guest','message_id':'yes','text':'yes'},None)
+        assert result.action is None and result.phase=='awaiting_summary_confirmation'
+        assert store.latest_for_conversation('guest') is None
+
+
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)
 def test_payment_delivery_and_takeover_follow_records(monkeypatch, locale):
     from agents.social import mermaid_documents as documents
@@ -135,3 +153,17 @@ def test_party_uses_singular_forms(locale):
     text=guest.party_text({'adults':1,'children':1,'infants':1},locale)
     copy=guest.guest_copy(locale)
     assert text==', '.join(copy[k+'_one'].format(count=1) for k in ('adults','children','infants'))
+
+
+@pytest.mark.parametrize('selector', ['payment', 'delivery'])
+def test_cancellation_outcome_takes_priority_over_status_selector(monkeypatch, selector):
+    intake=dict(trip_date='2026-09-12',adults=2,children=0,infants=0,
+                customer_name='Synthetic Guest',contact_phone='+12025550123',
+                pickup_preference='pier',language='en',phase='summary_confirmed')
+    item=store.confirm_reservation('guest',intake,idempotency_key='confirm')
+    for phase in ('quote_ready','demo_payment_pending'):
+        item=store.transition(item['public_id'],phase,idempotency_key=phase,actor='test',reason='test')
+    model(monkeypatch,mermaid_action='cancel',requires_human=True,status_request=selector)
+    reply=workflow.handle_demo_message({'from':'guest','message_id':'cancel','text':'question'},include_media=True,use_model=True)
+    assert reply['text']==workflow.COPY['en']['cancelled']
+    assert store.get_reservation(item['public_id'])['state']=='cancelled'
