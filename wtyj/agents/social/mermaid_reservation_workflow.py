@@ -788,14 +788,18 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
             if use_model:
                 _cache_reply(message, reply)
             return reply
-    elif result.action == "payment_status" and current and current["state"] == "demo_payment_pending":
+    elif result.action == "payment_status" and current:
         from agents.social import mermaid_demo_payment
         import os
-        url = mermaid_demo_payment.build_payment_url(
-            mermaid_catalog.get_catalog().get("links", {}).get("checkout_base_url") or os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001"),
-            current["public_id"], os.environ.get("MERMAID_DEMO_SIGNING_SECRET", ""),
-        )
-        result = IntakeResult(result.text + "\n\n" + guest.guest_copy(result.locale)["checkout_link"] + "\n" + url, result.locale, result.phase)
+        # A signed payment may finish while the model is composing its answer.
+        # Offer checkout only from the current state, not the earlier snapshot.
+        current = _reservation_store.get_reservation(current["public_id"])
+        if current and current["state"] == "demo_payment_pending" and not current["human_takeover"]:
+            url = mermaid_demo_payment.build_payment_url(
+                mermaid_catalog.get_catalog().get("links", {}).get("checkout_base_url") or os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001"),
+                current["public_id"], os.environ.get("MERMAID_DEMO_SIGNING_SECRET", ""),
+            )
+            result = IntakeResult(result.text + "\n\n" + guest.guest_copy(result.locale)["checkout_link"] + "\n" + url, result.locale, result.phase)
     elif result.action == "cancel":
         from agents.social import mermaid_reservation_store
 

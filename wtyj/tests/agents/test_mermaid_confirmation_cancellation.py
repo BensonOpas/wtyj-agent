@@ -164,8 +164,23 @@ def test_failed_cancellation_retries_same_event_without_false_success(monkeypatc
     assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "cancelled"
     assert len([event for event in store.events(reservation["public_id"]) if event["to_state"] == "cancelled"]) == 1
     if use_model:
+        calls_after_recovery = model.call_count
         assert workflow.handle_demo_message(message, True, use_model=True)["text"] == recovered["text"]
-        assert model.call_count == 2
+        assert model.call_count == calls_after_recovery
+
+
+def test_payment_completed_during_generation_does_not_offer_another_checkout(monkeypatch):
+    reservation = pending()
+    def model(**_):
+        store.complete_demo_payment(reservation["public_id"], payment_reference="PAY-DEMO-STATUS", idempotency_key="pay")
+        return understood("payment_status", reply="Your simulated payment is recorded as completed.")
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    message = {"from": "guest", "text": "I paid", "message_id": "paid-status"}
+    result = workflow.handle_demo_message(message, True, use_model=True)
+    assert "checkout" not in result["text"].casefold() and "/pay/" not in result["text"]
+    assert counts(reservation["public_id"]) == (1, 0)
+    assert store.get_reservation(reservation["public_id"])["state"] == "booked"
+    assert workflow.handle_demo_message(message, True, use_model=True)["text"] == result["text"]
 
 
 def ordered_writer_race(monkeypatch, first, operations):

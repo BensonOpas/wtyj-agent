@@ -47,6 +47,12 @@ event retryable. Only the authoritative outcome sets the final phase, processed
 marker and cached reply. This closes the previous failure window where an
 aborted cancellation was already marked cancelled and duplicate on retry.
 
+The payment-status handler also reloads the reservation after generation and
+only offers checkout while payment is still pending and the reservation is
+unfrozen. A signed payment finishing during the model call must not leave a
+fresh checkout link appended to the recorded paid answer. Existing signed
+payment replay behavior is unchanged.
+
 Rejected: parsing model prose or adding multilingual confirmation/cancellation
 keyword lists; cancelling based only on the model snapshot; deleting tokens in
 a later transaction; revoking a paid booking; changing final-send pause/mute
@@ -86,6 +92,8 @@ fault-injection regressions cover model and deterministic cancellation retries
 after token revocation aborts, and the paid-race test checks the cached review
 payload. Combined parent tests
 and the complete real-model audit remain release gates owned by the root task.
+A real store payment committed inside the status model stub additionally
+verifies that no new checkout token/link is produced after generation.
 
 ## Success Condition
 One canonical summary plus one unambiguous YES produces one reservation/quote.
