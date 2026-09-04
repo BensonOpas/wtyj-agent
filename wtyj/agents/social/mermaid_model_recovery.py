@@ -245,6 +245,17 @@ def generate(message: dict, locale: str, call_model) -> dict:
         delay = TRANSIENT_DELAY_SECONDS * row["attempts"] if failure.get("retryable") else OPERATOR_COOLDOWN_SECONDS
         retry_at = time.time() + delay
         conn.execute("UPDATE mermaid_model_events SET status='failed',error_kind=?,retryable=?,retry_at=? WHERE conversation_id=? AND message_id=?", (kind, retryable, retry_at, conversation, message_id))
+        if kind == "invalid_response":
+            # The provider answered, but this event's structured output was
+            # invalid. Keep its retry local so healthy guests can still reply.
+            # A probe may clear only its own older outage, never a concurrent
+            # newer provider failure or another worker's lease.
+            cleared = conn.execute("DELETE FROM mermaid_model_circuit WHERE probe_id=? AND failed_at<=?", (probe_id, now)).rowcount
+            if cleared and not conn.execute("SELECT 1 FROM mermaid_model_circuit").fetchone():
+                conn.execute("UPDATE pending_notifications SET status='resolved' WHERE notification_type='technical' AND customer_id='mermaid:model-provider' AND status IN ('pending','sent')")
+            updated = conn.execute("SELECT * FROM mermaid_model_events WHERE conversation_id=? AND message_id=?", (conversation, message_id)).fetchone()
+            conn.commit()
+            return _failure(locale, _metadata(updated))
         circuit = conn.execute("SELECT * FROM mermaid_model_circuit WHERE singleton=1").fetchone()
         if circuit and circuit["probe_id"] != probe_id and circuit["blocked_until"] > time.time():
             retry_at = max(retry_at, circuit["blocked_until"])

@@ -1,0 +1,5 @@
+# OUTPUT342 A1 — Invalid response isolation
+
+The actual first candidate PARA006 malformed empty fields response no longer suppresses other messages. Mermaid alone normalizes exactly empty fields to an empty object; other malformed values stay rejected. Invalid output preserves bounded event retries, saved intake and idempotent notices without opening the provider circuit or creating a provider-outage alert. An invalid probe clears only its own older outage; concurrent later outages survive.
+
+Before implementation, seven of eight new regression cases failed (one race protection case already passed). After implementation, all212 combined recovery/policy/pickup/soft-review checks passed; independent reviewer reran all90 recovery checks successfully and approved the source with no actionable findings. Evidence preserves the failing run. No second model call, live data changes or customer sends were introduced. Parent owns exact-image and real-model follow-up verification and guarded deployment.

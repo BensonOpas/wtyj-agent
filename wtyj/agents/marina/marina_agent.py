@@ -2197,6 +2197,11 @@ def process_message(
                           channel=channel, from_id=from_email[:50])
             return fallback
         result = dict(tool_use_block.input)
+        # A real Mermaid FAQ response used an empty string for no extracted
+        # fields. Normalize only that empty representation; malformed values
+        # containing information must still fail the recovery schema check.
+        if response_contract == "mermaid_reservation_demo" and result.get("fields") == "":
+            result["fields"] = {}
 
         # Default missing fields instead of rejecting the entire response
         for field, default in _RESPONSE_DEFAULTS.items():

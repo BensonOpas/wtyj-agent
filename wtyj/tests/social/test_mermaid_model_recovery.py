@@ -65,7 +65,8 @@ def test_failed_event_recovers_once_without_caching_fallback(review_runtime, loc
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 0
     assert model.call_count == send.call_count == 2
-    assert _rows("SELECT COUNT(*) FROM pending_notifications WHERE notification_type='technical'") == [(1,)]
+    # This malformed output is local to the message, not a provider outage.
+    assert _rows("SELECT COUNT(*) FROM pending_notifications WHERE notification_type='technical'") == [(0,)]
 
 
 @pytest.mark.parametrize("locale,text", HUMAN_REQUESTS.items())
@@ -419,3 +420,109 @@ def test_actual_marina_sdk_response_with_compatibility_metadata_recovers_normall
     assert status == "generated"
     assert "intents" in stored and "flags" in stored
     assert stored["mermaid_action"] == "question"
+
+
+@pytest.mark.parametrize("value,accepted", [("", True), ("passengers=5", False), ([], False), (None, False)])
+def test_actual_sdk_empty_fields_normalization_is_narrow_and_preserves_intake(review_runtime, monkeypatch, value, accepted):
+    import json
+    _model, send, _controls = review_runtime
+    original = _locale("en")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-not-a-key")
+    monkeypatch.setattr(marina_agent, "process_message", _real_process_message)
+    client = Mock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input={**_understood("question", "Breakfast is included."), "fields": value})], usage=None,
+    )
+    monkeypatch.setattr(marina_agent.anthropic, "Anthropic", Mock(return_value=client))
+    _flush("sdk-fields", "Is breakfast included?")
+    assert client.messages.create.call_count == send.call_count == 1
+    assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
+    status, raw = _rows("SELECT status,response_json FROM mermaid_model_events")[0]
+    if accepted:
+        assert send.call_args.args[3] == "Breakfast is included."
+        assert status == "generated" and json.loads(raw)["fields"] == {}
+        assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
+    else:
+        assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+        assert status == "failed" and raw == "{}"
+        assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
+    assert _rows("SELECT COUNT(*) FROM mermaid_model_circuit") == [(0,)]
+    assert _rows("SELECT COUNT(*) FROM pending_notifications") == [(0,)]
+
+
+def test_invalid_response_retries_own_event_without_blocking_other_conversations(review_runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: clock[0]))
+    message = {"from": CONVERSATION, "message_id": "invalid-isolated", "text": "trip question"}
+    model = Mock(return_value={**_understood("question", "Invalid"), "fields": ["wrong type"]})
+    first = recovery.generate(message, "en", model)
+    assert first["generation_failure"]["retry_at"] == 1005
+    recovery.notice_sent(first["generation_failure"])
+    clock[0] = 1001
+    blocked = recovery.generate(message, "en", model)
+    assert blocked["reply"] == "" and model.call_count == 1
+    other = Mock(return_value=_understood("question", "Other guest's answer"))
+    assert recovery.generate({**message, "from": "other-guest"}, "en", other)["reply"] == "Other guest's answer"
+    assert other.call_count == 1
+    assert _rows("SELECT COUNT(*) FROM mermaid_model_circuit") == [(0,)]
+    assert _rows("SELECT COUNT(*) FROM pending_notifications") == [(0,)]
+    clock[0] = 1005
+    model.return_value = _understood("question", "Recovered answer")
+    assert recovery.generate(message, "en", model)["reply"] == "Recovered answer"
+    assert recovery.generate(message, "en", model)["reply"] == "Recovered answer"
+    assert model.call_count == 2
+
+
+def test_invalid_response_does_not_block_fresh_message_from_same_guest(review_runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: clock[0]))
+    message = {"from": CONVERSATION, "message_id": "old-invalid", "text": "trip question"}
+    recovery.generate(message, "en", lambda: {**_understood("question", "Invalid"), "fields": None})
+    clock[0] = 1001
+    model = Mock(return_value=_understood("question", "Fresh answer"))
+    assert recovery.generate({**message, "message_id": "fresh-valid"}, "en", model)["reply"] == "Fresh answer"
+    assert model.call_count == 1
+    assert _rows("SELECT status FROM mermaid_model_events WHERE message_id='old-invalid'") == [("superseded",)]
+
+
+def test_invalid_response_probe_clears_own_old_provider_outage(review_runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: clock[0]))
+    message = {"from": CONVERSATION, "message_id": "outage", "text": "trip question"}
+    recovery.generate(message, "en", Mock(side_effect=TimeoutError()))
+    clock[0] = 1005
+    result = recovery.generate(message, "en", lambda: {**_understood("question", "Invalid"), "fields": None})
+    assert result["generation_failure"]["kind"] == "invalid_response"
+    assert result["generation_failure"]["retry_at"] == 1015
+    assert _rows("SELECT COUNT(*) FROM mermaid_model_circuit") == [(0,)]
+    assert _rows("SELECT status FROM pending_notifications") == [("resolved",)]
+    model = Mock(return_value=_understood("question", "Healthy answer"))
+    assert recovery.generate({**message, "from": "healthy-other"}, "en", model)["reply"] == "Healthy answer"
+    assert model.call_count == 1
+
+
+def test_invalid_response_probe_does_not_clear_concurrent_later_provider_failure(review_runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: clock[0]))
+    started, release = Event(), Event()
+    message = {"from": CONVERSATION, "message_id": "slow", "text": "trip question"}
+    def slow_failure():
+        started.set()
+        assert release.wait(3)
+        return {"generation_failed": True, "model_error": {"kind": "billing", "retryable": False}}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        slow = pool.submit(recovery.generate, message, "en", slow_failure)
+        assert started.wait(3)
+        clock[0] = 1001
+        recovery.generate({**message, "message_id": "outage"}, "en", Mock(side_effect=TimeoutError()))
+        clock[0] = 1006
+        def invalid_probe():
+            clock[0] = 1007
+            release.set()
+            assert slow.result(timeout=3)["generation_failure"]["kind"] == "billing"
+            return {**_understood("question", "Invalid"), "fields": None}
+        result = recovery.generate({**message, "message_id": "probe"}, "en", invalid_probe)
+    assert result["generation_failure"]["kind"] == "invalid_response"
+    assert _rows("SELECT error_kind,failed_at,blocked_until FROM mermaid_model_circuit") == [("billing", 1007.0, 1907.0)]
+    assert _rows("SELECT status FROM pending_notifications") == [("pending",)]
+    assert "billing" in _rows("SELECT body FROM pending_notifications")[0][0]
