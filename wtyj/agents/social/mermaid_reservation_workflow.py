@@ -690,6 +690,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         review_pending and action in {'confirm_summary', 'new_booking', 'cancel'}
     ):
         response = response_policy.wildlife_guarantee_reply(locale, response_policy.state_context(phone, reservation))
+    elif understood.get('status_request') == 'pickup_pricing' and not (
+        review_pending and action in {'confirm_summary', 'new_booking', 'cancel'}
+    ):
+        response = response_policy.pickup_pricing_reply(
+            locale, fields, None if action == 'new_booking' and not review_pending else reservation)
+        other_answer = str(understood.get('other_question_reply') or '').strip()
+        if other_answer:
+            response += '\n\n' + other_answer
     elif understood.get('status_request') == 'pickup_coverage':
         response = response_policy.pickup_coverage_reply(locale)
     elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':

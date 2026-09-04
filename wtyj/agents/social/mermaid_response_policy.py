@@ -113,6 +113,67 @@ def pickup_coverage_reply(locale: str) -> str:
     return copy('pickup_round_trip' if journey == 'round_trip' else 'pickup_unknown', locale)
 
 
+def pickup_pricing_reply(locale: str, fields: dict, reservation: dict | None = None) -> str:
+    """Informational transport facts never select pickup or reprice a booking."""
+    from agents.social import mermaid_guest_experience as guest
+
+    catalog = mermaid_catalog.get_catalog()
+    intake = reservation['intake'] if reservation else fields
+    counts = [intake.get(key) for key in ('adults', 'children', 'infants')]
+    complete_party = all(type(count) is int and count >= 0 for count in counts)
+    passengers = sum(counts) if complete_party else 0
+    parts = []
+    if complete_party and passengers > 0:
+        parts.append(guest.party_text(intake, locale) + '. ' +
+                     copy('pickup_party_count', locale).format(count=passengers))
+
+    def offer(plan):
+        if not plan.get('vehicle_key'):
+            return copy('pickup_current_amount', locale).format(
+                currency=plan['currency'], amount=f"{plan['amount']:,.2f}")
+        vehicle = guest.pickup_label({'pickup_plan': plan}, locale)
+        text = copy('pickup_option', locale).format(
+            vehicle=vehicle, quantity=plan['quantity'], currency=plan['currency'],
+            amount=f"{plan['unit_amount']:,.2f}")
+        if plan['quantity'] > 1:
+            text += ' ' + copy('pickup_option_total', locale).format(
+                currency=plan['currency'], amount=f"{plan['amount']:,.2f}")
+        return text
+
+    money = reservation.get('monetary_snapshot') if reservation else None
+    if money and money.get('pickup_amount') is not None:
+        plan = money.get('pickup_plan') or {}
+        if plan.get('vehicle_key'):
+            parts.append(copy('pickup_recorded_vehicle', locale).format(
+                quantity=plan['quantity'], vehicle=guest.pickup_label(money, locale),
+                currency=money['currency'], amount=f"{money['pickup_amount']:,.2f}"))
+        else:
+            # Historical flat-fee quotes establish an amount, not a vehicle.
+            parts.append(copy('pickup_recorded_amount', locale).format(
+                currency=money['currency'], amount=f"{money['pickup_amount']:,.2f}"))
+    else:
+        if reservation:
+            parts.append(copy('pickup_not_included', locale))
+        if not complete_party or passengers <= 0:
+            for vehicle in catalog['pricing'].get('pickup_vehicles') or []:
+                parts.append(offer(mermaid_catalog.pickup_quote(vehicle['capacity'], catalog)))
+            if not catalog['pricing'].get('pickup_vehicles'):
+                plan = mermaid_catalog.pickup_quote(1, catalog)
+                parts.append(offer(plan) if plan['status'] == 'quoted' else copy('pickup_unpriced', locale))
+            parts.append(copy('pickup_need_party', locale))
+        else:
+            plan = mermaid_catalog.pickup_quote(passengers, catalog)
+            if plan['status'] == 'quoted':
+                parts.append(offer(plan))
+            else:
+                parts.append(copy('pickup_offer_review' if plan['status'] == 'requires_review'
+                                  else 'pickup_unpriced', locale))
+    parts.append(copy('pickup_schedule', locale).format(time=mermaid_catalog.pickup_time(catalog)))
+    journey = catalog['pricing'].get('pickup_journey', 'unconfirmed')
+    parts.append(copy('pickup_round_trip' if journey == 'round_trip' else 'pickup_unknown', locale))
+    return '\n\n'.join(parts)
+
+
 def record_security_event(conversation: str, message_id: str, event: str, *, now: float | None = None) -> bool:
     """Log classifications, never supplied secrets/text. Return durable review need.
 
