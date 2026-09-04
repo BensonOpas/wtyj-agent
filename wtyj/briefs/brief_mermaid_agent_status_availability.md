@@ -71,6 +71,15 @@ After the fix, these three suites pass: **46 tests** on local Python 3.14.
 Production verification should repeat the same suites in the exact deployment
 image's Python 3.12 runtime without production mounts or network access.
 
+The broader exact-image run exposed an unrelated timing-sensitive fixture in
+`tests/test_mermaid_runtime_hardening.py:2425`: same-inode, same-size recovery
+writes sometimes retained the prior `mtime_ns` in Docker (66 of 100 isolated
+repetitions reported by the deployment task). The fixture now publishes its
+final valid configuration through a sibling-file atomic replacement, matching
+production writes and giving it a distinct inode. Its malformed in-place write
+and last-good assertions remain unchanged. This is a test-fixture correction;
+production `config_loader.py` is unchanged.
+
 ## Success Condition
 A control-panel outage is displayed as unavailable without writing a pause, and
 waiting for the bridge leaves the tenant HTTP event loop responsive.

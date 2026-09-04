@@ -2437,7 +2437,11 @@ def test_client_config_cache_preserves_last_good_read_and_recovers(
     config_path.write_text('{"revision":', encoding="utf-8")
     assert config_loader.get_raw()["revision"] == "good-1"
 
-    config_path.write_text(json.dumps({"revision": "good-2"}), encoding="utf-8")
+    # Production publishes complete config updates with atomic replacement.
+    # A new inode avoids same-size writes sharing a filesystem timestamp.
+    replacement = tmp_path / "client.next.json"
+    replacement.write_text(json.dumps({"revision": "good-2"}), encoding="utf-8")
+    replacement.replace(config_path)
     assert config_loader.get_raw()["revision"] == "good-2"
 
 
