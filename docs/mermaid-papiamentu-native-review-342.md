@@ -7,6 +7,38 @@ Qualification / native Curaçao language background: pending
 Date and exact approved commit/version: pending  
 Corrections and approval: pending
 
+## Current wording correction — 4 September 2026
+
+The user requires **standard written Curaçao Papiamentu: correct spelling, accents and grammar, with polite, professional, concise wording rather than street register**. The initial change applied 23 reviewed copy groups across six existing files; the final guidance amendment is recorded below. Reference checking and assistant wording review are complete for this scope; **a qualified native human sign-off is unavailable in the retained evidence and is not claimed**. Native approval remains pending. The fresh 12-conversation review is complete with preserved findings; the final wording update is deployed and its service checks passed.
+
+| Current source/key group | Correction applied |
+| --- | --- |
+| `client.json` → `agent_persona.language_register`; `response_policy.json` → `glossary.pap` | Professional standard-writing guidance reaches both generated reply fields, including language switches. The expanded glossary supplies food, drink, clothing, money and accommodation vocabulary plus all seven existing weekday spellings. German guidance is preserved. |
+| `reservation_catalog.json` → PAP trip/contact, hotel and pickup copy; policy `pickup_round_trip` | Consistent `biahe`, `alohamentu`, `tim` and `na total`; prices, return coverage, times, ages and placeholders are preserved. |
+| Policy `review_active`; workflow `COPY.pap.human`; recovery `HUMAN_COPY.pap` | Active copy now says “Un miembro di e tim ta atendé e kombersashon aki.” Queued copy still explicitly waits for team review and retains saved details/general-question support. Recorded state continues to select the wording. |
+| Workflow `COPY.pap.intro` | “Bon bini na Mermaid! Mi ta TRACY, asistente virtual di reservashon. Mi ta yuda bo ku bo biahe i prepara bo oferta di demo aki den WhatsApp.” |
+| Workflow `FAQ_COPY.pap.included`; document `DOCUMENT_COPY.pap.included_items`; glossary | Consistent `almuerso di barbekiú` and `máskara di snòrkel`; drink guidance uses `refresko`, `djus`, `serbes` and `biña`, preserving which items cost extra. |
+| Glossary `cash` and `cash_for_optional_drinks_example` | `sèn kèsh`; “Hiba sèn kèsh si bo ke serbes òf biña.” This retains optional-drink cash advice without adding a cash-only payment policy. |
+| Workflow `COPY.pap.invalid_day`, `FAQ_COPY.pap.price`; document date/protocol labels | Correct `djárason` and `detayá`; use `Fecha di biahe` and `Protokòl di biahe`. |
+
+The [government-published FPI spelling rules and word list](https://gobiernu.cw/wp-content/uploads/2025/12/196-GT.-Lb-schrijfwijze-Papiamentu-en-Nederlands.pdf) support the selected spellings and weekdays. Contextual usage comes from the [Ministry of Finance beverage notice](https://minfin.cw/wp-content/uploads/2019/09/FIN-Anunsio-Medida-PAP-4klx20cm-1.pdf), [CMC's Papiamentu patient booklet](https://www.cmc.cw/wp-content/uploads/2024/09/Beibi-Prematuro-Foyeto-ougustus-2024.pdf), and [Curaçao Tourist Board accommodation reporting](https://www.curacaotouristboard.com/2024/06/13/korsou-a-risibi-53-970-turista-di-estadia-na-mei-2024/). These establish spelling or usage, not approval of our complete sentences. Ordinary attested loanwords remain valid; `beibi` is not banned, and existing `handuk` is retained. Fare labels keep explicit ages. Complete combinations such as `paña di landa` and `máskara di snòrkel` remain assistant phrasing decisions, not independently certified expressions.
+
+The [CBCS/CGA/FIU Papiamentu notice of 28 March 2025](https://www.centralbank.cw/storage/app/media/press_releases_2025/20250328_persbericht_cbcs_cga_fiu_introductie_caribische_gulden_pa.pdf) uses `sèn kèsh` for cash deposits and purchases. It supports the cash term; the complete optional-drink sentence remains assistant-authored wording, without native human sign-off.
+
+The exact before/after mapping and reference limits are retained in `output/remediation-342-2026-09-04/papiamentu-correction-2026-09-04/{copy-plan-final.json,final-amendment.json,references-review.json}`. No language classifier, generated-text blacklist, business-rule change or extra model call is introduced. Earlier transcripts, raw grades and all historical rows below remain unchanged; they must not be read as the current copy inventory or erased after a later improvement.
+
+### Fresh PAP12 evidence and final guidance
+
+The run on `d61582302369c9b01e9e4f087923b23941dc1666` completed **12 conversations, 72 turns and 71 model calls**, with no generation failures. Raw results remain **9/10 Papiamentu originals + 1/1 Papiamentu paraphrase + 1/1 English/Papiamentu switch**. All turns and seven simulated receipts were reviewed; seven booked, one cancelled and four review-only outcomes retain correct recorded amounts and state.
+
+Concrete findings remain in `editorial-review.{json,md}`: BASE-005 T3 omits the requested arrival answer from its visible reply although the dedicated field contains it; BASE-059 T4 says “sombré òf kacho”; BASE-035/041/059 use “september”; BASE-035 has malformed contact/party phrasing; BASE-055 T3 uses unclear “blokmènt di solo”. These remain actual recorded defects, including those missed by raw assertions. Improved food/drink vocabulary does not establish perfect professional language.
+
+Source `9261d4a6d1d5efc030ab9706c3037c7607e4f3f3` adds the [twelve FPI month spellings](https://gobiernu.cw/wp-content/uploads/2025/12/196-GT.-Lb-schrijfwijze-Papiamentu-en-Nederlands.pdf#page=168), positive `sombré`, `pet`, `krema solar` packing guidance, existing catalog contact examples using `alkansá`, and an acknowledgement restricted to supplied or recorded details. Ordinary questions outside review and critical routes now receive explicit guidance to put the complete answer in `reply`, not split it across fields. Existing review routing is unchanged. `pet` remains existing document vocabulary, not a claimed FPI-listed word.
+
+The amendment passed **22 offline tests for prompt delivery and existing behavior**. Those checks do not generate fresh language or prove the recorded defects cannot recur. **No further paid audit was run after this amendment; no raw result or native-review status is regraded.** Exact additions and limits are in `final-amendment.json` beside the retained audit evidence. Final source `9261d4a` is deployed: **530 exact-image tests and 19/19 live checks passed** at 17:32 UTC. Tracy is active/available; controls and peers are preserved. These service checks do not change the language-quality limits above. See the [release report](mermaid-audit-342-release.md).
+
+## Retained historical review packet
+
 The reviewer should check clarity, Curaçao spelling, natural guest-service tone and factual meaning. Accept unaccented/Aruba-style incoming messages without forcing those spellings into output. Business facts are already approved: pickup and return are included in the configured vehicle price; do not change prices or policy while editing language.
 
 Weekday spelling reference: [Curaçao government locations and opening hours](https://gobiernu.cw/sitionan/). This reference supports weekday spellings only, not native approval of these sentences.

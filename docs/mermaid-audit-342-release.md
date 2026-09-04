@@ -1,6 +1,26 @@
 # Mermaid Tracy audit remediation — 4 September 2026
 
-The engineering fixes, German register update and paragraph-format correction are deployed to Mermaid; the current runtime is `aebe37f` and the service is online. **A4 language review and A8 complete acceptance remain open.** The balanced 60+6 fresh model audit and independent transcript reviews are complete: raw results are **59/60 + 5/6**. The display correction passed captured-output tests and live deployment checks; no fresh post-correction 60/60 result or native-language certification is claimed.
+Tracy is online on `9261d4a` with the engineering repairs and updated professional Curaçao Papiamentu guidance. The final image passed **530 tests** and **19/19 live checks**. **A4 native-language review and A8 complete acceptance remain open:** reference-backed copy and prompt-delivery checks do not certify perfect generated language.
+
+## Current deployed release — Curaçao Papiamentu
+
+Source `9261d4a6d1d5efc030ab9706c3037c7607e4f3f3` is deployed as `wtyj-agent:tracy-audit-342-9261d4a`, digest `sha256:3503a3b0802c9814e9816718c7be7f682f3aa534ff32167e7f8f0c678077fa8d`. It started at **2026-09-04 17:32:17 UTC (13:32:17 Curaçao)**. Health returned HTTP 200 in 0.003 seconds; public Unboks status returned HTTP 200 in 0.040 seconds with active/available true. The existing watchdog was healthy, 35.9 seconds old, with zero issues. All 19 post-release checks passed: all 15 runtime/policy hashes, complete configuration snapshot, owner contacts, controls, prices, return coverage, peer containers and maintenance removal. These are point-in-time observations, not an uptime or language-perfection guarantee.
+
+The update changes **43 configuration leaves** (client 1, catalog 10, policy 32) and four packaged overlays (workflow, documents, recovery and policy); 11 runtime files are inherited unchanged from `aebe37f`. It requires standard written Curaçao Papiamentu with correct accents and polite, professional wording. Positive glossary entries cover meals, drinks, clothing, cash, lodging, weekdays and all twelve official month spellings. Fixed catalog, handover and document copy is aligned. Packing/contact examples and an acknowledgement limited to actually supplied or recorded details address concrete sample findings. Ordinary-question guidance clarifies that the complete answer belongs in `reply`, with no splitting across fields. Runtime routing is unchanged. German guidance, approved amounts, contact overrides and intentional controls are preserved.
+
+The exact final Python 3.12 image passed **530 deterministic tests**. These verify prompt delivery, existing booking/contact/review/recovery behaviour and documents; they do not generate fresh model replies. The preceding candidate `d615823` also passed its own 530-test image gate. Independent reviews approved the copy, final eight-entry amendment and release pins; unchanged release helpers passed 12 offline tests, and direct conflict checks cover all 43 final allowed configuration leaves. Two synthetic maximum-content Papiamentu quote/receipt pages were visually checked: accents and demo notices remain readable, with no clipping or overlap and unchanged USD 75 return pickup / USD 450 total. The final amendment does not alter their document copy.
+
+Deployment used a private database/configuration backup, per-field compare-and-swap guards and graceful recreation of Mermaid only. The prior `aebe37f` image is retained for rollback; the private database/configuration backup is `/root/backups/tracy-papiamentu-9261d4a6d1d5`. The paused Codex monitor remains paused; no new monitor, live guest send, real payment or unrelated tenant restart was performed.
+
+### Fresh parent-source language sample and limits
+
+The isolated run on **`d615823`** completed **12 conversations, 72 turns and 71 model calls**, with raw results **9/10 original Papiamentu + 1/1 same Papiamentu paraphrase + 1/1 English-to-Papiamentu switch**. All replies, seven simulated receipts and recorded state were reviewed. Results contain seven booked reservations, one cancelled request and four without reservations; four soft reviews, eight quote IDs and seven receipt IDs. No generation failure, repeated model call per turn or recorded price/payment/state defect was found.
+
+The raw BASE-005 turn 3 failure is retained: its visible reply omits the requested arrival time while the separate FAQ field contains it. Editorial review also found a wrong cap noun in BASE-059, unclear sunscreen wording in BASE-055, unaccented September in three cases, and malformed contact/party wording in BASE-035. These are actual findings, including those missed by raw functional assertions. Source `9261d4a` adds the complete month list and positive packing/contact/acknowledgement examples plus field-placement guidance in response. **No paid generation run occurred after that final amendment; offline guide-delivery tests do not demonstrate that these defects cannot recur.** No raw score is rewritten or inherited as a fresh final-source result.
+
+PAP12 added **estimated USD 2.422149**, bringing the six preserved remediation attempts to **USD 33.817998 / 1,107 calls**. Its limit was USD 4 additional / USD 35.395849 cumulative and 80 new requests; actual usage is fully settled with no unknown debit, pending reservation or stop. All eleven new immutable result files and thirty pinned prior files passed independent reconciliation. The original separate baseline and all previous audit records remain preserved.
+
+Evidence is under `output/remediation-342-2026-09-04/papiamentu-correction-2026-09-04/`: `final-release/built/`, `pap12-run/results/`, `editorial-review.{md,json}`, `pap12-evidence-reconciliation-independent.{md,json}`, `final-amendment.json` and `documents/visual-review.json`. The [native review packet](mermaid-papiamentu-native-review-342.md) contains the official references and precise limits. Reference checking and assistant editorial review are complete for this scope; **qualified native-human approval remains unverified**.
 
 ## What changed
 
@@ -24,6 +44,7 @@ The original baseline remains **47/60 functional and 32/60 transcript accepted**
 | Third attempt |178ba56|6 accessibility +same 6 fresh|2/6 +2/6|69|2.153505|
 | Compatibility check |dc98142|6 accessibility +same 6 fresh|1/6 +5/6|72|2.285184|
 | Final balanced run |6714e33|Original 60 +same 6 fresh|59/60 +5/6|384|12.269262|
+| Papiamentu sample |d615823|10 PAP +same PAP paraphrase +EN/PAP switch|9/10 +1/1 +1/1|71|2.422149|
 
 Before the final run, these four preserved remediation attempts totaled **652 API calls, USD 19.126587 of their USD 20 ceiling**, with no unknown-usage debit and no provider/budget stop. Their results and cost remain unchanged. The later balanced 60+6 fresh audit is recorded separately below. These are token-based estimates, not invoice certification. The earlier original baseline's USD 11.944941 is a separate historical audit cost.
 
@@ -54,7 +75,7 @@ The final run cost **USD 12.269262** under the recorded revised **USD 35 cumulat
 
 Independent evidence reconciliation passed: all 14 final result files match their immutable manifest; all 103 original baseline files and the four prior attempts' pinned files remain unchanged. Evidence: `output/remediation-342-2026-09-04/final66-evidence-review.{json,md}`, `final66-run/results/` and `review-final66-{en-de,nl-pap,es-pt}.{json,md}`. No raw result was regraded.
 
-## Latest deployed release — readable paragraphs
+## Previous release — readable paragraphs
 
 Source `aebe37f43c74b14feb66b4f89f05142fe8165320` changes only Mermaid's generated `reply` and `other_question_reply` display cleanup, converting literal escaped newline characters to actual line breaks before existing sanitation. Guest excerpts, extracted fields, Unicode, unrelated escapes, routing and other clients' behavior are preserved. No configuration changes are included.
 
