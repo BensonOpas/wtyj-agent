@@ -1,5 +1,5 @@
 # BRIEF342 — Use consistent formal German address
-**Status:** Prepared, independently reviewed; not deployed | **Files:** `clients/mermaid/config/client.json`, `clients/mermaid/config/reservation_catalog.json`, `wtyj/agents/social/mermaid_understanding.py`, `wtyj/tests/agents/test_mermaid_german_register.py` | **Depends on:** 7788f54 | **Blocks:** final A4 language acceptance
+**Status:** Deployed as 6714e33; fresh language acceptance pending | **Files:** `clients/mermaid/config/client.json`, `clients/mermaid/config/reservation_catalog.json`, `wtyj/agents/social/mermaid_understanding.py`, `wtyj/tests/agents/test_mermaid_german_register.py` | **Depends on:** 7788f54 | **Blocks:** final A4 language acceptance
 
 ## Context
 The preserved English/German compatibility review records German generated replies using informal du/ihr while the canonical summary, payment, pickup and review copy uses formal Sie/Ihr. BASE045 T1 says “Für welches Datum planst du den Ausflug?”; its T6 dedicated FAQ says “seid ihr”. PARA003 T4 refers to “deine Bestätigung”. These are actual saved model outputs, not new model tests. The tenant's `agent_persona.language_register` currently tells the agent to match guest formality, and the Mermaid-specific prompt does not inject that existing field. Two deterministic German contact copies also use dich/du and need the same narrow correction.
@@ -27,10 +27,12 @@ Exercise the actual Marina SDK request boundary with a stubbed provider: the cur
 
 The four new regressions failed before the change. After implementation, 83 tests passed across the new register tests, contact-number workflow, public configuration projection and Marina tool-use suites. The actual SDK request is captured with a stubbed provider; its supplied output is not a model-quality result. A structural JSON comparison confirms only one persona leaf and the two German contact leaves changed. Before/after logs are preserved outside this checkout at `output/remediation-342-2026-09-04/german-register-{before,after}.txt`. Independent brief review passed before the runtime/config edits.
 
+The narrow release was deployed on 4 September 2026 at 15:59:19 UTC as `wtyj-agent:tracy-audit-342-6714e33`, digest `sha256:93ce387d82a69eac338727fbc63ec9b23157a0a7fbb021c5e7d574b65c7b4c4f`. The exact image passed the same 83-test gate and all 15 runtime/policy hash checks; fourteen files are inherited unchanged from the prior `f220c3e` image. Deployment verification passed 19/19 checks, preserving the existing policy, controls, owner contacts, prices and peer containers. No guest test messages or real payments were made. Fresh language acceptance remains pending; the prepared balanced 60+6 audit has no recorded outcome in this brief.
+
 ## Success Condition
 The reviewed formal register reaches Mermaid's generated reply contract and both deterministic contact prompts use matching formal address; native review and fresh model adherence remain explicitly unverified.
 
 ## Rollback
-Revert the source/config/test commit before release. No deployment, live mutation, migration or paid evaluation is included; the recorded USD 19.126587 of the USD 20 ceiling is unchanged.
+The guarded release can restore the prior `f220c3e` image and original configuration/compose bytes from `/root/backups/tracy-german-register-6714e33dbb6e`; the response policy is untouched. Nine offline release tests cover CAS and rollback guards. This narrow release added no paid evaluation; the four earlier remediation attempts remain recorded at USD 19.126587 of their USD 20 ceiling before the final run. Later fresh audit evidence is tracked separately.
 
 Independent output review passed with no actionable findings. The reviewer verified the exact three configuration leaves and one prompt paragraph, reran all four new regressions successfully, and confirmed the documented distinction between prompt delivery and fresh/native language validation.
