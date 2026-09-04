@@ -254,7 +254,7 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     for item in money["items"]:
         if not item["quantity"]:
             continue
-        item_label = guest.guest_copy(locale)["pickup_line"] if item["key"] == "pickup" else copy["items"][item["key"]]
+        item_label = guest.pickup_label(money, locale) if item["key"] == "pickup" else copy["items"][item["key"]]
         rows.append([Paragraph(_safe(item_label), body), str(item["quantity"]),
                      _money(money["currency"], item["unit_amount"]), _money(money["currency"], item["line_total"])])
     price_table = Table(rows, colWidths=[78 * mm, 22 * mm, 38 * mm, 42 * mm])

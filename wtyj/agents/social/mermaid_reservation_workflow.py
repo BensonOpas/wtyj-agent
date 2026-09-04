@@ -466,6 +466,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         context["booking_code"] = reservation["booking_code"]
     elif all(key in fields for key in ("adults", "children", "infants")):
         context["authoritative_pricing"] = guest.intake_money(fields)
+        context["pickup_offer"] = mermaid_catalog.pickup_quote(sum(fields[key] for key in ("adults", "children", "infants")))
     if fields.get("pickup_preference") == "pickup_requested":
         context["pickup_status"] = (
             "included" if (context.get("authoritative_pricing") or {}).get("pickup_amount") is not None
@@ -473,11 +474,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         )
     else:
         context["pickup_status"] = "not_requested"
+    missing_fields = [key for key in REQUIRED_FIELDS if key not in fields]
+    if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
+        missing_fields.append("pickup_location")
     understood = marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,
         thread_flags={"phase": fields.get("phase", "collecting")},
-        action_context=json.dumps({"required_fields": REQUIRED_FIELDS}),
+        action_context=json.dumps({"required_fields": REQUIRED_FIELDS, "missing_fields": missing_fields}),
         channel="whatsapp", messages=history,
         response_contract="mermaid_reservation_demo",
     )
@@ -516,7 +520,15 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     response = str(understood.get("reply") or "").strip()
     has_question = understood.get("has_open_question") is True or action == "question"
     result_action = None
-    if understood.get("requires_human") or action == "request_human" or (
+    pickup_review = (
+        (not reservation or action == "new_booking")
+        and action != "cancel"
+        and fields.get("pickup_preference") == "pickup_requested"
+        and mermaid_catalog.pickup_quote(sum(fields.get(key, 0) for key in ("adults", "children", "infants")))["status"] == "requires_review"
+    )
+    if pickup_review and action != "request_human":
+        response = guest.guest_copy(locale)["pickup_requires_review"]
+    if pickup_review or understood.get("requires_human") or action == "request_human" or (
         action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
     ):
         state_registry.create_pending_notification(
@@ -526,7 +538,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             preserve_hard_mode=True,
         )
         fields["phase"] = "human_takeover"
-        if action in {"confirm_summary", "new_booking", "cancel"}:
+        if action in {"confirm_summary", "new_booking", "cancel"} and not pickup_review:
             response = COPY[locale]["human"]
         else:
             response = response or COPY[locale]["human"]

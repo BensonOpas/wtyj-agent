@@ -99,7 +99,7 @@
   },
   "workflow": {
     "type": "mermaid_reservation_demo",
-    "catalog_version": "mermaid-demo-v3-2026-09-03",
+    "catalog_version": "mermaid-demo-v4-2026-09-03",
     "availability_source": "demo_assumed"
   },
   "features": {

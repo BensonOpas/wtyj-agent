@@ -1,0 +1,4 @@
+# Preserve the one-page PDF, pickup timing and soft-review repairs.
+FROM wtyj-agent:tracy-one-page-2eb3709
+COPY wtyj/shared/mermaid_catalog.py /app/shared/
+COPY wtyj/agents/social/mermaid_reservation_store.py wtyj/agents/social/mermaid_guest_experience.py wtyj/agents/social/mermaid_understanding.py wtyj/agents/social/mermaid_reservation_workflow.py wtyj/agents/social/mermaid_documents.py /app/agents/social/

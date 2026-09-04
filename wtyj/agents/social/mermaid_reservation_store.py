@@ -172,14 +172,20 @@ def _money_snapshot(intake: dict, catalog: dict) -> dict:
             "unit_amount": unit, "line_total": line_total,
         })
     pickup_amount = None
+    pickup_plan = None
     if intake.get("pickup_preference") == "pickup_requested":
-        pickup_amount = catalog["pricing"].get("pickup_price")
-        if pickup_amount is not None:
+        pickup_plan = (
+            mermaid_catalog.pickup_quote(sum(quantities.values()), catalog)
+            if all(key in intake for key in ("adults", "children", "infants"))
+            else {"status": "awaiting_guest_count"}
+        )
+        if pickup_plan["status"] == "quoted":
+            pickup_amount = pickup_plan["amount"]
             if currency != catalog["pricing"]["pickup_currency"]:
                 raise MermaidReservationError("pickup is unavailable in this currency; no conversion rate configured")
             items.append({
-                "key": "pickup", "label": "Pickup", "quantity": 1,
-                "unit_amount": pickup_amount, "line_total": pickup_amount,
+                "key": "pickup", "label": "Pickup", "quantity": pickup_plan["quantity"],
+                "unit_amount": pickup_plan["unit_amount"], "line_total": pickup_amount,
             })
             total += pickup_amount
     return {
@@ -187,6 +193,7 @@ def _money_snapshot(intake: dict, catalog: dict) -> dict:
         "items": items,
         "total": total,
         "pickup_amount": pickup_amount,
+        "pickup_plan": pickup_plan,
         "catalog_version": catalog["version"],
     }
 
@@ -226,6 +233,8 @@ def confirm_reservation(
             return _row(existing)
         public_id = "mer_" + uuid.uuid4().hex
         snapshot = _money_snapshot(intake, catalog)
+        if (snapshot.get("pickup_plan") or {}).get("status") in {"requires_review", "awaiting_guest_count"}:
+            raise MermaidReservationError("pickup requires review or a complete passenger count")
         for _ in range(10):
             code = _booking_code()
             try:

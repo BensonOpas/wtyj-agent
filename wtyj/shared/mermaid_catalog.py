@@ -51,14 +51,35 @@ def validate_catalog(catalog: dict) -> dict:
                 raise MermaidCatalogError(f"{currency} {band} price must be a non-negative integer")
     if pricing.get("default_currency") not in _SUPPORTED_CURRENCIES:
         raise MermaidCatalogError("default currency is unsupported")
+    vehicles = pricing.get("pickup_vehicles")
     pickup = pricing.get("pickup_price")
-    if pickup is not None:
+    if vehicles is None and pricing.get("pickup_basis") == "per_vehicle":
+        raise MermaidCatalogError("pickup vehicles are required for per-vehicle pricing")
+    if vehicles is not None:
+        if not isinstance(vehicles, list) or len(vehicles) != 2 or [v.get("key") for v in vehicles if isinstance(v, dict)] != ["car", "van"]:
+            raise MermaidCatalogError("pickup vehicles must define car and van")
+        previous_capacity = 0
+        for vehicle in vehicles:
+            capacity = vehicle.get("capacity")
+            amount = vehicle.get("price")
+            if type(capacity) is not int or capacity <= previous_capacity:
+                raise MermaidCatalogError("pickup vehicle capacities must be positive and increasing")
+            if type(amount) is not int or amount < 0:
+                raise MermaidCatalogError("pickup price must be a non-negative integer")
+            previous_capacity = capacity
+        if pricing.get("pickup_basis") != "per_vehicle" or pricing.get("pickup_coverage") != "island_wide":
+            raise MermaidCatalogError("pickup must be priced per vehicle island-wide")
+        if pricing.get("pickup_overflow") not in {"team_review", "multiple_vans"}:
+            raise MermaidCatalogError("pickup overflow policy is required")
+        if pickup is not None:
+            raise MermaidCatalogError("flat pickup price conflicts with vehicle pricing")
+    elif pickup is not None:
         if not isinstance(pickup, int) or isinstance(pickup, bool) or pickup < 0:
             raise MermaidCatalogError("pickup price must be a non-negative integer")
-        if pricing.get("pickup_currency") not in _SUPPORTED_CURRENCIES:
-            raise MermaidCatalogError("pickup currency is unsupported")
         if pricing.get("pickup_basis") != "per_booking" or pricing.get("pickup_coverage") != "island_wide":
             raise MermaidCatalogError("pickup must be a flat island-wide charge per booking")
+    if (vehicles is not None or pickup is not None) and pricing.get("pickup_currency") not in _SUPPORTED_CURRENCIES:
+        raise MermaidCatalogError("pickup currency is unsupported")
 
     service = catalog.get("service") or {}
     if set(service.get("operating_weekdays") or []) != _REQUIRED_WEEKDAYS:
@@ -97,6 +118,29 @@ def pickup_time(catalog: dict | None = None) -> str:
     service = (get_catalog() if catalog is None else catalog)["service"]
     arrival = datetime.strptime(service["arrival_time"], "%H:%M")
     return (arrival - timedelta(minutes=service["pickup_minutes_before_arrival"])).strftime("%H:%M")
+
+
+def pickup_quote(passengers: int, catalog: dict | None = None) -> dict:
+    """Choose configured transport; passenger count includes every age band."""
+    pricing = (get_catalog() if catalog is None else catalog)["pricing"]
+    if type(passengers) is not int or passengers <= 0:
+        return {"status": "awaiting_guest_count"}
+    base = {"passenger_count": passengers, "currency": pricing.get("pickup_currency")}
+    vehicles = pricing.get("pickup_vehicles")
+    if not vehicles:
+        amount = pricing.get("pickup_price")
+        return {**base, "status": "unpriced" if amount is None else "quoted",
+                "quantity": 1, "unit_amount": amount, "amount": amount}
+    selected = next((v for v in vehicles if passengers <= v["capacity"]), None)
+    quantity = 1
+    if selected is None:
+        if pricing["pickup_overflow"] == "team_review":
+            return {**base, "status": "requires_review"}
+        selected = vehicles[-1]
+        quantity = (passengers + selected["capacity"] - 1) // selected["capacity"]
+    return {**base, "status": "quoted", "vehicle_key": selected["key"],
+            "vehicle_capacity": selected["capacity"], "quantity": quantity,
+            "unit_amount": selected["price"], "amount": quantity * selected["price"]}
 
 
 def reservation_demo_enabled() -> bool:

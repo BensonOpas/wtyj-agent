@@ -146,15 +146,15 @@ def test_repeated_payment_callback_reconciles_instead_of_resending(monkeypatch):
     assert docs.claim_initial_delivery(job['public_id']) is False
 
 
-@pytest.mark.parametrize('location,adults', [('Piscadera Bay Resort', 3), ('Westpunt', 2), ('Jan Thiel', 7)])
-def test_flat_pickup_is_one_charge_anywhere_on_island(location, adults):
+@pytest.mark.parametrize('location,adults,fee', [('Piscadera Bay Resort', 3, 75), ('Westpunt', 2, 75), ('Jan Thiel', 7, 125)])
+def test_vehicle_pickup_charge_is_independent_of_location(location, adults, fee):
     intake=fields(); intake.update(pickup_location=location, adults=adults)
     money=store._money_snapshot(intake,mermaid_catalog.get_catalog())
-    assert money['pickup_amount']==75
+    assert money['pickup_amount']==fee
     assert '05:45' in guest.transport_text(intake, 'en', money)
-    assert money['total']==adults*150+75
+    assert money['total']==adults*150+fee
     assert [i for i in money['items'] if i['key']=='pickup']==[
-        {'key':'pickup','label':'Pickup','quantity':1,'unit_amount':75,'line_total':75}]
+        {'key':'pickup','label':'Pickup','quantity':1,'unit_amount':fee,'line_total':fee}]
     intake['pickup_preference']='pier'
     own=store._money_snapshot(intake,mermaid_catalog.get_catalog())
     assert own['pickup_amount'] is None and own['total']==adults*150
@@ -164,11 +164,11 @@ def test_flat_pickup_is_one_charge_anywhere_on_island(location, adults):
 
 
 def test_current_fee_does_not_reprice_historical_reservation(monkeypatch,tmp_path):
-    old=mermaid_catalog.get_catalog(); old['pricing']['pickup_price']=None; old['version']='historical-demo'
+    old=mermaid_catalog.get_catalog(); old['pricing'].pop('pickup_vehicles'); old['pricing']['pickup_price']=None; old['version']='historical-demo'
     with monkeypatch.context() as m:
         m.setattr(mermaid_catalog,'get_catalog',lambda:old)
         item=store.confirm_reservation('old-guest',fields(),idempotency_key='old')
-    assert mermaid_catalog.get_catalog()['pricing']['pickup_price']==75
+    assert mermaid_catalog.get_catalog()['pricing']['pickup_vehicles'][0]['price']==75
     assert store.get_reservation(item['public_id'])['monetary_snapshot']['total']==450
     record={'currency':'USD','amount':450,'payment_reference':'OLD','paid_at':'2026-09-03T23:48:43+00:00'}
     for kind,render in [('quote',lambda p:docs.render_quote_pdf(item,p)),('receipt',lambda p:docs.render_receipt_pdf(item,record,p))]:
@@ -191,7 +191,7 @@ def test_pickup_never_invents_currency_conversion():
 
 @pytest.mark.parametrize('amount', [-1, True, '75', 75.5])
 def test_invalid_pickup_price_is_rejected(amount):
-    catalog=mermaid_catalog.get_catalog();catalog['pricing']['pickup_price']=amount
+    catalog=mermaid_catalog.get_catalog();catalog['pricing']['pickup_vehicles'][0]['price']=amount
     with pytest.raises(mermaid_catalog.MermaidCatalogError,match='pickup price'):
         mermaid_catalog.validate_catalog(catalog)
 
