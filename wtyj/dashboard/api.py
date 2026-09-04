@@ -5417,7 +5417,31 @@ async def get_mermaid_reservation_catalog_endpoint(response: Response):
     _require_mermaid_reservation_dashboard()
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["X-Unboks-Tenant"] = "mermaid"
-    return {"catalog": mermaid_catalog.get_catalog(), "demo": True, "remindersEnabled": False}
+    catalog = mermaid_catalog.get_catalog()
+    return {"catalog": catalog, "revision": mermaid_catalog.catalog_revision(catalog), "editable": True, "demo": True, "remindersEnabled": False}
+
+
+class MermaidCatalogPublishRequest(BaseModel):
+    expected_revision: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    changes: dict
+
+    model_config = {"extra": "forbid"}
+
+
+@router.put("/mermaid-reservations/catalog", dependencies=[Depends(_check_auth)])
+def publish_mermaid_reservation_catalog_endpoint(body: MermaidCatalogPublishRequest, response: Response):
+    _require_mermaid_reservation_dashboard()
+    try:
+        catalog = mermaid_catalog.publish_catalog(body.changes, body.expected_revision)
+    except mermaid_catalog.MermaidCatalogConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except mermaid_catalog.MermaidCatalogError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Trip settings could not be published. Reload to check the current version before retrying.") from exc
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+    return {"catalog": catalog, "revision": mermaid_catalog.catalog_revision(catalog), "editable": True, "demo": True, "remindersEnabled": False}
 
 
 @router.get("/mermaid-reservations/{public_id}", dependencies=[Depends(_check_auth)])
