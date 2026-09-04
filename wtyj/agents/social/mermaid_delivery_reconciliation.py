@@ -3,6 +3,7 @@
 A synchronous timeout is not a failed delivery. This worker never sends and
 matches the tenant's exact immutable document, independent of URL signatures.
 """
+import json
 import os
 import time
 from urllib.parse import quote, urlsplit
@@ -38,6 +39,11 @@ def reconcile_job(job_id):
     if not row or not key or not base or not row["zernio_account_id"]:
         return "unknown"
     account = row["zernio_account_id"]
+    from agents.social import mermaid_document_cards as cards
+    card_records = cards.records(row["public_id"], job["conversation_id"], account)
+    card_ids = {record["provider_message_id"] for record in card_records if record["provider_message_id"]}
+    card_urls = {json_payload["interactive"]["action"]["parameters"]["url"]
+                 for json_payload in (json.loads(record["payload_json"]) for record in card_records)}
     expected = _document_identity(f"{base}/api/public/mermaid-document/{row['public_id']}")
     response = provider._provider_account_get(
         f"https://zernio.com/api/v1/inbox/conversations/{quote(job['conversation_id'], safe='')}/messages",
@@ -57,11 +63,19 @@ def reconcile_job(job_id):
         attachments = message.get("attachments") or []
         urls = [message.get("attachmentUrl"), message.get("attachment_url")]
         urls += [item.get("url") or item.get("publicUrl") or item.get("attachmentUrl") for item in attachments if isinstance(item, dict)]
-        if expected not in [_document_identity(url) for url in urls if url]:
+        message_id = message.get("id") or message.get("messageId")
+        def contains_card_url(value):
+            if isinstance(value, str):
+                return value in card_urls
+            if isinstance(value, dict):
+                return any(contains_card_url(item) for item in value.values())
+            if isinstance(value, list):
+                return any(contains_card_url(item) for item in value)
+            return False
+        if message_id not in card_ids and not contains_card_url(message) and expected not in [_document_identity(url) for url in urls if url]:
             continue
         matched = True
         status = str(message.get("deliveryStatus") or message.get("status") or "").lower()
-        message_id = message.get("id") or message.get("messageId")
         states.add(status if message_id else "unknown")
         if not message_id or status not in {"delivered", "read"}:
             continue

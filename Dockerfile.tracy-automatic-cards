@@ -1,0 +1,8 @@
+FROM wtyj-agent:tracy-tropical-8fba1de
+COPY wtyj/agents/social/mermaid_document_cards.py /app/agents/social/mermaid_document_cards.py
+COPY wtyj/agents/social/mermaid_documents.py /app/agents/social/mermaid_documents.py
+COPY wtyj/agents/social/mermaid_demo_payment.py /app/agents/social/mermaid_demo_payment.py
+COPY wtyj/agents/social/mermaid_delivery_reconciliation.py /app/agents/social/mermaid_delivery_reconciliation.py
+COPY wtyj/agents/social/webhook_server.py /app/agents/social/webhook_server.py
+COPY wtyj/agents/social/senders/zernio.py /app/agents/social/senders/zernio.py
+COPY clients/mermaid/config/client.json /app/clients/mermaid/config/client.json

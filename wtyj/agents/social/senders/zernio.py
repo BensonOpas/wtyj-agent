@@ -21,6 +21,11 @@ class ZernioSender(Sender):
         from shared.tenant_guard import is_account_allowed
         if not is_account_allowed(account_id, direction="outbound"):
             return False
+        if attachment_url and attachment_type == "file":
+            from agents.social.mermaid_document_cards import try_send
+            card_result = try_send(conversation_id, account_id, text, attachment_url, idempotency_key)
+            if card_result is not None:
+                return card_result
         kwargs = {
             "attachment_url": attachment_url,
             "attachment_type": attachment_type,

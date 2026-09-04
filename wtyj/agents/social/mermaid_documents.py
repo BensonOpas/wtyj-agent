@@ -599,6 +599,9 @@ def stored_document_response(public_id: str):
 
 
 def quote_message(reservation: dict) -> str:
+    from agents.social import mermaid_document_cards as cards
+    if cards.enabled():
+        return cards.quote_text(reservation)
     locale = reservation["language"]
     return "\n\n".join([
         guest.guest_copy(locale)["quote_ready"],
