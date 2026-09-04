@@ -151,8 +151,8 @@ def test_payment_delivery_and_takeover_follow_records(monkeypatch, locale):
 def test_party_uses_singular_forms(locale):
     from agents.social import mermaid_guest_experience as guest
     text=guest.party_text({'adults':1,'children':1,'infants':1},locale)
-    copy=guest.guest_copy(locale)
-    assert text==', '.join(copy[k+'_one'].format(count=1) for k in ('adults','children','infants'))
+    copy=guest.guest_copy(locale)['formal_party']
+    assert text==' · '.join((copy['adult_one'].format(count=1), copy['children_unknown_one'].format(count=1), copy['infants_unknown_one'].format(count=1)))
 
 
 @pytest.mark.parametrize('selector', ['payment', 'delivery', 'wildlife_guarantee'])

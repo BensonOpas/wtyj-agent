@@ -5303,6 +5303,15 @@ def _mermaid_projection(item: dict) -> dict:
     intake = item["intake"]
     money = item["monetary_snapshot"]
     from agents.social.mermaid_guest_experience import party_text
+    if intake.get("child_ages"):
+        party_description = party_text(intake, "en")
+    else:
+        parts = []
+        for key, one, many, band in (("adults", "adult", "adults", ""), ("children", "child", "children", " (4–12)"), ("infants", "child", "children", " (0–3)")):
+            count = intake.get(key, 0)
+            if count:
+                parts.append(f"{count} {one if count == 1 else many}{band}")
+        party_description = " · ".join(parts)
     return {
         "publicId": item["public_id"],
         "conversationId": item["conversation_id"],
@@ -5314,7 +5323,7 @@ def _mermaid_projection(item: dict) -> dict:
         "children": intake["children"],
         "infants": intake["infants"],
         "childAges": intake.get("child_ages", []),
-        "partyDescription": party_text(intake, "en"),
+        "partyDescription": party_description,
         "pickupPreference": intake["pickup_preference"],
         "pickupLocation": intake.get("pickup_location"),
         "dietaryRequirements": intake.get("dietary_requirements"),
