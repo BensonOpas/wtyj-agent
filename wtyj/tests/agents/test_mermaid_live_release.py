@@ -36,6 +36,7 @@ def test_short_answer_journey_uses_one_understanding_call_per_turn(locale, monke
         ("0", {"children": 0}),
         ("none", {"infants": 0}),
         ("Ana Silva", {"customer_name": "Ana Silva"}),
+        ("+1 202 555 0123", {"contact_phone": "+1 202 555 0123"}),
         ("pier", {"pickup_preference": "pier"}),
     ]
     understood = MagicMock()
@@ -44,7 +45,7 @@ def test_short_answer_journey_uses_one_understanding_call_per_turn(locale, monke
         understood.return_value = interpretation(fields, locale=locale)
         reply = workflow.handle_demo_message({"from": phone, "text": text, "message_id": str(index)}, include_media=True, use_model=True)
         assert reply["media"] is None
-    assert understood.call_count == 6
+    assert understood.call_count == 7
     assert state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]["phase"] == "awaiting_summary_confirmation"
 
     understood.return_value = interpretation(action="question", locale=locale, reply="The included facilities are in your quote.")
@@ -66,14 +67,14 @@ def test_short_answer_journey_uses_one_understanding_call_per_turn(locale, monke
     retry = workflow.handle_demo_message({"from": phone, "text": "yes", "message_id": "yes"}, include_media=True, use_model=True)
     assert retry["media"] == confirmed["media"]
     assert retry["mermaid_delivery_commit"] == confirmed["mermaid_delivery_commit"]
-    assert understood.call_count == 9
+    assert understood.call_count == 10
     mermaid_documents.mark_delivery(confirmed["mermaid_delivery_commit"]["job_id"], True)
     delivered_replay = workflow.handle_demo_message({"from": phone, "text": "yes", "message_id": "yes"}, include_media=True, use_model=True)
     assert delivered_replay["text"] == ""
 
 
 def test_empty_party_cannot_reach_confirmation(monkeypatch):
-    fields = {"trip_date": "2026-09-05", "adults": 0, "children": 0, "infants": 0, "customer_name": "Ana Silva", "pickup_preference": "pier"}
+    fields = {"trip_date": "2026-09-05", "adults": 0, "children": 0, "infants": 0, "customer_name": "Ana Silva", "contact_phone": "+12025550123", "pickup_preference": "pier"}
     monkeypatch.setattr(marina_agent, "process_message", lambda **kwargs: interpretation(fields))
     result = workflow.handle_demo_message({"from": "empty-party", "text": "zero", "message_id": "zero"}, include_media=True, use_model=True)
     assert result["media"] is None
@@ -83,7 +84,7 @@ def test_empty_party_cannot_reach_confirmation(monkeypatch):
 def test_model_cannot_supply_money_or_approve_changed_summary(monkeypatch):
     state_registry.wa_save_booking_state("guard", {"mermaid_intake": {
         "trip_date": "2026-09-05", "adults": 2, "children": 0, "infants": 0,
-        "customer_name": "Ana Silva", "pickup_preference": "pier", "language": "en",
+        "customer_name": "Ana Silva", "contact_phone": "+12025550123", "pickup_preference": "pier", "language": "en",
         "phase": "awaiting_summary_confirmation",
     }}, {})
     monkeypatch.setattr(marina_agent, "process_message", lambda **kwargs: interpretation({"adults": 3, "total": 1, "payment_state": "paid", "booking_code": "FAKE"}, "confirm_summary"))

@@ -44,6 +44,8 @@ def test_multi_fact_message_preserves_facts_and_asks_only_one_question():
         "My name is Ana Silva. Date 2026-09-05, 2 adults, 1 child, 0 infants. We will meet at the pier.",
         message_id="one",
     )
+    assert result.phase == "collecting"
+    result = workflow.process_intake_turn("guest-multi", "+1 202 555 0123", message_id="contact")
     assert result.phase == "awaiting_summary_confirmation"
     assert result.text.count("?") == 1
     assert "Ana Silva" in result.text
@@ -74,6 +76,7 @@ def test_summary_requires_explicit_confirmation_and_allows_one_field_correction(
         "My name is Ana Silva. Date 2026-09-05, 2 adults, 0 children, 0 infants, meet at pier.",
         message_id="one",
     )
+    workflow.process_intake_turn(phone, "+1 202 555 0123", message_id="contact")
     hesitation = workflow.process_intake_turn(phone, "hmm 🙂", message_id="two")
     assert hesitation.phase == "awaiting_summary_confirmation"
     assert hesitation.action is None

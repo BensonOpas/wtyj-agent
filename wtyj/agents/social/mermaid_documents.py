@@ -234,8 +234,13 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     def detail(label, value):
         return Paragraph(f"<b>{_safe(label)}</b><br/>{_safe(value)}", body)
 
+    customer_detail = detail(labels["customer"], reservation["customer_name"])
+    if intake.get("contact_phone"):
+        customer_detail = Paragraph(
+            f"<b>{_safe(labels['customer'])}</b><br/>{_safe(reservation['customer_name'])}"
+            f"<br/><b>{_safe(guest.guest_copy(locale)['contact_phone_label'])}:</b> {_safe(intake['contact_phone'])}", body)
     detail_rows = [
-        [detail(labels["customer"], reservation["customer_name"]), detail(labels["quote"], reservation["public_id"][-10:].upper())],
+        [customer_detail, detail(labels["quote"], reservation["public_id"][-10:].upper())],
         [detail(labels["date"], guest.guest_date(intake["trip_date"], locale)), detail(labels["guests"], guest.party_text(intake, locale))],
     ]
     details = Table(detail_rows, colWidths=[90 * mm, 90 * mm])

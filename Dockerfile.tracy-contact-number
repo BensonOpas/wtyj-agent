@@ -1,0 +1,5 @@
+# Keep all current conversation, vehicle pricing, timing and document repairs.
+FROM wtyj-agent:tracy-layout-796d5a2
+COPY wtyj/shared/mermaid_contact.py /app/shared/
+COPY wtyj/agents/social/mermaid_understanding.py wtyj/agents/social/mermaid_reservation_workflow.py wtyj/agents/social/mermaid_reservation_store.py wtyj/agents/social/mermaid_documents.py /app/agents/social/
+COPY wtyj/dashboard/api.py /app/dashboard/

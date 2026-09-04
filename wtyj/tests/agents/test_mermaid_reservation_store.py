@@ -23,7 +23,7 @@ def isolated(tmp_path, monkeypatch):
 def intake(**changes):
     value = {
         "trip_date": "2026-09-05", "adults": 2, "children": 1, "infants": 1,
-        "customer_name": "Ana Silva", "pickup_preference": "pier", "language": "en",
+        "customer_name": "Ana Silva", "contact_phone": "+12025550123", "pickup_preference": "pier", "language": "en",
         "phase": "summary_confirmed",
     }
     value.update(changes)
@@ -37,7 +37,7 @@ def test_confirmation_creates_immutable_demo_assumed_snapshot():
     assert reservation["booking_code"].startswith("MER-DEMO-")
     assert reservation["monetary_snapshot"]["total"] == 375
     assert reservation["monetary_snapshot"]["currency"] == "USD"
-    assert reservation["catalog_version"] == "mermaid-demo-v4-2026-09-03"
+    assert reservation["catalog_version"] == "mermaid-demo-v5-2026-09-03"
     assert "available" not in reservation["intake"]
     event = store.events(reservation["public_id"])[0]
     assert event["to_state"] == "demo_availability_approved"

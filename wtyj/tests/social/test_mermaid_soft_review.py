@@ -50,7 +50,7 @@ def review_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(webhook_server, "send_reply", send)
     state_registry.wa_save_booking_state(CONVERSATION, {"mermaid_intake": {
         "trip_date": "2026-09-06", "adults": 2, "children": 0, "infants": 0,
-        "customer_name": "Test Guest", "pickup_preference": "pier",
+        "customer_name": "Test Guest", "contact_phone": "+12025550123", "pickup_preference": "pier",
         "language": "en", "phase": "awaiting_summary_confirmation",
     }}, {})
     yield model, send, controls

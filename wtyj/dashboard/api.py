@@ -5306,6 +5306,7 @@ def _mermaid_projection(item: dict) -> dict:
         "publicId": item["public_id"],
         "conversationId": item["conversation_id"],
         "customerName": item["customer_name"],
+        "contactPhone": intake.get("contact_phone"),
         "language": item["language"],
         "tripDate": intake["trip_date"],
         "adults": intake["adults"],
@@ -5346,6 +5347,7 @@ async def list_mermaid_reservations_endpoint(response: Response, query: str = ""
             needle in str(value or "").casefold()
             for value in (
                 item["customerName"], item["conversationId"], item["quotePublicId"],
+                item["contactPhone"],
                 item["bookingCode"], item["paymentReference"],
             )
         )]

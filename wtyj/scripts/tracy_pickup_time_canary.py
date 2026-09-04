@@ -35,7 +35,7 @@ def main():
 
     phone = 'synthetic-pickup-time'
     intake = dict(trip_date='2026-09-06', adults=3, children=0, infants=0,
-                  customer_name='Test Guest', pickup_preference='pickup_requested',
+                  customer_name='Test Guest', contact_phone='+12025550123', pickup_preference='pickup_requested',
                   language='en', phase='collecting')
     state_registry.wa_save_booking_state(phone, {'mermaid_intake': intake}, {})
     state_registry.dm_store_message(phone, 'whatsapp', 'assistant', 'Would you like pickup?')

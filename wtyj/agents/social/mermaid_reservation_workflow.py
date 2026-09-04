@@ -17,12 +17,13 @@ from typing import Any
 import dateparser
 
 from shared import mermaid_catalog, state_registry
+from shared.mermaid_contact import normalize_contact_phone
 from agents.social import mermaid_guest_experience as guest
 
 
 SUPPORTED_LOCALES = ("en", "nl", "de", "es", "pap", "pt")
 REQUIRED_FIELDS = (
-    "trip_date", "adults", "children", "infants", "customer_name", "pickup_preference"
+    "trip_date", "adults", "children", "infants", "customer_name", "contact_phone", "pickup_preference"
 )
 
 
@@ -251,6 +252,9 @@ def _extract_fields(text: str, locale: str, current: dict) -> tuple[dict, bool]:
     for word, number in number_words.items():
         numeric_value = re.sub(rf"\b{re.escape(word)}\b", number, numeric_value, flags=re.IGNORECASE)
     updates: dict[str, Any] = {}
+    contact = normalize_contact_phone(value)
+    if contact:
+        updates["contact_phone"] = contact
     ambiguous_party = False
 
     trip_date = _extract_date(value)
@@ -305,11 +309,14 @@ def _summary(fields: dict, locale: str) -> str:
     labels = SUMMARY_COPY[locale]
     pickup = guest.transport_text(fields, locale)
     party = guest.party_text(fields, locale)
+    contact = (f"{guest.guest_copy(locale)['contact_phone_label']}: {fields['contact_phone']}\n"
+               if fields.get("contact_phone") else "")
     return (
         f"*{labels['title']}*\n"
         f"{labels['date']}: {guest.guest_date(fields['trip_date'], locale)}\n"
         f"{labels['guests']}: {party}\n"
         f"{labels['name']}: {fields['customer_name']}\n"
+        f"{contact}"
         f"{guest.price_text(guest.intake_money(fields), fields, locale)}\n"
         f"{labels['transport']}: {pickup}\n\n{guest.guest_copy(locale)['confirm']}"
     )
@@ -329,6 +336,10 @@ def _next_question(fields: dict, locale: str) -> str | None:
         "infants": "infants", "customer_name": "name", "pickup_preference": "pickup",
     }
     for field in REQUIRED_FIELDS:
+        if field == "contact_phone":
+            if not normalize_contact_phone(fields.get(field)):
+                return guest.guest_copy(locale)["contact_phone_prompt"]
+            continue
         if field not in fields:
             return COPY[locale][prompt_keys[field]]
     if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
@@ -475,6 +486,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     else:
         context["pickup_status"] = "not_requested"
     missing_fields = [key for key in REQUIRED_FIELDS if key not in fields]
+    if "contact_phone" not in missing_fields and not normalize_contact_phone(fields.get("contact_phone")):
+        missing_fields.append("contact_phone")
     if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
         missing_fields.append("pickup_location")
     understood = marina_agent.process_message(
@@ -496,6 +509,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     old_phase = fields.get("phase", "collecting")
     fields["language"] = locale
     changes = {}
+    invalid_contact = False
     for key, value in (understood.get("fields") or {}).items():
         if key in {"adults", "children", "infants"}:
             if type(value) is int and 0 <= value <= 100:
@@ -509,16 +523,27 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
                 pass
         elif key == "pickup_preference" and value in {"pier", "pickup_requested"}:
             changes[key] = value
+        elif key == "contact_phone":
+            contact = normalize_contact_phone(value)
+            if contact:
+                changes[key] = contact
+            else:
+                invalid_contact = True
         elif key in {"customer_name", "pickup_location", "dietary_requirements", "accessibility_notes", "special_requests"} and isinstance(value, str):
             cleaned = " ".join(value.split())[:160]
             if cleaned:
                 changes[key] = cleaned
     changes = {key: value for key, value in changes.items() if fields.get(key) != value}
     fields.update(changes)
+    if invalid_contact and not reservation:
+        fields.pop("contact_phone", None)
     if fields.get("pickup_preference") == "pier":
         fields.pop("pickup_location", None)
     response = str(understood.get("reply") or "").strip()
     has_question = understood.get("has_open_question") is True or action == "question"
+    if invalid_contact and not reservation and not review_pending:
+        response = guest.guest_copy(locale)["contact_phone_retry"]
+        has_question = True
     result_action = None
     pickup_review = (
         (not reservation or action == "new_booking")
@@ -567,9 +592,11 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
                 fields.pop("trip_date")
                 response = COPY[locale]["invalid_day"] + "\n\n" + COPY[locale]["trip_date"]
         question = _next_question(fields, locale)
-        if question:
+        if invalid_contact:
             fields["phase"] = "collecting"
-            if not response:
+        elif question:
+            fields["phase"] = "collecting"
+            if not response or action == "confirm_summary":
                 response = question
         elif has_question:
             # A mixed detail/question turn must keep its answer. Changed facts

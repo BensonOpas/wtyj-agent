@@ -25,7 +25,7 @@ def isolated(tmp_path, monkeypatch):
 
 def intake(**changes):
     return dict(dict(trip_date='2026-09-06', adults=4, children=1, infants=1,
-                     customer_name='Test Guest', pickup_preference='pickup_requested',
+                     customer_name='Test Guest', contact_phone='+12025550123', pickup_preference='pickup_requested',
                      pickup_location='Westpunt', language='en', phase='summary_confirmed'), **changes)
 
 

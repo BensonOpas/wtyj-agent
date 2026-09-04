@@ -67,6 +67,8 @@ def main():
     for locale, (request, confirm) in samples.items():
         phone = "synthetic-release-" + locale
         first = turn(phone, request, 1)
+        assert state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]["phase"] == "collecting"
+        first = turn(phone, "+1 202 555 0123", "contact")
         intake = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
         assert intake["phase"] == "awaiting_summary_confirmation", (locale, intake)
         assert intake["language"] == locale, (locale, intake["language"])
@@ -91,7 +93,7 @@ def main():
         results.append({"locale": locale, "quote": True, "receipt": True, "payment_idempotent": True})
         print(json.dumps(results[-1]), flush=True)
     phone = "synthetic-release-short"
-    for index, text in enumerate(["Hi, I'd like to book a trip.", "Saturday", "2", "0", "none", "Ana Silva", "We will meet at the pier."]):
+    for index, text in enumerate(["Hi, I'd like to book a trip.", "Saturday", "2", "0", "none", "Ana Silva", "+1 202 555 0123", "We will meet at the pier."]):
         turn(phone, text, index)
     fields = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
     assert fields["phase"] == "awaiting_summary_confirmation", fields

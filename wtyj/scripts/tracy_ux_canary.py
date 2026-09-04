@@ -31,7 +31,7 @@ def main():
     phone='synthetic-tracy-ux'
     transcript=[]
     turns=[
-        "Hi, I wanna book for Sunday 6 September 2026, two adults and our 16 year old son. My name is Calvin Adamus.",
+        "Hi, I wanna book for Sunday 6 September 2026, two adults and our 16 year old son. My name is Calvin Adamus and my contact number is +1 202 555 0123.",
         "We have a rental car, we can make it. Is there any cost for picking us up? We're at Piscadera Bay Resort.",
         "I'd like pickup from Piscadera Bay Resort, please.",
         "Will that pickup price be included in the PDF?",

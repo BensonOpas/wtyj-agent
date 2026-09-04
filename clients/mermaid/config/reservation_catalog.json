@@ -1,5 +1,5 @@
 {
-  "version": "mermaid-demo-v4-2026-09-03",
+  "version": "mermaid-demo-v5-2026-09-03",
   "tenant_slug": "mermaid",
   "service": {
     "key": "klein_curacao_day_trip",
@@ -110,7 +110,10 @@
       "pickup_van": "Van pickup (up to {capacity} guests)",
       "pickup_vehicle_priced": "Pickup from {location} at {pickup_time}. Please be ready then. {quantity} × {vehicle}; {currency} {amount} pickup total, included in this booking.",
       "pickup_requires_review": "Your group needs more than one pickup vehicle. Mermaid's team will need to confirm the transport and price.",
-      "pickup_awaiting_guest_count": "I need the full guest count, including children and infants, to price the pickup."
+      "pickup_awaiting_guest_count": "I need the full guest count, including children and infants, to price the pickup.",
+      "contact_phone_label": "Contact number",
+      "contact_phone_prompt": "What's the best number to reach you on, including the country code? It's for important trip updates, like a weather cancellation.",
+      "contact_phone_retry": "Could you send the full phone number with its country code, starting with +? I need that to save a reachable contact for trip updates."
     },
     "nl": {
       "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
@@ -135,7 +138,10 @@
       "pickup_van": "Busjestransfer (max. {capacity} personen)",
       "pickup_vehicle_priced": "We halen je om {pickup_time} op bij {location}. Zorg dat je dan klaarstaat. {quantity} × {vehicle}; {currency} {amount} voor de transfer, inbegrepen in deze boeking.",
       "pickup_requires_review": "Jullie groep heeft meer dan één voertuig nodig. Het team van Mermaid moet het vervoer en de prijs bevestigen.",
-      "pickup_awaiting_guest_count": "Voor de transferprijs heb ik het volledige aantal gasten nodig, inclusief kinderen en baby’s."
+      "pickup_awaiting_guest_count": "Voor de transferprijs heb ik het volledige aantal gasten nodig, inclusief kinderen en baby’s.",
+      "contact_phone_label": "Contactnummer",
+      "contact_phone_prompt": "Op welk telefoonnummer kunnen we je bereiken, inclusief landcode? Het is voor belangrijke updates over de trip, bijvoorbeeld als slecht weer de vaart verhindert.",
+      "contact_phone_retry": "Kun je het volledige telefoonnummer met landcode sturen, beginnend met +? Dan kan ik een contactnummer voor updates over de trip opslaan."
     },
     "de": {
       "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
@@ -160,7 +166,10 @@
       "pickup_van": "Van-Abholung (max. {capacity} Gäste)",
       "pickup_vehicle_priced": "Abholung von {location} um {pickup_time}. Bitte seien Sie dann bereit. {quantity} × {vehicle}; insgesamt {currency} {amount} für die Abholung, in dieser Buchung enthalten.",
       "pickup_requires_review": "Ihre Gruppe benötigt mehr als ein Abholfahrzeug. Mermaids Team muss Transport und Preis bestätigen.",
-      "pickup_awaiting_guest_count": "Für den Abholpreis benötige ich die gesamte Gästezahl, einschließlich Kinder und Kleinkinder."
+      "pickup_awaiting_guest_count": "Für den Abholpreis benötige ich die gesamte Gästezahl, einschließlich Kinder und Kleinkinder.",
+      "contact_phone_label": "Telefonnummer",
+      "contact_phone_prompt": "Unter welcher Telefonnummer mit Ländervorwahl können wir dich erreichen? Sie ist für wichtige Informationen zur Fahrt, etwa bei einer wetterbedingten Absage.",
+      "contact_phone_retry": "Kannst du die vollständige Telefonnummer mit Ländervorwahl senden, beginnend mit +? So kann ich eine Kontaktnummer für Informationen zur Fahrt speichern."
     },
     "es": {
       "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
@@ -185,7 +194,10 @@
       "pickup_van": "Recogida en van (máx. {capacity} personas)",
       "pickup_vehicle_priced": "Te recogemos en {location} a las {pickup_time}. Ten todo listo para esa hora. {quantity} × {vehicle}; {currency} {amount} en total por la recogida, incluida en esta reserva.",
       "pickup_requires_review": "Su grupo necesita más de un vehículo. El equipo de Mermaid debe confirmar el transporte y el precio.",
-      "pickup_awaiting_guest_count": "Para calcular la recogida necesito el número total de pasajeros, incluidos niños y bebés."
+      "pickup_awaiting_guest_count": "Para calcular la recogida necesito el número total de pasajeros, incluidos niños y bebés.",
+      "contact_phone_label": "Teléfono de contacto",
+      "contact_phone_prompt": "¿Cuál es el mejor número para contactarte, incluido el código de país? Es para avisos importantes del viaje, como una cancelación por mal tiempo.",
+      "contact_phone_retry": "¿Puedes enviar el número completo con el código de país, empezando por +? Lo necesito para guardar un contacto para avisos del viaje."
     },
     "pap": {
       "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di trip.",
@@ -210,7 +222,10 @@
       "pickup_van": "Pickup ku van (máx. {capacity} persona)",
       "pickup_vehicle_priced": "Nos ta pasa buska bo na {location} pa {pickup_time}. Por fabor, ta kla na e ora ei. {quantity} × {vehicle}; {currency} {amount} pa pickup en total, inkluí den e reservashon aki.",
       "pickup_requires_review": "Boso grupo mester mas ku un vehíkulo. E team di Mermaid mester konfirmá e transporte i e preis.",
-      "pickup_awaiting_guest_count": "Pa kalkulá e preis di pickup mi mester e kantidat total di huéspednan, inkluyendo mucha i beibi."
+      "pickup_awaiting_guest_count": "Pa kalkulá e preis di pickup mi mester e kantidat total di huéspednan, inkluyendo mucha i beibi.",
+      "contact_phone_label": "Number di kontakto",
+      "contact_phone_prompt": "Na ki number di telefòn nos por alkansá bo, inkluyendo kódigo di pais? Ta pa avisunan importante di e trip, manera un kanselashon pa mal tempu.",
+      "contact_phone_retry": "Bo por manda e number di telefòn kompleto ku kódigo di pais, kuminsando ku +? Asina mi por warda un number di kontakto pa avisunan di e trip."
     },
     "pt": {
       "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
@@ -235,7 +250,10 @@
       "pickup_van": "Traslado de van (máx. {capacity} pessoas)",
       "pickup_vehicle_priced": "Buscamos você em {location} às {pickup_time}. Esteja pronto nesse horário. {quantity} × {vehicle}; {currency} {amount} no total pelo traslado, incluído nesta reserva.",
       "pickup_requires_review": "Seu grupo precisa de mais de um veículo. A equipe da Mermaid deve confirmar o transporte e o preço.",
-      "pickup_awaiting_guest_count": "Para calcular o traslado, preciso do número total de passageiros, incluindo crianças e bebês."
+      "pickup_awaiting_guest_count": "Para calcular o traslado, preciso do número total de passageiros, incluindo crianças e bebês.",
+      "contact_phone_label": "Telefone de contato",
+      "contact_phone_prompt": "Qual é o melhor número para falar com você, incluindo o código do país? É para avisos importantes sobre o passeio, como um cancelamento por mau tempo.",
+      "contact_phone_retry": "Pode enviar o número completo com o código do país, começando por +? Preciso dele para salvar um contato para avisos do passeio."
     }
   },
   "links": {

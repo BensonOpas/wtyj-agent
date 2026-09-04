@@ -62,7 +62,13 @@ def test_full_six_language_whatsapp_journey(locale, opening, confirmation, monke
         "_zernio_account_id": "synthetic-account",
     }, include_media=True)
     assert summary["media"] is None
+    assert state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]["phase"] == "collecting"
+    summary = mermaid_reservation_workflow.handle_demo_message({
+        "from": phone, "text": "+1 202 555 0123", "message_id": f"{locale}-contact",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
     intake = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
+    assert intake["contact_phone"] == "+12025550123"
     assert intake["language"] == locale
     assert intake["phase"] == "awaiting_summary_confirmation"
     assert intake["trip_date"] == "2026-09-05"
@@ -127,6 +133,9 @@ def test_duplicate_confirmation_cancel_retry_and_delivery_recovery(monkeypatch):
     opening = JOURNEYS[0][1]
     mermaid_reservation_workflow.handle_demo_message({
         "from": phone, "text": opening, "message_id": "opening",
+    }, include_media=True)
+    mermaid_reservation_workflow.handle_demo_message({
+        "from": phone, "text": "+1 202 555 0123", "message_id": "contact",
     }, include_media=True)
     first = mermaid_reservation_workflow.handle_demo_message({
         "from": phone, "text": "yes", "message_id": "confirm",

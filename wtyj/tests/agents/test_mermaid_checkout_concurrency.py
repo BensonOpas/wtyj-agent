@@ -38,7 +38,7 @@ def test_checkout_keeps_health_and_signed_receipt_available(monkeypatch, tmp_pat
         "checkout-concurrency-guest",
         {
             "trip_date": "2026-09-05", "adults": 2, "children": 0, "infants": 0,
-            "customer_name": "Test Guest", "pickup_preference": "pier",
+            "customer_name": "Test Guest", "contact_phone": "+12025550123", "pickup_preference": "pier",
             "language": "en", "phase": "summary_confirmed",
         },
         idempotency_key="checkout-concurrency-confirm",

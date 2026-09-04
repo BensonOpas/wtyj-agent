@@ -41,7 +41,7 @@ def main():
 
     phone = 'synthetic-vehicle-correction'
     fields = dict(trip_date='2026-09-06', adults=5, children=0, infants=0, customer_name='Test Guest',
-                  pickup_preference='pickup_requested', pickup_location='Westpunt', language='en',
+                  contact_phone='+12025550123', pickup_preference='pickup_requested', pickup_location='Westpunt', language='en',
                   phase='awaiting_summary_confirmation')
     state_registry.wa_save_booking_state(phone, {'mermaid_intake': fields}, {})
     state_registry.dm_store_message(phone, 'whatsapp', 'assistant', workflow._summary(fields, 'en'))

@@ -30,7 +30,7 @@ def pending(locale="en"):
     reservation = mermaid_reservation_store.confirm_reservation(
         f"guest-{locale}",
         {"trip_date": "2026-09-05", "adults": 2, "children": 1, "infants": 1,
-         "customer_name": "Ana Silva", "pickup_preference": "pier", "language": locale,
+         "customer_name": "Ana Silva", "contact_phone": "+12025550123", "pickup_preference": "pier", "language": locale,
          "phase": "summary_confirmed"},
         idempotency_key=f"confirm-{locale}", zernio_account_id="demo-account",
     )

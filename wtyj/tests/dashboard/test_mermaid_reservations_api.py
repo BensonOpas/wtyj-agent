@@ -46,6 +46,15 @@ def test_routes_require_auth_and_mermaid_flag(client, monkeypatch):
     assert client.get("/dashboard/api/mermaid-reservations", headers=auth()).status_code == 404
 
 
+def test_contact_number_is_available_and_searchable_for_the_team(client, monkeypatch):
+    item=record();item['intake']['contact_phone']='+12025550123'
+    monkeypatch.setattr(api.mermaid_reservation_store,'list_reservations',lambda limit:[item])
+    response=client.get('/dashboard/api/mermaid-reservations',params={'query':'2025550123'},headers=auth())
+    assert response.status_code==200
+    assert response.json()['items'][0]['contactPhone']=='+12025550123'
+    assert api._mermaid_projection(record())['contactPhone'] is None
+
+
 def test_list_is_no_store_searchable_and_never_exposes_prepaid_booking_code(client, monkeypatch):
     monkeypatch.setattr(api.mermaid_reservation_store, "list_reservations", lambda limit: [record()])
     response = client.get("/dashboard/api/mermaid-reservations?query=ana", headers=auth())

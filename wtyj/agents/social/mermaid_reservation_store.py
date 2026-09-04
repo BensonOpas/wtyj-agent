@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from shared import mermaid_catalog, state_registry
+from shared.mermaid_contact import normalize_contact_phone
 
 
 class MermaidReservationError(RuntimeError):
@@ -142,6 +143,9 @@ def _summary_version(intake: dict) -> str:
             "accessibility_notes", "special_requests", "language",
         )
     }
+    # Omit the absent field to preserve identity for pre-contact reservations.
+    if "contact_phone" in intake:
+        owned["contact_phone"] = intake["contact_phone"]
     encoded = json.dumps(owned, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -217,6 +221,10 @@ def confirm_reservation(
         raise MermaidReservationError("confirmed intake is incomplete")
     if intake.get("phase") != "summary_confirmed":
         raise MermaidReservationError("summary is not confirmed")
+    intake = dict(intake)
+    contact = normalize_contact_phone(intake.get("contact_phone"))
+    if contact:
+        intake["contact_phone"] = contact
     catalog = mermaid_catalog.get_catalog()
     version = _summary_version(intake)
     now = _now()
@@ -231,6 +239,8 @@ def confirm_reservation(
         if existing:
             conn.commit()
             return _row(existing)
+        if not contact:
+            raise MermaidReservationError("a customer-supplied international contact number is required")
         public_id = "mer_" + uuid.uuid4().hex
         snapshot = _money_snapshot(intake, catalog)
         if (snapshot.get("pickup_plan") or {}).get("status") in {"requires_review", "awaiting_guest_count"}:
