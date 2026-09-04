@@ -1,0 +1,7 @@
+# Preserve the exact deployed runtime dependencies; all source changes are reviewed below.
+FROM wtyj-agent:mermaid-reservations-70deced
+COPY wtyj/agents/social/mermaid*.py /app/agents/social/
+COPY wtyj/agents/social/webhook_server.py wtyj/agents/social/zernio_dm_client.py /app/agents/social/
+COPY wtyj/agents/social/senders/ /app/agents/social/senders/
+COPY wtyj/assets/ /app/assets/
+COPY wtyj/scripts/tracy_ux_canary.py /app/scripts/tracy_ux_canary.py

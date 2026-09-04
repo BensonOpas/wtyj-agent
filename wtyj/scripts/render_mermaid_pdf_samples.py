@@ -23,7 +23,7 @@ def main():
                 {"key": "infant_0_3", "quantity": 1, "unit_amount": 0, "line_total": 0},
             ]},
         }
-        payment = {"payment_reference": "PAY-DEMO-PREVIEW", "paid_at": "2026-09-03 19:45 UTC",
+        payment = {"payment_reference": "PAY-DEMO-PREVIEW", "paid_at": "2026-09-03T19:45:00+00:00",
                    "currency": "USD", "amount": 375}
         for kind, renderer, args, pages in (
             ("quote", mermaid_documents.render_quote_pdf, (reservation,), 2),
