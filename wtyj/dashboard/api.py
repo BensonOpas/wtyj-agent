@@ -1005,11 +1005,26 @@ async def get_client_profile():
 
 
 @router.get("/agent/status", dependencies=[Depends(_check_auth)])
-async def get_agent_status():
-    """Return the real tenant-scoped AI auto-reply state from Nr 3."""
+def get_agent_status():
+    """Distinguish a verified operator pause from unavailable control state.
+
+    The synchronous bridge runs in FastAPI's worker pool so its timeout cannot
+    block this tenant's webhooks, health checks, or document downloads.
+    """
     from shared import icp_overrides as _icp
     envelope = _icp.fetch_overrides()
-    active = _icp.auto_reply_enabled(envelope)
+    active = (
+        _icp.auto_reply_state(envelope)
+        if envelope.get("available") is True else None
+    )
+    if active is None:
+        return {
+            "active": None,
+            "status": "unavailable",
+            "available": False,
+            "source": "unavailable",
+            "updatedAt": None,
+        }
     toggle = (envelope.get("feature_toggles") or {}).get("ai_auto_reply") or {}
     return {
         "active": active,
@@ -1021,7 +1036,7 @@ async def get_agent_status():
 
 
 @router.put("/agent/status", dependencies=[Depends(_check_auth)])
-async def set_agent_status(req: AgentControlRequest):
+def set_agent_status(req: AgentControlRequest):
     """Start or pause AI replies without stopping message collection."""
     from shared import icp_overrides as _icp
     try:

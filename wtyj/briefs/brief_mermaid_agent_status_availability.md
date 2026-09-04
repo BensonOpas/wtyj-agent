@@ -1,0 +1,52 @@
+# BRIEF — Distinguish unavailable agent controls from an operator pause
+**Status:** Implemented | **Files:** dashboard/api.py; tests/dashboard/test_agent_control_availability.py | **Depends on:** live Mermaid pickup source 8053f5d | **Blocks:** truthful dashboard agent status
+
+## Context
+The user reported that TRACY appears to pause without an operator action. The
+live backend's GET status route maps every false `auto_reply_enabled` result to
+`paused`, including a timed-out control-panel read. Runtime controls already
+distinguish unavailable (`None`) from an explicit pause (`False`), but the status
+endpoint discards that distinction. These reads never persist a pause.
+
+Both status routes were asynchronous handlers invoking the synchronous bridge.
+A slow GET blocks unrelated HTTP handling for its three-second timeout; an
+explicit update can wait on both its write and verification read.
+
+## Why This Approach
+Expose the existing tri-state control result to the dashboard: unknown controls
+return `active: null`, `status: unavailable`, and `available: false`. Verified
+active/paused responses retain their existing shape. Run these synchronous
+handlers in FastAPI's normal worker pool to preserve unrelated HTTP progress.
+
+Rejected automatically enabling replies on bridge failure: that would bypass
+operator control and tenant isolation safeguards. Also rejected presenting the
+last known enabled state as current because a pause may have occurred meanwhile.
+The runtime's strict sending checks and all control writes remain unchanged.
+
+## Instructions
+1. Update the status read at `dashboard/api.py:1007` to preserve unknown state.
+2. Use synchronous route functions for GET and PUT so bridge I/O leaves the event
+   loop available; retain existing authentication and strict boolean validation.
+3. Have dashboard consumers show unavailability and disable state-changing
+   controls until a boolean authoritative status returns.
+
+## Tests
+All eight new regression cases fail against the unchanged live source: six
+because unavailable state appears paused, and two because GET/PUT bridge waits
+block a simultaneous HTTP request until timeout. The regressions cover missing
+controls, null values, unavailable responses with stale false values, recovery
+to either explicit state, and concurrent HTTP progress while the bridge waits.
+The existing client-profile and ICP override suites cover authentication,
+explicit pause persistence, strict inputs, and stale-fetch pause fencing.
+After the fix, these three suites pass: **40 tests** on local Python 3.14.
+Production verification should repeat the same suites in the exact deployment
+image's Python 3.12 runtime without production mounts or network access.
+
+## Success Condition
+A control-panel outage is displayed as unavailable without writing a pause, and
+waiting for the bridge leaves the tenant HTTP event loop responsive.
+
+## Rollback
+Revert this commit and redeploy the previous verified image. This change does
+not write control state, customer data, or configuration, so no data rollback is
+required. Revert the matching frontend contract change with the backend rollback.
