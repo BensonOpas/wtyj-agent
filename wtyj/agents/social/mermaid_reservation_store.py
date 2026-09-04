@@ -6,11 +6,13 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Iterable
 
 from shared import mermaid_catalog, state_registry
+from shared.mermaid_contact import normalize_contact_phone
 
 
 class MermaidReservationError(RuntimeError):
@@ -18,6 +20,7 @@ class MermaidReservationError(RuntimeError):
 
 
 TERMINAL_STATES = {"cancelled", "booked"}
+_schema_lock = threading.Lock()
 TRANSITIONS = {
     "demo_availability_approved": {"quote_ready", "cancelled"},
     "quote_ready": {"demo_payment_pending", "cancelled"},
@@ -35,9 +38,17 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(state_registry.DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    _ensure_schema(conn)
+    try:
+        # Concurrent first-use callbacks must not race the journal-mode switch.
+        # Only schema initialization is serialized; reservation transactions
+        # retain their existing SQLite uniqueness and transactional authority.
+        with _schema_lock:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            _ensure_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -96,6 +107,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL CHECK (status='simulated_success'),
             paid_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mermaid_checkout_links (
+            token_hash TEXT PRIMARY KEY,
+            tenant_slug TEXT NOT NULL CHECK (tenant_slug='mermaid'),
+            reservation_public_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (reservation_public_id) REFERENCES mermaid_reservations(public_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_mermaid_checkout_link_expiry ON mermaid_checkout_links(expires_at);
         """
     )
     try:
@@ -123,6 +143,9 @@ def _summary_version(intake: dict) -> str:
             "accessibility_notes", "special_requests", "language",
         )
     }
+    # Omit the absent field to preserve identity for pre-contact reservations.
+    if "contact_phone" in intake:
+        owned["contact_phone"] = intake["contact_phone"]
     encoded = json.dumps(owned, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -152,11 +175,29 @@ def _money_snapshot(intake: dict, catalog: dict) -> dict:
             "key": key, "label": label, "quantity": quantity,
             "unit_amount": unit, "line_total": line_total,
         })
+    pickup_amount = None
+    pickup_plan = None
+    if intake.get("pickup_preference") == "pickup_requested":
+        pickup_plan = (
+            mermaid_catalog.pickup_quote(sum(quantities.values()), catalog)
+            if all(key in intake for key in ("adults", "children", "infants"))
+            else {"status": "awaiting_guest_count"}
+        )
+        if pickup_plan["status"] == "quoted":
+            pickup_amount = pickup_plan["amount"]
+            if currency != catalog["pricing"]["pickup_currency"]:
+                raise MermaidReservationError("pickup is unavailable in this currency; no conversion rate configured")
+            items.append({
+                "key": "pickup", "label": "Pickup", "quantity": pickup_plan["quantity"],
+                "unit_amount": pickup_plan["unit_amount"], "line_total": pickup_amount,
+            })
+            total += pickup_amount
     return {
         "currency": currency,
         "items": items,
         "total": total,
-        "pickup_amount": None,
+        "pickup_amount": pickup_amount,
+        "pickup_plan": pickup_plan,
         "catalog_version": catalog["version"],
     }
 
@@ -180,6 +221,10 @@ def confirm_reservation(
         raise MermaidReservationError("confirmed intake is incomplete")
     if intake.get("phase") != "summary_confirmed":
         raise MermaidReservationError("summary is not confirmed")
+    intake = dict(intake)
+    contact = normalize_contact_phone(intake.get("contact_phone"))
+    if contact:
+        intake["contact_phone"] = contact
     catalog = mermaid_catalog.get_catalog()
     version = _summary_version(intake)
     now = _now()
@@ -194,8 +239,12 @@ def confirm_reservation(
         if existing:
             conn.commit()
             return _row(existing)
+        if not contact:
+            raise MermaidReservationError("a customer-supplied international contact number is required")
         public_id = "mer_" + uuid.uuid4().hex
         snapshot = _money_snapshot(intake, catalog)
+        if (snapshot.get("pickup_plan") or {}).get("status") in {"requires_review", "awaiting_guest_count"}:
+            raise MermaidReservationError("pickup requires review or a complete passenger count")
         for _ in range(10):
             code = _booking_code()
             try:

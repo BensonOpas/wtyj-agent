@@ -1,5 +1,5 @@
 {
-  "version": "mermaid-demo-v1-2026-09-03",
+  "version": "mermaid-demo-v5-2026-09-03",
   "tenant_slug": "mermaid",
   "service": {
     "key": "klein_curacao_day_trip",
@@ -14,16 +14,47 @@
     ],
     "meeting_point": "Fishermen's Pier, Curaçao",
     "arrival_time": "06:45",
-    "island_departure_time": "15:20"
+    "island_departure_time": "15:20",
+    "pickup_minutes_before_arrival": 60
   },
   "pricing": {
     "currencies": {
-      "USD": {"adult": 150, "child_4_12": 75, "infant_0_3": 0, "sedula": 110},
-      "EUR": {"adult": 130, "child_4_12": 65, "infant_0_3": 0, "sedula": 95},
-      "XCG": {"adult": 270, "child_4_12": 135, "infant_0_3": 0, "sedula": 195}
+      "USD": {
+        "adult": 150,
+        "child_4_12": 75,
+        "infant_0_3": 0,
+        "sedula": 110
+      },
+      "EUR": {
+        "adult": 130,
+        "child_4_12": 65,
+        "infant_0_3": 0,
+        "sedula": 95
+      },
+      "XCG": {
+        "adult": 270,
+        "child_4_12": 135,
+        "infant_0_3": 0,
+        "sedula": 195
+      }
     },
     "default_currency": "USD",
-    "pickup_price": null
+    "pickup_currency": "USD",
+    "pickup_basis": "per_vehicle",
+    "pickup_coverage": "island_wide",
+    "pickup_vehicles": [
+      {
+        "key": "car",
+        "capacity": 5,
+        "price": 75
+      },
+      {
+        "key": "van",
+        "capacity": 9,
+        "price": 125
+      }
+    ],
+    "pickup_overflow": "team_review"
   },
   "included": [
     "Breakfast",
@@ -36,7 +67,7 @@
   ],
   "extras": [
     "Beer and wine are available at an additional charge",
-    "Optional pickup and return can be requested; demo pricing is not included"
+    "Optional island-wide pickup: a car carries up to 5 guests for USD 75; a van carries up to 9 guests for USD 125 per van. All adults, children and infants count toward capacity. Groups above 9 need transport reviewed by the team. Pickup is one hour before arrival/check-in, in Curaçao local time."
   ],
   "bring": [
     "Towel",
@@ -51,5 +82,181 @@
     "safety": "DEMO POLICY - REPLACE BEFORE GO-LIVE: Participation is at the guest's own risk and instructions from the captain and crew must be followed. This demonstration does not state or verify insurance coverage.",
     "insurance": "Insurance coverage is not verified in this demonstration. Mermaid must approve final insurance wording before go-live.",
     "quote_validity_minutes": 60
+  },
+  "guest_copy": {
+    "en": {
+      "pickup_pending": "Pickup from {location} is requested, not confirmed. Its price and collection time still need confirmation; pickup is not included in the trip amount.",
+      "hotel": "your accommodation",
+      "pier_arrival": "Meet us at {place} at {time}.",
+      "trip_only": "Trip total (pickup excluded)",
+      "trip_total": "Trip total",
+      "confirm": "Does that look right? You can confirm in your own words or tell me what to change.",
+      "adults": "{count} adult fares",
+      "children": "{count} children (4-12)",
+      "infants": "{count} little ones (0-3)",
+      "quote_ready": "Your demo quote is attached.",
+      "booking_complete": "Your demo booking is complete with Mermaid. Your receipt is attached.",
+      "paid": "Demo paid",
+      "pickup_payment_note": "Pickup is still pending; this payment covers the trip only.",
+      "island_departure": "Departure from the island: {time}.",
+      "adults_one": "{count} adult fare",
+      "children_one": "{count} child (4-12)",
+      "infants_one": "{count} little one (0-3)",
+      "pickup_priced": "Pickup from {location} at {pickup_time}. Please be ready then. {currency} {amount} for your whole booking, anywhere on Curaçao, included in this total.",
+      "pickup_total": "Total incl. pickup",
+      "pickup_line": "Island-wide pickup",
+      "checkout_link": "Finish your demo booking here:",
+      "pickup_car": "Car pickup (up to {capacity} guests)",
+      "pickup_van": "Van pickup (up to {capacity} guests)",
+      "pickup_vehicle_priced": "Pickup from {location} at {pickup_time}. Please be ready then. {quantity} × {vehicle}; {currency} {amount} pickup total, included in this booking.",
+      "pickup_requires_review": "Your group needs more than one pickup vehicle. Mermaid's team will need to confirm the transport and price.",
+      "pickup_awaiting_guest_count": "I need the full guest count, including children and infants, to price the pickup.",
+      "contact_phone_label": "Contact number",
+      "contact_phone_prompt": "What's the best number to reach you on, including the country code? It's for important trip updates, like a weather cancellation.",
+      "contact_phone_retry": "Could you send the full phone number with its country code, starting with +? I need that to save a reachable contact for trip updates."
+    },
+    "nl": {
+      "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
+      "hotel": "je accommodatie",
+      "pier_arrival": "We zien jullie bij {place} om {time}.",
+      "trip_only": "Triptotaal (exclusief transfer)",
+      "trip_total": "Triptotaal",
+      "confirm": "Klopt dit zo? Bevestig gerust in je eigen woorden of geef een wijziging door.",
+      "adults": "{count} volwassenentarieven",
+      "children": "{count} kinderen (4-12)",
+      "infants": "{count} kleintjes (0-3)",
+      "quote_ready": "Je demo-offerte is bijgevoegd.",
+      "booking_complete": "Je demo-boeking bij Mermaid is rond. Je betalingsbewijs is bijgevoegd.",
+      "paid": "Demo betaald",
+      "pickup_payment_note": "De transfer is nog niet bevestigd; deze betaling is alleen voor de trip.",
+      "island_departure": "Vertrek van het eiland: {time}.",
+      "pickup_priced": "We halen je om {pickup_time} op bij {location}. Zorg dat je dan klaarstaat. {currency} {amount} voor je hele boeking, overal op Curaçao, inbegrepen in dit totaal.",
+      "pickup_total": "Totaal incl. transfer",
+      "pickup_line": "Transfer op heel Curaçao",
+      "checkout_link": "Rond je demo-boeking hier af:",
+      "pickup_car": "Autotransfer (max. {capacity} personen)",
+      "pickup_van": "Busjestransfer (max. {capacity} personen)",
+      "pickup_vehicle_priced": "We halen je om {pickup_time} op bij {location}. Zorg dat je dan klaarstaat. {quantity} × {vehicle}; {currency} {amount} voor de transfer, inbegrepen in deze boeking.",
+      "pickup_requires_review": "Jullie groep heeft meer dan één voertuig nodig. Het team van Mermaid moet het vervoer en de prijs bevestigen.",
+      "pickup_awaiting_guest_count": "Voor de transferprijs heb ik het volledige aantal gasten nodig, inclusief kinderen en baby’s.",
+      "contact_phone_label": "Contactnummer",
+      "contact_phone_prompt": "Op welk telefoonnummer kunnen we je bereiken, inclusief landcode? Het is voor belangrijke updates over de trip, bijvoorbeeld als slecht weer de vaart verhindert.",
+      "contact_phone_retry": "Kun je het volledige telefoonnummer met landcode sturen, beginnend met +? Dan kan ik een contactnummer voor updates over de trip opslaan."
+    },
+    "de": {
+      "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
+      "hotel": "Ihrer Unterkunft",
+      "pier_arrival": "Wir treffen uns am {place} um {time}.",
+      "trip_only": "Ausflugspreis (ohne Abholung)",
+      "trip_total": "Ausflugspreis",
+      "confirm": "Stimmt das so? Bestätigen Sie gern in eigenen Worten oder nennen Sie eine Änderung.",
+      "adults": "{count} Erwachsenentarife",
+      "children": "{count} Kinder (4-12)",
+      "infants": "{count} Kleinkinder (0-3)",
+      "quote_ready": "Ihr Demo-Angebot ist angehängt.",
+      "booking_complete": "Ihre Demo-Buchung bei Mermaid ist abgeschlossen. Ihr Zahlungsbeleg ist angehängt.",
+      "paid": "Demo bezahlt",
+      "pickup_payment_note": "Die Abholung ist noch offen; diese Zahlung gilt nur für den Ausflug.",
+      "island_departure": "Abfahrt von der Insel: {time}.",
+      "pickup_priced": "Abholung von {location} um {pickup_time}. Bitte seien Sie dann bereit. {currency} {amount} für Ihre gesamte Buchung, überall auf Curaçao, in diesem Gesamtbetrag enthalten.",
+      "pickup_total": "Gesamt inkl. Abholung",
+      "pickup_line": "Inselweite Abholung",
+      "checkout_link": "Schließen Sie Ihre Demo-Buchung hier ab:",
+      "pickup_car": "Autoabholung (max. {capacity} Gäste)",
+      "pickup_van": "Van-Abholung (max. {capacity} Gäste)",
+      "pickup_vehicle_priced": "Abholung von {location} um {pickup_time}. Bitte seien Sie dann bereit. {quantity} × {vehicle}; insgesamt {currency} {amount} für die Abholung, in dieser Buchung enthalten.",
+      "pickup_requires_review": "Ihre Gruppe benötigt mehr als ein Abholfahrzeug. Mermaids Team muss Transport und Preis bestätigen.",
+      "pickup_awaiting_guest_count": "Für den Abholpreis benötige ich die gesamte Gästezahl, einschließlich Kinder und Kleinkinder.",
+      "contact_phone_label": "Telefonnummer",
+      "contact_phone_prompt": "Unter welcher Telefonnummer mit Ländervorwahl können wir dich erreichen? Sie ist für wichtige Informationen zur Fahrt, etwa bei einer wetterbedingten Absage.",
+      "contact_phone_retry": "Kannst du die vollständige Telefonnummer mit Ländervorwahl senden, beginnend mit +? So kann ich eine Kontaktnummer für Informationen zur Fahrt speichern."
+    },
+    "es": {
+      "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
+      "hotel": "tu alojamiento",
+      "pier_arrival": "Nos encontramos en {place} a las {time}.",
+      "trip_only": "Total del paseo (sin recogida)",
+      "trip_total": "Total del paseo",
+      "confirm": "¿Está todo bien? Confírmalo con tus palabras o dime qué cambiamos.",
+      "adults": "{count} tarifas de adulto",
+      "children": "{count} niños (4-12)",
+      "infants": "{count} pequeños (0-3)",
+      "quote_ready": "Tu cotización demo está adjunta.",
+      "booking_complete": "Tu reserva demo con Mermaid está lista. Tu recibo está adjunto.",
+      "paid": "Demo pagado",
+      "pickup_payment_note": "La recogida sigue pendiente; este pago cubre solo el paseo.",
+      "island_departure": "Salida de la isla: {time}.",
+      "pickup_priced": "Te recogemos en {location} a las {pickup_time}. Por favor, ten todo listo para esa hora. {currency} {amount} por toda tu reserva, en cualquier lugar de Curaçao, incluido en este total.",
+      "pickup_total": "Total con recogida",
+      "pickup_line": "Recogida en toda la isla",
+      "checkout_link": "Completa tu reserva demo aquí:",
+      "pickup_car": "Recogida en coche (máx. {capacity} personas)",
+      "pickup_van": "Recogida en van (máx. {capacity} personas)",
+      "pickup_vehicle_priced": "Te recogemos en {location} a las {pickup_time}. Ten todo listo para esa hora. {quantity} × {vehicle}; {currency} {amount} en total por la recogida, incluida en esta reserva.",
+      "pickup_requires_review": "Su grupo necesita más de un vehículo. El equipo de Mermaid debe confirmar el transporte y el precio.",
+      "pickup_awaiting_guest_count": "Para calcular la recogida necesito el número total de pasajeros, incluidos niños y bebés.",
+      "contact_phone_label": "Teléfono de contacto",
+      "contact_phone_prompt": "¿Cuál es el mejor número para contactarte, incluido el código de país? Es para avisos importantes del viaje, como una cancelación por mal tiempo.",
+      "contact_phone_retry": "¿Puedes enviar el número completo con el código de país, empezando por +? Lo necesito para guardar un contacto para avisos del viaje."
+    },
+    "pap": {
+      "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di trip.",
+      "hotel": "bo akomodashon",
+      "pier_arrival": "Nos ta topa na {place} pa {time}.",
+      "trip_only": "Total di trip (sin pickup)",
+      "trip_total": "Total di trip",
+      "confirm": "Esaki ta korekto? Konfirmá den bo mes palabranan òf bisa mi kiko mester kambia.",
+      "adults": "{count} tarifa di adulto",
+      "children": "{count} mucha (4-12)",
+      "infants": "{count} mucha chikitu (0-3)",
+      "quote_ready": "Bo oferta demo ta adjuntá.",
+      "booking_complete": "Bo reservashon demo ku Mermaid ta kla. Bo resibu ta adjuntá.",
+      "paid": "Demo pagá",
+      "pickup_payment_note": "Pickup ta pendiente ainda; e pago aki ta kubri solamente e trip.",
+      "island_departure": "Salida for di e isla: {time}.",
+      "pickup_priced": "Nos ta pasa buska bo na {location} pa {pickup_time}. Por fabor, ta kla na e ora ei. {currency} {amount} pa henter bo reservashon, na kualke lugá na Kòrsou, inkluí den e total aki.",
+      "pickup_total": "Total ku pickup",
+      "pickup_line": "Pickup rònt Kòrsou",
+      "checkout_link": "Kompletá bo reservashon demo aki:",
+      "pickup_car": "Pickup ku outo (máx. {capacity} persona)",
+      "pickup_van": "Pickup ku van (máx. {capacity} persona)",
+      "pickup_vehicle_priced": "Nos ta pasa buska bo na {location} pa {pickup_time}. Por fabor, ta kla na e ora ei. {quantity} × {vehicle}; {currency} {amount} pa pickup en total, inkluí den e reservashon aki.",
+      "pickup_requires_review": "Boso grupo mester mas ku un vehíkulo. E team di Mermaid mester konfirmá e transporte i e preis.",
+      "pickup_awaiting_guest_count": "Pa kalkulá e preis di pickup mi mester e kantidat total di huéspednan, inkluyendo mucha i beibi.",
+      "contact_phone_label": "Number di kontakto",
+      "contact_phone_prompt": "Na ki number di telefòn nos por alkansá bo, inkluyendo kódigo di pais? Ta pa avisunan importante di e trip, manera un kanselashon pa mal tempu.",
+      "contact_phone_retry": "Bo por manda e number di telefòn kompleto ku kódigo di pais, kuminsando ku +? Asina mi por warda un number di kontakto pa avisunan di e trip."
+    },
+    "pt": {
+      "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
+      "hotel": "sua hospedagem",
+      "pier_arrival": "Nos encontramos em {place} às {time}.",
+      "trip_only": "Total do passeio (sem traslado)",
+      "trip_total": "Total do passeio",
+      "confirm": "Está tudo certo? Confirme com suas palavras ou diga o que devemos mudar.",
+      "adults": "{count} tarifas de adulto",
+      "children": "{count} crianças (4-12)",
+      "infants": "{count} pequenos (0-3)",
+      "quote_ready": "Sua cotação demo está anexada.",
+      "booking_complete": "Sua reserva demo com a Mermaid está pronta. Seu recibo está anexado.",
+      "paid": "Demo pago",
+      "pickup_payment_note": "O traslado continua pendente; este pagamento cobre apenas o passeio.",
+      "island_departure": "Saída da ilha: {time}.",
+      "pickup_priced": "Buscamos você em {location} às {pickup_time}. Por favor, esteja pronto nesse horário. {currency} {amount} por toda a sua reserva, em qualquer lugar de Curaçao, incluído neste total.",
+      "pickup_total": "Total com traslado",
+      "pickup_line": "Traslado em toda a ilha",
+      "checkout_link": "Conclua sua reserva demo aqui:",
+      "pickup_car": "Traslado de carro (máx. {capacity} pessoas)",
+      "pickup_van": "Traslado de van (máx. {capacity} pessoas)",
+      "pickup_vehicle_priced": "Buscamos você em {location} às {pickup_time}. Esteja pronto nesse horário. {quantity} × {vehicle}; {currency} {amount} no total pelo traslado, incluído nesta reserva.",
+      "pickup_requires_review": "Seu grupo precisa de mais de um veículo. A equipe da Mermaid deve confirmar o transporte e o preço.",
+      "pickup_awaiting_guest_count": "Para calcular o traslado, preciso do número total de passageiros, incluindo crianças e bebês.",
+      "contact_phone_label": "Telefone de contato",
+      "contact_phone_prompt": "Qual é o melhor número para falar com você, incluindo o código do país? É para avisos importantes sobre o passeio, como um cancelamento por mau tempo.",
+      "contact_phone_retry": "Pode enviar o número completo com o código do país, começando por +? Preciso dele para salvar um contato para avisos do passeio."
+    }
+  },
+  "links": {
+    "checkout_base_url": "https://unboks.org/mermaid"
   }
 }

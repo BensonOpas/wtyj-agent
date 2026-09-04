@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import pytest
 from pypdf import PdfReader
@@ -41,10 +41,10 @@ JOURNEYS = [
 
 
 def _payment_token(reply: dict) -> tuple[str, int, str]:
-    url = re.search(r"https://demo\.example/api/public/mermaid-demo-payment/[^\s]+", reply["text"]).group(0)
+    url = re.search(r"https://unboks\.org/mermaid/pay/[^\s]+", reply["text"]).group(0)
     parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-    return parsed.path.rsplit("/", 1)[-1], int(query["expires"][0]), query["signature"][0]
+    assert not parsed.query and len(parsed.path.rsplit("/",1)[-1])==22
+    return mermaid_demo_payment.resolve_checkout_token(parsed.path.rsplit("/",1)[-1])
 
 
 def _pdf_text(path: str) -> str:
@@ -62,7 +62,13 @@ def test_full_six_language_whatsapp_journey(locale, opening, confirmation, monke
         "_zernio_account_id": "synthetic-account",
     }, include_media=True)
     assert summary["media"] is None
+    assert state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]["phase"] == "collecting"
+    summary = mermaid_reservation_workflow.handle_demo_message({
+        "from": phone, "text": "+1 202 555 0123", "message_id": f"{locale}-contact",
+        "_zernio_account_id": "synthetic-account",
+    }, include_media=True)
     intake = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
+    assert intake["contact_phone"] == "+12025550123"
     assert intake["language"] == locale
     assert intake["phase"] == "awaiting_summary_confirmation"
     assert intake["trip_date"] == "2026-09-05"
@@ -128,6 +134,9 @@ def test_duplicate_confirmation_cancel_retry_and_delivery_recovery(monkeypatch):
     mermaid_reservation_workflow.handle_demo_message({
         "from": phone, "text": opening, "message_id": "opening",
     }, include_media=True)
+    mermaid_reservation_workflow.handle_demo_message({
+        "from": phone, "text": "+1 202 555 0123", "message_id": "contact",
+    }, include_media=True)
     first = mermaid_reservation_workflow.handle_demo_message({
         "from": phone, "text": "yes", "message_id": "confirm",
     }, include_media=True)
@@ -148,15 +157,20 @@ def test_duplicate_confirmation_cancel_retry_and_delivery_recovery(monkeypatch):
     mermaid_demo_payment.complete_checkout(reservation_id, expires, signature, "success")
     documents = mermaid_documents.documents_for_reservation(reservation_id)
     receipt = next(item for item in documents if item["kind"] == "receipt")
-    assert receipt["delivery_status"] == "failed"
+    assert receipt["delivery_status"] == "pending"
     assert receipt["delivery_attempts"] == 1
 
+    from agents.social import mermaid_delivery_reconciliation
+    def reconcile(job_id):
+        mermaid_documents.mark_delivery(job_id, True, count_attempt=False)
+        return "delivered"
+    monkeypatch.setattr(mermaid_delivery_reconciliation, "reconcile_job", reconcile)
     mermaid_demo_payment.complete_checkout(reservation_id, expires, signature, "success")
     documents = mermaid_documents.documents_for_reservation(reservation_id)
     receipt = next(item for item in documents if item["kind"] == "receipt")
     assert receipt["delivery_status"] == "delivered"
-    assert receipt["delivery_attempts"] == 2
-    assert len(sends) == 2
+    assert receipt["delivery_attempts"] == 1
+    assert len(sends) == 1
 
 
 def test_demo_flags_provide_immediate_safe_rollback():

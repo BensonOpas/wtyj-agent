@@ -17,11 +17,13 @@ from typing import Any
 import dateparser
 
 from shared import mermaid_catalog, state_registry
+from shared.mermaid_contact import normalize_contact_phone
+from agents.social import mermaid_guest_experience as guest
 
 
 SUPPORTED_LOCALES = ("en", "nl", "de", "es", "pap", "pt")
 REQUIRED_FIELDS = (
-    "trip_date", "adults", "children", "infants", "customer_name", "pickup_preference"
+    "trip_date", "adults", "children", "infants", "customer_name", "contact_phone", "pickup_preference"
 )
 
 
@@ -39,7 +41,7 @@ COPY = {
         "confirm": "Please reply *YES* if everything is correct, or tell me exactly what to change.",
         "confirmed": "Perfect, I have your confirmed details. I’m preparing your demo reservation and quote now.",
         "cancelled": "Your demo reservation request is cancelled. No payment was taken.",
-        "human": "Of course. I’ve paused TRACY and passed the conversation to Mermaid’s team with your progress saved.",
+        "human": "I’ve passed this to Mermaid’s team for review. Your details are saved, and I can still help with general trip questions.",
         "invalid_day": "Mermaid’s published trips run Monday, Tuesday, Wednesday, Friday, Saturday and Sunday. Please choose one of those days.",
     },
     "nl": {
@@ -55,7 +57,7 @@ COPY = {
         "confirm": "Antwoord met *JA* als alles klopt, of zeg precies wat ik moet aanpassen.",
         "confirmed": "Perfect, ik heb je gegevens bevestigd. Ik maak nu je demo-reservering en offerte.",
         "cancelled": "Je demo-reserveringsaanvraag is geannuleerd. Er is niets betaald.",
-        "human": "Natuurlijk. Ik heb TRACY gepauzeerd en het gesprek met de opgeslagen gegevens doorgegeven aan Mermaid’s team.",
+        "human": "Ik heb dit ter beoordeling aan Mermaid’s team doorgegeven. Je gegevens zijn opgeslagen en ik kan algemene vragen over de trip blijven beantwoorden.",
         "invalid_day": "Mermaid vaart volgens de publicatie op maandag, dinsdag, woensdag, vrijdag, zaterdag en zondag. Kies een van die dagen.",
     },
     "de": {
@@ -71,7 +73,7 @@ COPY = {
         "confirm": "Antworten Sie mit *JA*, wenn alles stimmt, oder nennen Sie genau die gewünschte Änderung.",
         "confirmed": "Perfekt, Ihre Angaben sind bestätigt. Ich erstelle jetzt Ihre Demo-Reservierung und Ihr Angebot.",
         "cancelled": "Ihre Demo-Reservierungsanfrage wurde storniert. Es wurde nichts bezahlt.",
-        "human": "Natürlich. Ich habe TRACY pausiert und das Gespräch mit dem gespeicherten Stand an Mermaids Team übergeben.",
+        "human": "Ich habe dies zur Prüfung an Mermaids Team weitergegeben. Ihre Angaben sind gespeichert und ich kann weiterhin allgemeine Fragen zum Ausflug beantworten.",
         "invalid_day": "Mermaid fährt laut Veröffentlichung Montag, Dienstag, Mittwoch, Freitag, Samstag und Sonntag. Bitte wählen Sie einen dieser Tage.",
     },
     "es": {
@@ -87,7 +89,7 @@ COPY = {
         "confirm": "Responde *SÍ* si todo está correcto o dime exactamente qué debo cambiar.",
         "confirmed": "Perfecto, tus datos están confirmados. Ahora preparo tu reserva demo y cotización.",
         "cancelled": "Tu solicitud de reserva demo está cancelada. No se realizó ningún pago.",
-        "human": "Claro. He pausado a TRACY y pasé la conversación al equipo de Mermaid con tu progreso guardado.",
+        "human": "He pasado esto al equipo de Mermaid para que lo revise. Tus datos están guardados y puedo seguir respondiendo preguntas generales sobre la excursión.",
         "invalid_day": "Según la información publicada, Mermaid opera lunes, martes, miércoles, viernes, sábado y domingo. Elige uno de esos días.",
     },
     "pap": {
@@ -103,7 +105,7 @@ COPY = {
         "confirm": "Kontestá *SI* si tur kos ta korekto, òf bisa mi eksaktamente kiko mester kambia.",
         "confirmed": "Perfekto, bo datonan ta konfirmá. Awor mi ta prepara bo reservashon demo i oferta.",
         "cancelled": "Bo petishon di reservashon demo ta kanselá. No a tuma ningun pago.",
-        "human": "Sigur. Mi a pone TRACY na pausa i pasa e kombersashon ku bo progreso wardá pa tim di Mermaid.",
+        "human": "Mi a pasa esaki pa tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e trip.",
         "invalid_day": "Segun e informashon publiká, Mermaid ta bai djaluna, djamars, djarason, djabièrnè, djasabra i djadumingu. Skohe un di e dianan ei.",
     },
     "pt": {
@@ -119,7 +121,7 @@ COPY = {
         "confirm": "Responda *SIM* se estiver tudo correto ou diga exatamente o que devo alterar.",
         "confirmed": "Perfeito, seus dados estão confirmados. Agora vou preparar sua reserva demo e cotação.",
         "cancelled": "Seu pedido de reserva demo foi cancelado. Nenhum pagamento foi realizado.",
-        "human": "Claro. Pausei a TRACY e encaminhei a conversa para a equipe da Mermaid com seu progresso salvo.",
+        "human": "Encaminhei isso à equipe da Mermaid para análise. Seus dados estão salvos e posso continuar respondendo a perguntas gerais sobre o passeio.",
         "invalid_day": "Segundo as informações publicadas, a Mermaid opera segunda, terça, quarta, sexta, sábado e domingo. Escolha um desses dias.",
     },
 }
@@ -250,6 +252,9 @@ def _extract_fields(text: str, locale: str, current: dict) -> tuple[dict, bool]:
     for word, number in number_words.items():
         numeric_value = re.sub(rf"\b{re.escape(word)}\b", number, numeric_value, flags=re.IGNORECASE)
     updates: dict[str, Any] = {}
+    contact = normalize_contact_phone(value)
+    if contact:
+        updates["contact_phone"] = contact
     ambiguous_party = False
 
     trip_date = _extract_date(value)
@@ -302,14 +307,18 @@ def _extract_fields(text: str, locale: str, current: dict) -> tuple[dict, bool]:
 
 def _summary(fields: dict, locale: str) -> str:
     labels = SUMMARY_COPY[locale]
-    pickup = labels["pickup"].format(location=fields.get("pickup_location")) if fields.get("pickup_preference") == "pickup_requested" else labels["pier"]
-    party = labels["party"].format(adults=fields["adults"], children=fields["children"], infants=fields["infants"])
+    pickup = guest.transport_text(fields, locale)
+    party = guest.party_text(fields, locale)
+    contact = (f"{guest.guest_copy(locale)['contact_phone_label']}: {fields['contact_phone']}\n"
+               if fields.get("contact_phone") else "")
     return (
         f"*{labels['title']}*\n"
-        f"{labels['date']}: {fields['trip_date']}\n"
+        f"{labels['date']}: {guest.guest_date(fields['trip_date'], locale)}\n"
         f"{labels['guests']}: {party}\n"
         f"{labels['name']}: {fields['customer_name']}\n"
-        f"{labels['transport']}: {pickup}\n\n{COPY[locale]['confirm']}"
+        f"{contact}"
+        f"{guest.price_text(guest.intake_money(fields), fields, locale)}\n"
+        f"{labels['transport']}: {pickup}\n\n{guest.guest_copy(locale)['confirm']}"
     )
 
 
@@ -327,6 +336,10 @@ def _next_question(fields: dict, locale: str) -> str | None:
         "infants": "infants", "customer_name": "name", "pickup_preference": "pickup",
     }
     for field in REQUIRED_FIELDS:
+        if field == "contact_phone":
+            if not normalize_contact_phone(fields.get(field)):
+                return guest.guest_copy(locale)["contact_phone_prompt"]
+            continue
         if field not in fields:
             return COPY[locale][prompt_keys[field]]
     if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
@@ -370,14 +383,18 @@ def process_intake_turn(
     lower = str(text or "").strip().casefold()
     if any(phrase in lower for phrase in ("human", "person", "real person", "medewerker", "mitarbeiter", "persona", "humano", "un hende")):
         fields["phase"] = "human_takeover"
-        state_registry.set_ai_muted(phone, True, channel="whatsapp")
         state_registry.create_pending_notification(
             "escalation", "whatsapp", phone, from_name or fields.get("customer_name") or "Mermaid guest",
             "Mermaid reservation: human requested",
             "The guest requested a person. Intake progress is saved.", mode="soft",
+            preserve_hard_mode=True,
         )
         action = "human_takeover"
         response = COPY[locale]["human"]
+    elif state_registry.get_active_escalation_mode(phone) in {"soft", "hard"}:
+        fields["phase"] = "human_takeover"
+        action = None
+        response = _question_answer(text, locale) or COPY[locale]["human"]
     elif any(phrase in lower for phrase in ("cancel", "annuleer", "stornieren", "cancelar", "kanselá")):
         fields["phase"] = "cancelled"
         action = "cancel"
@@ -447,13 +464,37 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     if message_id and message_id in seen:
         return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
     history = state_registry.dm_get_history(phone, "whatsapp", limit=16)
+    review_pending = (
+        state_registry.get_active_escalation_mode(phone) in {"soft", "hard"}
+        or bool((reservation or {}).get("human_takeover"))
+    )
     context = dict(fields)
+    context["human_review_pending"] = review_pending
     context["reservation_state"] = (reservation or {}).get("state")
+    if reservation:
+        context["reservation_intake"] = reservation["intake"]
+        context["authoritative_pricing"] = reservation["monetary_snapshot"]
+        context["booking_code"] = reservation["booking_code"]
+    elif all(key in fields for key in ("adults", "children", "infants")):
+        context["authoritative_pricing"] = guest.intake_money(fields)
+        context["pickup_offer"] = mermaid_catalog.pickup_quote(sum(fields[key] for key in ("adults", "children", "infants")))
+    if fields.get("pickup_preference") == "pickup_requested":
+        context["pickup_status"] = (
+            "included" if (context.get("authoritative_pricing") or {}).get("pickup_amount") is not None
+            else "requested_unconfirmed"
+        )
+    else:
+        context["pickup_status"] = "not_requested"
+    missing_fields = [key for key in REQUIRED_FIELDS if key not in fields]
+    if "contact_phone" not in missing_fields and not normalize_contact_phone(fields.get("contact_phone")):
+        missing_fields.append("contact_phone")
+    if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
+        missing_fields.append("pickup_location")
     understood = marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,
         thread_flags={"phase": fields.get("phase", "collecting")},
-        action_context=json.dumps({"required_fields": REQUIRED_FIELDS}),
+        action_context=json.dumps({"required_fields": REQUIRED_FIELDS, "missing_fields": missing_fields}),
         channel="whatsapp", messages=history,
         response_contract="mermaid_reservation_demo",
     )
@@ -463,11 +504,12 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     action = understood.get("mermaid_action")
     if action not in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}:
         return IntakeResult(str(understood.get("reply") or COPY[locale]["trip_date"]), locale, fields.get("phase", "collecting"))
-    if action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
+    if not review_pending and action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
         fields = {}
     old_phase = fields.get("phase", "collecting")
     fields["language"] = locale
     changes = {}
+    invalid_contact = False
     for key, value in (understood.get("fields") or {}).items():
         if key in {"adults", "children", "infants"}:
             if type(value) is int and 0 <= value <= 100:
@@ -481,28 +523,58 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
                 pass
         elif key == "pickup_preference" and value in {"pier", "pickup_requested"}:
             changes[key] = value
+        elif key == "contact_phone":
+            contact = normalize_contact_phone(value)
+            if contact:
+                changes[key] = contact
+            else:
+                invalid_contact = True
         elif key in {"customer_name", "pickup_location", "dietary_requirements", "accessibility_notes", "special_requests"} and isinstance(value, str):
             cleaned = " ".join(value.split())[:160]
             if cleaned:
                 changes[key] = cleaned
     changes = {key: value for key, value in changes.items() if fields.get(key) != value}
     fields.update(changes)
+    if invalid_contact and not reservation:
+        fields.pop("contact_phone", None)
     if fields.get("pickup_preference") == "pier":
         fields.pop("pickup_location", None)
     response = str(understood.get("reply") or "").strip()
+    has_question = understood.get("has_open_question") is True or action == "question"
+    if invalid_contact and not reservation and not review_pending:
+        response = guest.guest_copy(locale)["contact_phone_retry"]
+        has_question = True
     result_action = None
-    if understood.get("requires_human") or action == "request_human" or (
+    pickup_review = (
+        (not reservation or action == "new_booking")
+        and action != "cancel"
+        and fields.get("pickup_preference") == "pickup_requested"
+        and mermaid_catalog.pickup_quote(sum(fields.get(key, 0) for key in ("adults", "children", "infants")))["status"] == "requires_review"
+    )
+    if pickup_review and action != "request_human":
+        response = guest.guest_copy(locale)["pickup_requires_review"]
+    if pickup_review or understood.get("requires_human") or action == "request_human" or (
         action == "cancel" and (reservation or {}).get("state") in {"booked", "demo_paid"}
     ):
-        state_registry.set_ai_muted(phone, True, channel="whatsapp")
         state_registry.create_pending_notification(
             "escalation", "whatsapp", phone,
             str(message.get("from_name") or fields.get("customer_name") or "Mermaid guest"),
             "Mermaid reservation: human review", "Reservation progress is saved for the team.", mode="soft",
+            preserve_hard_mode=True,
         )
         fields["phase"] = "human_takeover"
-        response = COPY[locale]["human"]
+        if action in {"confirm_summary", "new_booking", "cancel"} and not pickup_review:
+            response = COPY[locale]["human"]
+        else:
+            response = response or COPY[locale]["human"]
         result_action = "human_takeover"
+    elif review_pending:
+        # Human review freezes booking decisions, not safe conversation. Only
+        # an operator resolves the work item; an existing reservation stays
+        # frozen independently even after that conversation item is resolved.
+        fields["phase"] = "human_takeover"
+        if action in {"confirm_summary", "new_booking", "cancel"} or not response:
+            response = COPY[locale]["human"]
     elif action == "cancel":
         fields["phase"] = "cancelled"
         response = COPY[locale]["cancelled"]
@@ -520,17 +592,23 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
                 fields.pop("trip_date")
                 response = COPY[locale]["invalid_day"] + "\n\n" + COPY[locale]["trip_date"]
         question = _next_question(fields, locale)
-        if question:
+        if invalid_contact:
             fields["phase"] = "collecting"
-            if not response:
+        elif question:
+            fields["phase"] = "collecting"
+            if not response or action == "confirm_summary":
                 response = question
+        elif has_question:
+            # A mixed detail/question turn must keep its answer. Changed facts
+            # require a fresh summary before any later approval can book them.
+            fields["phase"] = old_phase if old_phase == "awaiting_summary_confirmation" and not changes else "collecting"
         elif action == "confirm_summary" and old_phase == "awaiting_summary_confirmation" and not changes:
             fields["phase"] = "summary_confirmed"
             response = COPY[locale]["confirmed"]
             result_action = "summary_confirmed"
         else:
             fields["phase"] = "awaiting_summary_confirmation"
-            response = ((response + "\n\n") if action == "question" and response else "") + _summary(fields, locale)
+            response = _summary(fields, locale)
     root_fields["mermaid_intake"] = fields
     if message_id:
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
@@ -609,11 +687,13 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
             actor="system", reason="No-money demo checkout created",
         )
         payment_url = mermaid_demo_payment.build_payment_url(
-            base_url, reservation["public_id"], secret
+            mermaid_catalog.get_catalog().get("links", {}).get("checkout_base_url") or base_url,
+            reservation["public_id"], secret
         )
-        availability_copy, payment_copy = PAYMENT_COPY[result.locale]
+        availability_copy = PAYMENT_COPY[result.locale][0]
+        payment_copy = guest.guest_copy(result.locale)["checkout_link"]
         result = IntakeResult(
-            result.text + "\n\n" + availability_copy + "\n\n" + mermaid_documents.quote_message(reservation) + "\n\n" + payment_copy + " " + payment_url,
+            mermaid_documents.quote_message(reservation) + "\n\n" + availability_copy + "\n\n" + payment_copy + "\n" + payment_url,
             result.locale,
             result.phase,
             action=f"reservation:{reservation['public_id']}",
@@ -629,10 +709,10 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         from agents.social import mermaid_demo_payment
         import os
         url = mermaid_demo_payment.build_payment_url(
-            os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001"),
+            mermaid_catalog.get_catalog().get("links", {}).get("checkout_base_url") or os.environ.get("UNBOKS_PUBLIC_BASE_URL", "http://localhost:8001"),
             current["public_id"], os.environ.get("MERMAID_DEMO_SIGNING_SECRET", ""),
         )
-        result = IntakeResult(result.text + "\n\n" + PAYMENT_COPY[result.locale][1] + " " + url, result.locale, result.phase)
+        result = IntakeResult(result.text + "\n\n" + guest.guest_copy(result.locale)["checkout_link"] + "\n" + url, result.locale, result.phase)
     elif result.action == "cancel":
         from agents.social import mermaid_reservation_store
 

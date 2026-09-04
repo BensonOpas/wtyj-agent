@@ -1,0 +1,3 @@
+# Preserve the verified status/cache fixes and Tracy introduction.
+FROM wtyj-agent:tracy-status-9adae23
+COPY wtyj/agents/social/mermaid_demo_payment.py wtyj/agents/social/mermaid_reservation_store.py wtyj/agents/social/mermaid_reservation_workflow.py wtyj/agents/social/webhook_server.py /app/agents/social/

@@ -6,12 +6,15 @@ import hashlib
 import hmac
 import html
 import os
+import re
+import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from fastapi.responses import HTMLResponse, Response
 
 from agents.social import mermaid_documents, mermaid_reservation_store
+from agents.social import mermaid_guest_experience as guest
 from agents.social.senders import send_reply
 from shared import icp_overrides, mermaid_catalog, state_registry
 
@@ -33,11 +36,64 @@ def verify_payment(reservation_id: str, expires: int, signature: str, secret: st
 
 
 def build_payment_url(base_url: str, reservation_id: str, secret: str, now: int | None = None) -> str:
-    if not base_url.startswith(("https://", "http://localhost", "http://127.0.0.1")) or not secret:
+    parts = urlsplit(base_url)
+    if not secret or not parts.netloc or parts.query or parts.fragment or parts.username or parts.password or not (
+        parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in {"localhost", "127.0.0.1"})
+    ):
         raise ValueError("Mermaid demo payment configuration is missing")
-    expires = int(time.time() if now is None else now) + 3600
-    signature = sign_payment(reservation_id, expires, secret)
-    return f"{base_url.rstrip('/')}/api/public/mermaid-demo-payment/{reservation_id}?{urlencode({'expires': expires, 'signature': signature})}"
+    current = int(time.time() if now is None else now)
+    token = secrets.token_urlsafe(16)
+    conn = mermaid_reservation_store._conn()
+    try:
+        with conn:
+            reservation = conn.execute(
+                "SELECT public_id FROM mermaid_reservations WHERE public_id=? AND tenant_slug='mermaid' AND state!='cancelled' AND human_takeover=0",
+                (reservation_id,),
+            ).fetchone()
+            if not reservation:
+                raise ValueError("Mermaid reservation is unavailable")
+            conn.execute("DELETE FROM mermaid_checkout_links WHERE expires_at < ?", (current,))
+            conn.execute(
+                "INSERT INTO mermaid_checkout_links VALUES (?, 'mermaid', ?, ?, ?)",
+                (_checkout_token_hash(token, secret), reservation_id, current + 3600, current),
+            )
+    finally:
+        conn.close()
+    return f"{base_url.rstrip('/')}/pay/{token}"
+
+
+def _checkout_token_hash(token: str, secret: str) -> str:
+    return hmac.new(secret.encode(), ("mermaid-short-checkout:" + token).encode(), hashlib.sha256).hexdigest()
+
+
+def resolve_checkout_token(token: str) -> tuple[str, int, str] | None:
+    secret = _secret()
+    if not secret or not re.fullmatch(r"[A-Za-z0-9_-]{22}", token) or not mermaid_catalog.reservation_demo_enabled() or not mermaid_catalog.demo_features()["demo_payment"]:
+        return None
+    conn = mermaid_reservation_store._conn()
+    try:
+        row = conn.execute(
+            "SELECT l.reservation_public_id,l.expires_at FROM mermaid_checkout_links l "
+            "JOIN mermaid_reservations r ON r.public_id=l.reservation_public_id "
+            "WHERE l.token_hash=? AND l.tenant_slug='mermaid' AND r.tenant_slug='mermaid' "
+            "AND r.state!='cancelled' AND r.human_takeover=0 AND l.expires_at>=?",
+            (_checkout_token_hash(token, secret), int(time.time())),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return row[0], row[1], sign_payment(row[0], row[1], secret)
+
+
+def short_checkout_page(token: str) -> Response:
+    payment = resolve_checkout_token(token)
+    return checkout_page(*payment, form_action="") if payment else Response(status_code=404)
+
+
+def complete_short_checkout(token: str, status: str) -> Response:
+    payment = resolve_checkout_token(token)
+    return complete_checkout(*payment, status) if payment else Response(status_code=404)
 
 
 def _page(title: str, body: str, *, actions: str = "", status: int = 200) -> HTMLResponse:
@@ -46,10 +102,10 @@ def _page(title: str, body: str, *, actions: str = "", status: int = 200) -> HTM
 <title>{html.escape(title)}</title><style>
 body{{margin:0;background:#eaf8f8;color:#063b46;font:16px/1.5 system-ui,sans-serif}}main{{max-width:620px;margin:40px auto;padding:30px;background:white;border-radius:18px;box-shadow:0 12px 36px #063b4622}}h1{{margin-top:18px}}.demo{{background:#f36c5b;color:white;padding:10px 14px;border-radius:8px;font-weight:800;text-align:center}}.summary{{background:#f4fbfb;padding:18px;border-radius:12px;margin:20px 0}}button{{border:0;border-radius:10px;padding:14px 18px;font-weight:750;cursor:pointer}}.pay{{background:#007f86;color:white}}.cancel{{background:#e9eef0;color:#203c44;margin-left:8px}}small{{display:block;margin-top:20px;color:#4d6870}}
 </style></head><body><main><div class="demo">PAYMENT SIMULATION - NO MONEY</div><h1>{html.escape(title)}</h1>{body}{actions}<small>No card number, bank account, password, or payment credential is requested or stored.</small></main></body></html>"""
-    return HTMLResponse(markup, status_code=status, headers={"Cache-Control": "private, no-store"})
+    return HTMLResponse(markup, status_code=status, headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
 
-def checkout_page(reservation_id: str, expires: int, signature: str) -> Response:
+def checkout_page(reservation_id: str, expires: int, signature: str, *, form_action: str | None = None) -> Response:
     if not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
@@ -61,45 +117,30 @@ def checkout_page(reservation_id: str, expires: int, signature: str) -> Response
         f'<div class="summary"><b>{html.escape(reservation["customer_name"])}</b><br>'
         f'{html.escape(intake["trip_date"])} · {intake["adults"]} adults · '
         f'{intake["children"]} children 4-12 · {intake["infants"]} children 0-3<br>'
-        f'<b>{html.escape(money["currency"])} {int(money["total"]):,.2f}</b></div>'
+        f'<b>{html.escape(guest.price_text(money, intake, reservation["language"]))}</b><br>'
+        f'{html.escape(guest.transport_text(intake, reservation["language"], money))}</div>'
         '<p>This page demonstrates payment completion only. Clicking success moves no money.</p>'
     )
+    action = f"?expires={int(expires)}&signature={signature}" if form_action is None else form_action
     actions = (
-        f'<form method="post" action="?expires={int(expires)}&amp;signature={html.escape(signature)}">'
+        f'<form method="post" action="{html.escape(action, quote=True)}">'
         '<button class="pay" name="status" value="success">Simulate successful payment</button>'
         '<button class="cancel" name="status" value="cancel">Cancel</button></form>'
     )
     return _page("Mermaid demo checkout", body, actions=actions)
 
 
-SUCCESS_COPY = {
-    "en": "You’re booked for a wonderful day at Klein Curaçao! Your demo payment is recorded. Booking code: {code}. Date: {date}. Guests: {guests}. Demo paid: {amount}. Arrive at Fishermen’s Pier at 06:45. Bring towels and sunscreen; Mermaid takes care of the rest.",
-    "nl": "Jullie zijn geboekt voor een heerlijke dag op Klein Curaçao! De demo-betaling is geregistreerd. Boekingscode: {code}. Datum: {date}. Gasten: {guests}. Demo betaald: {amount}. Wees om 06:45 bij Fishermen’s Pier. Neem handdoeken en zonnebrand mee; Mermaid zorgt voor de rest.",
-    "de": "Sie sind für einen großartigen Tag auf Klein Curaçao gebucht! Die Demo-Zahlung ist erfasst. Buchungscode: {code}. Datum: {date}. Gäste: {guests}. Demo bezahlt: {amount}. Seien Sie um 06:45 am Fishermen’s Pier. Bringen Sie Handtücher und Sonnencreme mit; Mermaid kümmert sich um den Rest.",
-    "es": "¡Tu gran día en Klein Curaçao está reservado! El pago demo quedó registrado. Código: {code}. Fecha: {date}. Pasajeros: {guests}. Demo pagado: {amount}. Llega a Fishermen’s Pier a las 06:45. Trae toallas y protector solar; Mermaid se encarga del resto.",
-    "pap": "Bo ta buk pa un dia bunita na Klein Curaçao! E pago demo ta registrá. Kódigo: {code}. Fecha: {date}. Huéspednan: {guests}. Demo pagá: {amount}. Yega Fishermen’s Pier pa 06:45. Hiba handuk i krema solar; Mermaid ta sòru pa e rèst.",
-    "pt": "Seu grande dia em Klein Curaçao está reservado! O pagamento demo foi registrado. Código: {code}. Data: {date}. Passageiros: {guests}. Demo pago: {amount}. Chegue ao Fishermen’s Pier às 06:45. Leve toalhas e protetor solar; a Mermaid cuida do resto.",
-}
-
-SUCCESS_GUESTS = {
-    "en": "{adults} adults, {children} children 4-12, {infants} children 0-3",
-    "nl": "{adults} volwassenen, {children} kinderen 4-12, {infants} kinderen 0-3",
-    "de": "{adults} Erwachsene, {children} Kinder 4-12, {infants} Kinder 0-3",
-    "es": "{adults} adultos, {children} niños de 4-12, {infants} niños de 0-3",
-    "pap": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3",
-    "pt": "{adults} adultos, {children} crianças de 4-12, {infants} crianças de 0-3",
-}
-
-
 def success_message(reservation: dict, payment: dict) -> str:
     intake = reservation["intake"]
-    locale = reservation["language"] if reservation["language"] in SUCCESS_COPY else "en"
-    guests = SUCCESS_GUESTS[locale].format(
-        adults=intake["adults"], children=intake["children"], infants=intake["infants"]
-    )
-    amount = f"{payment['currency']} {int(payment['amount']):,.2f}"
-    template = SUCCESS_COPY[locale]
-    return template.format(code=reservation["booking_code"], date=intake["trip_date"], guests=guests, amount=amount)
+    locale = reservation["language"] if reservation["language"] in mermaid_documents.LABELS else "en"
+    copy = guest.guest_copy(locale)
+    return "\n\n".join([
+        copy["booking_complete"],
+        f"{reservation['booking_code']} · {guest.guest_date(intake['trip_date'], locale)}\n{guest.party_text(intake, locale)}",
+        f"{copy['paid']}: {payment['currency']} {int(payment['amount']):,.2f}",
+        guest.transport_text(intake, locale, reservation["monetary_snapshot"]),
+    ])
+
 
 
 def complete_checkout(reservation_id: str, expires: int, signature: str, status: str) -> Response:
@@ -126,21 +167,32 @@ def complete_checkout(reservation_id: str, expires: int, signature: str, status:
         and icp_overrides.auto_reply_state(controls) is True
         and not state_registry.get_ai_muted(reservation["conversation_id"])
     )
-    if not delivered and can_send:
+    if not delivered and job["attempts"]:
+        from agents.social.mermaid_delivery_reconciliation import reconcile_job
+        try:
+            delivered = reconcile_job(job["public_id"]) == "delivered"
+        except Exception:
+            delivered = False
+    # A timeout can mean accepted but not delivered yet. Repeated checkout
+    # callbacks must only reconcile; never resend a new signed URL blindly.
+    if not delivered and can_send and not job["attempts"] and mermaid_documents.claim_initial_delivery(job["public_id"]):
         delivered = send_reply(
             "whatsapp", reservation["conversation_id"], reservation.get("zernio_account_id") or "",
             success_message(reservation, payment), attachment_url=receipt_url, attachment_type="file",
+            attachment_name=document["filename"],
             confirm_delivery=True, idempotency_key=job["idempotency_key"],
         )
-        mermaid_documents.mark_delivery(job["public_id"], delivered, "provider returned false" if not delivered else "")
+        mermaid_documents.mark_delivery(job["public_id"], delivered, "awaiting provider confirmation" if not delivered else "", count_attempt=False)
         if delivered:
-            state_registry.dm_store_message(
+            state_registry.dm_store_message_once(
                 conversation_id=reservation["conversation_id"], channel="whatsapp", role="assistant",
                 text=success_message(reservation, payment),
+                source_message_key="mermaid-job:" + job["public_id"],
             )
-            state_registry.dm_store_message(
+            state_registry.dm_store_message_once(
                 conversation_id=reservation["conversation_id"], channel="whatsapp", role="system",
                 text="Payment receipt sent: " + document["filename"],
+                source_message_key="mermaid-attachment:" + job["public_id"],
             )
     body = (
         f"<p><b>Demo payment complete.</b></p><p>Booking code: <b>{html.escape(reservation['booking_code'])}</b></p>"

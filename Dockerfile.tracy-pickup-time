@@ -1,0 +1,4 @@
+# Preserve the verified short links, introduction and status/cache fixes.
+FROM wtyj-agent:tracy-links-521379d
+COPY wtyj/shared/mermaid_catalog.py /app/shared/
+COPY wtyj/agents/social/mermaid_guest_experience.py wtyj/agents/social/mermaid_understanding.py wtyj/agents/social/mermaid_reservation_workflow.py /app/agents/social/

@@ -2866,6 +2866,8 @@ def wa_store_message(phone: str, role: str, text: str):
         "INSERT INTO whatsapp_threads (phone, role, text, created_at) VALUES (?, ?, ?, ?)",
         (phone, role, text, datetime.now(timezone.utc).isoformat())
     )
+    from shared import mermaid_customers
+    mermaid_customers.capture(conn, phone, name="", at=None)
     conn.commit()
     conn.close()
 
@@ -3322,6 +3324,8 @@ def wa_save_booking_state(phone: str, fields: dict, flags: dict,
         (phone, json.dumps(fields, ensure_ascii=False),
          json.dumps(flags, ensure_ascii=False), cb, now, phone, now)
     )
+    from shared import mermaid_customers
+    mermaid_customers.capture(conn, phone, intake=fields.get("mermaid_intake"), at=now)
     conn.commit()
     conn.close()
 
@@ -4421,8 +4425,11 @@ def wa_cleanup_stale_data() -> dict:
     now = datetime.now(timezone.utc)
     # Conversation messages >30 days
     cutoff_30d = (now - timedelta(days=30)).isoformat()
-    cur = conn.execute("DELETE FROM whatsapp_threads WHERE created_at < ?", (cutoff_30d,))
-    threads_cleaned = cur.rowcount
+    from shared import mermaid_customers
+    threads_cleaned = 0
+    if not mermaid_customers.enabled():
+        cur = conn.execute("DELETE FROM whatsapp_threads WHERE created_at < ?", (cutoff_30d,))
+        threads_cleaned = cur.rowcount
     # Processed message IDs >7 days
     cutoff_7d = (now - timedelta(days=7)).isoformat()
     cur = conn.execute("DELETE FROM whatsapp_processed WHERE created_at < ?", (cutoff_7d,))
@@ -4446,6 +4453,8 @@ def dm_store_message(conversation_id: str, channel: str, role: str, text: str,
         "VALUES (?, ?, ?, ?, ?, ?)",
         (conversation_id, role, text, timestamp, channel, sender_name)
     )
+    from shared import mermaid_customers
+    mermaid_customers.capture(conn, conversation_id, name=sender_name if role == "user" else "", at=timestamp)
     conn.commit()
     conn.close()
 
@@ -4487,6 +4496,8 @@ def dm_store_message_once(
                 source_key,
             ),
         )
+        from shared import mermaid_customers
+        mermaid_customers.capture(conn, conversation_id, name=sender_name if role == "user" else "", at=timestamp)
         conn.commit()
         if cursor.rowcount == 1:
             return True
@@ -4522,6 +4533,8 @@ def dm_store_inbound_message(
             "VALUES (?, 'user', ?, ?, ?, ?, ?)",
             (conversation_id, text, now, channel, sender_name, source_key),
         )
+        from shared import mermaid_customers
+        mermaid_customers.capture(conn, conversation_id, name=sender_name, at=now)
         conn.commit()
         return cur.rowcount == 1
     finally:
@@ -4691,17 +4704,23 @@ def create_pending_notification(notification_type: str, channel: str,
                                  customer_id: str, customer_name: str,
                                  subject: str, body: str,
                                  relay_token: str = None,
-                                 mode: str = None) -> int:
+                                 mode: str = None,
+                                 preserve_hard_mode: bool = False) -> int:
     """Insert (or, for an unresolved escalation, UPDATE) a pending
     notification. Brief 227: dedup unresolved escalations + structured
     summary persisted on the same row. Brief 239: optional `mode` param
     ('soft'/'hard') sets pending_notifications.mode at insert time and
     drives the alert email's Mode line. None preserves existing value
-    on UPDATE (COALESCE)."""
+    on UPDATE (COALESCE). Automatic review callers can preserve an existing
+    operator's hard takeover with ``preserve_hard_mode=True``; the check is
+    atomic with the update so a concurrent takeover cannot be downgraded."""
     if mode is None and notification_type == "relay":
         mode = "soft"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
+
+    if preserve_hard_mode:
+        conn.execute("BEGIN IMMEDIATE")
 
     # Brief 239: gate-safe initialization so non-escalation paths can
     # still compute is_update without NameError.
@@ -4740,9 +4759,9 @@ def create_pending_notification(notification_type: str, channel: str,
         conn.execute(
             "UPDATE pending_notifications "
             "SET subject = ?, body = ?, customer_name = ?, created_at = ?, "
-            "mode = COALESCE(?, mode) "
+            "mode = CASE WHEN ? AND mode = 'hard' THEN mode ELSE COALESCE(?, mode) END "
             "WHERE id = ?",
-            (subject, body, customer_name, now, mode, row_id))
+            (subject, body, customer_name, now, preserve_hard_mode, mode, row_id))
     conn.commit()
     conn.close()
 

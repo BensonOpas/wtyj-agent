@@ -44,11 +44,13 @@ def test_multi_fact_message_preserves_facts_and_asks_only_one_question():
         "My name is Ana Silva. Date 2026-09-05, 2 adults, 1 child, 0 infants. We will meet at the pier.",
         message_id="one",
     )
+    assert result.phase == "collecting"
+    result = workflow.process_intake_turn("guest-multi", "+1 202 555 0123", message_id="contact")
     assert result.phase == "awaiting_summary_confirmation"
-    assert result.text.count("?") == 0
+    assert result.text.count("?") == 1
     assert "Ana Silva" in result.text
-    assert "2 adults, 1 children 4-12, 0 children 0-3" in result.text
-    assert "2026-09-05" in result.text
+    assert "2 adult fares, 1 child (4-12)" in result.text
+    assert "Saturday 5 September 2026" in result.text
 
 
 def test_ambiguous_party_size_asks_one_composition_question():
@@ -74,13 +76,14 @@ def test_summary_requires_explicit_confirmation_and_allows_one_field_correction(
         "My name is Ana Silva. Date 2026-09-05, 2 adults, 0 children, 0 infants, meet at pier.",
         message_id="one",
     )
+    workflow.process_intake_turn(phone, "+1 202 555 0123", message_id="contact")
     hesitation = workflow.process_intake_turn(phone, "hmm 🙂", message_id="two")
     assert hesitation.phase == "awaiting_summary_confirmation"
     assert hesitation.action is None
 
     correction = workflow.process_intake_turn(phone, "Actually 3 adults", message_id="three")
     assert correction.phase == "awaiting_summary_confirmation"
-    assert "3 adults" in correction.text
+    assert "3 adult fares" in correction.text
     state = state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]
     assert state["children"] == 0
     assert state["customer_name"] == "Ana Silva"
@@ -98,7 +101,7 @@ def test_duplicate_inbound_does_not_advance_or_reply_twice():
     assert duplicate.duplicate is True
 
 
-def test_human_takeover_mutes_automation_and_preserves_progress(monkeypatch):
+def test_human_review_stays_soft_and_preserves_progress(monkeypatch):
     muted = []
     notices = []
     monkeypatch.setattr(state_registry, "set_ai_muted", lambda phone, value, channel: muted.append((phone, value, channel)))
@@ -106,8 +109,10 @@ def test_human_takeover_mutes_automation_and_preserves_progress(monkeypatch):
     workflow.process_intake_turn("guest-human", "Date 2026-09-05", message_id="one")
     result = workflow.process_intake_turn("guest-human", "I want a human", message_id="two")
     assert result.action == "human_takeover"
-    assert muted == [("guest-human", True, "whatsapp")]
+    assert muted == []
     assert len(notices) == 1
+    assert notices[0][1]["mode"] == "soft"
+    assert notices[0][1]["preserve_hard_mode"] is True
     state = state_registry.wa_get_booking_state("guest-human")["fields"]["mermaid_intake"]
     assert state["trip_date"] == "2026-09-05"
 

@@ -200,6 +200,20 @@ async def mermaid_demo_checkout(reservation_id: str, expires: int, signature: st
 _mermaid_checkout_limiter = CapacityLimiter(1)
 
 
+@app.get("/pay/{token}")
+async def mermaid_short_checkout(token: str):
+    from agents.social.mermaid_demo_payment import short_checkout_page
+    return await run_in_threadpool(short_checkout_page, token)
+
+
+@app.post("/pay/{token}")
+async def mermaid_short_checkout_complete(request: Request, token: str):
+    from agents.social.mermaid_demo_payment import complete_short_checkout
+    form = await request.form()
+    async with _mermaid_checkout_limiter:
+        return await run_in_threadpool(complete_short_checkout, token, str(form.get("status") or "cancel"))
+
+
 @app.post("/api/public/mermaid-demo-payment/{reservation_id}")
 async def mermaid_demo_checkout_complete(
     request: Request, reservation_id: str, expires: int, signature: str,
@@ -740,6 +754,11 @@ def _ali_inbound_recovery_loop(
                 "zernio_failed_event_queue_scan_failed",
                 error=type(exc).__name__,
             )
+        try:
+            from agents.social.mermaid_delivery_reconciliation import reconcile_pending_once
+            reconcile_pending_once()
+        except Exception as exc:
+            log("mermaid_document_recovery_failed", error=type(exc).__name__)
         try:
             _recover_stale_ali_inbound_once(ali_workflow=ali_workflow)
         except Exception as exc:
@@ -2103,6 +2122,7 @@ def _flush_buffer(buffer_key):
                                 reply_text,
                                 attachment_url=attachment_url,
                                 attachment_type=str((reply_media or {}).get("type") or "image"),
+                                attachment_name=str((reply_media or {}).get("filename") or ""),
                                 confirm_delivery=True,
                                 idempotency_key=delivery_idempotency_key,
                             )
@@ -3476,6 +3496,7 @@ def _process_zernio_event(
                     reply_text,
                     attachment_url=attachment_url,
                     attachment_type=str((reply_media or {}).get("type") or "image"),
+                    attachment_name=str((reply_media or {}).get("filename") or ""),
                     confirm_delivery=bool(mermaid_delivery_commit),
                     idempotency_key=(
                         f"mermaid-delivery:{mermaid_delivery_commit['job_id']}"

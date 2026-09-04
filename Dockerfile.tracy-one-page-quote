@@ -1,0 +1,4 @@
+# Keep the verified pickup timing, short links and soft-review repairs.
+FROM wtyj-agent:tracy-soft-review-33272b1
+COPY wtyj/agents/social/mermaid_documents.py /app/agents/social/
+COPY wtyj/scripts/refresh_mermaid_pdf_presentation.py /app/scripts/

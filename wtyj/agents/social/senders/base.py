@@ -16,7 +16,7 @@ class Sender(ABC):
     def send(cls, conversation_id: str, account_id: str, text: str,
              attachment_url: str = "", attachment_type: str = "image",
              confirm_delivery: bool = False,
-             idempotency_key: str = "") -> bool:
+             idempotency_key: str = "", attachment_name: str = "") -> bool:
         """Send a reply to the given conversation.
 
         Args:
@@ -29,6 +29,7 @@ class Sender(ABC):
             text: the reply text to deliver.
             attachment_url: optional public media URL to send with the reply.
             attachment_type: provider attachment type, defaults to image.
+            attachment_name: recipient-visible document filename.
             confirm_delivery: require a provider-visible delivery status before
                 returning success.
             idempotency_key: stable provider request key for safe retries.

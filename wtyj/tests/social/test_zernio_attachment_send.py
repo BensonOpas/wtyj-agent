@@ -142,6 +142,24 @@ def test_whatsapp_file_attachment_includes_recipient_visible_name(monkeypatch):
     )
 
 
+def test_mermaid_filename_survives_entire_sender_dispatch(monkeypatch):
+    from agents.social.senders import send_reply
+    monkeypatch.setenv("LATE_API_KEY", "test-key")
+    _legacy_attachment_confirmation(monkeypatch)
+    calls = []
+    def fake_post(url, headers, json, timeout):
+        calls.append(json)
+        return _Resp(201, {"id": "attachment-confirmed"})
+    monkeypatch.setattr(zernio_dm_client.http_requests, "post", fake_post)
+    name = "Mermaid - Demo Trip Quote - EXAMPLE.pdf"
+    assert send_reply(
+        "whatsapp", "conv_123", "account_123", "Your quote",
+        attachment_url="https://demo.example/document/id?signature=test",
+        attachment_type="file", attachment_name=name,
+    )
+    assert calls[0]["attachmentName"] == name
+
+
 def test_attachment_name_is_omitted_for_non_file_and_legacy_calls(monkeypatch):
     monkeypatch.setenv("LATE_API_KEY", "test-key")
     _legacy_attachment_confirmation(monkeypatch)
