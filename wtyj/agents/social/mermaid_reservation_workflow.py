@@ -405,9 +405,9 @@ def process_intake_turn(
         action = None
         response = _question_answer(text, locale) or COPY[locale]["human"]
     elif any(phrase in lower for phrase in ("cancel", "annuleer", "stornieren", "cancelar", "kanselá")):
-        fields["phase"] = "cancelled"
+        fields["phase"] = "cancellation_requested"
         action = "cancel"
-        response = COPY[locale]["cancelled"]
+        response = ""
     else:
         updates, ambiguous_party = _extract_fields(text, locale, fields)
         for key, value in updates.items():
@@ -452,7 +452,7 @@ def process_intake_turn(
             fields["introduced"] = True
 
     root_fields["mermaid_intake"] = fields
-    if message_id:
+    if message_id and action != "cancel":
         seen.append(message_id)
         flags["mermaid_seen_message_ids"] = seen[-100:]
     state_registry.wa_save_booking_state(phone, root_fields, flags, completed)
@@ -624,8 +624,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         if action in {"confirm_summary", "new_booking", "cancel"} or not response:
             response = COPY[locale]["human"]
     elif action == "cancel":
-        fields["phase"] = "cancelled"
-        response = COPY[locale]["cancelled"]
+        fields["phase"] = "cancellation_requested"
+        response = ""
         result_action = "cancel"
     elif reservation and reservation["state"] in {"demo_payment_pending", "booked", "cancelled"} and action != "new_booking":
         # Answers after a quote never reopen intake or change the immutable quote.
@@ -686,7 +686,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     elif understood.get('status_request') in {'payment', 'handover', 'delivery'} or action == 'payment_status':
         response = response_policy.status_reply(understood.get('status_request') if understood.get('status_request') in {'payment', 'handover', 'delivery'} else 'payment', locale, response_policy.state_context(phone, reservation))
     root_fields["mermaid_intake"] = fields
-    if message_id:
+    if message_id and result_action != "cancel":
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
     state_registry.wa_save_booking_state(phone, root_fields, flags, state.get("completed_bookings") or [])
     return IntakeResult(response, locale, fields["phase"], action=result_action,
@@ -816,11 +816,20 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
             )
             if current:
                 mermaid_reservation_store.freeze_for_human(current["public_id"])
-            state = state_registry.wa_get_booking_state(phone)
-            fields = dict(state.get("fields") or {})
-            fields["mermaid_intake"] = dict(fields.get("mermaid_intake") or {}) | {"phase": "human_takeover"}
-            state_registry.wa_save_booking_state(phone, fields, state.get("flags") or {}, state.get("completed_bookings") or [])
             result = IntakeResult(COPY[result.locale]["human"], result.locale, "human_takeover", action="human_takeover")
+        else:
+            result = IntakeResult(COPY[result.locale]["cancelled"], result.locale, "cancelled", action="cancel")
+        # An attempted cancellation remains retryable until its authoritative
+        # state change or required review succeeds. Never cache a success claim
+        # or mark this provider event seen before those operations complete.
+        state = state_registry.wa_get_booking_state(phone)
+        fields = dict(state.get("fields") or {})
+        fields["mermaid_intake"] = dict(fields.get("mermaid_intake") or {}) | {"phase": result.phase}
+        flags = dict(state.get("flags") or {})
+        message_id = str(message.get("message_id") or "")
+        if message_id:
+            flags["mermaid_seen_message_ids"] = (list(flags.get("mermaid_seen_message_ids") or []) + [message_id])[-100:]
+        state_registry.wa_save_booking_state(phone, fields, flags, state.get("completed_bookings") or [])
     elif result.action == "human_takeover":
         from agents.social import mermaid_reservation_store
 

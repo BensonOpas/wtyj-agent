@@ -120,5 +120,8 @@ def test_human_review_stays_soft_and_preserves_progress(monkeypatch):
 def test_customer_can_cancel_before_payment():
     result = workflow.process_intake_turn("guest-cancel", "cancel", message_id="one")
     assert result.action == "cancel"
-    assert result.phase == "cancelled"
-    assert "No payment" in result.text
+    assert result.phase == "cancellation_requested"
+    assert result.text == ""
+    reply = workflow.handle_demo_message({"from": "guest-cancel", "text": "cancel", "message_id": "one"})
+    assert reply == workflow.COPY["en"]["cancelled"]
+    assert "No payment" in reply

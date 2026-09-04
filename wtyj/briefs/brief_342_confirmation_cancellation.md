@@ -40,6 +40,13 @@ issued signed checkout GET/POST requests reject cancelled state; a cancellation
 winning after the callback's first read also returns unavailable. Closing a paid
 checkout reports the already-paid state without implying a refund or cancellation.
 
+The intake phase remains `cancellation_requested`, with an empty success reply
+and no processed-message marker, until the handler commits cancellation or its
+required review. A database/revocation error therefore leaves the same provider
+event retryable. Only the authoritative outcome sets the final phase, processed
+marker and cached reply. This closes the previous failure window where an
+aborted cancellation was already marked cancelled and duplicate on retry.
+
 Rejected: parsing model prose or adding multilingual confirmation/cancellation
 keyword lists; cancelling based only on the model snapshot; deleting tokens in
 a later transaction; revoking a paid booking; changing final-send pause/mute
@@ -74,7 +81,10 @@ The focused file plus reservation-store, demo-payment, checkout-concurrency,
 live-release and actual soft-review webhook suites pass: 78 tests, including
 five added operator-write ordering and handler/store-gap regressions. Companion
 multilingual intake, demo end-to-end, contact, pickup, handoff-durability and
-dashboard reservation tests pass: 106 tests. Combined parent tests
+dashboard reservation tests pass: 106 tests. Two additional workflow-level
+fault-injection regressions cover model and deterministic cancellation retries
+after token revocation aborts, and the paid-race test checks the cached review
+payload. Combined parent tests
 and the complete real-model audit remain release gates owned by the root task.
 
 ## Success Condition

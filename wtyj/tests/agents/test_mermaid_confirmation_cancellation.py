@@ -131,6 +131,43 @@ def test_cancellation_and_link_revocation_roll_back_together():
     assert all(event["to_state"] != "cancelled" for event in store.events(reservation["public_id"]))
 
 
+@pytest.mark.parametrize("use_model", [True, False])
+def test_failed_cancellation_retries_same_event_without_false_success(monkeypatch, use_model):
+    reservation = pending()
+    checkout.build_payment_url("https://demo.example", reservation["public_id"], "test-secret")
+    conn = store._conn()
+    try:
+        conn.execute("CREATE TRIGGER fail_revoke BEFORE DELETE ON mermaid_checkout_links BEGIN SELECT RAISE(ABORT, 'injected revoke failure'); END")
+        conn.commit()
+    finally:
+        conn.close()
+    model = Mock(return_value=understood("cancel"))
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    message = {"from": "guest", "text": "cancel", "message_id": "cancel-retry"}
+    with pytest.raises(sqlite3.IntegrityError, match="injected revoke failure"):
+        workflow.handle_demo_message(message, True, use_model=use_model)
+    state = state_registry.wa_get_booking_state("guest")
+    assert state["fields"]["mermaid_intake"]["phase"] == "cancellation_requested"
+    assert "cancel-retry" not in state["flags"].get("mermaid_seen_message_ids", [])
+    assert "cancel-retry" not in state["flags"].get("mermaid_cached_replies", {})
+    assert store.get_reservation(reservation["public_id"])["state"] == "demo_payment_pending"
+    assert counts(reservation["public_id"]) == (0, 1)
+    conn = store._conn()
+    try:
+        conn.execute("DROP TRIGGER fail_revoke")
+        conn.commit()
+    finally:
+        conn.close()
+    recovered = workflow.handle_demo_message(message, True, use_model=use_model)
+    assert recovered["text"] == workflow.COPY["en"]["cancelled"]
+    assert counts(reservation["public_id"]) == (0, 0)
+    assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "cancelled"
+    assert len([event for event in store.events(reservation["public_id"]) if event["to_state"] == "cancelled"]) == 1
+    if use_model:
+        assert workflow.handle_demo_message(message, True, use_model=True)["text"] == recovered["text"]
+        assert model.call_count == 2
+
+
 def ordered_writer_race(monkeypatch, first, operations):
     real_conn = store._conn
     ready = threading.Barrier(2)
@@ -250,13 +287,15 @@ def test_payment_winning_after_model_snapshot_returns_review_not_cancelled(monke
         store.complete_demo_payment(reservation["public_id"], payment_reference="PAY-DEMO-WINNER", idempotency_key="pay")
         return understood("cancel")
     monkeypatch.setattr(marina_agent, "process_message", model)
-    result = workflow.handle_demo_message({"from": "guest", "text": "Cancel", "message_id": "cancel"}, True, use_model=True)
+    message = {"from": "guest", "text": "Cancel", "message_id": "cancel"}
+    result = workflow.handle_demo_message(message, True, use_model=True)
     assert result["text"] != workflow.COPY["en"]["cancelled"]
     assert store.get_reservation(reservation["public_id"])["state"] == "booked"
     assert store.get_reservation(reservation["public_id"])["human_takeover"]
     assert state_registry.get_active_escalation_mode("guest") == "soft"
     assert state_registry.get_ai_muted("guest") is False
     assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "human_takeover"
+    assert workflow.handle_demo_message(message, True, use_model=True)["text"] == result["text"]
 
 
 def test_cancelled_signed_checkout_is_unavailable(monkeypatch):
