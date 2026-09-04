@@ -12,7 +12,7 @@ from shared import config_loader, state_registry
 IDENTIFIER = "mermaid_conversation_id"
 DETAIL_KEYS = (
     "customer_name", "contact_phone", "language", "trip_date", "adults",
-    "children", "infants", "pickup_preference", "pickup_location",
+    "children", "infants", "child_ages", "pickup_preference", "pickup_location",
     "dietary_requirements", "accessibility_notes", "special_requests", "phase",
 )
 

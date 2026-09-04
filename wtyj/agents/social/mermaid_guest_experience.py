@@ -63,11 +63,27 @@ def guest_date(value, locale="en"):
 
 
 def party_text(intake, locale):
+    """Professional summary wording; exact ages are facts, fare bands are fallback."""
+    from shared.mermaid_guest_ages import normalize_child_ages, age_band, age_months
     copy = guest_copy(locale)
+    formal = copy.get("formal_party")
+    if not formal:
+        return ", ".join((copy.get(key + "_one", copy[key]) if intake.get(key) == 1 else copy[key]).format(count=intake[key])
+                         for key in ("adults", "children", "infants") if intake.get(key))
     parts = []
-    for key in ("adults", "children", "infants"):
-        count = intake.get(key, 0)
-        if count:
-            template = copy.get(key + "_one", copy[key]) if count == 1 else copy[key]
-            parts.append(template.format(count=count))
-    return ", ".join(parts)
+    adults = intake.get("adults", 0)
+    if adults:
+        parts.append(formal["adult_one" if adults == 1 else "adults"].format(count=adults))
+    ages = normalize_child_ages(intake.get("child_ages", []), intake) or []
+    for band in ("children", "infants"):
+        known = [age for age in ages if age_band(age) == band]
+        for kind in ("child", "infant"):
+            group = [age for age in known if ("infant" if age_months(age) < 12 else "child") == kind]
+            if group:
+                age_text = ", ".join(formal[age["unit"] + ("_one" if age["value"] == 1 else "")].format(value=age["value"]) for age in group)
+                label = formal[kind + ("_one" if len(group) == 1 else "s")].format(count=len(group))
+                parts.append(f"{label} ({age_text})")
+        unknown = intake.get(band, 0) - len(known)
+        if unknown > 0:
+            parts.append(formal[band + "_unknown" + ("_one" if unknown == 1 else "")].format(count=unknown))
+    return " · ".join(parts)

@@ -133,6 +133,9 @@ def checkout_page(reservation_id: str, expires: int, signature: str, *, form_act
 
 
 def success_message(reservation: dict, payment: dict) -> str:
+    from agents.social import mermaid_document_cards as cards
+    if cards.enabled():
+        return cards.receipt_text(reservation, payment)
     intake = reservation["intake"]
     locale = reservation["language"] if reservation["language"] in mermaid_documents.LABELS else "en"
     copy = guest.guest_copy(locale)

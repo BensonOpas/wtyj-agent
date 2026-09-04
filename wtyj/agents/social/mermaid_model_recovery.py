@@ -129,6 +129,14 @@ def _valid_schema_value(value, schema, *, allow_metadata=False):
     elif value_type == "boolean":
         if type(value) is not bool:
             return False
+    elif value_type == "array":
+        if not isinstance(value, list):
+            return False
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            return False
+        item_schema = schema.get("items")
+        if item_schema and any(not _valid_schema_value(item, item_schema) for item in value):
+            return False
     elif value_type == "integer":
         if type(value) is not int:
             return False

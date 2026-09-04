@@ -9,6 +9,7 @@ from agents.social import mermaid_documents as docs, mermaid_demo_payment as pay
 from agents.social import mermaid_reservation_store as store
 from agents.social import mermaid_delivery_reconciliation as reconcile
 from agents.social import mermaid_guest_experience as guest
+from agents.social import mermaid_response_policy as response_policy
 from shared import config_loader, mermaid_catalog, state_registry
 
 
@@ -63,6 +64,42 @@ def test_one_summary_price_and_natural_approval(monkeypatch):
     model.return_value=dict(language='en',mermaid_action='confirm_summary',has_open_question=False,fields={},reply='Thanks.')
     result=workflow.process_model_turn({'from':'guest','message_id':'yes','text':'yesz'},None)
     assert result.action=='summary_confirmed'
+
+
+def test_natural_approval_plus_payment_question_creates_quote_and_checkout(monkeypatch):
+    initial=fields();initial['phase']='awaiting_summary_confirmation'
+    state_registry.wa_save_booking_state('guest',{'mermaid_intake':initial},{})
+    model=Mock(return_value=dict(
+        language='en',mermaid_action='payment_status',fields={},reply='I can help with that.',
+        confidence='high',requires_human=False,has_open_question=True,
+        guest_question_excerpt='where and when do I pay?',calendar_request='none',
+        status_request='payment',security_event='none',other_question_reply=''))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.handle_demo_message(
+        {'from':'guest','text':'Yes, looks good, where and when do I pay?',
+         'message_id':'natural-payment-approval'},True,use_model=True)
+    reservation=store.latest_for_conversation('guest')
+    assert reservation and reservation['state']=='demo_payment_pending'
+    assert result['media'] and result['media']['type']=='file'
+    assert '/pay/' in result['text']
+    assert response_policy.copy('payment_none','en') not in result['text']
+
+
+def test_payment_question_without_approval_explains_next_step(monkeypatch):
+    initial=fields();initial['phase']='awaiting_summary_confirmation'
+    state_registry.wa_save_booking_state('guest',{'mermaid_intake':initial},{})
+    monkeypatch.setattr(marina_agent,'process_message',Mock(return_value=dict(
+        language='en',mermaid_action='payment_status',fields={},reply='I can help with that.',
+        confidence='high',requires_human=False,has_open_question=True,
+        guest_question_excerpt='Where do I pay?',calendar_request='none',
+        status_request='payment',security_event='none',other_question_reply='')))
+    result=workflow.handle_demo_message(
+        {'from':'guest','text':'Where do I pay?','message_id':'payment-question'},
+        True,use_model=True)
+    assert result['media'] is None
+    assert store.latest_for_conversation('guest') is None
+    assert result['text']==response_policy.copy('payment_none','en')
+    assert "I’ll send your quote PDF" in result['text']
 
 
 @pytest.mark.parametrize('locale',workflow.SUPPORTED_LOCALES)

@@ -185,10 +185,19 @@ async def download_ali_quote(public_id: str, expires: int, signature: str):
 
 
 @app.get("/api/public/mermaid-document/{public_id}")
-async def download_mermaid_document(public_id: str, expires: int, signature: str):
+async def download_mermaid_document(public_id: str, expires: int, signature: str, card: bool = False):
     """Serve a private Mermaid quote or receipt through an expiring HMAC URL."""
+    if card:
+        from agents.social.mermaid_document_cards import download_response
+        return download_response(public_id, expires, signature)
     from agents.social.mermaid_documents import document_response
     return document_response(public_id, expires, signature)
+
+
+@app.get("/api/public/mermaid-card-image/{digest}.png")
+async def mermaid_card_image(digest: str):
+    from agents.social.mermaid_document_cards import image_response
+    return image_response(digest)
 
 
 @app.get("/api/public/mermaid-demo-payment/{reservation_id}")

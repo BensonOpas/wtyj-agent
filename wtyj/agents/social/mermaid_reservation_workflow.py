@@ -175,6 +175,35 @@ YES = {
     "pt": {"sim", "sim correto", "correto", "confirmar", "confirmado"},
 }
 
+NATURAL_APPROVAL_PREFIXES = {
+    "en": ("yes", "yes it looks good", "yes looks good", "looks good", "all good", "go ahead"),
+    "nl": ("ja", "ja het klopt", "ja klopt", "alles klopt", "helemaal goed", "ga verder"),
+    "de": ("ja", "ja das passt", "alles passt", "alles stimmt", "alles gut", "weiter"),
+    "es": ("sí", "si", "sí está bien", "si esta bien", "todo está bien", "todo esta bien", "adelante"),
+    "pap": ("si", "si ta bon", "tur kos ta bon", "tur kos ta korekto", "por sigui"),
+    "pt": ("sim", "sim está certo", "sim esta certo", "está tudo certo", "esta tudo certo", "pode continuar"),
+}
+
+APPROVAL_BLOCKERS = {
+    "en": ("not correct", "not right", "wrong", "change", "different", "instead", "unless"),
+    "nl": ("niet correct", "niet goed", "fout", "wijzig", "anders", "tenzij"),
+    "de": ("nicht korrekt", "nicht richtig", "falsch", "ändern", "anders", "außer wenn"),
+    "es": ("no es correcto", "no está bien", "incorrecto", "cambiar", "diferente", "a menos que"),
+    "pap": ("no ta korekto", "no ta bon", "robes", "kambia", "otro", "a menos ku"),
+    "pt": ("não está certo", "nao esta certo", "errado", "mudar", "diferente", "a menos que"),
+}
+
+
+def _has_natural_approval(text: str, locale: str) -> bool:
+    """Recognize a clear approval lead before a procedural payment question."""
+    normalized = " ".join(re.sub(r"[^\w\s]", " ", str(text or "").casefold()).split())
+    if not normalized or any(blocker in normalized for blocker in APPROVAL_BLOCKERS[locale]):
+        return False
+    return any(
+        normalized == phrase or normalized.startswith(phrase + " ")
+        for phrase in NATURAL_APPROVAL_PREFIXES[locale]
+    )
+
 
 @dataclass(frozen=True)
 class IntakeResult:
@@ -321,13 +350,14 @@ def _summary(fields: dict, locale: str) -> str:
     contact = (f"{guest.guest_copy(locale)['contact_phone_label']}: {fields['contact_phone']}\n"
                if fields.get("contact_phone") else "")
     return (
-        f"*{labels['title']}*\n"
+        f"*{labels['title']}*\n\n"
         f"{labels['date']}: {guest.guest_date(fields['trip_date'], locale)}\n"
         f"{labels['guests']}: {party}\n"
         f"{labels['name']}: {fields['customer_name']}\n"
-        f"{contact}"
-        f"{guest.price_text(guest.intake_money(fields), fields, locale)}\n"
-        f"{labels['transport']}: {pickup}\n\n{guest.guest_copy(locale)['confirm']}"
+        f"{contact}\n"
+        f"*{labels['transport']}*\n{pickup}\n\n"
+        f"*{guest.price_text(guest.intake_money(fields), fields, locale)}*\n\n"
+        f"{guest.guest_copy(locale)['confirm']}"
     )
 
 
@@ -570,8 +600,25 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             cleaned = " ".join(value.split())[:160]
             if cleaned:
                 changes[key] = cleaned
+    from shared.mermaid_guest_ages import normalize_child_ages, age_band
+    supplied = understood.get("fields") or {}
+    if "child_ages" in supplied:
+        ages = normalize_child_ages(supplied["child_ages"], {**fields, **changes})
+        if ages is not None:
+            changes["child_ages"] = ages
+        elif action == "confirm_summary":
+            # Invalid age corrections cannot approve an unchanged summary.
+            action = "details"
+    elif fields.get("child_ages"):
+        # A reduced group does not establish which child's age remains valid.
+        reduced = {key for key in ("children", "infants")
+                   if key in changes and key in fields and changes[key] < fields[key]}
+        if reduced:
+            changes["child_ages"] = [age for age in fields["child_ages"] if age_band(age) not in reduced]
     changes = {key: value for key, value in changes.items() if fields.get(key) != value}
     fields.update(changes)
+    if fields.get("child_ages") == []:
+        fields.pop("child_ages")
     if invalid_contact and not reservation:
         fields.pop("contact_phone", None)
     if fields.get("pickup_preference") == "pier":
@@ -584,6 +631,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         has_question = True
     result_action = None
     canonical_response = False
+    natural_payment_approval = (
+        old_phase == "awaiting_summary_confirmation"
+        and not changes
+        and not invalid_contact
+        and understood.get("status_request") == "payment"
+        and action in {"confirm_summary", "payment_status", "question", "acknowledge"}
+        and _has_natural_approval(str(message.get("text") or ""), locale)
+    )
     pickup_review = (
         security_event not in {"blocked_override", "actionable_incident"}
         and (not reservation or action == "new_booking")
@@ -649,6 +704,14 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             fields["phase"] = "collecting"
             if not response or action == "confirm_summary":
                 response = question
+        elif natural_payment_approval:
+            # A guest can approve the displayed details and naturally ask how
+            # to pay in the same sentence. The quote and checkout answer that
+            # procedural question, so do not force a second artificial YES.
+            fields["phase"] = "summary_confirmed"
+            response = COPY[locale]["confirmed"]
+            result_action = "summary_confirmed"
+            canonical_response = True
         elif has_question:
             # A mixed detail/question turn must keep its answer. Changed facts
             # require a fresh summary before any later approval can book them.

@@ -38,12 +38,35 @@ CORAL = colors.HexColor("#F36C5B")
 MARKER_TEXT = colors.HexColor("#082B32")
 PALE = colors.HexColor("#EAF8F8")
 MUTED = colors.HexColor("#4D6870")
-HERO_IMAGE = Path(__file__).resolve().parents[2] / "assets" / "mermaid-klein-curacao.jpg"
+HERO_IMAGE = Path(__file__).resolve().parents[2] / "assets" / "mermaid-tropical-hero.png"
 
 
-def _hero(width_mm: float) -> Image:
-    """Bundled first-party photo: no runtime download or signed-URL dependency."""
-    return Image(str(HERO_IMAGE), width=width_mm * mm, height=width_mm * mm * 650 / 1920)
+class _HeroImage(Image):
+    """Clip the decorative banner to its layout box without stretching the photo."""
+
+    def __init__(self, width_mm: float, height_mm: float | None = None):
+        super().__init__(str(HERO_IMAGE), width=width_mm * mm, height=width_mm * mm / 3)
+        self.viewport_height = (height_mm if height_mm is not None else width_mm / 3) * mm
+
+    def wrap(self, available_width, available_height):
+        return self.drawWidth, self.viewport_height
+
+    def draw(self):
+        self.canv.saveState()
+        try:
+            clip = self.canv.beginPath()
+            clip.rect(0, 0, self.drawWidth, self.viewport_height)
+            self.canv.clipPath(clip, stroke=0, fill=0)
+            # Favor the upper part so the boat stays whole in the quote's shallow banner.
+            self.canv.translate(0, (self.viewport_height - self.drawHeight) * 0.8)
+            super().draw()
+        finally:
+            self.canv.restoreState()
+
+
+def _hero(width_mm: float, height_mm: float | None = None) -> Image:
+    """Bundled tropical artwork; provenance is recorded beside the asset."""
+    return _HeroImage(width_mm, height_mm)
 
 LABELS = {
     "en": {"title": "Your Klein Curaçao demo quote", "quote": "Quote", "customer": "Guest", "date": "Trip date", "guests": "Guests", "transport": "Transport", "charges": "Itemized price", "description": "Description", "qty": "Qty", "unit": "Unit", "amount": "Amount", "total": "Total", "included": "Everything included", "schedule": "Your day", "bring": "Bring with you", "rules": "Rules and important notes", "payment": "Next step", "payment_text": "Use the secure demo payment link sent in WhatsApp. It asks for no card or bank details and moves no money.", "arrival": "Arrive at Fishermen's Pier at 06:45. The published island departure is approximately 15:20.", "pickup": "Hotel pickup requested; location and price require confirmation.", "pier": "Meet at Fishermen's Pier", "valid": "This demo quote is valid for 60 minutes.", "available": "For this demo experience, seats are assumed available. No live inventory was checked."},
@@ -241,9 +264,9 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
     styles = getSampleStyleSheet()
     body = ParagraphStyle("QuoteBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=11.5, textColor=DEEP, spaceBefore=0, spaceAfter=0)
     small = ParagraphStyle("QuoteSmall", parent=body, fontSize=8, leading=10, textColor=MUTED)
-    brand = ParagraphStyle("QuoteBrand", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=21)
+    brand = ParagraphStyle("QuoteBrand", parent=body, fontName="Helvetica-Bold", fontSize=12, leading=15)
     heading = ParagraphStyle("QuoteTitle", parent=brand, fontSize=15, leading=18, spaceAfter=3 * mm)
-    section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, spaceBefore=3 * mm, spaceAfter=1.5 * mm, keepWithNext=True)
+    section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, spaceBefore=2 * mm, spaceAfter=1.5 * mm, keepWithNext=True)
     marker = ParagraphStyle("QuoteMarker", parent=small, fontName="Helvetica-Bold", textColor=MARKER_TEXT, alignment=TA_CENTER)
     total = ParagraphStyle("QuoteTotal", parent=body, fontName="Helvetica-Bold", fontSize=15, leading=18, alignment=TA_RIGHT)
     doc = SimpleDocTemplate(
@@ -252,15 +275,15 @@ def render_quote_pdf(reservation: dict, target: Path) -> str:
         title=f"Mermaid - {labels['title']} - {reservation['public_id'][-10:].upper()}", author="Mermaid Boat Trips Curaçao",
     )
     header = Table([[
-        [Paragraph("MERMAID BOAT TRIPS<br/>CURAÇAO", brand), Spacer(1, 2 * mm), Paragraph(_safe(copy["tagline"]), body)],
-        _hero(58),
-    ]], colWidths=[120 * mm, 60 * mm])
+        Paragraph("MERMAID BOAT TRIPS · CURAÇAO", brand),
+        Paragraph(_safe(copy["tagline"]), small),
+    ]], colWidths=[105 * mm, 75 * mm])
     header.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0), ("ALIGN", (1, 0), (1, 0), "RIGHT"),
     ]))
-    story = [header, Spacer(1, 3 * mm),
+    story = [_hero(180, 34), Spacer(1, 2 * mm), header, Spacer(1, 2 * mm),
         Table([[Paragraph(_safe(notices["quote_banner"]), marker)]], colWidths=[180 * mm], style=TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), CORAL),
             ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
@@ -370,7 +393,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     styles = getSampleStyleSheet()
     body = ParagraphStyle("ReceiptBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12, textColor=DEEP)
-    brand = ParagraphStyle("ReceiptBrand", parent=body, fontName="Helvetica-Bold", fontSize=18, leading=21)
+    brand = ParagraphStyle("ReceiptBrand", parent=body, fontName="Helvetica-Bold", fontSize=12, leading=15)
     heading = ParagraphStyle("ReceiptHeading", parent=brand, fontSize=20, leading=24)
     section = ParagraphStyle("QuoteSection", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=TEAL, keepWithNext=True)
     marker = ParagraphStyle("ReceiptMarker", parent=body, fontName="Helvetica-Bold", fontSize=10, leading=13, textColor=MARKER_TEXT, alignment=TA_CENTER)
@@ -382,9 +405,9 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         author="Mermaid Boat Trips Curaçao",
     )
     header = Table([[
-        [Paragraph("MERMAID BOAT TRIPS<br/>CURAÇAO", brand), Spacer(1, 2 * mm),
-         Paragraph(_safe(notices["receipt_subtitle"]), body)], _hero(58),
-    ]], colWidths=[114 * mm, 60 * mm])
+        Paragraph("MERMAID BOAT TRIPS · CURAÇAO", brand),
+        Paragraph(_safe(notices["receipt_subtitle"]), body),
+    ]], colWidths=[104 * mm, 70 * mm])
     header.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
@@ -420,7 +443,7 @@ def render_receipt_pdf(reservation: dict, payment: dict, target: Path) -> str:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     story = [
-        header, Spacer(1, 4 * mm),
+        _hero(174), Spacer(1, 3 * mm), header, Spacer(1, 4 * mm),
         Table([[Paragraph(_safe(notices["receipt_banner"]), marker)]], colWidths=[174 * mm], style=TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), CORAL),
             ("TOPPADDING", (0, 0), (-1, -1), 6),
@@ -576,6 +599,9 @@ def stored_document_response(public_id: str):
 
 
 def quote_message(reservation: dict) -> str:
+    from agents.social import mermaid_document_cards as cards
+    if cards.enabled():
+        return cards.quote_text(reservation)
     locale = reservation["language"]
     return "\n\n".join([
         guest.guest_copy(locale)["quote_ready"],

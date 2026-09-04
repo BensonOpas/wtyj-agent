@@ -92,7 +92,8 @@
     "small_talk": "Warm and brief. Match the guest's energy, then return naturally to Mermaid trip questions.",
     "escalation_tone": "Calm and factual. Say that Mermaid's team needs to confirm the detail. Do not over-apologize or promise when they will reply.",
     "freeform_notes": "Mermaid WhatsApp reservation demo. Use the structured demo contract and current reservation catalog as the authority for booking, transport, prices, dates and policies. Supplementary approved logistics are in faq. Preserve immutable reservation snapshots and recorded payment/review/delivery state. Live inventory and real commerce remain disabled. Support English, Dutch, German, Spanish, Curaçao Papiamentu and Portuguese; native Papiamentu quality approval remains pending.",
-    "booking_contact_guidance": "Ask for the best phone number to reach the guest during their stay, including the country code. Explain briefly that Mermaid's team needs it for important trip updates, for example if bad weather means the boat cannot leave the harbor. A natural English question is: What's the best number to reach you on, including the country code? It's for important trip updates, like a weather cancellation. Adapt it naturally to the guest's language. Ask once after the reservation name, unless the guest already supplied the number earlier; collect all explicitly supplied booking details together. A local number needs its country code. Do not assume the current WhatsApp number is usable or readable from metadata: if the guest says use this number, ask them to type the full number with country code. Keep this human: Could you type the full number, including the country code, so I can add it to your booking? Do not explain metadata, sender IDs, technical access or platform limitations, and do not give the business number as an example. Do not claim a number was verified, send an OTP, promise automatic alerts, or imply that weather has currently cancelled the trip. If they cannot or do not want to provide a reachable number, explain its purpose briefly and offer team review rather than endlessly repeating the question. Existing quoted or booked reservations keep their current status and should not be interrupted by a new contact request during general questions."
+    "booking_contact_guidance": "Ask for the best phone number to reach the guest during their stay, including the country code. Explain briefly that Mermaid's team needs it for important trip updates, for example if bad weather means the boat cannot leave the harbor. A natural English question is: What's the best number to reach you on, including the country code? It's for important trip updates, like a weather cancellation. Adapt it naturally to the guest's language. Ask once after the reservation name, unless the guest already supplied the number earlier; collect all explicitly supplied booking details together. A local number needs its country code. Do not assume the current WhatsApp number is usable or readable from metadata: if the guest says use this number, ask them to type the full number with country code. Keep this human: Could you type the full number, including the country code, so I can add it to your booking? Do not explain metadata, sender IDs, technical access or platform limitations, and do not give the business number as an example. Do not claim a number was verified, send an OTP, promise automatic alerts, or imply that weather has currently cancelled the trip. If they cannot or do not want to provide a reachable number, explain its purpose briefly and offer team review rather than endlessly repeating the question. Existing quoted or booked reservations keep their current status and should not be interrupted by a new contact request during general questions.",
+    "booking_age_guidance": "Keep warm terms such as little one in ordinary conversation when natural. Reservation summaries, confirmations, quotes and receipts use professional guest categories and the supplied exact age: 3 adults · 1 infant (9 months). Capture ages in child_ages as soon as the guest mentions them, even while asking about the island before booking. For a 9 month old baby return value 9 and unit months; preserve years when supplied as years. A known age must remain saved as other details are collected. Recover explicit ages from available conversation history if missing, without asking again. Do not infer an exact age from 0–3 or 4–12 fare bands, invent a birth date, duplicate the same child on repeated mentions, or apply the age to a new party. Return the complete list of known child ages when correcting it. Children aged under 4 still use the existing infants fare count; children aged 4–12 use children. Under-one children may be described as infants in formal copy; older known ages use child. An age correction requires a refreshed summary before confirmation and cannot silently alter an existing quote or booking."
   },
   "payment": {
     "timing": "external_reservation_checkout",
@@ -101,7 +102,7 @@
   },
   "workflow": {
     "type": "mermaid_reservation_demo",
-    "catalog_version": "mermaid-demo-v6-2026-09-04",
+    "catalog_version": "mermaid-demo-v7-2026-09-04",
     "availability_source": "demo_assumed"
   },
   "features": {
@@ -247,5 +248,82 @@
     "mode": "strict",
     "zernio_accounts": [],
     "notes": "The tracked template is deliberately strict-empty so a clone cannot bind to a live provider account. Nr3 and the protected live client.json hold Mermaid's one exact verified account for +1 223 276 0075; that identifier is not stored in Git. Existing personal and other-tenant numbers remain untouched."
+  },
+  "mermaid_document_cards": {
+    "enabled": true,
+    "copies": {
+      "en": {
+        "title": "Your Klein Curaçao trip ☀️🏝️",
+        "open_pdf": "Open PDF",
+        "quote_ready": "Your demo quote is ready. Tap Open PDF to view it.",
+        "welcome": "All set, {name}! Your demo booking is complete. Thank you for choosing Mermaid! Your receipt is ready below.",
+        "guest": "guest",
+        "pickup_at": "🚐 Pickup at {time}",
+        "return_included": "Your return to your accommodation is included.",
+        "booking_code": "Booking code",
+        "demo_note": "This was a demo payment; no real money was charged.",
+        "closing": "Blue seas, white sand and a Caribbean day to look forward to! 🌊\n\nDoes everything look right? Anything else I can help you with before your trip?"
+      },
+      "nl": {
+        "title": "Jouw trip naar Klein Curaçao ☀️🏝️",
+        "open_pdf": "Open PDF",
+        "quote_ready": "Je demo-offerte staat klaar. Tik op Open PDF om deze te bekijken.",
+        "welcome": "Helemaal geregeld, {name}! Je demo-boeking is rond. Bedankt dat je voor Mermaid kiest! Je betalingsbewijs staat hieronder klaar.",
+        "guest": "gast",
+        "pickup_at": "🚐 We halen je op om {time}",
+        "return_included": "De terugrit naar je accommodatie is inbegrepen.",
+        "booking_code": "Boekingscode",
+        "demo_note": "Dit was een demobetaling; er is geen echt geld afgeschreven.",
+        "closing": "Blauwe zee, wit zand en een heerlijke Caribische dag om naar uit te kijken! 🌊\n\nKlopt alles zo? Kan ik je voor de trip nog ergens mee helpen?"
+      },
+      "de": {
+        "title": "Ihr Ausflug nach Klein Curaçao ☀️🏝️",
+        "open_pdf": "PDF öffnen",
+        "quote_ready": "Ihr Demo-Angebot ist bereit. Tippen Sie auf PDF öffnen.",
+        "welcome": "Alles bereit, {name}! Ihre Demo-Buchung ist abgeschlossen. Danke, dass Sie Mermaid gewählt haben! Ihren Beleg finden Sie unten.",
+        "guest": "Gast",
+        "pickup_at": "🚐 Abholung um {time}",
+        "return_included": "Die Rückfahrt zu Ihrer Unterkunft ist inbegriffen.",
+        "booking_code": "Buchungscode",
+        "demo_note": "Dies war eine Demo-Zahlung; es wurde kein echtes Geld abgebucht.",
+        "closing": "Blaues Meer, weißer Sand und ein karibischer Tag zum Vorfreuen! 🌊\n\nStimmt alles so? Kann ich Ihnen vor dem Ausflug noch mit etwas helfen?"
+      },
+      "es": {
+        "title": "Tu viaje a Klein Curaçao ☀️🏝️",
+        "open_pdf": "Abrir PDF",
+        "quote_ready": "Tu cotización demo está lista. Toca Abrir PDF para verla.",
+        "welcome": "¡Todo listo, {name}! Tu reserva demo está completa. ¡Gracias por elegir Mermaid! Tu recibo está listo abajo.",
+        "guest": "visitante",
+        "pickup_at": "🚐 Recogida a las {time}",
+        "return_included": "El regreso a tu alojamiento está incluido.",
+        "booking_code": "Código de reserva",
+        "demo_note": "Fue un pago de demostración; no se cobró dinero real.",
+        "closing": "¡Mar azul, arena blanca y un día caribeño para disfrutar! 🌊\n\n¿Está todo correcto? ¿Puedo ayudarte con algo más antes del viaje?"
+      },
+      "pap": {
+        "title": "Bo biahe pa Klein Curaçao ☀️🏝️",
+        "open_pdf": "Habri PDF",
+        "quote_ready": "Bo oferta demo ta kla. Primi Habri PDF pa wak e oferta.",
+        "welcome": "Tur kos ta kla, {name}! Bo reservashon demo ta kompletá. Danki pa skohe Mermaid! Bo resibu ta kla aki bou.",
+        "guest": "huésped",
+        "pickup_at": "🚐 Nos ta buska bo pa {time}",
+        "return_included": "E regreso na bo alohamentu ta inkluí.",
+        "booking_code": "Kódigo di reservashon",
+        "demo_note": "Esaki tabata un pago demo; no a kobra plaka real.",
+        "closing": "Laman blou, santu blanku i un dushi dia den Karibe ta warda bo! 🌊\n\nTur kos ta korekto? Tin algu mas ku mi por yuda bo kuné promé ku e biahe?"
+      },
+      "pt": {
+        "title": "Sua viagem a Klein Curaçao ☀️🏝️",
+        "open_pdf": "Abrir PDF",
+        "quote_ready": "Sua cotação demo está pronta. Toque em Abrir PDF para ver.",
+        "welcome": "Tudo certo, {name}! Sua reserva demo está concluída. Obrigada por escolher a Mermaid! Seu recibo está pronto abaixo.",
+        "guest": "visitante",
+        "pickup_at": "🚐 Busca às {time}",
+        "return_included": "O retorno à sua hospedagem está incluído.",
+        "booking_code": "Código da reserva",
+        "demo_note": "Este foi um pagamento de demonstração; nenhum dinheiro real foi cobrado.",
+        "closing": "Mar azul, areia branca e um dia caribenho para aproveitar! 🌊\n\nEstá tudo certo? Posso ajudar com mais alguma coisa antes da viagem?"
+      }
+    }
   }
 }

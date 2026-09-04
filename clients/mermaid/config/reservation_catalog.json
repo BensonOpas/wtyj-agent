@@ -1,5 +1,5 @@
 {
-  "version": "mermaid-demo-v6-2026-09-04",
+  "version": "mermaid-demo-v7-2026-09-04",
   "tenant_slug": "mermaid",
   "service": {
     "key": "klein_curacao_day_trip",
@@ -114,7 +114,23 @@
       "pickup_awaiting_guest_count": "I need the full guest count, including children and infants, to price the pickup.",
       "contact_phone_label": "Contact number",
       "contact_phone_prompt": "What's the best number to reach you on, including the country code? It's for important trip updates, like a weather cancellation.",
-      "contact_phone_retry": "Could you send the full phone number with its country code, starting with +? I need that to save a reachable contact for trip updates."
+      "contact_phone_retry": "Could you send the full phone number with its country code, starting with +? I need that to save a reachable contact for trip updates.",
+      "formal_party": {
+        "adult_one": "{count} adult",
+        "adults": "{count} adults",
+        "child_one": "{count} child",
+        "childs": "{count} children",
+        "infant_one": "{count} infant",
+        "infants": "{count} infants",
+        "months_one": "{value} month",
+        "months": "{value} months",
+        "years_one": "{value} year",
+        "years": "{value} years",
+        "children_unknown_one": "{count} child (4–12)",
+        "children_unknown": "{count} children (4–12)",
+        "infants_unknown_one": "{count} child (0–3)",
+        "infants_unknown": "{count} children (0–3)"
+      }
     },
     "nl": {
       "pickup_pending": "Transfer vanaf {location} is aangevraagd, nog niet bevestigd. Prijs en ophaaltijd moeten nog worden bevestigd; transfer is niet inbegrepen in het tripbedrag.",
@@ -145,7 +161,23 @@
       "contact_phone_retry": "Kun je het volledige telefoonnummer met landcode sturen, beginnend met +? Dan kan ik een contactnummer voor updates over de trip opslaan.",
       "adults_one": "{count} volwassenentarief",
       "children_one": "{count} kind (4-12)",
-      "infants_one": "{count} kleintje (0-3)"
+      "infants_one": "{count} kleintje (0-3)",
+      "formal_party": {
+        "adult_one": "{count} volwassene",
+        "adults": "{count} volwassenen",
+        "child_one": "{count} kind",
+        "childs": "{count} kinderen",
+        "infant_one": "{count} baby",
+        "infants": "{count} baby’s",
+        "months_one": "{value} maand",
+        "months": "{value} maanden",
+        "years_one": "{value} jaar",
+        "years": "{value} jaar",
+        "children_unknown_one": "{count} kind (4–12)",
+        "children_unknown": "{count} kinderen (4–12)",
+        "infants_unknown_one": "{count} kind (0–3)",
+        "infants_unknown": "{count} kinderen (0–3)"
+      }
     },
     "de": {
       "pickup_pending": "Die Abholung von {location} ist angefragt, nicht bestätigt. Preis und Abholzeit müssen noch bestätigt werden; die Abholung ist nicht im Ausflugspreis enthalten.",
@@ -176,7 +208,23 @@
       "contact_phone_retry": "Können Sie die vollständige Telefonnummer mit Ländervorwahl senden, beginnend mit +? So kann ich eine Kontaktnummer für Informationen zur Fahrt speichern.",
       "adults_one": "{count} Erwachsenentarif",
       "children_one": "{count} Kind (4-12)",
-      "infants_one": "{count} Kleinkind (0-3)"
+      "infants_one": "{count} Kleinkind (0-3)",
+      "formal_party": {
+        "adult_one": "{count} Erwachsener",
+        "adults": "{count} Erwachsene",
+        "child_one": "{count} Kind",
+        "childs": "{count} Kinder",
+        "infant_one": "{count} Säugling",
+        "infants": "{count} Säuglinge",
+        "months_one": "{value} Monat",
+        "months": "{value} Monate",
+        "years_one": "{value} Jahr",
+        "years": "{value} Jahre",
+        "children_unknown_one": "{count} Kind (4–12)",
+        "children_unknown": "{count} Kinder (4–12)",
+        "infants_unknown_one": "{count} Kind (0–3)",
+        "infants_unknown": "{count} Kinder (0–3)"
+      }
     },
     "es": {
       "pickup_pending": "La recogida en {location} está solicitada, no confirmada. Falta confirmar el precio y la hora; la recogida no está incluida en el importe del paseo.",
@@ -207,7 +255,23 @@
       "contact_phone_retry": "¿Puedes enviar el número completo con el código de país, empezando por +? Lo necesito para guardar un contacto para avisos del viaje.",
       "adults_one": "{count} tarifa de adulto",
       "children_one": "{count} niño (4-12)",
-      "infants_one": "{count} pequeño (0-3)"
+      "infants_one": "{count} pequeño (0-3)",
+      "formal_party": {
+        "adult_one": "{count} adulto",
+        "adults": "{count} adultos",
+        "child_one": "{count} niño",
+        "childs": "{count} niños",
+        "infant_one": "{count} bebé",
+        "infants": "{count} bebés",
+        "months_one": "{value} mes",
+        "months": "{value} meses",
+        "years_one": "{value} año",
+        "years": "{value} años",
+        "children_unknown_one": "{count} niño (4–12)",
+        "children_unknown": "{count} niños (4–12)",
+        "infants_unknown_one": "{count} niño (0–3)",
+        "infants_unknown": "{count} niños (0–3)"
+      }
     },
     "pap": {
       "pickup_pending": "Pickup na {location} ta pidi, no konfirmá. Preis i ora di pickup mester wordu konfirmá ainda; pickup no ta inkluí den e montante di biahe.",
@@ -238,7 +302,23 @@
       "contact_phone_retry": "Bo por manda e number di telefòn kompleto ku kódigo di pais, kuminsando ku +? Asina mi por warda un number di kontakto pa avisunan di e biahe.",
       "adults_one": "{count} tarifa di adulto",
       "children_one": "{count} mucha (4-12)",
-      "infants_one": "{count} mucha chikitu (0-3)"
+      "infants_one": "{count} mucha chikitu (0-3)",
+      "formal_party": {
+        "adult_one": "{count} adulto",
+        "adults": "{count} adulto",
+        "child_one": "{count} mucha",
+        "childs": "{count} mucha",
+        "infant_one": "{count} bebé",
+        "infants": "{count} bebé",
+        "months_one": "{value} luna",
+        "months": "{value} luna",
+        "years_one": "{value} aña",
+        "years": "{value} aña",
+        "children_unknown_one": "{count} mucha (4–12)",
+        "children_unknown": "{count} mucha (4–12)",
+        "infants_unknown_one": "{count} mucha (0–3)",
+        "infants_unknown": "{count} mucha (0–3)"
+      }
     },
     "pt": {
       "pickup_pending": "O traslado de {location} foi solicitado, não confirmado. O preço e o horário ainda precisam de confirmação; o traslado não está incluído no valor do passeio.",
@@ -269,7 +349,23 @@
       "contact_phone_retry": "Pode enviar o número completo com o código do país, começando por +? Preciso dele para salvar um contato para avisos do passeio.",
       "adults_one": "{count} tarifa de adulto",
       "children_one": "{count} criança (4-12)",
-      "infants_one": "{count} pequeno (0-3)"
+      "infants_one": "{count} pequeno (0-3)",
+      "formal_party": {
+        "adult_one": "{count} adulto",
+        "adults": "{count} adultos",
+        "child_one": "{count} criança",
+        "childs": "{count} crianças",
+        "infant_one": "{count} bebê",
+        "infants": "{count} bebês",
+        "months_one": "{value} mês",
+        "months": "{value} meses",
+        "years_one": "{value} ano",
+        "years": "{value} anos",
+        "children_unknown_one": "{count} criança (4–12)",
+        "children_unknown": "{count} crianças (4–12)",
+        "infants_unknown_one": "{count} criança (0–3)",
+        "infants_unknown": "{count} crianças (0–3)"
+      }
     }
   },
   "links": {
