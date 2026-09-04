@@ -1,5 +1,5 @@
 # Mermaid WhatsApp reply layout
-**Status:** In progress | **Files:** tenant persona, Mermaid understanding contract, runtime overlay | **Depends on:** vehicle pricing release 776b0df | **Blocks:** readable trip overviews
+**Status:** Deployed and verified | **Files:** tenant persona, Mermaid understanding contract, runtime overlay | **Depends on:** vehicle pricing release 776b0df | **Blocks:** None
 
 ## Context
 The customer's screenshot shows activities, food, drinks, wildlife and crossing time squeezed into one dense WhatsApp paragraph. They want a little more explanation with visible paragraph breaks and a natural voice. The understanding contract only injects persona freeform notes, so its existing short-paragraph brand rule is absent from this route; its ordinary 55-word preference also needs a clear overview exception.
@@ -22,3 +22,9 @@ Tracy explains the trip in readable short paragraphs with a little more detail w
 
 ## Rollback
 Restore the prior Mermaid image and client configuration from the release backup; preserve customer data and the current vehicle-pricing catalog.
+
+## Verification
+- 60 focused booking, multilingual intake and soft-review tests passed. The source change only exposes the tenant's presentation guidance to the existing model call and describes real paragraph breaks in the reply schema; no language classifier, second call or reply-rewriting pass was added.
+- Five final real-model responses were inspected in disposable data without provider credentials. English/Dutch overviews and a follow-up after dense history used four paragraphs with 118–137 words. The towel answer was 16 words. Pickup still quoted a USD 125 van and 05:45 collection. An overly broad canary assertion rejected a rhetorical Dutch question inside the overview; it was narrowed to closing questions before the remaining cases ran.
+- Earlier replies added unnecessary booking prompts and clock-time logistics. A grounded tenant example now anchors useful detail and spacing while leaving wording adaptable. General overviews omit clock-time logistics; existing timing and pricing rules remain in force for transport questions.
+- Deployed source `796d5a2` as `wtyj-agent:tracy-layout-796d5a2`, digest `sha256:4a2130b44c0b281dfcf4d4119060b467faae801b45ba58ebb31e4631d6e3cbdd`. Backup: `/root/backups/tracy-layout-796d5a2`. The deployment verifies the exact source hash, changes only the new persona field in live client configuration, and leaves catalog bytes and all six peer containers unchanged. Public health and watchdog are healthy. No customer messages or reservation changes were made.
