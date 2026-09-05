@@ -3182,6 +3182,9 @@ def _conversation_status_fields(customer_id: str) -> dict:
     cid = customer_id or ""
     status = state_registry.get_conversation_status(cid)
     summary = state_registry.get_active_escalation_summary_for(cid)
+    booking_state = state_registry.wa_get_booking_state(cid)
+    booking_flags = booking_state.get("flags") or {}
+    loop_status = state_registry.mermaid_loop_status(booking_flags)
     return {
         "escalated": status == "open",
         "escalationResolved": status == "resolved",
@@ -3197,6 +3200,9 @@ def _conversation_status_fields(customer_id: str) -> dict:
         "escalationSummary": summary,
         "recommendedOptions": (summary or {}).get("recommendedOptions") or [],
         "extractedDetails": (summary or {}).get("extractedDetails") or None,
+        "loopStopped": loop_status is not None,
+        "loopStatus": loop_status,
+        "loopStoppedAt": booking_flags.get("mermaid_loop_stopped_at") if loop_status else None,
     }
 
 

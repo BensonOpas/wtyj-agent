@@ -8,6 +8,7 @@ from agents.marina import marina_agent
 from agents.social import mermaid_reservation_workflow as workflow
 from agents.social import mermaid_response_policy as policy
 from agents.social import mermaid_reservation_store as store
+from agents.social import mermaid_model_recovery as recovery
 from shared import config_loader, state_registry, mermaid_catalog
 
 
@@ -24,7 +25,8 @@ def isolated(tmp_path, monkeypatch):
 def model(monkeypatch, locale='en', **kw):
     output = dict(language=locale, mermaid_action='question', reply='UNSUPPORTED CLAIM', fields={},
                   has_open_question=True, guest_question_excerpt='question', requires_human=False,
-                  calendar_request='none', status_request='none', security_event='none')
+                  calendar_request='none', status_request='none', security_event='none',
+                  automation_loop=False)
     output.update(kw)
     stub = Mock(return_value=output)
     monkeypatch.setattr(marina_agent, 'process_message', stub)
@@ -73,6 +75,70 @@ def test_owner_approved_pickup_includes_return(monkeypatch, locale):
     model(monkeypatch, locale, status_request='pickup_coverage')
     result = workflow.process_model_turn({'from':'guest','message_id':'return','text':'question'}, None)
     assert result.text == policy.copy('pickup_round_trip', locale)
+
+
+def test_confirmed_automation_loop_stops_before_reply_and_never_escalates(monkeypatch):
+    intake = {
+        'trip_date': '2026-09-12', 'adults': 2, 'children': 0, 'infants': 0,
+        'customer_name': 'Saved Guest', 'contact_phone': '+12025550123',
+        'pickup_preference': 'pier', 'language': 'en', 'phase': 'collecting',
+    }
+    state_registry.wa_save_booking_state('loop-guest', {'mermaid_intake': intake}, {})
+    state_registry.wa_store_message('loop-guest', 'user', 'Automated peer reply')
+    stub = model(
+        monkeypatch,
+        automation_loop=True,
+        mermaid_action='request_human',
+        requires_human=True,
+        fields={'adults': 99},
+        reply='THIS MUST NEVER BE SENT',
+    )
+    result = workflow.handle_demo_message({
+        'from': 'loop-guest', '_zernio_sender_name': 'Unboks',
+        'message_id': 'loop-one', 'text': 'Automated peer reply',
+    }, include_media=True, use_model=True)
+
+    assert result['text'] == '' and result['mermaid_action'] == 'loop_stopped'
+    saved = state_registry.wa_get_booking_state('loop-guest')
+    assert saved['fields']['mermaid_intake'] == intake
+    assert saved['flags'][state_registry.MERMAID_LOOP_STOPPED_FLAG] is True
+    assert saved['flags']['mermaid_loop_message_id'] == 'loop-one'
+    assert saved['flags']['mermaid_loop_stopped_at']
+    assert stub.call_args.kwargs['thread_flags']['latest_sender_name_untrusted'] == 'Unboks'
+    assert store.latest_for_conversation('loop-guest') is None
+    assert state_registry.get_active_escalation_mode('loop-guest') is None
+    with state_registry._get_conn() as db:
+        assert db.execute('SELECT COUNT(*) FROM pending_notifications').fetchone()[0] == 0
+
+    # A stale cached answer must never reopen a stopped conversation.
+    saved['flags']['mermaid_cached_reply'] = {
+        'message_id': 'loop-two', 'reply': {'text': 'STALE REPLY'},
+    }
+    state_registry.wa_save_booking_state(
+        'loop-guest', saved['fields'], saved['flags'], saved['completed_bookings'])
+    later = workflow.handle_demo_message({
+        'from': 'loop-guest', 'message_id': 'loop-two', 'text': 'Still looping',
+    }, include_media=True, use_model=True)
+    assert later['text'] == '' and later['mermaid_action'] == 'loop_stopped'
+    assert stub.call_count == 1
+
+    row = state_registry.wa_list_conversations()[0]
+    assert row['last_message'] == state_registry.MERMAID_LOOP_STOP_STATUS
+    assert row['loop_status'] == 'Loop detected and stopped'
+    assert row['loop_stopped'] is True and row['status'] == 'active'
+    assert state_registry.wa_get_full_history('loop-guest')[0]['text'] == 'Automated peer reply'
+
+
+def test_loop_is_a_valid_server_owned_empty_reply():
+    result = {
+        'language': 'en', 'mermaid_action': 'acknowledge',
+        'automation_loop': True, 'fields': {}, 'reply': '',
+        'confidence': 'high', 'requires_human': False,
+        'has_open_question': False, 'guest_question_excerpt': '',
+        'calendar_request': 'none', 'status_request': 'none',
+        'security_event': 'none', 'other_question_reply': '',
+    }
+    assert recovery._valid_result(result, 'Automated peer reply') is True
 
 
 @pytest.mark.parametrize('locale', workflow.SUPPORTED_LOCALES)

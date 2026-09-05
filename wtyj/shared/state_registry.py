@@ -35,6 +35,18 @@ ZERNIO_FAILED_EVENT_LEASE_SECONDS = 1320.0
 _EMAIL_STATE_PROCESS_LOCK = threading.RLock()
 _MISSING = object()
 
+MERMAID_LOOP_STOPPED_FLAG = "mermaid_loop_stopped"
+MERMAID_LOOP_STOP_STATUS = "Loop detected and stopped"
+
+
+def mermaid_loop_status(flags: dict | None) -> str | None:
+    """Return the exact operator status for a terminal Mermaid loop stop."""
+    return (
+        MERMAID_LOOP_STOP_STATUS
+        if isinstance(flags, dict) and flags.get(MERMAID_LOOP_STOPPED_FLAG) is True
+        else None
+    )
+
 
 class HandoffAccountReassignedError(PermissionError):
     """A known foreign account cannot persist a tenant operator work item."""
@@ -4418,6 +4430,8 @@ def wa_list_archived_conversations() -> list:
             "WHERE phone = ?", (phone,)
         ).fetchone()
         fields = json.loads(state_row[0] or "{}") if state_row else {}
+        flags = json.loads(state_row[1] or "{}") if state_row else {}
+        loop_status = mermaid_loop_status(flags)
         name = (fields.get("customer_name") or fields.get("name") or "")
         if not name:
             sender_row = conn.execute(
@@ -4435,12 +4449,15 @@ def wa_list_archived_conversations() -> list:
         conversations.append({
             "phone": phone,
             "customer_name": name,
-            "last_message": (r[1] or "")[:200],
+            "last_message": loop_status or (r[1] or "")[:200],
             "last_message_role": r[3] or "",
             "last_message_at": r[2] or "",
             "status": "archived",
             "message_count": count_row[0] if count_row else 0,
             "channel": r[4] if len(r) > 4 and r[4] else "whatsapp",
+            "loop_stopped": loop_status is not None,
+            "loop_status": loop_status,
+            "loop_stopped_at": flags.get("mermaid_loop_stopped_at") if loop_status else None,
         })
     conn.close()
     return conversations
@@ -4885,6 +4902,7 @@ def wa_list_conversations() -> list:
         if not name:
             name = phone  # final fallback to hex/phone if no name source at all
         status = "escalated" if flags.get("fully_escalated") else "active"
+        loop_status = mermaid_loop_status(flags)
         # Count messages
         count_row = conn.execute(
             "SELECT COUNT(*) FROM whatsapp_threads WHERE phone = ?", (phone,)
@@ -4893,12 +4911,15 @@ def wa_list_conversations() -> list:
         conversations.append({
             "phone": phone,
             "customer_name": name,
-            "last_message": r[1],
+            "last_message": loop_status or r[1],
             "last_message_role": r[3],
             "last_message_at": r[2],
             "status": status,
             "message_count": count_row[0] if count_row else 0,
             "channel": channel,
+            "loop_stopped": loop_status is not None,
+            "loop_status": loop_status,
+            "loop_stopped_at": flags.get("mermaid_loop_stopped_at") if loop_status else None,
         })
         order_state = get_order_state_for_conversation(phone)
         if order_state:

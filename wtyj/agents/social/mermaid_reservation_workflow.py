@@ -17,7 +17,7 @@ from typing import Any
 
 import dateparser
 
-from shared import mermaid_catalog, state_registry
+from shared import bm_logger, mermaid_catalog, state_registry
 from shared.mermaid_contact import normalize_contact_phone
 from agents.social import mermaid_guest_experience as guest
 from agents.social import mermaid_response_policy as response_policy
@@ -27,6 +27,19 @@ SUPPORTED_LOCALES = ("en", "nl", "de", "es", "pap", "pt")
 REQUIRED_FIELDS = (
     "trip_date", "adults", "children", "infants", "customer_name", "contact_phone", "pickup_preference"
 )
+
+
+def _stopped_loop_result(state: dict, *, suppressed: bool = False) -> IntakeResult:
+    """Return a provider-silent result for a terminal Mermaid loop stop."""
+    intake = (state.get("fields") or {}).get("mermaid_intake") or {}
+    return IntakeResult(
+        "",
+        intake.get("language", "en"),
+        intake.get("phase", "loop_stopped"),
+        action="loop_stopped",
+        duplicate=suppressed,
+        understanding_source="loop_stop",
+    )
 
 
 COPY = {
@@ -944,6 +957,13 @@ def process_model_turn(
     root_fields = dict(state.get("fields") or {})
     flags = dict(state.get("flags") or {})
     fields = dict(root_fields.get("mermaid_intake") or {})
+    if flags.get(state_registry.MERMAID_LOOP_STOPPED_FLAG) is True:
+        bm_logger.log(
+            "mermaid_loop_message_suppressed",
+            conversation_id=phone[:60],
+            message_id=message_id[:60],
+        )
+        return _stopped_loop_result(state, suppressed=True)
     seen = list(flags.get("mermaid_seen_message_ids") or [])
     if message_id and message_id in seen:
         return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
@@ -1007,7 +1027,14 @@ def process_model_turn(
     understood = mermaid_model_recovery.generate(message, fields.get("language", "en"), lambda: marina_agent.process_message(
         from_email=phone, subject="Mermaid WhatsApp reservation demo",
         body=str(message.get("text") or ""), thread_fields=context,
-        thread_flags={"phase": fields.get("phase", "collecting")},
+        thread_flags={
+            "phase": fields.get("phase", "collecting"),
+            "latest_sender_name_untrusted": str(
+                message.get("from_name")
+                or message.get("_zernio_sender_name")
+                or ""
+            ),
+        },
         action_context=json.dumps({"required_fields": REQUIRED_FIELDS, "missing_fields": missing_fields}),
         channel="whatsapp", messages=visible_history,
         response_contract="mermaid_reservation_demo",
@@ -1020,6 +1047,26 @@ def process_model_turn(
             str(understood.get("reply") or ""), locale, fields.get("phase", "collecting"),
             generation_failure=understood["generation_failure"],
             understanding_source="model_failure",
+        )
+    if understood.get("automation_loop") is True:
+        flags[state_registry.MERMAID_LOOP_STOPPED_FLAG] = True
+        flags["mermaid_loop_stopped_at"] = datetime.now(timezone.utc).isoformat()
+        flags["mermaid_loop_message_id"] = message_id
+        if message_id:
+            flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
+        state_registry.wa_save_booking_state(
+            phone,
+            root_fields,
+            flags,
+            state.get("completed_bookings") or [],
+        )
+        bm_logger.log(
+            "mermaid_loop_detected_and_stopped",
+            conversation_id=phone[:60],
+            message_id=message_id[:60],
+        )
+        return _stopped_loop_result(
+            {"fields": root_fields, "flags": flags},
         )
     guest_text = str(message.get("text") or "")
     from agents.social import mermaid_reply_planning as reply_planning
@@ -1750,6 +1797,14 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
     if use_model:
         state = state_registry.wa_get_booking_state(phone)
         flags = state.get("flags") or {}
+        if flags.get(state_registry.MERMAID_LOOP_STOPPED_FLAG) is True:
+            bm_logger.log(
+                "mermaid_loop_message_suppressed",
+                conversation_id=phone[:60],
+                message_id=str(message.get("message_id") or "")[:60],
+            )
+            result = _stopped_loop_result(state, suppressed=True)
+            return result.as_reply() if include_media else ""
         cached = (flags.get("mermaid_cached_replies") or {}).get(str(message.get("message_id") or "")) or flags.get("mermaid_cached_reply") or {}
         if (message.get("message_id") and cached.get("message_id") == message["message_id"]
                 and message["message_id"] in flags.get("mermaid_seen_message_ids", [])):
@@ -1887,7 +1942,7 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         current = mermaid_reservation_store.latest_for_conversation(str(message.get("from") or ""))
         if current:
             mermaid_reservation_store.freeze_for_human(current["public_id"])
-    if use_model:
+    if use_model and result.action != "loop_stopped":
         _cache_reply(message, result.as_reply())
     return result.as_reply() if include_media else result.text
 

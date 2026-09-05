@@ -92,3 +92,26 @@ def test_detail_includes_server_stage_documents_events_and_chronological_chat(cl
     assert payload["events"][0]["toState"] == "booked"
     assert [message["role"] for message in payload["conversation"]] == ["user", "assistant"]
     assert payload["primaryAction"]["id"] == "view_receipt"
+
+
+def test_conversation_detail_exposes_non_actionable_loop_stop(monkeypatch):
+    monkeypatch.setattr(api.state_registry, "get_conversation_status", lambda _cid: None)
+    monkeypatch.setattr(api.state_registry, "get_active_escalation_summary_for", lambda _cid: None)
+    monkeypatch.setattr(api.state_registry, "get_active_escalation_mode", lambda _cid: None)
+    monkeypatch.setattr(api.state_registry, "get_ai_muted", lambda _cid: False)
+    monkeypatch.setattr(api.state_registry, "get_human_takeover_at", lambda _cid: None)
+    monkeypatch.setattr(api.state_registry, "get_learning_status_for_conversation", lambda _cid: "none")
+    monkeypatch.setattr(api.state_registry, "wa_get_booking_state", lambda _cid: {
+        "fields": {},
+        "flags": {
+            api.state_registry.MERMAID_LOOP_STOPPED_FLAG: True,
+            "mermaid_loop_stopped_at": "2026-09-04T01:14:20+00:00",
+        },
+    })
+
+    result = api._conversation_status_fields("loop-guest")
+    assert result["loopStopped"] is True
+    assert result["loopStatus"] == "Loop detected and stopped"
+    assert result["loopStoppedAt"] == "2026-09-04T01:14:20+00:00"
+    assert result["escalated"] is False
+    assert result["escalationMode"] is None
