@@ -62,19 +62,13 @@ test -f "$PREPARE_SCRIPT"
 test -d "$LIVE_DIR"
 export WTYJ_MERMAID_LIVE_DIR="$LIVE_DIR"
 
-# These are every non-Mermaid application container in the current runtime.
-# A missing, stopped, restarted, or re-imaged peer fails the release gate.
-PEER_CONTAINERS="
-wtyj-bluemarlin
-wtyj-adamus
-wtyj-ali-car-rental
-wtyj-consultadespertares
-wtyj-unboks
-wtyj-wibrandt
-"
-
 snapshot_peers() {
-  for container in $PEER_CONTAINERS; do
+  # Discover the live peer set at the start of the release. Tenant names can
+  # change over time, so a stale allowlist must never disable the safety gate.
+  # Sorting makes the before/after byte comparison deterministic.
+  containers=$(docker ps --format '{{.Names}}' | LC_ALL=C sort)
+  for container in $containers; do
+    [ "$container" = "wtyj-mermaid" ] && continue
     snapshot=$(docker inspect --format '{{.Name}}|{{.Id}}|{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}' "$container")
     case "$snapshot" in
       *'|true') ;;
@@ -110,6 +104,7 @@ if [ "$(docker inspect --format '{{.State.Running}}' wtyj-mermaid)" != "true" ];
 fi
 CANDIDATE_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE")
 PEERS_BEFORE=$(snapshot_peers)
+PEER_COUNT=$(printf '%s\n' "$PEERS_BEFORE" | sed '/^$/d' | wc -l | tr -d ' ')
 
 python3 "$PREPARE_SCRIPT" \
   --source "$SOURCE_ROOT" \
@@ -217,5 +212,5 @@ fi
 
 ROLLBACK_ARMED=0
 trap - EXIT HUP INT TERM
-printf '{"deployed":true,"tenant":"mermaid","image":"%s","backup":"%s","peers_preserved":6}\n' \
-  "$IMAGE" "$RELEASE"
+printf '{"deployed":true,"tenant":"mermaid","image":"%s","backup":"%s","peers_preserved":%s}\n' \
+  "$IMAGE" "$RELEASE" "$PEER_COUNT"

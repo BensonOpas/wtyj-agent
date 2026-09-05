@@ -127,22 +127,17 @@ def test_portable_mermaid_compose_requires_an_explicit_immutable_image():
     assert "image: ${MERMAID_IMAGE:?MERMAID_IMAGE must pin an immutable Tracy revision}" in compose
 
 
-def test_scoped_release_requires_all_six_peer_identities_to_stay_equal():
+def test_scoped_release_requires_every_live_peer_identity_to_stay_equal():
     script = _script("deploy_mermaid_release.sh")
-    peers = {
-        "wtyj-bluemarlin",
-        "wtyj-adamus",
-        "wtyj-ali-car-rental",
-        "wtyj-consultadespertares",
-        "wtyj-unboks",
-        "wtyj-wibrandt",
-    }
 
-    for peer in peers:
-        assert script.count(peer) == 1
+    assert "docker ps --format '{{.Names}}'" in script
+    assert '[ "$container" = "wtyj-mermaid" ] && continue' in script
+    assert "LC_ALL=C sort" in script
+    assert "PEER_CONTAINERS=" not in script
     assert "PEERS_BEFORE=$(snapshot_peers)" in script
     assert "PEERS_AFTER=$(snapshot_peers)" in script
     assert 'if [ "$PEERS_AFTER" != "$PEERS_BEFORE" ]' in script
+    assert '"$PEER_COUNT"' in script
 
 
 def test_scoped_release_never_restores_live_database_on_failure():
