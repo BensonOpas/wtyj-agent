@@ -10,6 +10,7 @@ import pytest
 
 from agents.marina import marina_agent
 from agents.social import mermaid_demo_payment as checkout
+from agents.social import mermaid_documents as documents
 from agents.social import mermaid_reservation_store as store
 from agents.social import mermaid_reservation_workflow as workflow
 from shared import config_loader, state_registry
@@ -59,6 +60,88 @@ def counts(reservation_id):
                      for table in ("mermaid_demo_payments", "mermaid_checkout_links"))
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("failure_point", ["quote", "transition", "cache"])
+def test_confirmation_retries_after_each_downstream_failure_without_losing_event(
+    monkeypatch, failure_point
+):
+    saved = intake() | {
+        "phase": "awaiting_summary_confirmation",
+        "accessibility_notes": "A guest uses a wheelchair.",
+        "wheelchair_relationship": "unspecified",
+    }
+    state_registry.wa_save_booking_state(
+        "guest", {"mermaid_intake": saved}, {}
+    )
+    model = Mock(return_value=understood("confirm_summary"))
+    monkeypatch.setattr(marina_agent, "process_message", model)
+    message = {
+        "from": "guest",
+        "from_name": "Synthetic Guest",
+        "text": "Yes, all details are correct.",
+        "message_id": f"confirm-retry-{failure_point}",
+    }
+
+    if failure_point == "quote":
+        real = documents.create_quote
+        monkeypatch.setattr(
+            documents,
+            "create_quote",
+            Mock(side_effect=RuntimeError("injected quote failure")),
+        )
+    elif failure_point == "transition":
+        real = store.transition
+
+        def fail_transition(*args, **kwargs):
+            if kwargs.get("idempotency_key", "").startswith("quote-ready:"):
+                raise RuntimeError("injected transition failure")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(store, "transition", fail_transition)
+    else:
+        real = workflow._cache_reply
+        monkeypatch.setattr(
+            workflow,
+            "_cache_reply",
+            Mock(side_effect=RuntimeError("injected cache failure")),
+        )
+
+    with pytest.raises(RuntimeError, match=f"injected {failure_point} failure"):
+        workflow.handle_demo_message(message, True, use_model=True)
+
+    state = state_registry.wa_get_booking_state("guest")
+    assert message["message_id"] not in state["flags"].get(
+        "mermaid_seen_message_ids", []
+    )
+    assert state["flags"]["mermaid_pending_confirmation_message_id"] == message[
+        "message_id"
+    ]
+
+    if failure_point == "quote":
+        monkeypatch.setattr(documents, "create_quote", real)
+    elif failure_point == "transition":
+        monkeypatch.setattr(store, "transition", real)
+    else:
+        monkeypatch.setattr(workflow, "_cache_reply", real)
+
+    recovered = workflow.handle_demo_message(message, True, use_model=True)
+    reservation = store.latest_for_conversation("guest")
+    assert recovered["media"] is not None
+    assert reservation["state"] == "demo_payment_pending"
+    assert len(store.list_reservations()) == 1
+    from agents.social import mermaid_crew_assistance
+
+    assert mermaid_crew_assistance.for_reservation(reservation["public_id"])
+    final_state = state_registry.wa_get_booking_state("guest")
+    assert message["message_id"] in final_state["flags"][
+        "mermaid_seen_message_ids"
+    ]
+    assert "mermaid_pending_confirmation_message_id" not in final_state["flags"]
+    assert model.call_count == 1
+    assert workflow.handle_demo_message(message, True, use_model=True)[
+        "media"
+    ] == recovered["media"]
 
 
 @pytest.mark.parametrize("excerpt", ["", "Would you like to go ahead with these details?"])
@@ -111,10 +194,15 @@ def test_incidental_pickup_selector_preserves_canonical_summary_and_one_confirma
     assert "450.00" in summary["text"] and "Mila Tromp" in summary["text"]
     assert "Unrequested model pickup prose" not in summary["text"]
     assert store.latest_for_conversation("guest") is None
+    faq_reply = (
+        "Desayuno ta inkluí."
+        if locale == "pap"
+        else "Breakfast is included."
+    )
     model.return_value = understood("question", language=locale, has_open_question=True,
-        guest_question_excerpt="Breakfast?", reply="Breakfast is included.")
+        guest_question_excerpt="Breakfast?", reply=faq_reply)
     faq = workflow.handle_demo_message({"from":"guest", "message_id":"faq", "text":"Breakfast?"}, True, use_model=True)
-    assert faq["text"] == "Breakfast is included."
+    assert faq["text"] == faq_reply
     assert state_registry.wa_get_booking_state("guest")["fields"]["mermaid_intake"]["phase"] == "awaiting_summary_confirmation"
     # A volunteered pricing selector is not another guest uncertainty on YES.
     model.return_value = understood("confirm_summary", language=locale, status_request="pickup_pricing")
@@ -357,6 +445,60 @@ def test_payment_winning_after_model_snapshot_returns_review_not_cancelled(monke
     assert workflow.handle_demo_message(message, True, use_model=True)["text"] == result["text"]
 
 
+@pytest.mark.parametrize("mode", [None, "soft", "hard"])
+def test_active_operator_review_blocks_payment_even_before_freeze_projection(mode):
+    reservation = pending()
+    checkout.build_payment_url(
+        "https://demo.example", reservation["public_id"], "test-secret"
+    )
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", "guest", "Guest", "Review", "Review",
+        mode=mode,
+    )
+    # This models the narrow interval before a derived reservation freeze is
+    # projected. The payment writer must consult the authoritative work item in
+    # its own immediate transaction rather than trust the cached flag alone.
+    assert store.get_reservation(reservation["public_id"])["human_takeover"] is False
+
+    with pytest.raises(store.MermaidReservationError, match="frozen"):
+        store.complete_demo_payment(
+            reservation["public_id"],
+            payment_reference="PAY-DEMO-REVIEW-RACE",
+            idempotency_key=f"pay-review-{mode}",
+        )
+
+    assert store.get_reservation(reservation["public_id"])["state"] == "demo_payment_pending"
+    assert counts(reservation["public_id"]) == (0, 1)
+
+
+@pytest.mark.parametrize("operation", ["confirm", "transition"])
+def test_active_review_blocks_booking_writes_before_freeze_projection(operation):
+    reservation = None
+    if operation == "transition":
+        reservation = store.confirm_reservation(
+            "guest", intake(), idempotency_key="confirm-before-review"
+        )
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", "guest", "Guest", "Review", "Review",
+        mode="soft",
+    )
+
+    if operation == "confirm":
+        with pytest.raises(store.MermaidReservationError, match="frozen"):
+            store.confirm_reservation(
+                "guest", intake(), idempotency_key="confirm-after-review"
+            )
+        assert store.list_reservations() == []
+    else:
+        assert reservation["human_takeover"] is False
+        with pytest.raises(store.MermaidReservationError, match="frozen"):
+            store.transition(
+                reservation["public_id"], "quote_ready",
+                idempotency_key="quote-after-review", actor="tracy", reason="test",
+            )
+        assert store.get_reservation(reservation["public_id"])["state"] == "demo_availability_approved"
+
+
 def test_cancelled_signed_checkout_is_unavailable(monkeypatch):
     reservation = pending()
     monkeypatch.setattr(checkout.time, "time", lambda: 1000)
@@ -433,7 +575,7 @@ def test_token_mint_cannot_publish_a_token_after_cancellation(monkeypatch):
 
         def execute(self, sql, *args):
             cursor = self.conn.execute(sql, *args)
-            if sql.startswith("SELECT public_id FROM mermaid_reservations"):
+            if sql.startswith("SELECT public_id,conversation_id FROM mermaid_reservations"):
                 row = cursor.fetchone()
                 checked.set()
                 assert release.wait(5)
@@ -479,7 +621,8 @@ def test_token_mint_cannot_publish_a_token_after_cancellation(monkeypatch):
     finally:
         release.set()
         mint_thread.join(5)
-        cancel_thread.join(5)
+        if cancel_thread.ident is not None:
+            cancel_thread.join(5)
     assert not mint_thread.is_alive() and not cancel_thread.is_alive()
     assert errors == []
     assert cancelled.is_set()

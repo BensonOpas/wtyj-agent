@@ -1,6 +1,7 @@
 """Document-only interface copy; business facts stay in the catalog.
 
-Papiamentu strings are Curaçao draft copy awaiting native review (issue 342 A4).
+Papiamentu strings follow the formal written Curaçao register reviewed against
+the official FPI orthography and word list for issue 342.
 """
 
 DOCUMENT_NOTICES = {

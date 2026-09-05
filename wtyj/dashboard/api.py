@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Header, File, UploadFile, Form, Query, Body, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, StrictBool, Field, field_validator
+from pydantic import BaseModel, StrictBool, StrictInt, Field, field_validator
 from PIL import Image
 
 from shared import state_registry, config_loader, bm_logger, auto_block, agent_identity, response_timing, tenant_hard_rules, rental_catalog, mermaid_catalog
@@ -34,6 +34,7 @@ from agents.social import (
     ali_reservation_v2,
     ali_reservation_v2_automation,
     ali_reservation_workflow,
+    mermaid_crew_assistance,
     mermaid_documents,
     mermaid_reservation_store,
 )
@@ -3076,7 +3077,7 @@ def _hydrate_conversation_contact_identities(items: list[dict]) -> list[dict]:
 
 
 @router.get("/messages/conversations", dependencies=[Depends(_check_auth)])
-async def list_conversations():
+async def list_conversations(response: Response):
     """Brief 171: List WhatsApp + email conversations merged, sorted newest first.
     Email conversation rows have phone prefixed with `email::` so the detail
     endpoint can route to the email helper."""
@@ -3100,6 +3101,9 @@ async def list_conversations():
     # via dm_store_message which already sets it; legacy rows default to 'whatsapp').
     for c in wa_convos:
         c.setdefault("channel", "whatsapp")
+    _attach_mermaid_crew_assistance_by_conversation(wa_convos)
+    if _mermaid_dashboard_projection_enabled():
+        _mermaid_crew_assistance_no_store(response)
     email_convos = state_registry.email_list_conversations()
     merged = wa_convos + email_convos
     merged.sort(key=lambda r: r.get("last_message_at") or "", reverse=True)
@@ -3108,7 +3112,7 @@ async def list_conversations():
 
 @router.get("/messages/conversations/archived",
              dependencies=[Depends(_check_auth)])
-async def list_archived_conversations():
+async def list_archived_conversations(response: Response):
     """Brief 249: return archived WhatsApp + email conversations merged.
     Same response shape as GET /messages/conversations so the frontend
     can swap data source by URL. Cross-device-consistent because the
@@ -3119,6 +3123,9 @@ async def list_archived_conversations():
     )
     for c in wa:
         c.setdefault("channel", "whatsapp")
+    _attach_mermaid_crew_assistance_by_conversation(wa)
+    if _mermaid_dashboard_projection_enabled():
+        _mermaid_crew_assistance_no_store(response)
     email = state_registry.email_list_archived_conversations()
     merged = wa + email
     merged.sort(key=lambda r: r.get("last_message_at") or "", reverse=True)
@@ -3194,7 +3201,7 @@ def _conversation_status_fields(customer_id: str) -> dict:
 
 
 @router.get("/messages/conversations/{phone:path}", dependencies=[Depends(_check_auth)])
-async def get_conversation(phone: str):
+async def get_conversation(phone: str, http_response: Response):
     """Get full conversation thread + booking state. Brief 171: routes to the
     email helper when phone starts with 'email::'. Brief 201: each message dict
     is enriched with `content` (alias of text) and `timestamp` (alias of
@@ -3210,6 +3217,8 @@ async def get_conversation(phone: str):
         parts = thread_key.split(":", 2)
         email_id = parts[1] if len(parts) >= 2 else ""
         result.update(_conversation_status_fields(email_id))
+        if _mermaid_dashboard_projection_enabled():
+            _mermaid_crew_assistance_no_store(http_response)
         return result
     messages = state_registry.wa_get_full_history(phone, limit=200)
     # Brief 201: add frontend-friendly field aliases without removing originals.
@@ -3235,6 +3244,9 @@ async def get_conversation(phone: str):
             "nextOperatorAction": order_state.get("next_operator_action"),
         })
     response.update(_conversation_status_fields(phone))
+    if _mermaid_dashboard_projection_enabled():
+        response["crewAssistance"] = mermaid_crew_assistance.for_conversation(phone)
+        _mermaid_crew_assistance_no_store(http_response)
     return response
 
 
@@ -3256,8 +3268,9 @@ async def delete_conversation(phone: str):
 
 class EmailReplyRequest(BaseModel):
     body: str
+    request_id: str = Field(default="", max_length=128)
     mode: str = "direct"           # v1 ignores; reserved for future relay/draft modes
-    attachments: list = []         # v1 ignores (forward also defers attachments)
+    attachments: list = Field(default_factory=list)  # v1 ignores (forward also defers attachments)
 
 
 @router.post("/messages/conversations/{conversation_id:path}/email/reply",
@@ -3266,8 +3279,8 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
     """Brief 225: send an operator-authored email reply to a thread that may
     not be tied to an escalation. Operator's text is sent verbatim — no
     Marina reformulation (matches the /escalations/{id}/reply email branch)."""
-    body = (req.body or "").strip()
-    if not body:
+    body = req.body or ""
+    if not body.strip():
         raise HTTPException(status_code=400, detail="`body` is required")
 
     thread_key = conversation_id
@@ -3280,37 +3293,55 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
         raise HTTPException(status_code=404,
             detail="Email conversation not found")
 
+    customer_email = state_registry.email_thread_customer(thread_key)
+    if not customer_email:
+        raise HTTPException(status_code=404,
+            detail="Email conversation not found")
+
     # thread_key format from email_adapter.resolve_thread_key:
     #   "subj:<from_email>:<normalized_subject>"
-    # parts[0] == literal "subj", parts[1] == customer email, parts[2] == subject.
     parts = thread_key.split(":", 2)
-    customer_email = parts[1] if len(parts) >= 2 else ""
     raw_subject = parts[2] if len(parts) >= 3 else ""
-
-    if not customer_email or "@" not in customer_email:
-        raise HTTPException(status_code=404,
-            detail="Email conversation has no resolvable customer address")
 
     subject = raw_subject or "Unboks"
     if not subject.lower().startswith("re:"):
         subject = "Re: " + subject
 
-    try:
-        smtp_send(customer_email, subject, body)
-    except Exception as exc:
-        bm_logger.log("dashboard_email_reply_send_failed",
-                      thread_key=thread_key[:60],
-                      email=customer_email[:60],
-                      error=str(exc)[:200])
-        raise HTTPException(status_code=500,
-            detail=f"Failed to send email reply: {str(exc)[:120]}")
-
-    matched = state_registry.email_append_assistant_message(
-        customer_email, body, role="operator")
-    bm_logger.log("dashboard_email_reply_sent",
-                  thread_key=thread_key[:60],
-                  email=customer_email[:60],
-                  matched=matched or "(no thread match)")
+    email_conv = state_registry.email_get_conversation(thread_key)
+    user_messages = [
+        message for message in email_conv.get("messages", [])
+        if message.get("role") == "user"
+    ]
+    latest_user = user_messages[-1] if user_messages else {}
+    thread_anchor = {
+        "customer_message_count": len(user_messages),
+        "created_at": str(latest_user.get("created_at") or ""),
+        "text": str(latest_user.get("text") or ""),
+    }
+    result, replayed = _deliver_operator_email(
+        conversation_id=customer_email,
+        scope=f"email-inbox:{thread_key}:reply",
+        original={
+            "body": body,
+            "thread_key": thread_key,
+            "thread_anchor": thread_anchor,
+        },
+        request_id=req.request_id,
+        prepare=lambda: {
+            "to": customer_email,
+            "subject": subject,
+            "text": body,
+            "role": "operator",
+            "thread_key": thread_key,
+            "response": {"ok": True, "channel": "email"},
+        },
+    )
+    bm_logger.log(
+        "dashboard_email_reply_confirmed",
+        thread_key=thread_key[:60],
+        email=customer_email[:60],
+        replayed=replayed,
+    )
 
     # Brief 266 + Brief 267: toggle-aware learning create from the Inbox-side
     # email reply path. Brief 225's endpoint never auto-learned before; Brief
@@ -3319,14 +3350,15 @@ async def reply_to_email_conversation(conversation_id: str, req: EmailReplyReque
     # createPendingLearningFromOperatorReplies toggle uniformly with the
     # Escalations-tab reply UX. No escalation_id at this surface (the Brief
     # 225 endpoint is conversation-scoped, not escalation-scoped).
-    _create_learning_from_operator_reply(
-        conversation_id=customer_email,
-        channel="email",
-        answer=body,
-        source="messages_email_reply",
-        escalation_id=None)
+    if not replayed:
+        _create_learning_from_operator_reply(
+            conversation_id=customer_email,
+            channel="email",
+            answer=body,
+            source="messages_email_reply",
+            escalation_id=None)
 
-    return {"ok": True, "channel": "email"}
+    return result
 
 
 # ── WhatsApp Conversation Reply ──────────────────────────────────────────────
@@ -3367,6 +3399,26 @@ def _deliver_operator_whatsapp(**kwargs) -> tuple[dict, bool]:
         raise HTTPException(
             status_code=502,
             detail="No se pudo confirmar el envío por WhatsApp. Reintenta la misma solicitud.",
+        ) from exc
+
+
+def _deliver_operator_email(**kwargs) -> tuple[dict, bool]:
+    """Translate durable email outbox outcomes for dashboard callers."""
+    try:
+        return operator_delivery.deliver_email(sender=smtp_send, **kwargs)
+    except (operator_delivery.OperatorDeliveryBusy, operator_delivery.OperatorDeliveryConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        bm_logger.log(
+            "dashboard_operator_email_delivery_failed",
+            conversation_id=str(kwargs.get("conversation_id") or "")[:60],
+            error=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email reply: {str(exc)[:120]}",
         ) from exc
 
 
@@ -5266,13 +5318,43 @@ async def list_ali_reservations_endpoint(response: Response, status: str = None)
     return {"items": items, "reservations": items}
 
 
+def _mermaid_dashboard_projection_enabled() -> bool:
+    if _current_tenant_slug() != "mermaid":
+        return False
+    try:
+        raw = config_loader.get_raw() or {}
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    return bool((raw.get("features") or {}).get("mermaid_dashboard_projection", False))
+
+
 def _require_mermaid_reservation_dashboard() -> None:
-    raw = config_loader.get_raw() or {}
-    if (
-        _current_tenant_slug() != "mermaid"
-        or not (raw.get("features") or {}).get("mermaid_dashboard_projection", False)
-    ):
+    if not _mermaid_dashboard_projection_enabled():
         raise HTTPException(status_code=404, detail="Reservation dashboard is not enabled")
+
+
+def _attach_mermaid_crew_assistance_by_conversation(items: list[dict]) -> list[dict]:
+    """Add the private operational marker to Mermaid conversation/customer rows."""
+    if not _mermaid_dashboard_projection_enabled():
+        return items
+    conversation_ids = {
+        item.get("conversationId") or item.get("phone") for item in items
+    }
+    by_conversation = mermaid_crew_assistance.for_conversations(conversation_ids)
+    for item in items:
+        conversation_id = item.get("conversationId") or item.get("phone")
+        item["crewAssistance"] = by_conversation.get(conversation_id)
+    return items
+
+
+def _mermaid_crew_assistance_by_reservation(
+    reservation_ids,
+    *,
+    kind: str | None = None,
+) -> dict[str, dict]:
+    return mermaid_crew_assistance.for_reservations(reservation_ids, kind=kind)
 
 
 def _mermaid_stage(state: str) -> str:
@@ -5299,7 +5381,12 @@ def _mermaid_primary_action(item: dict) -> dict | None:
     }.get(_mermaid_stage(item["state"]))
 
 
-def _mermaid_projection(item: dict) -> dict:
+def _mermaid_projection(
+    item: dict,
+    *,
+    crew_assistance: dict | None = None,
+    wheelchair_assistance: dict | None = None,
+) -> dict:
     intake = item["intake"]
     money = item["monetary_snapshot"]
     from agents.social.mermaid_guest_experience import party_text
@@ -5327,7 +5414,12 @@ def _mermaid_projection(item: dict) -> dict:
         "pickupPreference": intake["pickup_preference"],
         "pickupLocation": intake.get("pickup_location"),
         "dietaryRequirements": intake.get("dietary_requirements"),
-        "accessibilityNotes": intake.get("accessibility_notes"),
+        "accessibilityNotes": intake.get("accessibility_notes") or (
+            wheelchair_assistance.get("note")
+            if wheelchair_assistance
+            and wheelchair_assistance.get("status") != "withdrawn"
+            else None
+        ),
         "specialRequests": intake.get("special_requests"),
         "catalogVersion": item["catalog_version"],
         "currency": money["currency"],
@@ -5341,6 +5433,7 @@ def _mermaid_projection(item: dict) -> dict:
         "paymentReference": item["payment_reference"],
         "receiptPublicId": item["receipt_public_id"],
         "humanTakeover": item["human_takeover"],
+        "crewAssistance": crew_assistance,
         "revision": item["revision"],
         "createdAt": item["created_at"],
         "updatedAt": item["updated_at"],
@@ -5366,7 +5459,9 @@ def _mermaid_customer_access(response: Response):
 async def list_mermaid_customers_endpoint(response: Response, query: str = "",
         offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
     customers = _mermaid_customer_access(response)
-    return customers.list_accounts(query, offset, limit)
+    result = customers.list_accounts(query, offset, limit)
+    _attach_mermaid_crew_assistance_by_conversation(result["items"])
+    return result
 
 
 @router.get("/mermaid-customers/{customer_id}", dependencies=[Depends(_check_auth)])
@@ -5375,9 +5470,26 @@ async def get_mermaid_customer_endpoint(customer_id: int, response: Response):
     result = customers.get_account(customer_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Customer not found")
+    result["crewAssistance"] = mermaid_crew_assistance.for_conversation(
+        result["conversationId"]
+    )
+    reservations = customers.reservations_for_account(customer_id)
+    reservation_ids = [reservation["public_id"] for reservation in reservations]
+    assistance_by_reservation = _mermaid_crew_assistance_by_reservation(
+        reservation_ids
+    )
+    wheelchair_by_reservation = _mermaid_crew_assistance_by_reservation(
+        reservation_ids, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+    )
     result["reservations"] = []
-    for reservation in customers.reservations_for_account(customer_id):
-        item = _mermaid_projection(reservation)
+    for reservation in reservations:
+        item = _mermaid_projection(
+            reservation,
+            crew_assistance=assistance_by_reservation.get(reservation["public_id"]),
+            wheelchair_assistance=wheelchair_by_reservation.get(
+                reservation["public_id"]
+            ),
+        )
         item["documents"] = mermaid_documents.documents_for_reservation(reservation["public_id"])
         result["reservations"].append(item)
     return result
@@ -5409,7 +5521,22 @@ async def get_mermaid_customer_document_endpoint(customer_id: int, document_id: 
 async def list_mermaid_reservations_endpoint(response: Response, query: str = ""):
     _require_mermaid_reservation_dashboard()
     needle = str(query or "").strip().casefold()
-    items = [_mermaid_projection(item) for item in mermaid_reservation_store.list_reservations(limit=500)]
+    reservations = mermaid_reservation_store.list_reservations(limit=500)
+    reservation_ids = [item["public_id"] for item in reservations]
+    assistance_by_reservation = _mermaid_crew_assistance_by_reservation(
+        reservation_ids
+    )
+    wheelchair_by_reservation = _mermaid_crew_assistance_by_reservation(
+        reservation_ids, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+    )
+    items = [
+        _mermaid_projection(
+            item,
+            crew_assistance=assistance_by_reservation.get(item["public_id"]),
+            wheelchair_assistance=wheelchair_by_reservation.get(item["public_id"]),
+        )
+        for item in reservations
+    ]
     if needle:
         items = [item for item in items if any(
             needle in str(value or "").casefold()
@@ -5440,6 +5567,82 @@ class MermaidCatalogPublishRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class MermaidCrewAssistanceAcknowledgeRequest(BaseModel):
+    expected_revision: StrictInt = Field(alias="expectedRevision", ge=1)
+    acknowledged_by: str = Field(alias="acknowledgedBy", min_length=1, max_length=80)
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+
+def _mermaid_crew_assistance_no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Unboks-Tenant"] = "mermaid"
+
+
+def _raise_mermaid_crew_assistance_error(exc: Exception, *, action: str) -> None:
+    if isinstance(exc, mermaid_crew_assistance.CrewAssistanceNotFound):
+        status_code, detail = 404, "Crew-assistance item not found"
+    elif isinstance(exc, mermaid_crew_assistance.CrewAssistanceConflict):
+        status_code, detail = 409, "Crew-assistance item changed; reload before acknowledging"
+    elif isinstance(exc, mermaid_crew_assistance.CrewAssistanceError):
+        status_code, detail = 422, "Invalid crew-assistance request"
+    else:
+        bm_logger.log(
+            "mermaid_crew_assistance_dashboard_error",
+            action=action,
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(status_code=500, detail="Crew-assistance action failed") from exc
+    bm_logger.log(
+        "mermaid_crew_assistance_dashboard_rejected",
+        action=action,
+        status_code=status_code,
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/mermaid-crew-assistance", dependencies=[Depends(_check_auth)])
+async def list_mermaid_crew_assistance_endpoint(
+    response: Response,
+    status: Literal["unacknowledged", "acknowledged", "withdrawn", "all"] = "unacknowledged",
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+):
+    _require_mermaid_reservation_dashboard()
+    try:
+        items = mermaid_crew_assistance.list_items(
+            status=status, limit=limit, offset=offset
+        )
+    except Exception as exc:
+        _raise_mermaid_crew_assistance_error(exc, action="list")
+    _mermaid_crew_assistance_no_store(response)
+    return {"items": items}
+
+
+@router.post(
+    "/mermaid-crew-assistance/{attention_id}/acknowledge",
+    dependencies=[Depends(_check_auth)],
+)
+async def acknowledge_mermaid_crew_assistance_endpoint(
+    attention_id: int,
+    body: MermaidCrewAssistanceAcknowledgeRequest,
+    response: Response,
+):
+    _require_mermaid_reservation_dashboard()
+    try:
+        item = mermaid_crew_assistance.acknowledge(
+            attention_id,
+            expected_revision=body.expected_revision,
+            acknowledged_by=body.acknowledged_by,
+        )
+    except Exception as exc:
+        _raise_mermaid_crew_assistance_error(exc, action="acknowledge")
+    _mermaid_crew_assistance_no_store(response)
+    return {"item": item}
+
+
 @router.put("/mermaid-reservations/catalog", dependencies=[Depends(_check_auth)])
 def publish_mermaid_reservation_catalog_endpoint(body: MermaidCatalogPublishRequest, response: Response):
     _require_mermaid_reservation_dashboard()
@@ -5462,7 +5665,13 @@ async def get_mermaid_reservation_endpoint(public_id: str, response: Response):
     reservation = mermaid_reservation_store.get_reservation(public_id)
     if reservation is None:
         raise HTTPException(status_code=404, detail="Reservation not found")
-    result = _mermaid_projection(reservation)
+    result = _mermaid_projection(
+        reservation,
+        crew_assistance=mermaid_crew_assistance.for_reservation(public_id),
+        wheelchair_assistance=mermaid_crew_assistance.for_reservation(
+            public_id, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+        ),
+    )
     from shared import mermaid_customers
     result["customerId"] = mermaid_customers.account_id(reservation["conversation_id"])
     result["documents"] = mermaid_documents.documents_for_reservation(public_id)
@@ -6445,7 +6654,14 @@ async def get_escalation(escalation_id: int):
     return esc
 
 
-class ResolveRequest(BaseModel):
+class EscalationRevisionRequest(BaseModel):
+    # Safe compatibility for dashboards deployed before revision tokens: an
+    # omitted token can act on an untouched revision-1 row, but fails closed
+    # once newer customer content has reused the work-item id.
+    content_revision: StrictInt = Field(default=1, ge=1)
+
+
+class ResolveRequest(EscalationRevisionRequest):
     resolutionNote: str = ""
     saveAsLearning: bool = False
     autoUseNextTime: bool = True
@@ -6456,12 +6672,26 @@ class ResolveRequest(BaseModel):
 async def resolve_escalation(escalation_id: int, req: ResolveRequest = None):
     """Brief 213 + 215: mark resolved. Optionally save the operator's
     resolutionNote as an approved escalation_learnings row."""
-    ok = state_registry.update_notification_status(escalation_id, "resolved")
-    if not ok:
-        raise HTTPException(status_code=404, detail="Escalation not found")
-    state_registry.resolve_conversation_from_escalation(escalation_id)
-
     body = req or ResolveRequest()
+    try:
+        if _current_tenant_slug() == "mermaid":
+            released = state_registry.release_mermaid_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+            )
+            if released is None:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+        else:
+            ok = state_registry.resolve_conversation_from_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+                mark_notification_resolved=True,
+            )
+            if not ok:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     learning_entry_id = None
     if body.saveAsLearning and body.resolutionNote.strip():
         esc = next((e for e in state_registry.get_all_escalations()
@@ -6484,7 +6714,9 @@ async def resolve_escalation(escalation_id: int, req: ResolveRequest = None):
 
 
 @router.post("/escalations/{escalation_id}/unresolve", dependencies=[Depends(_check_auth)])
-async def unresolve_escalation(escalation_id: int):
+async def unresolve_escalation(
+    escalation_id: int, req: EscalationRevisionRequest = None,
+):
     """Reopen a resolved escalation without deleting conversation history.
 
     The pending_notifications.mode field is preserved, so reopened soft rows
@@ -6495,7 +6727,21 @@ async def unresolve_escalation(escalation_id: int):
     if not before:
         raise HTTPException(status_code=404, detail="Escalation not found")
     previous_status = before.get("status")
-    ok = state_registry.reopen_conversation_from_escalation(escalation_id)
+    body = req or EscalationRevisionRequest()
+    try:
+        if _current_tenant_slug() == "mermaid":
+            reopened_result = state_registry.reopen_mermaid_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+            )
+            ok = reopened_result is not None
+        else:
+            ok = state_registry.reopen_conversation_from_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+            )
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
     bm_logger.log(
@@ -6512,11 +6758,26 @@ async def unresolve_escalation(escalation_id: int):
 
 
 @router.delete("/escalations/{escalation_id}", dependencies=[Depends(_check_auth)])
-async def delete_escalation_endpoint(escalation_id: int):
+async def delete_escalation_endpoint(
+    escalation_id: int, req: EscalationRevisionRequest = None,
+):
     """Brief 172: hard-delete an escalation. SR built an archive-first UX
     (localStorage hide, then trash button visible only in archive view).
     This endpoint handles the actual permanent delete."""
-    ok = state_registry.delete_escalation(escalation_id)
+    body = req or EscalationRevisionRequest()
+    try:
+        if _current_tenant_slug() == "mermaid":
+            ok = state_registry.delete_mermaid_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+            )
+        else:
+            ok = state_registry.delete_escalation(
+                escalation_id,
+                expected_content_revision=body.content_revision,
+            )
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
     return {"ok": True, "id": escalation_id}
@@ -6527,8 +6788,12 @@ async def delete_escalation_endpoint(escalation_id: int):
 # Storage: pending_notifications.mode (per escalation) and
 # conversation_status.ai_muted + human_takeover_at (per conversation).
 
-class EscalationModeRequest(BaseModel):
+class EscalationModeRequest(EscalationRevisionRequest):
     mode: str  # "soft" | "hard" | "order"
+
+
+class EscalationTakeoverRequest(EscalationRevisionRequest):
+    note: str = ""
 
 
 def _refresh_and_stringify_escalation(escalation_id: int):
@@ -6546,7 +6811,21 @@ def _refresh_and_stringify_escalation(escalation_id: int):
 async def set_escalation_mode_endpoint(escalation_id: int, req: EscalationModeRequest):
     if req.mode not in ("soft", "hard", "order"):
         raise HTTPException(status_code=400, detail=f"invalid mode: {req.mode!r} (must be 'soft', 'hard', or 'order')")
-    ok = state_registry.set_escalation_mode(escalation_id, req.mode)
+    try:
+        if _current_tenant_slug() == "mermaid":
+            ok = state_registry.set_mermaid_escalation_mode(
+                escalation_id,
+                req.mode,
+                expected_content_revision=req.content_revision,
+            )
+        else:
+            ok = state_registry.set_escalation_mode(
+                escalation_id,
+                req.mode,
+                expected_content_revision=req.content_revision,
+            )
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Escalation not found")
     refreshed = _refresh_and_stringify_escalation(escalation_id)
@@ -6554,15 +6833,38 @@ async def set_escalation_mode_endpoint(escalation_id: int, req: EscalationModeRe
 
 
 @router.post("/escalations/{escalation_id}/takeover", dependencies=[Depends(_check_auth)])
-async def takeover_escalation(escalation_id: int):
+async def takeover_escalation(
+    escalation_id: int, req: EscalationTakeoverRequest = None,
+):
     """Brief 213: hard takeover. Sets escalation mode=hard, conversation
     ai_muted=true, stamps human_takeover_at."""
     esc = next((e for e in state_registry.get_all_escalations()
                 if e["id"] == escalation_id), None)
     if not esc:
         raise HTTPException(status_code=404, detail="Escalation not found")
-    state_registry.set_escalation_mode(escalation_id, "hard")
-    state_registry.set_ai_muted(esc["customer_id"], True, esc.get("channel", "whatsapp"))
+    body = req or EscalationTakeoverRequest()
+    try:
+        if _current_tenant_slug() == "mermaid":
+            # The reservation freeze is part of the same transaction as the mode
+            # and mute.  A dashboard-created or legacy soft review can therefore
+            # never become a hard takeover while its booking remains payable.
+            updated = state_registry.set_mermaid_escalation_mode(
+                escalation_id,
+                "hard",
+                expected_content_revision=body.content_revision,
+            )
+            if updated is None:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+        else:
+            updated = state_registry.set_escalation_takeover_state(
+                escalation_id,
+                True,
+                expected_content_revision=body.content_revision,
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     bm_logger.log("escalation_takeover", escalation_id=escalation_id,
                   customer_id=(esc["customer_id"] or "")[:30],
                   channel=esc.get("channel"))
@@ -6571,14 +6873,37 @@ async def takeover_escalation(escalation_id: int):
 
 
 @router.post("/escalations/{escalation_id}/handback", dependencies=[Depends(_check_auth)])
-async def handback_escalation(escalation_id: int):
-    """Brief 213: release a hard takeover — clear ai_muted, set mode=soft."""
+async def handback_escalation(
+    escalation_id: int, req: EscalationRevisionRequest = None,
+):
+    """Release a hard takeover and return the conversation to AI control."""
     esc = next((e for e in state_registry.get_all_escalations()
                 if e["id"] == escalation_id), None)
     if not esc:
         raise HTTPException(status_code=404, detail="Escalation not found")
-    state_registry.set_escalation_mode(escalation_id, "soft")
-    state_registry.set_ai_muted(esc["customer_id"], False, esc.get("channel", "whatsapp"))
+    body = req or EscalationRevisionRequest()
+    try:
+        if _current_tenant_slug() == "mermaid":
+            # Mermaid treats any active escalation, including soft mode, as a
+            # reservation freeze.  Resolve it and release every persisted freeze
+            # atomically so Hand back actually lets Tracy continue.
+            released = state_registry.release_mermaid_escalation(
+                escalation_id,
+                set_mode_soft=True,
+                expected_content_revision=body.content_revision,
+            )
+            if released is None:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+        else:
+            updated = state_registry.set_escalation_takeover_state(
+                escalation_id,
+                False,
+                expected_content_revision=body.content_revision,
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Escalation not found")
+    except state_registry.EscalationRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     bm_logger.log("escalation_handback", escalation_id=escalation_id,
                   customer_id=(esc["customer_id"] or "")[:30])
     refreshed = _refresh_and_stringify_escalation(escalation_id)
@@ -7165,6 +7490,10 @@ class EscalationReplyRequest(BaseModel):
     mediaId: str | None = None
     media_id: str | None = None
     request_id: str = Field(default="", max_length=128)
+    # Revision 1 is the safe compatibility value for pre-token dashboard
+    # clients. Once a work item is updated, an old client necessarily receives
+    # 409 instead of being allowed to close unseen newer content.
+    content_revision: StrictInt = Field(default=1, ge=1)
 
     @property
     def text(self) -> str:
@@ -7173,6 +7502,21 @@ class EscalationReplyRequest(BaseModel):
     @property
     def selected_media_id(self) -> str:
         return str(self.mediaId or self.media_id or "").strip()
+
+
+def _require_current_escalation_revision(esc: dict, req: EscalationReplyRequest) -> int:
+    current = int(esc.get("content_revision") or 1)
+    if req.content_revision is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This case must be refreshed before sending; its revision is missing",
+        )
+    if req.content_revision != current:
+        raise HTTPException(
+            status_code=409,
+            detail="This case changed while the reply was being prepared. Review the latest guest message before sending",
+        )
+    return current
 
 
 def _prepare_whatsapp_operator_payload(
@@ -7213,9 +7557,62 @@ def _prepare_whatsapp_operator_payload(
         "attachment_url": attachment_url,
         "media_id": req.selected_media_id,
         "notification_id": escalation_id,
+        "expected_content_revision": req.content_revision,
         "clear_relay": not hard,
         "image_notice": guidance,
         "response": response,
+    }
+
+
+def _prepare_email_operator_payload(
+    customer_id: str,
+    escalation_id: int,
+    req: EscalationReplyRequest,
+    subject: str,
+    *,
+    guidance: bool,
+    thread_key: str = "",
+) -> dict:
+    """Prepare and freeze one operator-authored or Marina-reformulated email."""
+    thread_key = str(thread_key or "")
+    thread_customer = state_registry.email_thread_customer(thread_key) if thread_key else ""
+    if thread_customer.casefold() != str(customer_id or "").strip().casefold():
+        raise operator_delivery.OperatorDeliveryConflict(
+            "The exact email thread for this escalation is unavailable; no message was sent"
+        )
+    if guidance:
+        if thread_key:
+            email_conv = state_registry.email_get_conversation(thread_key)
+            email_state = email_conv.get("booking_state", {}) or {}
+            email_fields = email_state.get("fields", {}) or {}
+            email_flags = dict(email_state.get("flags", {}) or {})
+        else:
+            email_fields = {}
+            email_flags = {}
+        email_flags["awaiting_relay"] = True
+        for name in ("relay_token", "reply_times"):
+            email_flags.pop(name, None)
+        relay_result = marina_agent.process_message(
+            customer_id, subject, req.text, email_fields, email_flags,
+        )
+        if not isinstance(relay_result, dict) or relay_result.get("generation_failed"):
+            raise ValueError("Marina relay failed; no email reply was prepared")
+        reply = relay_result.get("reply", "")
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("Marina returned empty reply")
+        role = "marina"
+    else:
+        reply = req.text
+        role = "operator"
+    return {
+        "to": customer_id,
+        "subject": subject,
+        "text": reply,
+        "role": role,
+        "thread_key": thread_key,
+        "notification_id": escalation_id,
+        "expected_content_revision": req.content_revision,
+        "response": {"ok": True, "reply": reply, "channel": "email"},
     }
 
 @router.post("/escalations/{escalation_id}/reply", dependencies=[Depends(_check_auth)])
@@ -7235,6 +7632,7 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
     customer_id = esc.get("customer_id", "")
 
     if channel == "whatsapp" and customer_id:
+        content_revision = _require_current_escalation_revision(esc, req)
         # Brief 246: hard mode = operator IS the author. Send verbatim.
         # Soft/legacy mode = relay (Marina reformulates).
         # Mirrors the email branch at lines 2470-2511 (Brief 210).
@@ -7246,7 +7644,11 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         result, replayed = _deliver_operator_whatsapp(
             conversation_id=customer_id,
             scope=f"escalation:{escalation_id}:reply:{'hard' if hard else 'soft'}",
-            original={"text": req.text, "media_id": req.selected_media_id},
+            original={
+                "text": req.text,
+                "media_id": req.selected_media_id,
+                "content_revision": content_revision,
+            },
             request_id=req.request_id,
             prepare=lambda: _prepare_whatsapp_operator_payload(
                 customer_id, escalation_id, req, hard=hard,
@@ -7273,36 +7675,39 @@ async def reply_to_escalation(escalation_id: int, req: EscalationReplyRequest):
         if not customer_id or "@" not in customer_id:
             raise HTTPException(status_code=400,
                 detail="Email escalation missing valid email address")
+        content_revision = _require_current_escalation_revision(esc, req)
 
         operator_reply = req.text
-        subject = esc.get("subject") or "Re: Unboks"
+        thread_key = str(esc.get("email_thread_key") or "")
+        subject = esc.get("email_reply_subject") or "Re: Unboks"
         if not subject.lower().startswith("re:"):
             subject = "Re: " + subject
 
-        try:
-            smtp_send(customer_id, subject, operator_reply)
-        except Exception as exc:
-            bm_logger.log("dashboard_email_reply_send_failed",
-                          email=customer_id, escalation_id=escalation_id,
-                          error=str(exc)[:200])
-            raise HTTPException(status_code=500,
-                detail=f"Failed to send email reply: {str(exc)[:120]}")
-
-        thread_key = state_registry.email_append_assistant_message(
-            customer_id, operator_reply, role="operator")
-        bm_logger.log("dashboard_email_reply_sent",
-                      email=customer_id, escalation_id=escalation_id,
-                      thread_key=thread_key or "(no thread match)")
-
-        state_registry.update_notification_status(escalation_id, "replied")
+        result, replayed = _deliver_operator_email(
+            conversation_id=customer_id,
+            scope=f"escalation:{escalation_id}:reply:email",
+            original={"text": operator_reply, "content_revision": content_revision},
+            request_id=req.request_id,
+            prepare=lambda: _prepare_email_operator_payload(
+                customer_id, escalation_id, req, subject, guidance=False,
+                thread_key=thread_key,
+            ),
+        )
+        bm_logger.log(
+            "dashboard_email_reply_confirmed",
+            email=customer_id,
+            escalation_id=escalation_id,
+            replayed=replayed,
+        )
 
         # Brief 215 + Brief 266: toggle-aware learning create.
-        _create_learning_from_operator_reply(
-            conversation_id=customer_id, channel="email",
-            answer=operator_reply, source="reply_email",
-            escalation_id=escalation_id)
+        if not replayed:
+            _create_learning_from_operator_reply(
+                conversation_id=customer_id, channel="email",
+                answer=operator_reply, source="reply_email",
+                escalation_id=escalation_id)
 
-        return {"ok": True, "reply": operator_reply, "channel": "email"}
+        return result
 
     else:
         raise HTTPException(status_code=400, detail=f"Channel '{channel}' reply not supported from dashboard")
@@ -7337,10 +7742,15 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
     customer_id = esc.get("customer_id", "")
 
     if channel == "whatsapp" and customer_id:
+        content_revision = _require_current_escalation_revision(esc, req)
         result, replayed = _deliver_operator_whatsapp(
             conversation_id=customer_id,
             scope=f"escalation:{escalation_id}:guidance",
-            original={"text": req.text, "media_id": req.selected_media_id},
+            original={
+                "text": req.text,
+                "media_id": req.selected_media_id,
+                "content_revision": content_revision,
+            },
             request_id=req.request_id,
             prepare=lambda: _prepare_whatsapp_operator_payload(
                 customer_id, escalation_id, req, hard=False, guidance=True,
@@ -7363,68 +7773,37 @@ async def guidance_to_marina(escalation_id: int, req: EscalationReplyRequest):
         if not customer_id or "@" not in customer_id:
             raise HTTPException(status_code=400,
                 detail="Email escalation missing valid email address")
+        content_revision = _require_current_escalation_revision(esc, req)
 
-        # Load thread context (fields + flags) so Marina has booking history
-        thread_key = state_registry._find_email_thread_key_for(customer_id)
-        if thread_key:
-            email_conv = state_registry.email_get_conversation(thread_key)
-            email_state = email_conv.get("booking_state", {}) or {}
-            email_fields = email_state.get("fields", {}) or {}
-            email_flags = dict(email_state.get("flags", {}) or {})
-        else:
-            email_fields = {}
-            email_flags = {}
-
-        email_flags["awaiting_relay"] = True
-        for rk in ("relay_token", "reply_times"):
-            email_flags.pop(rk, None)
-
-        subject = esc.get("subject") or "Re: Unboks"
+        thread_key = str(esc.get("email_thread_key") or "")
+        subject = esc.get("email_reply_subject") or "Re: Unboks"
         if not subject.lower().startswith("re:"):
             subject = "Re: " + subject
-
-        try:
-            relay_result = marina_agent.process_message(
-                customer_id, subject, req.text,
-                email_fields, email_flags,
-            )
-        except Exception as exc:
-            bm_logger.log("dashboard_guidance_marina_failed",
-                          email=customer_id, escalation_id=escalation_id,
-                          error=str(exc)[:200])
-            raise HTTPException(status_code=500,
-                detail=f"Marina relay failed: {str(exc)[:120]}")
-
-        relay_reply = relay_result.get("reply", "")
-        if not relay_reply:
-            raise HTTPException(status_code=500, detail="Marina returned empty reply")
-
-        try:
-            smtp_send(customer_id, subject, relay_reply)
-        except Exception as exc:
-            bm_logger.log("dashboard_guidance_send_failed",
-                          email=customer_id, escalation_id=escalation_id,
-                          error=str(exc)[:200])
-            raise HTTPException(status_code=500,
-                detail=f"Failed to send email reply: {str(exc)[:120]}")
-
-        # Append Marina's REFORMULATED reply to thread (NOT the operator's
-        # coaching). Dashboard view should show what the customer actually saw.
-        appended_thread_key = state_registry.email_append_assistant_message(
-            customer_id, relay_reply)
-        bm_logger.log("dashboard_guidance_sent_email",
-                      email=customer_id, escalation_id=escalation_id,
-                      thread_key=appended_thread_key or "(no thread match)")
-
-        state_registry.update_notification_status(escalation_id, "replied")
+        result, replayed = _deliver_operator_email(
+            conversation_id=customer_id,
+            scope=f"escalation:{escalation_id}:guidance:email",
+            original={"guidance": req.text, "content_revision": content_revision},
+            request_id=req.request_id,
+            prepare=lambda: _prepare_email_operator_payload(
+                customer_id, escalation_id, req, subject, guidance=True,
+                thread_key=thread_key,
+            ),
+        )
+        bm_logger.log(
+            "dashboard_guidance_email_confirmed",
+            email=customer_id,
+            escalation_id=escalation_id,
+            replayed=replayed,
+        )
 
         # Brief 215 + Brief 266: toggle-aware learning create.
-        _create_learning_from_operator_reply(
-            conversation_id=customer_id, channel="email",
-            answer=req.text, source="guidance_email",
-            escalation_id=escalation_id)
+        if not replayed:
+            _create_learning_from_operator_reply(
+                conversation_id=customer_id, channel="email",
+                answer=req.text, source="guidance_email",
+                escalation_id=escalation_id)
 
-        return {"ok": True, "reply": relay_reply, "channel": "email"}
+        return result
 
     else:
         raise HTTPException(status_code=501,

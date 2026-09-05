@@ -1,4 +1,4 @@
-"""Durable, action-scoped delivery for operator WhatsApp replies.
+"""Durable, action-scoped delivery for operator WhatsApp and email replies.
 
 The provider call cannot share a transaction with SQLite. Persist the exact
 payload before that call and reuse its provider idempotency key on every retry.
@@ -140,6 +140,57 @@ def _claimed_row(conn, claim: dict):
     return row
 
 
+def _freeze_notification_guard(
+    conn, claim: dict, payload: dict, *, channel: str,
+) -> dict:
+    """Bind a prepared reply to the exact operator work-item revision.
+
+    Escalation rows are intentionally reused when another inbound message
+    expands the same issue.  The provider call happens outside SQLite, so a
+    reply may be in flight while that row is updated.  Persisting the content
+    revision with the frozen payload lets finish close the question that was
+    actually answered without closing a newer revision.
+    """
+    notification_id = payload.get("notification_id")
+    if notification_id is None or isinstance(payload.get("notification_guard"), dict):
+        return payload
+    row = conn.execute(
+        "SELECT id, customer_id, channel, status, content_revision, relay_token "
+        "FROM pending_notifications WHERE id = ?",
+        (notification_id,),
+    ).fetchone()
+    if (
+        row is None
+        or row["customer_id"] != claim["conversation_id"]
+        or row["channel"] != channel
+        or row["status"] not in {"pending", "sent"}
+    ):
+        raise OperatorDeliveryConflict("Operator work item changed before reply preparation")
+    expected_revision = payload.get("expected_content_revision")
+    if expected_revision is not None and row["content_revision"] != expected_revision:
+        raise OperatorDeliveryConflict(
+            "Operator work item changed while the reply was being prepared"
+        )
+    guarded = dict(payload)
+    guarded["notification_guard"] = {
+        "id": row["id"],
+        "customer_id": row["customer_id"],
+        "channel": row["channel"],
+        "content_revision": row["content_revision"],
+    }
+    if channel == "whatsapp" and guarded.get("clear_relay"):
+        state = conn.execute(
+            "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+            (claim["conversation_id"],),
+        ).fetchone()
+        flags = json.loads(state["flags_json"] or "{}") if state else {}
+        guarded["relay_guard"] = {
+            "token_present": "relay_token" in flags,
+            "token": flags.get("relay_token"),
+        }
+    return guarded
+
+
 def _prepare(claim: dict, prepare: Callable[[], dict]) -> dict:
     if claim["payload_json"]:
         payload = json.loads(claim["payload_json"])
@@ -154,11 +205,12 @@ def _prepare(claim: dict, prepare: Callable[[], dict]) -> dict:
         or not isinstance(payload.get("response"), dict)
     ):
         raise ValueError("Invalid prepared WhatsApp reply")
-    payload_json = _json(payload)
     conn = _connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
         _claimed_row(conn, claim)
+        payload = _freeze_notification_guard(conn, claim, payload, channel="whatsapp")
+        payload_json = _json(payload)
         conn.execute(
             "UPDATE operator_delivery_outbox SET payload_json = ?, status = 'prepared', "
             "lease_until = ?, updated_at = ? WHERE tenant_id = ? AND action_key = ?",
@@ -171,6 +223,61 @@ def _prepare(claim: dict, prepare: Callable[[], dict]) -> dict:
         conn.close()
 
 
+def _prepare_email(claim: dict, prepare: Callable[[], dict]) -> tuple[dict, str]:
+    """Persist one exact email body and retain every post-SMTP retry stage."""
+    prepared = json.loads(claim["payload_json"]) if claim["payload_json"] else prepare()
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _claimed_row(conn, claim)
+        status = str(row["status"] or "prepared")
+        if row["payload_json"]:
+            payload = json.loads(row["payload_json"])
+        else:
+            payload = prepared
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("to"), str)
+            or "@" not in payload["to"]
+            or not isinstance(payload.get("subject"), str)
+            or not isinstance(payload.get("text"), str)
+            or not payload["text"].strip()
+            or len(payload["text"]) > 100_000
+            or payload.get("role") not in {"operator", "marina"}
+            or not isinstance(payload.get("response"), dict)
+            or not isinstance(payload.get("thread_key", ""), str)
+        ):
+            raise ValueError("Invalid prepared email reply")
+        payload = dict(payload)
+        payload.setdefault(
+            "message_id",
+            f"<unboks-operator-{claim['action_key']}@delivery.unboks.local>",
+        )
+        message_id = str(payload["message_id"])
+        if "\r" in message_id or "\n" in message_id or not (
+            message_id.startswith("<") and message_id.endswith(">")
+        ):
+            raise ValueError("Invalid prepared email Message-ID")
+        payload = _freeze_notification_guard(conn, claim, payload, channel="email")
+        payload_json = _json(payload)
+        conn.execute(
+            "UPDATE operator_delivery_outbox SET payload_json = ?, status = ?, "
+            "lease_until = ?, updated_at = ? WHERE tenant_id = ? AND action_key = ?",
+            (
+                payload_json,
+                status if status in {"provider_confirmed", "effects_committed"} else "prepared",
+                time.time() + LEASE_SECONDS,
+                datetime.now(timezone.utc).isoformat(),
+                claim["tenant_id"],
+                claim["action_key"],
+            ),
+        )
+        conn.commit()
+        return json.loads(payload_json), status
+    finally:
+        conn.close()
+
+
 def _assert_current_claim(claim: dict) -> bool:
     conn = _connect()
     try:
@@ -178,6 +285,62 @@ def _assert_current_claim(claim: dict) -> bool:
         return True
     finally:
         conn.close()
+
+
+def _mark_email_provider_confirmed(claim: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _claimed_row(conn, claim)
+        conn.execute(
+            "UPDATE operator_delivery_outbox SET status = 'provider_confirmed', "
+            "lease_until = ?, updated_at = ? WHERE tenant_id = ? AND action_key = ?",
+            (
+                time.time() + LEASE_SECONDS,
+                datetime.now(timezone.utc).isoformat(),
+                claim["tenant_id"],
+                claim["action_key"],
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _complete_guarded_notification(conn, claim: dict, payload: dict, channel: str) -> int:
+    notification_id = payload.get("notification_id")
+    if notification_id is None:
+        return 0
+    guard = payload.get("notification_guard")
+    if not isinstance(guard, dict):
+        # Payloads prepared by this release always carry a guard.  Retain the
+        # old anchor fence only for an outbox row created by an older process.
+        if channel != "whatsapp" or _anchor(conn, claim["conversation_id"]) != claim["anchor"]:
+            return 0
+        return conn.execute(
+            "UPDATE pending_notifications SET status = 'replied' "
+            "WHERE id = ? AND customer_id = ? AND channel = ? "
+            "AND status IN ('pending', 'sent')",
+            (notification_id, claim["conversation_id"], channel),
+        ).rowcount
+    if (
+        guard.get("id") != notification_id
+        or guard.get("customer_id") != claim["conversation_id"]
+        or guard.get("channel") != channel
+        or not isinstance(guard.get("content_revision"), int)
+    ):
+        raise OperatorDeliveryConflict("Invalid operator work-item guard")
+    return conn.execute(
+        "UPDATE pending_notifications SET status = 'replied' "
+        "WHERE id = ? AND customer_id = ? AND channel = ? "
+        "AND content_revision = ? AND status IN ('pending', 'sent')",
+        (
+            notification_id,
+            claim["conversation_id"],
+            channel,
+            guard["content_revision"],
+        ),
+    ).rowcount
 
 
 def _finish(claim: dict, payload: dict) -> dict:
@@ -205,22 +368,33 @@ def _finish(claim: dict, payload: dict) -> dict:
                 "UPDATE photo_library SET used_count = used_count + 1 WHERE id = ?",
                 (payload["media_id"],),
             )
-        # An inbound message arriving during delivery must not have its newer
-        # relay state or work item cleared by an answer to an earlier question.
-        if _anchor(conn, claim["conversation_id"]) == claim["anchor"]:
-            if payload.get("notification_id") is not None:
-                conn.execute(
-                    "UPDATE pending_notifications SET status = 'replied' "
-                    "WHERE id = ? AND customer_id = ? AND channel = 'whatsapp'",
-                    (payload["notification_id"], claim["conversation_id"]),
-                )
-            if payload.get("clear_relay"):
-                state = conn.execute(
-                    "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
-                    (claim["conversation_id"],),
-                ).fetchone()
-                if state:
-                    flags = json.loads(state["flags_json"] or "{}")
+        # Finish the exact work-item revision that produced this reply.  A new
+        # customer message alone does not strand the old answered item; an
+        # updated/re-escalated row fails the revision CAS and remains active.
+        anchor_unchanged = _anchor(conn, claim["conversation_id"]) == claim["anchor"]
+        completed = _complete_guarded_notification(conn, claim, payload, "whatsapp")
+        if payload.get("notification_id") is not None and claim["tenant_id"] == "mermaid":
+            state_registry._sync_mermaid_escalation_freezes(
+                conn, claim["conversation_id"], "whatsapp", now
+            )
+        may_clear_relay = bool(completed) or (
+            payload.get("notification_id") is None and anchor_unchanged
+        )
+        if payload.get("clear_relay") and may_clear_relay:
+            state = conn.execute(
+                "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
+                (claim["conversation_id"],),
+            ).fetchone()
+            if state:
+                flags = json.loads(state["flags_json"] or "{}")
+                relay_guard = payload.get("relay_guard")
+                relay_unchanged = anchor_unchanged
+                if isinstance(relay_guard, dict):
+                    relay_unchanged = (
+                        bool(relay_guard.get("token_present")) == ("relay_token" in flags)
+                        and relay_guard.get("token") == flags.get("relay_token")
+                    )
+                if relay_unchanged:
                     for name in ("awaiting_relay", "relay_token", "relay_question"):
                         flags.pop(name, None)
                     conn.execute(
@@ -236,6 +410,96 @@ def _finish(claim: dict, payload: dict) -> dict:
         )
         conn.commit()
         return result
+    finally:
+        conn.close()
+
+
+def _finish_email(claim: dict, payload: dict) -> dict:
+    """Finish retryable local effects after SMTP has accepted the message.
+
+    The transcript is a JSON sidecar while review state is in SQLite, so one
+    transaction cannot cover both.  ``effects_committed`` is a durable stage:
+    a retry after either local write fails reuses the transcript key and skips
+    SMTP.
+    """
+    _assert_current_claim(claim)
+    source_key = "operator-email-action:" + claim["action_key"]
+    state_registry.email_append_assistant_message(
+        claim["conversation_id"],
+        payload["text"],
+        role=payload["role"],
+        source_message_key=source_key,
+        strict=True,
+        thread_key=payload.get("thread_key", ""),
+    )
+
+    should_clear_email_review = False
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _claimed_row(conn, claim)
+        if row["status"] not in {"provider_confirmed", "effects_committed"}:
+            raise OperatorDeliveryUnconfirmed("Email delivery is not provider-confirmed")
+        now = datetime.now(timezone.utc).isoformat()
+        result = payload["response"]
+        if row["status"] == "provider_confirmed":
+            if payload.get("notification_id") is not None:
+                _complete_guarded_notification(conn, claim, payload, "email")
+                if claim["tenant_id"] == "mermaid":
+                    has_active_review, _ = state_registry._sync_mermaid_escalation_freezes(
+                        conn, claim["conversation_id"], "email", now
+                    )
+                    should_clear_email_review = not has_active_review
+            conn.execute(
+                "UPDATE operator_delivery_outbox SET status = 'effects_committed', "
+                "result_json = ?, lease_until = ?, last_error = '', updated_at = ? "
+                "WHERE tenant_id = ? AND action_key = ?",
+                (
+                    _json(result),
+                    time.time() + LEASE_SECONDS,
+                    now,
+                    claim["tenant_id"],
+                    claim["action_key"],
+                ),
+            )
+        elif payload.get("notification_id") is not None and claim["tenant_id"] == "mermaid":
+            has_active_review, _ = state_registry._sync_mermaid_escalation_freezes(
+                conn, claim["conversation_id"], "email", now
+            )
+            should_clear_email_review = not has_active_review
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if should_clear_email_review:
+        state_registry.email_clear_fully_escalated_flag(
+            claim["conversation_id"],
+            strict=True,
+            require_no_active_review=True,
+        )
+
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _claimed_row(conn, claim)
+        if row["status"] != "effects_committed":
+            raise OperatorDeliveryUnconfirmed("Email delivery effects are not committed")
+        now = datetime.now(timezone.utc).isoformat()
+        result = payload["response"]
+        conn.execute(
+            "UPDATE operator_delivery_outbox SET status = 'confirmed', result_json = ?, "
+            "claim_token = '', lease_until = 0, last_error = '', updated_at = ? "
+            "WHERE tenant_id = ? AND action_key = ?",
+            (_json(result), now, claim["tenant_id"], claim["action_key"]),
+        )
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -288,6 +552,34 @@ def deliver(
             _assert_current_claim(claim)
             raise OperatorDeliveryUnconfirmed("WhatsApp no confirmó el envío.")
         return _finish(claim, payload), False
+    except Exception as exc:
+        _release(claim, exc)
+        raise
+
+
+def deliver_email(
+    *, conversation_id: str, scope: str, original: dict,
+    prepare: Callable[[], dict], sender: Callable, request_id: str = "",
+) -> tuple[dict, bool]:
+    """Send one durable email action and finish local effects exactly once."""
+    request_id = str(request_id or "")
+    if len(request_id) > 128 or any(ord(char) < 32 for char in request_id):
+        raise OperatorDeliveryConflict("Invalid request_id")
+    claim = _claim(conversation_id, scope, original, request_id)
+    if claim["replayed"]:
+        _check_tenant(claim["tenant_id"])
+        return json.loads(claim["result_json"]), True
+    try:
+        _assert_current_claim(claim)
+        payload, status = _prepare_email(claim, prepare)
+        if status not in {"provider_confirmed", "effects_committed"}:
+            _assert_current_claim(claim)
+            sender(
+                payload["to"], payload["subject"], payload["text"],
+                message_id=payload["message_id"],
+            )
+            _mark_email_provider_confirmed(claim)
+        return _finish_email(claim, payload), False
     except Exception as exc:
         _release(claim, exc)
         raise

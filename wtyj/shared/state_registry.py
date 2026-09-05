@@ -2,10 +2,14 @@
 # Last modified: Brief 098
 # Purpose: SQLite WAL deduplication, capacity, manifests, bookings
 import hashlib
+import copy
+import fcntl
 import json
 import os
 import re
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -28,9 +32,40 @@ INBOUND_RECOVERY_CLAIM_LEASE_SECONDS = 40.0
 VEHICLE_RECOMMENDATION_RECOVERY_LEASE_SECONDS = 300.0
 ZERNIO_FAILED_EVENT_LEASE_SECONDS = 1320.0
 
+_EMAIL_STATE_PROCESS_LOCK = threading.RLock()
+_MISSING = object()
+
 
 class HandoffAccountReassignedError(PermissionError):
     """A known foreign account cannot persist a tenant operator work item."""
+
+
+class EscalationRevisionConflictError(RuntimeError):
+    """An operator action targeted an older version of a reused work item."""
+
+    def __init__(self, expected: int, current: int):
+        self.expected = int(expected)
+        self.current = int(current)
+        super().__init__(
+            "This case changed while the action was being prepared. "
+            "Review the latest guest message before trying again"
+        )
+
+
+def _require_escalation_revision(
+    current: int | None, expected: int | None,
+) -> int:
+    """Validate an operator's work-item token while its write lock is held.
+
+    ``None`` remains an internal-call compatibility escape hatch. Dashboard
+    routes always pass a positive revision (legacy clients safely default to
+    revision 1), so an old UI cannot mutate a row after new guest content has
+    reused it.
+    """
+    normalized = int(current or 1)
+    if expected is not None and int(expected) != normalized:
+        raise EscalationRevisionConflictError(int(expected), normalized)
+    return normalized
 
 # Brief 217: optional callback set by dashboard.api at module-import time.
 # `dashboard.api` registers `_fire_escalation_alerts` here so that
@@ -505,7 +540,10 @@ def _get_conn():
         "subject TEXT NOT NULL, "
         "body TEXT NOT NULL, "
         "status TEXT DEFAULT 'pending', "
-        "created_at TEXT NOT NULL"
+        "created_at TEXT NOT NULL, "
+        "content_revision INTEGER NOT NULL DEFAULT 1, "
+        "email_thread_key TEXT NOT NULL DEFAULT '', "
+        "email_reply_subject TEXT NOT NULL DEFAULT ''"
         ")"
     )
     conn.execute(
@@ -606,6 +644,17 @@ def _get_conn():
         )
     except sqlite3.OperationalError:
         pass
+    for _email_column in (
+        "email_thread_key TEXT NOT NULL DEFAULT ''",
+        "email_reply_subject TEXT NOT NULL DEFAULT ''",
+        "content_revision INTEGER NOT NULL DEFAULT 1",
+    ):
+        try:
+            conn.execute(
+                "ALTER TABLE pending_notifications ADD COLUMN " + _email_column
+            )
+        except sqlite3.OperationalError:
+            pass
     # Brief 213: conversation_status.ai_muted (per-conversation human takeover flag)
     try:
         conn.execute("ALTER TABLE conversation_status ADD COLUMN ai_muted INTEGER NOT NULL DEFAULT 0")
@@ -3879,6 +3928,277 @@ def _get_email_state_path() -> str:
     return candidates[0]
 
 
+@contextmanager
+def email_state_file_lock(path: str):
+    """Serialize email sidecar updates across poller and dashboard processes."""
+    lock_path = str(path) + ".lock"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with _EMAIL_STATE_PROCESS_LOCK:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _legacy_email_archive_path(path: str) -> str:
+    return os.path.join(os.path.dirname(path), "archived_threads.jsonl")
+
+
+def _merge_legacy_email_thread(archived: dict, current: dict) -> dict:
+    """Restore archived history without hiding or rolling back a newer thread.
+
+    The legacy poller removed an archived subject thread from the main sidecar.
+    A later inbound email could therefore recreate the same key before this
+    migration runs.  The new live values win, while old transcript, fields and
+    completed-booking history remain available for export and retention.
+    """
+    merged = copy.deepcopy(archived)
+    for key, value in current.items():
+        if key == "messages" and isinstance(value, list):
+            merged[key] = _merge_email_messages(
+                [], value, archived.get("messages") or []
+            )
+        elif key == "completed_bookings" and isinstance(value, list):
+            historical = archived.get(key) or []
+            combined = copy.deepcopy(historical)
+            seen = {
+                json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+                for item in combined
+            }
+            for item in value:
+                identity = json.dumps(
+                    item, sort_keys=True, ensure_ascii=False, default=str
+                )
+                if identity not in seen:
+                    combined.append(copy.deepcopy(item))
+                    seen.add(identity)
+            merged[key] = combined
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**copy.deepcopy(merged[key]), **copy.deepcopy(value)}
+        else:
+            merged[key] = copy.deepcopy(value)
+
+    # A recreated live thread is authoritative about archive visibility.  The
+    # migration's synthetic deleted marker must not immediately hide it again.
+    current_flags = current.get("flags") or {}
+    if not current_flags.get("deleted"):
+        merged.setdefault("flags", {}).pop("deleted", None)
+    return merged
+
+
+def _read_email_state_unlocked(path: str, default=None, *, strict: bool = False):
+    fallback = default if default is not None else {"threads": {}, "message_id_index": {}}
+    legacy_path = _legacy_email_archive_path(path)
+    try:
+        with open(path, "r", encoding="utf-8") as state_file:
+            state = json.load(state_file)
+    except FileNotFoundError:
+        # A pre-governance poller could leave the raw archive as the only email
+        # store after moving every active thread out of the main sidecar.  That
+        # archive must still participate in export and privacy deletion.
+        if not os.path.exists(legacy_path):
+            if strict:
+                raise
+            return copy.deepcopy(fallback)
+        state = copy.deepcopy(fallback)
+    except (OSError, ValueError, TypeError):
+        if strict:
+            raise
+        return copy.deepcopy(fallback)
+    if not isinstance(state, dict):
+        if strict:
+            raise ValueError("Email conversation state must be an object")
+        state = copy.deepcopy(fallback)
+    if not os.path.exists(legacy_path):
+        return state
+
+    # Older pollers moved full email conversations into an untracked JSONL
+    # shadow archive. Move those rows back into the governed sidecar as normal
+    # archived threads, then remove the raw shadow only after the atomic write.
+    try:
+        with open(legacy_path, "r", encoding="utf-8") as archive_file:
+            records = [
+                json.loads(line)
+                for line in archive_file
+                if line.strip()
+            ]
+    except (OSError, ValueError, TypeError):
+        if strict:
+            raise
+        return state
+    threads = state.setdefault("threads", {})
+    changed = False
+    for record in records:
+        if not isinstance(record, dict):
+            if strict:
+                raise ValueError("Legacy email archive contains an invalid record")
+            return state
+        thread_key = str(record.get("thread_key") or "")
+        archived = record.get("data")
+        if not thread_key or not isinstance(archived, dict):
+            if strict:
+                raise ValueError("Legacy email archive contains an invalid record")
+            return state
+        archived = copy.deepcopy(archived)
+        archived.setdefault("flags", {})["deleted"] = True
+        current = threads.get(thread_key)
+        if isinstance(current, dict):
+            threads[thread_key] = _merge_legacy_email_thread(archived, current)
+        else:
+            threads[thread_key] = archived
+        changed = True
+    if changed or not records:
+        try:
+            _write_email_state_unlocked(path, state)
+            os.remove(legacy_path)
+        except OSError:
+            if strict:
+                raise
+    return state
+
+
+def _write_email_state_unlocked(path: str, state: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as state_file:
+            json.dump(state, state_file, ensure_ascii=False, indent=2)
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def email_state_read(path: str, default=None):
+    """Return a consistent snapshot of the shared email sidecar."""
+    with email_state_file_lock(path):
+        return _read_email_state_unlocked(path, default)
+
+
+def _message_identity(message) -> str:
+    if not isinstance(message, dict):
+        return "value:" + json.dumps(message, sort_keys=True, default=str)
+    for key in ("source_message_key", "message_id", "internet_message_id"):
+        value = str(message.get(key) or "").strip()
+        if value:
+            return key + ":" + value
+    stable = {
+        key: message.get(key)
+        for key in ("role", "ts", "timestamp", "created_at", "body", "text")
+        if key in message
+    }
+    return "content:" + hashlib.sha256(
+        json.dumps(stable, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _merge_email_messages(base: list, local: list, remote: list) -> list:
+    """Merge concurrent append-only transcript changes without resurrecting removals."""
+    base_ids = {_message_identity(item) for item in base}
+    remote_by_id = {_message_identity(item): copy.deepcopy(item) for item in remote}
+    merged = [copy.deepcopy(item) for item in remote]
+    present = set(remote_by_id)
+    for item in local:
+        identity = _message_identity(item)
+        if identity in present or identity in base_ids:
+            continue
+        merged.append(copy.deepcopy(item))
+        present.add(identity)
+    return merged
+
+
+def _three_way_email_merge(base, local, remote, path=()):
+    if local == base:
+        return copy.deepcopy(remote)
+    if remote == base or local == remote:
+        return copy.deepcopy(local)
+    if isinstance(base, dict) and isinstance(local, dict) and isinstance(remote, dict):
+        merged = {}
+        for key in set(base) | set(local) | set(remote):
+            base_value = base.get(key, _MISSING)
+            local_value = local.get(key, _MISSING)
+            remote_value = remote.get(key, _MISSING)
+            if local_value is _MISSING:
+                if base_value is _MISSING:
+                    merged[key] = copy.deepcopy(remote_value)
+                elif remote_value is not _MISSING and remote_value != base_value:
+                    merged[key] = copy.deepcopy(remote_value)
+                continue
+            if remote_value is _MISSING:
+                if base_value is _MISSING:
+                    merged[key] = copy.deepcopy(local_value)
+                # A concurrent disk-side deletion wins over stale local state.
+                continue
+            if base_value is _MISSING:
+                if isinstance(local_value, dict) and isinstance(remote_value, dict):
+                    merged[key] = _three_way_email_merge({}, local_value, remote_value, path + (key,))
+                elif local_value == remote_value:
+                    merged[key] = copy.deepcopy(local_value)
+                else:
+                    merged[key] = copy.deepcopy(local_value)
+                continue
+            merged[key] = _three_way_email_merge(
+                base_value, local_value, remote_value, path + (key,)
+            )
+        return merged
+    if (
+        isinstance(base, list)
+        and isinstance(local, list)
+        and isinstance(remote, list)
+        and path
+        and path[-1] == "messages"
+    ):
+        return _merge_email_messages(base, local, remote)
+    # Both sides changed the same scalar/list. The poller is committing its
+    # deliberate mutation now; unchanged local values were handled above.
+    return copy.deepcopy(local)
+
+
+def email_state_merge_save(path: str, base: dict, local: dict) -> dict:
+    """Three-way merge a poller snapshot with newer dashboard-side writes."""
+    with email_state_file_lock(path):
+        remote = _read_email_state_unlocked(path, {})
+        merged = _three_way_email_merge(base or {}, local or {}, remote or {})
+        _write_email_state_unlocked(path, merged)
+        return merged
+
+
+def _email_thread_address(thread_key: str) -> str:
+    parts = str(thread_key or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != "subj" or "@" not in parts[1]:
+        return ""
+    return parts[1].strip().casefold()
+
+
+def _find_email_thread_key_in_state(state: dict, customer_email: str) -> str | None:
+    needle = str(customer_email or "").strip().casefold()
+    if not needle:
+        return None
+    matches = [
+        (str((thread or {}).get("last_activity") or ""), thread_key)
+        for thread_key, thread in (state.get("threads") or {}).items()
+        if _email_thread_address(thread_key) == needle
+    ]
+    return max(matches, default=("", None))[1]
+
+
+def email_thread_customer(thread_key: str) -> str:
+    """Return the exact stored thread address, or empty when the key is forged."""
+    path = _get_email_state_path()
+    with email_state_file_lock(path):
+        state = _read_email_state_unlocked(path, {})
+        if thread_key not in (state.get("threads") or {}):
+            return ""
+        return _email_thread_address(thread_key)
+
+
 def email_list_conversations() -> list:
     """Brief 171: return email threads in the same shape as wa_list_conversations
     (phone, customer_name, last_message, last_message_role, last_message_at,
@@ -3934,7 +4254,15 @@ def email_list_conversations() -> list:
                 continue
             if get_blocked(_tk_parts[1]):
                 continue
-        status = "escalated" if flags.get("fully_escalated") or flags.get("awaiting_relay") else "active"
+        email_address = _email_thread_address(thread_key)
+        has_active_review = bool(
+            email_address and get_active_escalation_mode(email_address) is not None
+        )
+        status = "escalated" if (
+            flags.get("fully_escalated")
+            or flags.get("awaiting_relay")
+            or has_active_review
+        ) else "active"
         result.append({
             "phone": f"email::{thread_key}",
             "customer_name": customer_name or "(email customer)",
@@ -3958,32 +4286,26 @@ def email_set_archived(thread_key: str, archived: bool) -> bool:
     NOT hard-removed from storage). Returns True if the thread was found
     and updated; False if no matching thread_key in state."""
     path = _get_email_state_path()
-    if not os.path.exists(path):
-        return False
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return False
-    threads = state.get("threads") or {}
-    th = threads.get(thread_key)
-    if not th:
-        return False
-    flags = th.setdefault("flags", {})
-    if archived:
-        flags["deleted"] = True
-    else:
-        # Unarchive -- remove the key entirely so a future re-read sees
-        # the thread as never-archived (clean shape).
-        flags.pop("deleted", None)
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except OSError:
-        return False
-    return True
+    with email_state_file_lock(path):
+        if not os.path.exists(path):
+            return False
+        state = _read_email_state_unlocked(path, {})
+        threads = state.get("threads") or {}
+        th = threads.get(thread_key)
+        if not th:
+            return False
+        flags = th.setdefault("flags", {})
+        if archived:
+            flags["deleted"] = True
+        else:
+            # Unarchive -- remove the key entirely so a future re-read sees
+            # the thread as never-archived (clean shape).
+            flags.pop("deleted", None)
+        try:
+            _write_email_state_unlocked(path, state)
+        except OSError:
+            return False
+        return True
 
 
 def wa_set_archived(conversation_id: str, archived: bool) -> bool:
@@ -4124,13 +4446,7 @@ def email_get_conversation(thread_key: str) -> dict:
     """Brief 171: return full message history + fields for an email thread.
     Messages are normalized to the WhatsApp shape: {role, text, created_at}."""
     path = _get_email_state_path()
-    if not os.path.exists(path):
-        return {"phone": f"email::{thread_key}", "messages": [], "booking_state": {}}
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return {"phone": f"email::{thread_key}", "messages": [], "booking_state": {}}
+    state = email_state_read(path, {})
     th = state.get("threads", {}).get(thread_key, {})
     raw_messages = th.get("messages", []) or []
     out_messages = []
@@ -4166,21 +4482,10 @@ def _find_email_thread_key_for(customer_email: str):
     key for email rows, and by email_append_assistant_message to find the
     thread for an outbound reply. Returns the thread_key string or None
     if no thread exists yet for this customer."""
-    if not customer_email:
-        return None
     path = _get_email_state_path()
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return None
-    needle = customer_email.lower()
-    for thread_key in (state.get("threads") or {}).keys():
-        if needle in thread_key.lower():
-            return thread_key
-    return None
+    with email_state_file_lock(path):
+        state = _read_email_state_unlocked(path, {})
+        return _find_email_thread_key_in_state(state, customer_email)
 
 
 def email_mark_deleted(thread_key: str) -> bool:
@@ -4189,28 +4494,22 @@ def email_mark_deleted(thread_key: str) -> bool:
     IMAP MOVE to trash is deferred — local-state only for v1.
     Returns True on success, False if no such thread."""
     path = _get_email_state_path()
-    if not os.path.exists(path):
-        return False
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return False
-    threads = state.get("threads", {})
-    if thread_key not in threads:
-        return False
-    th = threads[thread_key]
-    th.setdefault("flags", {})["deleted"] = True
-    th["last_activity"] = datetime.now(timezone.utc).isoformat()
-    state["threads"][thread_key] = th
-    try:
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    except OSError:
-        return False
-    return True
+    with email_state_file_lock(path):
+        if not os.path.exists(path):
+            return False
+        state = _read_email_state_unlocked(path, {})
+        threads = state.get("threads", {})
+        if thread_key not in threads:
+            return False
+        th = threads[thread_key]
+        th.setdefault("flags", {})["deleted"] = True
+        th["last_activity"] = datetime.now(timezone.utc).isoformat()
+        state["threads"][thread_key] = th
+        try:
+            _write_email_state_unlocked(path, state)
+        except OSError:
+            return False
+        return True
 
 
 def email_get_latest_customer_message(thread_key: str) -> dict:
@@ -4234,8 +4533,14 @@ def email_get_latest_customer_message(thread_key: str) -> dict:
     return {}
 
 
-def email_append_assistant_message(customer_email: str, body: str,
-                                    role: str = "marina"):
+def email_append_assistant_message(
+    customer_email: str,
+    body: str,
+    role: str = "marina",
+    source_message_key: str = "",
+    strict: bool = False,
+    thread_key: str = "",
+):
     """Brief 210: append an outbound reply to the email thread state.
     Brief 233: `role` distinguishes Marina-generated replies (`"marina"`,
     the default) from verbatim operator replies (`"operator"`). The
@@ -4243,37 +4548,264 @@ def email_append_assistant_message(customer_email: str, body: str,
     reformulates the operator's coaching there. /escalations/{id}/reply
     (hard escalation) and /messages/conversations/{id}/email/reply pass
     `role="operator"` because the operator's text is sent verbatim.
-    Returns the matched thread_key string, or None if no thread exists
-    for this email yet."""
-    matched_key = _find_email_thread_key_for(customer_email)
-    if not matched_key:
-        return None
-
+    ``thread_key`` pins a reply to the exact subject thread. Returns that key,
+    or None if no matching thread exists."""
     path = _get_email_state_path()
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return None
+    with email_state_file_lock(path):
+        if not os.path.exists(path):
+            if strict:
+                raise LookupError("Email conversation state was not found")
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as state_file:
+                state = json.load(state_file)
+            if not isinstance(state, dict):
+                raise ValueError("Email conversation state must be an object")
+        except (OSError, ValueError, TypeError) as exc:
+            if strict:
+                raise RuntimeError("Email conversation state could not be read") from exc
+            return None
+        threads = state.get("threads") or {}
+        matched_key = str(thread_key or "")
+        if matched_key:
+            if (
+                matched_key not in threads
+                or _email_thread_address(matched_key)
+                != str(customer_email or "").strip().casefold()
+            ):
+                matched_key = ""
+        else:
+            matched_key = _find_email_thread_key_in_state(state, customer_email) or ""
+        if not matched_key:
+            if strict:
+                raise LookupError("Email conversation state was not found")
+            return None
 
-    th = state["threads"][matched_key]
-    th.setdefault("messages", []).append({
-        "role": role,
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "body": body,
-    })
-    th["last_activity"] = datetime.now(timezone.utc).isoformat()
-    state["threads"][matched_key] = th
+        th = threads[matched_key]
+        source_message_key = str(source_message_key or "")
+        if source_message_key and any(
+            message.get("source_message_key") == source_message_key
+            for message in th.get("messages", [])
+        ):
+            return matched_key
+        now = datetime.now(timezone.utc).isoformat()
+        th.setdefault("messages", []).append({
+            "role": role,
+            "ts": now,
+            "body": body,
+            **({"source_message_key": source_message_key} if source_message_key else {}),
+        })
+        th["last_activity"] = now
+        threads[matched_key] = th
+        state["threads"] = threads
+        try:
+            _write_email_state_unlocked(path, state)
+        except OSError as exc:
+            if strict:
+                raise RuntimeError("Email conversation state could not be written") from exc
+            return None
+        return matched_key
 
-    try:
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    except OSError:
-        return None
 
-    return matched_key
+def _has_table(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Check an optional feature table without importing its owning module."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
+    ).fetchone() is not None
+
+
+def _delete_mermaid_crew_assistance(
+    conn: sqlite3.Connection, conversation_ids
+) -> int:
+    """Delete private assistance notes and their audit rows for conversations."""
+    values = [str(value) for value in conversation_ids if str(value or "").strip()]
+    if not values or not _has_table(conn, "mermaid_crew_assistance"):
+        return 0
+    placeholders = ",".join("?" for _ in values)
+    total = 0
+    if _has_table(conn, "mermaid_crew_assistance_sources"):
+        cur = conn.execute(
+            f"DELETE FROM mermaid_crew_assistance_sources WHERE conversation_id IN ({placeholders})",
+            values,
+        )
+        total += cur.rowcount
+    if _has_table(conn, "mermaid_crew_assistance_reservations"):
+        cur = conn.execute(
+            "DELETE FROM mermaid_crew_assistance_reservations WHERE assistance_id IN "
+            f"(SELECT id FROM mermaid_crew_assistance WHERE conversation_id IN ({placeholders}))",
+            values,
+        )
+        total += cur.rowcount
+    if _has_table(conn, "mermaid_crew_assistance_events"):
+        cur = conn.execute(
+            "DELETE FROM mermaid_crew_assistance_events WHERE assistance_id IN "
+            f"(SELECT id FROM mermaid_crew_assistance WHERE conversation_id IN ({placeholders}))",
+            values,
+        )
+        total += cur.rowcount
+    cur = conn.execute(
+        f"DELETE FROM mermaid_crew_assistance WHERE conversation_id IN ({placeholders})",
+        values,
+    )
+    total += cur.rowcount
+    return total
+
+
+def _anonymize_mermaid_crew_assistance(
+    conn: sqlite3.Connection, conversation_ids, now_iso: str
+) -> int:
+    """Redact private assistance notes while retaining non-identifying row IDs."""
+    values = [str(value) for value in conversation_ids if str(value or "").strip()]
+    if not values or not _has_table(conn, "mermaid_crew_assistance"):
+        return 0
+    placeholders = ",".join("?" for _ in values)
+    total = 0
+    if _has_table(conn, "mermaid_crew_assistance_sources"):
+        cur = conn.execute(
+            f"DELETE FROM mermaid_crew_assistance_sources WHERE conversation_id IN ({placeholders})",
+            values,
+        )
+        total += cur.rowcount
+    rows = conn.execute(
+        f"SELECT id FROM mermaid_crew_assistance WHERE conversation_id IN ({placeholders})",
+        values,
+    ).fetchall()
+    assistance_ids = [int(row[0]) for row in rows]
+    if not assistance_ids:
+        return total
+    id_placeholders = ",".join("?" for _ in assistance_ids)
+    if _has_table(conn, "mermaid_crew_assistance_reservations"):
+        cur = conn.execute(
+            "DELETE FROM mermaid_crew_assistance_reservations "
+            f"WHERE assistance_id IN ({id_placeholders})",
+            assistance_ids,
+        )
+        total += cur.rowcount
+    if _has_table(conn, "mermaid_crew_assistance_events"):
+        cur = conn.execute(
+            "UPDATE mermaid_crew_assistance_events SET actor='',source_message_id='',"
+            "idempotency_key='[redacted]:' || lower(hex(randomblob(16))),"
+            f"payload_json='{{}}' WHERE assistance_id IN ({id_placeholders})",
+            assistance_ids,
+        )
+        total += cur.rowcount
+    cur = conn.execute(
+        "UPDATE mermaid_crew_assistance SET "
+        "conversation_id='[redacted]:' || id,customer_name='[redacted]',"
+        "note_text='[redacted]',relationship='',trip_date=NULL,"
+        "reservation_public_id=NULL,status='withdrawn',revision=revision+1,"
+        "source_message_id='',material_hash='',acknowledged_at=NULL,"
+        "acknowledged_by=NULL,updated_at=? "
+        f"WHERE id IN ({id_placeholders})",
+        [now_iso] + assistance_ids,
+    )
+    total += cur.rowcount
+    return total
+
+
+def _delete_abandoned_mermaid_crew_assistance(
+    conn: sqlite3.Connection, conversation_id: str
+) -> int:
+    """Delete private notes unless a retained Mermaid reservation owns them."""
+    if not _has_table(conn, "mermaid_crew_assistance"):
+        return 0
+    has_reservations = _has_table(conn, "mermaid_reservations")
+    has_links = _has_table(conn, "mermaid_crew_assistance_reservations")
+    ownership = "0"
+    args: list = [conversation_id]
+    if has_reservations:
+        ownership = (
+            "EXISTS (SELECT 1 FROM mermaid_reservations saved "
+            "WHERE saved.tenant_slug='mermaid' "
+            "AND saved.conversation_id=a.conversation_id "
+            "AND saved.public_id=a.reservation_public_id)"
+        )
+        if has_links:
+            ownership += (
+                " OR EXISTS (SELECT 1 FROM mermaid_crew_assistance_reservations link "
+                "JOIN mermaid_reservations saved "
+                "ON saved.public_id=link.reservation_public_id "
+                "AND saved.tenant_slug='mermaid' "
+                "AND saved.conversation_id=a.conversation_id "
+                "WHERE link.tenant_slug='mermaid' AND link.assistance_id=a.id)"
+            )
+    rows = conn.execute(
+        "SELECT a.id FROM mermaid_crew_assistance a "
+        "WHERE a.tenant_slug='mermaid' AND a.conversation_id=? "
+        f"AND NOT ({ownership})",
+        args,
+    ).fetchall()
+    assistance_ids = [int(row[0]) for row in rows]
+    retained_rows = conn.execute(
+        "SELECT a.id FROM mermaid_crew_assistance a "
+        "WHERE a.tenant_slug='mermaid' AND a.conversation_id=? "
+        f"AND ({ownership})",
+        args,
+    ).fetchall()
+    retained_ids = [int(row[0]) for row in retained_rows]
+    if retained_ids:
+        columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(mermaid_crew_assistance)"
+            ).fetchall()
+        }
+        if "session_started_at" not in columns:
+            conn.execute(
+                "ALTER TABLE mermaid_crew_assistance "
+                "ADD COLUMN session_started_at TEXT NOT NULL DEFAULT ''"
+            )
+        retained_placeholders = ",".join("?" for _ in retained_ids)
+        trash_session = (
+            "trashed:" + datetime.now(timezone.utc).isoformat()
+        )[:64]
+        conn.execute(
+            "UPDATE mermaid_crew_assistance SET session_started_at=? "
+            f"WHERE id IN ({retained_placeholders})",
+            [trash_session] + retained_ids,
+        )
+    total = 0
+    if _has_table(conn, "mermaid_crew_assistance_sources"):
+        if assistance_ids:
+            placeholders = ",".join("?" for _ in assistance_ids)
+            cur = conn.execute(
+                "DELETE FROM mermaid_crew_assistance_sources "
+                "WHERE tenant_slug='mermaid' AND conversation_id=? "
+                f"AND (assistance_id IS NULL OR assistance_id IN ({placeholders}))",
+                [conversation_id] + assistance_ids,
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM mermaid_crew_assistance_sources "
+                "WHERE tenant_slug='mermaid' AND conversation_id=? "
+                "AND assistance_id IS NULL",
+                (conversation_id,),
+            )
+        total += cur.rowcount
+    if not assistance_ids:
+        return total
+    placeholders = ",".join("?" for _ in assistance_ids)
+    if has_links:
+        cur = conn.execute(
+            "DELETE FROM mermaid_crew_assistance_reservations "
+            f"WHERE assistance_id IN ({placeholders})",
+            assistance_ids,
+        )
+        total += cur.rowcount
+    if _has_table(conn, "mermaid_crew_assistance_events"):
+        cur = conn.execute(
+            "DELETE FROM mermaid_crew_assistance_events "
+            f"WHERE assistance_id IN ({placeholders})",
+            assistance_ids,
+        )
+        total += cur.rowcount
+    cur = conn.execute(
+        "DELETE FROM mermaid_crew_assistance "
+        f"WHERE id IN ({placeholders})",
+        assistance_ids,
+    )
+    total += cur.rowcount
+    return total
 
 
 def wa_delete_conversation(phone: str) -> int:
@@ -4285,6 +4817,8 @@ def wa_delete_conversation(phone: str) -> int:
     """
     conn = _get_conn()
     total = 0
+    if _current_tenant_id() == "mermaid":
+        total += _delete_abandoned_mermaid_crew_assistance(conn, phone)
     for sql in (
         "DELETE FROM whatsapp_threads WHERE phone = ?",
         "DELETE FROM whatsapp_booking_state WHERE phone = ?",
@@ -4707,7 +5241,9 @@ def create_pending_notification(notification_type: str, channel: str,
                                  relay_token: str = None,
                                  mode: str = None,
                                  preserve_hard_mode: bool = False,
-                                 suppress_model_summary: bool = False) -> int:
+                                 suppress_model_summary: bool = False,
+                                 email_thread_key: str = "",
+                                 email_reply_subject: str = "") -> int:
     """Insert (or, for an unresolved escalation, UPDATE) a pending
     notification. Brief 227: dedup unresolved escalations + structured
     summary persisted on the same row. Brief 239: optional `mode` param
@@ -4722,14 +5258,17 @@ def create_pending_notification(notification_type: str, channel: str,
         mode = "soft"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
-
-    if preserve_hard_mode or suppress_model_summary:
-        conn.execute("BEGIN IMMEDIATE")
+    # The row id, visible content and revision form one operator work item.
+    # Always serialize the lookup/update so overlapping inbound messages cannot
+    # both derive the same target revision.
+    conn.execute("BEGIN IMMEDIATE")
 
     # Brief 239: gate-safe initialization so non-escalation paths can
     # still compute is_update without NameError.
     existing = None
     row_id = None
+    prev_summary = None
+    target_content_revision = 1
 
     # Brief 227: dedup unresolved escalations. If a 'pending' row already
     # exists for this customer_id (escalation only), UPDATE it instead of
@@ -4740,32 +5279,61 @@ def create_pending_notification(notification_type: str, channel: str,
     # multiple separate orders in the same conversation, and each confirmed
     # order must appear as its own operator work item.
     if notification_type == "escalation" and mode != "order":
-        existing = conn.execute(
-            "SELECT id FROM pending_notifications "
-            "WHERE customer_id = ? AND notification_type = 'escalation' "
-            "AND status IN ('pending', 'sent') "
-            "ORDER BY created_at DESC LIMIT 1",
-            (customer_id,)).fetchone()
+        if channel == "email" and email_thread_key:
+            existing = conn.execute(
+                "SELECT id, escalation_summary, content_revision "
+                "FROM pending_notifications "
+                "WHERE customer_id = ? AND channel = 'email' "
+                "AND email_thread_key = ? "
+                "AND notification_type = 'escalation' "
+                "AND status IN ('pending', 'sent') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (customer_id, email_thread_key),
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                "SELECT id, escalation_summary, content_revision "
+                "FROM pending_notifications "
+                "WHERE customer_id = ? AND notification_type = 'escalation' "
+                "AND status IN ('pending', 'sent') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (customer_id,),
+            ).fetchone()
         if existing:
             row_id = existing[0]
+            target_content_revision = int(existing[2] or 1) + 1
+            if existing[1]:
+                try:
+                    prev_summary = json.loads(existing[1])
+                except (json.JSONDecodeError, TypeError):
+                    prev_summary = None
 
     if row_id is None:
         cur = conn.execute(
             "INSERT INTO pending_notifications "
             "(notification_type, relay_token, channel, customer_id, customer_name, "
-            "subject, body, status, created_at, mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            "subject, body, status, created_at, mode, email_thread_key, "
+            "email_reply_subject) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
             (notification_type, relay_token, channel, customer_id, customer_name,
-             subject, body, now, mode)
+             subject, body, now, mode, email_thread_key, email_reply_subject)
         )
         row_id = cur.lastrowid
     else:
         conn.execute(
             "UPDATE pending_notifications "
             "SET subject = ?, body = ?, customer_name = ?, created_at = ?, "
-            "mode = CASE WHEN ? AND mode = 'hard' THEN mode ELSE COALESCE(?, mode) END "
+            "content_revision = content_revision + 1, escalation_summary = NULL, "
+            "mode = CASE WHEN ? AND mode = 'hard' THEN mode ELSE COALESCE(?, mode) END, "
+            "email_thread_key = CASE WHEN ? != '' THEN ? ELSE email_thread_key END, "
+            "email_reply_subject = CASE WHEN ? != '' THEN ? ELSE email_reply_subject END "
             "WHERE id = ?",
-            (subject, body, customer_name, now, preserve_hard_mode, mode, row_id))
+            (
+                subject, body, customer_name, now, preserve_hard_mode, mode,
+                email_thread_key, email_thread_key,
+                email_reply_subject, email_reply_subject,
+                row_id,
+            ))
     conn.commit()
     conn.close()
 
@@ -4775,21 +5343,9 @@ def create_pending_notification(notification_type: str, channel: str,
     if notification_type in {"escalation", "relay"}:
         set_conversation_status(customer_id, "open", channel)
 
-    # Brief 239: read previous summary BEFORE the new one is generated, so
-    # the suppression check has both versions to compare.
+    # Brief 239: ``prev_summary`` was captured under the same write lock as the
+    # revision increment, before the old derived summary was cleared.
     is_update = (existing is not None) and (notification_type == "escalation")
-    prev_summary = None
-    if is_update:
-        try:
-            conn = _get_conn()
-            _row = conn.execute(
-                "SELECT escalation_summary FROM pending_notifications "
-                "WHERE id = ?", (row_id,)).fetchone()
-            conn.close()
-            if _row and _row[0]:
-                prev_summary = json.loads(_row[0])
-        except Exception:
-            prev_summary = None
 
     # Brief 227 + 239: generate fresh structured summary BEFORE the alert
     # fires so the alert body can use it. Persisted regardless of whether
@@ -4801,21 +5357,57 @@ def create_pending_notification(notification_type: str, channel: str,
             summary_dict = _summary_dispatcher(
                 row_id, channel, customer_id, customer_name)
             if summary_dict:
-                conn = _get_conn()
-                conn.execute(
-                    "UPDATE pending_notifications SET escalation_summary = ? "
-                    "WHERE id = ?",
-                    (json.dumps(summary_dict), row_id))
-                conn.commit()
-                conn.close()
+                summary_conn = _get_conn()
+                try:
+                    saved = summary_conn.execute(
+                        "UPDATE pending_notifications SET escalation_summary = ? "
+                        "WHERE id = ? AND content_revision = ?",
+                        (
+                            json.dumps(summary_dict),
+                            row_id,
+                            target_content_revision,
+                        ),
+                    ).rowcount
+                    summary_conn.commit()
+                finally:
+                    summary_conn.close()
+                if saved != 1:
+                    # A newer inbound revision won the race. Its generator owns
+                    # the summary and alert; never overwrite it or alert from
+                    # this superseded invocation.
+                    summary_dict = None
         except Exception:
             summary_dict = None
+
+    # Even a no-summary or failed-summary path may have been superseded while
+    # the model call ran. Only the invocation that still owns this revision may
+    # emit its alert body.
+    revision_is_current = False
+    try:
+        revision_conn = _get_conn()
+        try:
+            current_row = revision_conn.execute(
+                "SELECT content_revision FROM pending_notifications WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            revision_is_current = bool(
+                current_row
+                and int(current_row[0] or 1) == target_content_revision
+            )
+        finally:
+            revision_conn.close()
+    except Exception:
+        # The work item is already durable. A follow-up alert is best effort,
+        # matching the existing dispatcher contract.
+        revision_is_current = False
 
     # Brief 217 + 239: alert dispatch — suppress duplicate updates with
     # an unchanged summary. Wrapped in try/except so a dispatcher failure
     # NEVER blocks the escalation row from being saved.
     if notification_type == "escalation" and _alert_dispatcher is not None:
-        should_fire = not (suppress_model_summary and is_update)
+        should_fire = revision_is_current and not (
+            suppress_model_summary and is_update
+        )
         if is_update and prev_summary is not None and summary_dict is not None:
             should_fire = _summaries_materially_differ(
                 prev_summary, summary_dict)
@@ -4879,20 +5471,111 @@ def get_conversation_status(conversation_id: str) -> str:
     return row[0] if row else "pending"
 
 
-def set_escalation_mode(escalation_id: int, mode: str) -> bool:
+def set_escalation_mode(
+    escalation_id: int,
+    mode: str,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
     """Brief 213: set the mode of a pending_notifications row. `mode` must
     be 'soft', 'hard', or 'order' (caller validates). Returns True if a row was
     updated, False if no row matched."""
     if mode not in ("soft", "hard", "order"):
         return False
     conn = _get_conn()
-    cur = conn.execute(
-        "UPDATE pending_notifications SET mode = ? WHERE id = ?",
-        (mode, escalation_id))
-    updated = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return updated
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT mode, content_revision FROM pending_notifications WHERE id = ?",
+            (escalation_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        current_mode, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        # Version operator-visible mode changes made through a revision-aware
+        # API. Unversioned internal callers retain their historical behavior.
+        revision_delta = int(
+            expected_content_revision is not None and current_mode != mode
+        )
+        conn.execute(
+            "UPDATE pending_notifications SET mode = ?, "
+            "content_revision = content_revision + ? WHERE id = ?",
+            (mode, revision_delta, escalation_id),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def set_escalation_takeover_state(
+    escalation_id: int,
+    muted: bool,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
+    """Atomically change a generic escalation's mode and transport mute.
+
+    Takeover and handback are one operator action. Keeping both writes under
+    the same immediate transaction prevents opposite actions from interleaving
+    into a hard/unmuted or soft/muted conversation.
+    """
+    mode = "hard" if muted else "soft"
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    takeover_at = now if muted else None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, mode, content_revision "
+            "FROM pending_notifications WHERE id = ?",
+            (escalation_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        customer_id, channel, current_mode, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        revision_delta = int(
+            expected_content_revision is not None and current_mode != mode
+        )
+        conn.execute(
+            "UPDATE pending_notifications SET mode = ?, "
+            "content_revision = content_revision + ? WHERE id = ?",
+            (mode, revision_delta, escalation_id),
+        )
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, ai_muted, human_takeover_at, updated_at) "
+            "VALUES (?, ?, 'pending', ?, ?, ?) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET "
+            "ai_muted = excluded.ai_muted, "
+            "human_takeover_at = excluded.human_takeover_at, "
+            "updated_at = excluded.updated_at",
+            (
+                customer_id,
+                channel or "whatsapp",
+                1 if muted else 0,
+                takeover_at,
+                now,
+            ),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def get_ai_muted(conversation_id: str) -> bool:
@@ -5341,17 +6024,19 @@ def list_ignored_contact_events(limit: int = 100) -> list[dict]:
 
 def get_active_escalation_mode(conversation_id: str):
     """Brief 213: return the mode ('soft' / 'hard') of the most recent
-    non-resolved escalation for this conversation, or None if none exist
+    actionable escalation for this conversation, or None if none exist
     or the most recent has no mode set (legacy rows)."""
     if not conversation_id:
         return None
     conn = _get_conn()
     row = conn.execute(
-        "SELECT mode FROM pending_notifications "
+        "SELECT CASE WHEN COUNT(*) = 0 THEN NULL "
+        "WHEN MAX(CASE WHEN mode = 'hard' THEN 1 ELSE 0 END) = 1 "
+        "THEN 'hard' ELSE 'soft' END FROM pending_notifications "
         "WHERE customer_id = ? "
         "AND notification_type IN ('escalation', 'relay') "
-        "AND status != 'resolved' "
-        "ORDER BY created_at DESC LIMIT 1",
+        "AND status IN ('pending', 'sent') "
+        "AND (mode IS NULL OR mode IN ('soft', 'hard'))",
         (conversation_id,)).fetchone()
     conn.close()
     return row[0] if row and row[0] else None
@@ -5576,7 +6261,12 @@ def appointment_alert_already_sent(appointment_id: int, channel: str,
     return row is not None
 
 
-def email_clear_fully_escalated_flag(customer_email: str) -> int:
+def email_clear_fully_escalated_flag(
+    customer_email: str,
+    *,
+    strict: bool = False,
+    require_no_active_review: bool = False,
+) -> int:
     """Brief 254: clear flags.fully_escalated AND flags.awaiting_relay
     on ALL email_thread_state.json threads matching this customer email.
     Used by resolve_conversation_from_escalation + delete_escalation to
@@ -5589,47 +6279,58 @@ def email_clear_fully_escalated_flag(customer_email: str) -> int:
     badge with no matching row in /escalations -- the symptom Calvin
     reported in issue #23.
 
-    Returns the count of threads whose flags were cleared (0 if no
-    matching threads OR if email_thread_state.json could not be loaded;
-    callers should treat this as best-effort cleanup, not a critical
-    failure path)."""
+    Returns the count of threads whose flags were cleared. By default this is
+    best-effort cleanup; ``strict=True`` raises on a missing, unreadable, or
+    unwritable state file so a durable delivery worker can retry the effect.
+    A provider-confirmed reply uses ``require_no_active_review`` so a new
+    escalation committed after the answered row cannot lose its sidecar flag."""
     if not customer_email:
         return 0
     path = _get_email_state_path()
-    if not os.path.exists(path):
-        return 0
-    try:
-        with open(path, "r") as f:
-            state = json.load(f)
-    except Exception:
-        return 0
-    threads = state.get("threads") or {}
-    cleared = 0
-    for thread_key, th in threads.items():
-        # thread_key shape: "subj:{customer_email}:{normalized_subject}"
-        parts = thread_key.split(":", 2)
-        if len(parts) < 3 or parts[0] != "subj":
-            continue
-        if parts[1] != customer_email:
-            continue
-        flags = th.setdefault("flags", {})
-        if flags.get("fully_escalated") or flags.get("awaiting_relay"):
-            flags["fully_escalated"] = False
-            flags.pop("awaiting_relay", None)
-            cleared += 1
-    if cleared == 0:
-        return 0
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except OSError:
-        return 0
-    return cleared
+    with email_state_file_lock(path):
+        if require_no_active_review and get_active_escalation_mode(customer_email) is not None:
+            return 0
+        if not os.path.exists(path):
+            if strict:
+                raise LookupError("Email conversation state was not found")
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8") as state_file:
+                state = json.load(state_file)
+            if not isinstance(state, dict):
+                raise ValueError("Email conversation state must be an object")
+        except (OSError, ValueError, TypeError) as exc:
+            if strict:
+                raise RuntimeError("Email conversation state could not be read") from exc
+            return 0
+        threads = state.get("threads") or {}
+        cleared = 0
+        needle = str(customer_email).strip().casefold()
+        for thread_key, th in threads.items():
+            if _email_thread_address(thread_key) != needle:
+                continue
+            flags = th.setdefault("flags", {})
+            if flags.get("fully_escalated") or flags.get("awaiting_relay"):
+                flags["fully_escalated"] = False
+                flags.pop("awaiting_relay", None)
+                cleared += 1
+        if cleared == 0:
+            return 0
+        try:
+            _write_email_state_unlocked(path, state)
+        except OSError as exc:
+            if strict:
+                raise RuntimeError("Email conversation state could not be written") from exc
+            return 0
+        return cleared
 
 
-def resolve_conversation_from_escalation(escalation_id: int) -> None:
+def resolve_conversation_from_escalation(
+    escalation_id: int,
+    *,
+    expected_content_revision: int | None = None,
+    mark_notification_resolved: bool = False,
+) -> bool:
     """Brief 188: when operator resolves an escalation, set conversation status
     to 'resolved' AND clear fully_escalated from booking state flags so the
     conversation returns to AI mode on the next customer message.
@@ -5644,47 +6345,459 @@ def resolve_conversation_from_escalation(escalation_id: int) -> None:
     orphan flags driving the Inbox status='escalated' forever (issue #23 root
     cause per Sonia's audit at issue #24)."""
     conn = _get_conn()
-    row = conn.execute(
-        "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
-        (escalation_id,)
-    ).fetchone()
-    if not row:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, status, content_revision "
+            "FROM pending_notifications WHERE id = ?",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        customer_id, esc_channel, current_status, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        if mark_notification_resolved:
+            revision_delta = int(
+                expected_content_revision is not None
+                and current_status != "resolved"
+            )
+            conn.execute(
+                "UPDATE pending_notifications SET status = 'resolved', "
+                "content_revision = content_revision + ? WHERE id = ?",
+                (revision_delta, escalation_id),
+            )
+
+        # Set conversation status to resolved and release human takeover/mute.
+        # Resolved means the operator has completed the work item; leaving
+        # ai_muted=1 makes the agent appear down on later customer follow-ups.
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
+            "VALUES (?, ?, 'resolved', ?, 0, NULL) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET status = 'resolved', "
+            "ai_muted = 0, human_takeover_at = NULL, "
+            "updated_at = excluded.updated_at",
+            (
+                customer_id,
+                esc_channel or "whatsapp",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+        # Atomically clear fully_escalated in booking state flags.
+        conn.execute(
+            "UPDATE whatsapp_booking_state "
+            "SET flags_json = json_set(COALESCE(flags_json, '{}'), "
+            "'$.fully_escalated', json('false')) WHERE phone = ?",
+            (customer_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return
-    customer_id, esc_channel = row
-
-    # Set conversation status to resolved and release human takeover/mute.
-    # Resolved means the operator has completed the work item; leaving
-    # ai_muted=1 makes the agent appear down on later customer follow-ups.
-    conn.execute(
-        "INSERT INTO conversation_status "
-        "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
-        "VALUES (?, ?, 'resolved', ?, 0, NULL) "
-        "ON CONFLICT(conversation_id) DO UPDATE SET status = 'resolved', "
-        "ai_muted = 0, human_takeover_at = NULL, "
-        "updated_at = excluded.updated_at",
-        (customer_id, esc_channel or "whatsapp",
-         datetime.now(timezone.utc).isoformat())
-    )
-
-    # Atomically clear fully_escalated in booking state flags
-    conn.execute(
-        "UPDATE whatsapp_booking_state "
-        "SET flags_json = json_set(COALESCE(flags_json, '{}'), '$.fully_escalated', json('false')) "
-        "WHERE phone = ?",
-        (customer_id,)
-    )
-
-    conn.commit()
-    conn.close()
 
     # Brief 254: also clear email flags when channel=email. Done OUTSIDE the
     # DB connection because email_thread_state.json is a file write.
     if esc_channel == "email" and customer_id:
+        email_clear_fully_escalated_flag(
+            customer_id,
+            require_no_active_review=mark_notification_resolved,
+        )
+    return True
+
+
+def _sync_mermaid_escalation_freezes(
+    conn: sqlite3.Connection,
+    customer_id: str,
+    channel: str,
+    now: str,
+) -> tuple[bool, bool]:
+    """Synchronize every Mermaid freeze from all active review rows.
+
+    One conversation can have both an escalation and a relay.  Resolving one
+    row must therefore derive the effective state from the rows that remain,
+    rather than blindly releasing the reservation.  A soft review freezes
+    reservation changes while still allowing Tracy to talk; a hard review also
+    mutes Tracy until an operator hands the conversation back.
+    """
+    active_modes = conn.execute(
+        "SELECT mode FROM pending_notifications "
+        "WHERE customer_id = ? "
+        "AND notification_type IN ('escalation', 'relay') "
+        "AND status IN ('pending', 'sent') "
+        "AND (mode IS NULL OR mode IN ('soft', 'hard'))",
+        (customer_id,),
+    ).fetchall()
+    has_active_review = bool(active_modes)
+    has_hard_review = any(row[0] == "hard" for row in active_modes)
+    conversation_status = "open" if has_active_review else "resolved"
+    takeover_at = now if has_hard_review else None
+
+    conn.execute(
+        "INSERT INTO conversation_status "
+        "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(conversation_id) DO UPDATE SET "
+        "status = excluded.status, ai_muted = excluded.ai_muted, "
+        "human_takeover_at = CASE WHEN excluded.ai_muted = 1 "
+        "THEN COALESCE(conversation_status.human_takeover_at, "
+        "excluded.human_takeover_at) ELSE NULL END, "
+        "updated_at = excluded.updated_at",
+        (
+            customer_id,
+            channel or "whatsapp",
+            conversation_status,
+            now,
+            1 if has_hard_review else 0,
+            takeover_at,
+        ),
+    )
+    conn.execute(
+        "UPDATE whatsapp_booking_state "
+        "SET flags_json = json_set(COALESCE(flags_json, '{}'), "
+        "'$.fully_escalated', json(?)) WHERE phone = ?",
+        ("true" if has_hard_review else "false", customer_id),
+    )
+    has_reservations = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'mermaid_reservations'"
+    ).fetchone()
+    if has_reservations:
+        conn.execute(
+            "UPDATE mermaid_reservations SET human_takeover = ?, updated_at = ? "
+            "WHERE tenant_slug = 'mermaid' AND conversation_id = ?",
+            (1 if has_active_review else 0, now, customer_id),
+        )
+    return has_active_review, has_hard_review
+
+
+def reconcile_mermaid_escalation_freezes() -> dict:
+    """Repair stale Mermaid mute/freeze state from durable active reviews.
+
+    This runs when the Mermaid service starts, including the first start after
+    upgrading from the one-way dashboard flags.  It repairs both orphaned
+    freezes and missing freezes in one immediate transaction.
+    """
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conversation_ids = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT customer_id FROM pending_notifications "
+                "WHERE notification_type IN ('escalation', 'relay')"
+            ).fetchall()
+            if row[0]
+        }
+        conversation_ids.update(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT conversation_id FROM conversation_status "
+                "WHERE ai_muted=1 OR human_takeover_at IS NOT NULL"
+            ).fetchall()
+            if row[0]
+        )
+        conversation_ids.update(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT phone FROM whatsapp_booking_state "
+                "WHERE json_valid(COALESCE(flags_json, '{}')) "
+                "AND json_extract(COALESCE(flags_json, '{}'), "
+                "'$.fully_escalated') = 1"
+            ).fetchall()
+            if row[0]
+        )
+        has_reservations = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='mermaid_reservations'"
+        ).fetchone()
+        if has_reservations:
+            conversation_ids.update(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT conversation_id FROM mermaid_reservations "
+                    "WHERE tenant_slug='mermaid' AND human_takeover=1"
+                ).fetchall()
+                if row[0]
+            )
+
+        active = 0
+        hard = 0
+        for customer_id in sorted(conversation_ids):
+            channel_row = conn.execute(
+                "SELECT channel FROM pending_notifications WHERE customer_id=? "
+                "ORDER BY created_at DESC,id DESC LIMIT 1",
+                (customer_id,),
+            ).fetchone()
+            if channel_row is None:
+                channel_row = conn.execute(
+                    "SELECT channel FROM conversation_status WHERE conversation_id=?",
+                    (customer_id,),
+                ).fetchone()
+            has_active, has_hard = _sync_mermaid_escalation_freezes(
+                conn,
+                customer_id,
+                str(channel_row[0] if channel_row else "whatsapp"),
+                now,
+            )
+            active += int(has_active)
+            hard += int(has_hard)
+        conn.commit()
+        return {
+            "conversations": len(conversation_ids),
+            "active": active,
+            "hard": hard,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def release_mermaid_escalation(
+    escalation_id: int,
+    *,
+    set_mode_soft: bool = False,
+    expected_content_revision: int | None = None,
+) -> dict | None:
+    """Resolve a Mermaid work item and release every persisted AI freeze.
+
+    Mermaid has two additional sources of truth beyond the generic dashboard
+    mute: ``whatsapp_booking_state.flags.fully_escalated`` and
+    ``mermaid_reservations.human_takeover``.  Updating only
+    ``conversation_status.ai_muted`` leaves Tracy unable to continue the
+    reservation.  Keep the notification, conversation, booking, and
+    reservation changes in one immediate transaction so a partial handback
+    cannot make the dashboard claim that Tracy is active while her booking is
+    still frozen.
+
+    ``set_mode_soft`` is used by the Hand back action.  The work item is also
+    resolved because an active soft escalation is itself a Mermaid workflow
+    freeze.  Returns the released row identity, or ``None`` when the work item
+    does not exist.
+    """
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, mode, status, content_revision "
+            "FROM pending_notifications "
+            "WHERE id = ? AND notification_type IN ('escalation', 'relay')",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        customer_id, esc_channel, current_mode, current_status, current_revision = row
+        current_revision = _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        resulting_mode = "soft" if set_mode_soft else current_mode
+        next_revision = current_revision + int(
+            current_status != "resolved" or resulting_mode != current_mode
+        )
+        if set_mode_soft:
+            conn.execute(
+                "UPDATE pending_notifications SET status = 'resolved', mode = 'soft', "
+                "content_revision = ? "
+                "WHERE id = ?",
+                (next_revision, escalation_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE pending_notifications SET status = 'resolved', "
+                "content_revision = ? WHERE id = ?",
+                (next_revision, escalation_id),
+            )
+
+        has_active_review, _has_hard_review = _sync_mermaid_escalation_freezes(
+            conn, customer_id, esc_channel or "whatsapp", now
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if esc_channel == "email" and customer_id and not has_active_review:
+        email_clear_fully_escalated_flag(
+            customer_id, require_no_active_review=True
+        )
+    return {
+        "customer_id": customer_id,
+        "channel": esc_channel or "whatsapp",
+        "mode": resulting_mode,
+        "status": "resolved",
+        "content_revision": next_revision,
+    }
+
+
+def reply_mermaid_escalation(escalation_id: int) -> dict | None:
+    """Mark one delivered operator answer complete and derive every freeze.
+
+    ``replied`` is a terminal notification status.  Mermaid booking and mute
+    state must therefore be recomputed in the same transaction, while another
+    pending review for the conversation must continue to hold its own freeze.
+    """
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, mode FROM pending_notifications "
+            "WHERE id = ? AND notification_type IN ('escalation', 'relay')",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        customer_id, esc_channel, mode = row
+        conn.execute(
+            "UPDATE pending_notifications SET status = 'replied' WHERE id = ?",
+            (escalation_id,),
+        )
+        has_active_review, _has_hard_review = _sync_mermaid_escalation_freezes(
+            conn, customer_id, esc_channel or "whatsapp", now
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if esc_channel == "email" and customer_id and not has_active_review:
         email_clear_fully_escalated_flag(customer_id)
+    return {
+        "customer_id": customer_id,
+        "channel": esc_channel or "whatsapp",
+        "mode": mode,
+        "status": "replied",
+        "active_review": has_active_review,
+    }
 
 
-def reopen_conversation_from_escalation(escalation_id: int) -> bool:
+def set_mermaid_escalation_mode(
+    escalation_id: int,
+    mode: str,
+    *,
+    expected_content_revision: int | None = None,
+) -> dict | None:
+    """Change a Mermaid review mode and atomically apply its booking freeze."""
+    if mode not in {"soft", "hard", "order"}:
+        return None
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, mode, content_revision "
+            "FROM pending_notifications "
+            "WHERE id = ? AND notification_type IN ('escalation', 'relay')",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        customer_id, esc_channel, current_mode, current_revision = row
+        current_revision = _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        next_revision = current_revision + int(current_mode != mode)
+        conn.execute(
+            "UPDATE pending_notifications SET mode = ?, content_revision = ? "
+            "WHERE id = ?",
+            (mode, next_revision, escalation_id),
+        )
+        has_active_review, has_hard_review = _sync_mermaid_escalation_freezes(
+            conn, customer_id, esc_channel or "whatsapp", now
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        "customer_id": customer_id,
+        "channel": esc_channel or "whatsapp",
+        "mode": mode,
+        "content_revision": next_revision,
+        "active_review": has_active_review,
+        "hard_review": has_hard_review,
+    }
+
+
+def reopen_mermaid_escalation(
+    escalation_id: int,
+    *,
+    expected_content_revision: int | None = None,
+) -> dict | None:
+    """Reopen a resolved Mermaid review and restore its booking freeze.
+
+    Hard reviews also restore the transport-level AI mute.  Soft reviews keep
+    transport delivery enabled, while the active escalation and reservation
+    freeze prevent Tracy from changing the booking until the operator releases
+    it again.
+    """
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, mode, status, content_revision "
+            "FROM pending_notifications "
+            "WHERE id = ? AND notification_type IN ('escalation', 'relay')",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        customer_id, esc_channel, stored_mode, current_status, current_revision = row
+        current_revision = _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        mode = stored_mode if stored_mode in {"soft", "hard"} else "soft"
+        next_revision = current_revision + int(
+            current_status != "sent" or stored_mode != mode
+        )
+        conn.execute(
+            "UPDATE pending_notifications SET status = 'sent', mode = ?, "
+            "content_revision = ? WHERE id = ?",
+            (mode, next_revision, escalation_id),
+        )
+        _sync_mermaid_escalation_freezes(
+            conn, customer_id, esc_channel or "whatsapp", now
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        "customer_id": customer_id,
+        "channel": esc_channel or "whatsapp",
+        "mode": mode,
+        "status": "sent",
+        "content_revision": next_revision,
+    }
+
+
+def reopen_conversation_from_escalation(
+    escalation_id: int,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
     """Reopen a previously resolved escalation.
 
     This is the inverse of ``resolve_conversation_from_escalation`` for the
@@ -5694,30 +6807,47 @@ def reopen_conversation_from_escalation(escalation_id: int) -> bool:
     ('soft'/'hard') remains untouched and continues to drive the correct UI tab.
     """
     conn = _get_conn()
-    row = conn.execute(
-        "SELECT customer_id, channel FROM pending_notifications WHERE id = ?",
-        (escalation_id,)
-    ).fetchone()
-    if not row:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, status, content_revision "
+            "FROM pending_notifications WHERE id = ?",
+            (escalation_id,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        customer_id, esc_channel, current_status, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        revision_delta = int(
+            expected_content_revision is not None and current_status != "sent"
+        )
+        cur = conn.execute(
+            "UPDATE pending_notifications SET status = 'sent', "
+            "content_revision = content_revision + ? WHERE id = ?",
+            (revision_delta, escalation_id),
+        )
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, updated_at) "
+            "VALUES (?, ?, 'open', ?) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET status = 'open', "
+            "updated_at = excluded.updated_at",
+            (
+                customer_id,
+                esc_channel or "whatsapp",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return False
-    customer_id, esc_channel = row
-    cur = conn.execute(
-        "UPDATE pending_notifications SET status = 'sent' WHERE id = ?",
-        (escalation_id,)
-    )
-    conn.execute(
-        "INSERT INTO conversation_status (conversation_id, channel, status, updated_at) "
-        "VALUES (?, ?, 'open', ?) "
-        "ON CONFLICT(conversation_id) DO UPDATE SET status = 'open', "
-        "updated_at = excluded.updated_at",
-        (customer_id, esc_channel or "whatsapp",
-         datetime.now(timezone.utc).isoformat())
-    )
-    conn.commit()
-    changed = cur.rowcount > 0
-    conn.close()
-    return changed
 
 
 def _lookup_customer_contact(customer_id: str, contact_type: str) -> dict:
@@ -5796,7 +6926,8 @@ def get_all_escalations() -> list:
     rows = conn.execute(
         "SELECT pn.id, pn.notification_type, pn.relay_token, pn.channel, "
         "pn.customer_id, pn.customer_name, pn.subject, pn.body, pn.status, "
-        "pn.created_at, pn.mode, pn.escalation_summary "
+        "pn.created_at, pn.mode, pn.escalation_summary, pn.email_thread_key, "
+        "pn.email_reply_subject, pn.content_revision "
         "FROM pending_notifications pn "
         # Brief 253: LEFT JOIN to drop escalations on archived conversations.
         # LEFT JOIN preserves rows whose conversation has no
@@ -5812,8 +6943,21 @@ def get_all_escalations() -> list:
         ct = _infer_contact_type(r[4] or "")
         contact = _lookup_customer_contact(r[4] or "", ct)
         customer_contact = contact["email"] or contact["phone"] or r[4] or ""
+        _email_thread_key = ""
+        _email_reply_subject = ""
         if r[3] == "email":
-            _email_thread_key = _find_email_thread_key_for(r[4])
+            _email_thread_key = str(r[12] or "")
+            # Only legacy rows without a stored identity may resolve to the
+            # customer's newest thread.  A nonblank missing key represents a
+            # removed/stale exact thread and must remain visible as such so the
+            # send path can fail closed instead of targeting another subject.
+            if not _email_thread_key:
+                _email_thread_key = _find_email_thread_key_for(r[4]) or ""
+            _email_reply_subject = str(r[13] or "")
+            if not _email_reply_subject and _email_thread_key:
+                _thread_parts = _email_thread_key.split(":", 2)
+                if len(_thread_parts) == 3 and _thread_parts[2]:
+                    _email_reply_subject = "Re: " + _thread_parts[2]
             _phone_routing_key = f"email::{_email_thread_key}" if _email_thread_key else (r[4] or "")
         else:
             _phone_routing_key = r[4] or ""
@@ -5831,6 +6975,7 @@ def get_all_escalations() -> list:
             "channel": r[3], "customer_id": r[4], "customer_name": r[5],
             "subject": r[6], "body": r[7], "status": r[8], "created_at": r[9],
             "mode": r[10],
+            "content_revision": int(r[14] or 1),
             "contact_type": ct,
             "customer_contact": customer_contact,
             "customer_email": contact["email"],
@@ -5842,6 +6987,8 @@ def get_all_escalations() -> list:
                 (summary_obj or {}).get("recommendedOptions") or []),
             "extractedDetails": (
                 (summary_obj or {}).get("extractedDetails") or None),
+            "email_thread_key": _email_thread_key,
+            "email_reply_subject": _email_reply_subject,
         })
     return result
 
@@ -6193,48 +7340,42 @@ def archive_inactive_conversations(active_inbox_archive_after_days: int) -> dict
     skipped_takeover = 0
     already_archived = 0
 
-    # Email side — load JSON, mutate, atomic replace.
+    # Email side — lock the shared sidecar across read/modify/replace.
     email_path = _get_email_state_path()
-    if os.path.exists(email_path):
-        try:
-            with open(email_path, "r") as f:
-                state = json.load(f)
-        except Exception:
-            state = None
-        if state:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            for thread_key, th in state.get("threads", {}).items():
-                flags = th.setdefault("flags", {})
-                if flags.get("deleted"):
-                    already_archived += 1
-                    continue
-                if flags.get("fully_escalated"):
-                    skipped_escalation += 1
-                    continue
-                if flags.get("ai_muted"):
-                    skipped_takeover += 1
-                    continue
-                last_raw = th.get("last_activity")
-                if last_raw is None:
-                    continue
-                if isinstance(last_raw, str):
-                    try:
-                        last_dt = datetime.fromisoformat(last_raw)
-                    except ValueError:
+    with email_state_file_lock(email_path):
+        if os.path.exists(email_path):
+            state = _read_email_state_unlocked(email_path, {})
+            if state:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for thread_key, th in state.get("threads", {}).items():
+                    flags = th.setdefault("flags", {})
+                    if flags.get("deleted"):
+                        already_archived += 1
                         continue
-                else:
-                    last_dt = datetime.fromtimestamp(float(last_raw), tz=timezone.utc)
-                if last_dt < cutoff:
-                    flags["deleted"] = True
-                    th["last_activity"] = now_iso
-                    archived += 1
-            try:
-                tmp = email_path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(state, f, ensure_ascii=False, indent=2)
-                os.replace(tmp, email_path)
-            except OSError:
-                pass
+                    if flags.get("fully_escalated"):
+                        skipped_escalation += 1
+                        continue
+                    if flags.get("ai_muted"):
+                        skipped_takeover += 1
+                        continue
+                    last_raw = th.get("last_activity")
+                    if last_raw is None:
+                        continue
+                    if isinstance(last_raw, str):
+                        try:
+                            last_dt = datetime.fromisoformat(last_raw)
+                        except ValueError:
+                            continue
+                    else:
+                        last_dt = datetime.fromtimestamp(float(last_raw), tz=timezone.utc)
+                    if last_dt < cutoff:
+                        flags["deleted"] = True
+                        th["last_activity"] = now_iso
+                        archived += 1
+                try:
+                    _write_email_state_unlocked(email_path, state)
+                except OSError:
+                    pass
 
     # WA/IG/FB side — group by phone, find max(created_at), check active escalations.
     conn = _get_conn()
@@ -6304,6 +7445,11 @@ def export_all_customer_data(export_dir: str, tenant: str) -> dict:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+    def _optional_table_rows(table_name):
+        if not _has_table(conn, table_name):
+            return []
+        return _rows(f"SELECT * FROM {table_name}")
+
     payload = {
         "tenant": tenant,
         "exportedAt": now_iso,
@@ -6311,24 +7457,48 @@ def export_all_customer_data(export_dir: str, tenant: str) -> dict:
         "customer_identifiers": _rows("SELECT * FROM customer_identifiers"),
         "customer_interactions": _rows("SELECT * FROM customer_interactions"),
         "whatsapp_threads": _rows("SELECT * FROM whatsapp_threads"),
+        "whatsapp_booking_state": _rows("SELECT * FROM whatsapp_booking_state"),
         "pending_notifications": _rows("SELECT * FROM pending_notifications"),
         "appointments": _rows("SELECT * FROM appointments"),
         "bookings": _rows("SELECT * FROM bookings"),
         "service_bookings": _rows("SELECT * FROM service_bookings"),
         "conversation_status": _rows("SELECT * FROM conversation_status"),
+        "mermaid_crew_assistance": _optional_table_rows(
+            "mermaid_crew_assistance"
+        ),
+        "mermaid_crew_assistance_events": _optional_table_rows(
+            "mermaid_crew_assistance_events"
+        ),
+        "mermaid_crew_assistance_reservations": _optional_table_rows(
+            "mermaid_crew_assistance_reservations"
+        ),
+        "mermaid_crew_assistance_sources": _optional_table_rows(
+            "mermaid_crew_assistance_sources"
+        ),
+        "mermaid_customer_intakes": _optional_table_rows(
+            "mermaid_customer_intakes"
+        ),
+        "mermaid_reservations": _optional_table_rows("mermaid_reservations"),
+        "mermaid_reservation_events": _optional_table_rows(
+            "mermaid_reservation_events"
+        ),
+        "mermaid_demo_payments": _optional_table_rows("mermaid_demo_payments"),
+        "mermaid_checkout_links": _optional_table_rows("mermaid_checkout_links"),
+        "mermaid_documents": _optional_table_rows("mermaid_documents"),
+        "mermaid_delivery_jobs": _optional_table_rows("mermaid_delivery_jobs"),
+        "mermaid_card_deliveries": _optional_table_rows(
+            "mermaid_card_deliveries"
+        ),
+        "mermaid_model_events": _optional_table_rows("mermaid_model_events"),
+        "operator_delivery_outbox": _optional_table_rows(
+            "operator_delivery_outbox"
+        ),
     }
     conn.close()
 
     # Email JSON state (no DB table).
     email_path = _get_email_state_path()
-    if os.path.exists(email_path):
-        try:
-            with open(email_path, "r") as f:
-                payload["email_threads"] = json.load(f)
-        except Exception:
-            payload["email_threads"] = {}
-    else:
-        payload["email_threads"] = {}
+    payload["email_threads"] = email_state_read(email_path, {})
 
     counts = {k: len(v) if isinstance(v, list) else 1
               for k, v in payload.items() if k not in ("tenant", "exportedAt")}
@@ -6347,200 +7517,553 @@ def export_all_customer_data(export_dir: str, tenant: str) -> dict:
 
 def delete_customer_data(identifier_value: str, identifier_type: str,
                           action: str, keep_approved_learnings: bool) -> dict:
-    """Brief 237: apply endOfRetentionAction (delete | anonymize) to a
-    specific customer's data. Active-escalation guard: refuses if the
-    customer has any pending/sent notification. keep_approved_learnings
-    preserves escalation_learnings (info_updates is tenant-wide
-    business announcements with no per-customer FK, so it is never
-    touched by this helper regardless of the flag)."""
+    """Delete or anonymize every record for one resolved customer identity.
+
+    Mermaid keeps a channel identity as well as its own intake identifier. Old
+    deployments could put those identifiers on two customer rows, so retention
+    deliberately resolves the whole exact-value identity cluster before doing
+    any work. Active escalations still block the operation atomically.
+    """
     if action not in ("delete", "anonymize"):
         return {"ok": False, "reason": f"invalid_action:{action}"}
 
     conn = _get_conn()
-    # Resolve the customer's integer PK + every text identifier they were
-    # ever filed under (per-table FKs are inconsistent: pending_notifications
-    # uses TEXT, customer_interactions uses INTEGER FK).
-    row = conn.execute(
-        "SELECT customer_id FROM customer_identifiers WHERE type = ? AND value = ? LIMIT 1",
-        (identifier_type, identifier_value)
-    ).fetchone()
-    if not row:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS data_retention_file_deletions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,identifier_type TEXT NOT NULL,"
+        "identifier_value TEXT NOT NULL,path TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    pending_files = conn.execute(
+        "SELECT id,path FROM data_retention_file_deletions "
+        "WHERE identifier_type=? AND identifier_value=?",
+        (identifier_type, identifier_value),
+    ).fetchall()
+    for pending_id, pending_path in pending_files:
+        try:
+            os.remove(pending_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            conn.close()
+            return {
+                "ok": False,
+                "action": action,
+                "deletedCount": 0,
+                "anonymizedCount": 0,
+                "reason": "document_delete_failed",
+            }
+        conn.execute(
+            "DELETE FROM data_retention_file_deletions WHERE id=?", (pending_id,)
+        )
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    conversation_types = {
+        "phone", "wa_conversation_id", "conversation_id",
+        "mermaid_conversation_id",
+    }
+    type_marks = ",".join("?" for _ in conversation_types)
+    if identifier_type in conversation_types:
+        rows = conn.execute(
+            "SELECT DISTINCT customer_id FROM customer_identifiers "
+            f"WHERE value=? AND type IN ({type_marks})",
+            [identifier_value] + sorted(conversation_types),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT customer_id FROM customer_identifiers "
+            "WHERE type=? AND value=?",
+            (identifier_type, identifier_value),
+        ).fetchall()
+    customer_ids = {int(row[0]) for row in rows}
+    if not customer_ids:
         conn.close()
         return {"ok": True, "action": action, "deletedCount": 0,
                 "anonymizedCount": 0, "reason": "no_such_customer"}
-    cust_pk = row[0]
-    ident_rows = conn.execute(
-        "SELECT type, value FROM customer_identifiers WHERE customer_id = ?",
-        (cust_pk,)).fetchall()
-    phones = {v for t, v in ident_rows if t in ("phone", "wa_conversation_id")}
-    emails = {v for t, v in ident_rows if t == "email"}
-    conv_ids = phones | {v for t, v in ident_rows if t == "conversation_id"}
-    text_keys = list(conv_ids | emails)
 
-    # Active-escalation guard (Rule 8). Filter status IN ('pending','sent')
-    # per Brief 235 — production transitions pending→sent on insert.
+    # Include legacy duplicate Mermaid identities reached through another exact
+    # conversation identifier on the initially resolved customer row.
+    customer_marks = ",".join("?" for _ in customer_ids)
+    seed_identifiers = conn.execute(
+        "SELECT type,value FROM customer_identifiers "
+        f"WHERE customer_id IN ({customer_marks})",
+        sorted(customer_ids),
+    ).fetchall()
+    conversation_values = {
+        value for type_, value in seed_identifiers if type_ in conversation_types
+    }
+    if conversation_values:
+        value_marks = ",".join("?" for _ in conversation_values)
+        related = conn.execute(
+            "SELECT DISTINCT customer_id FROM customer_identifiers "
+            f"WHERE type IN ({type_marks}) AND value IN ({value_marks})",
+            sorted(conversation_types) + sorted(conversation_values),
+        ).fetchall()
+        customer_ids.update(int(row[0]) for row in related)
+
+    customer_ids = sorted(customer_ids)
+    customer_marks = ",".join("?" for _ in customer_ids)
+    ident_rows = conn.execute(
+        "SELECT id,type,value FROM customer_identifiers "
+        f"WHERE customer_id IN ({customer_marks})",
+        customer_ids,
+    ).fetchall()
+    conversation_values = {
+        value for _id, type_, value in ident_rows if type_ in conversation_types
+    }
+    emails = {value for _id, type_, value in ident_rows if type_ == "email"}
+    text_keys = sorted(conversation_values | emails)
+
     if text_keys:
-        placeholders = ",".join("?" for _ in text_keys)
+        text_marks = ",".join("?" for _ in text_keys)
         active = conn.execute(
-            f"SELECT 1 FROM pending_notifications WHERE customer_id IN ({placeholders}) "
-            f"AND status IN ('pending', 'sent') LIMIT 1",
-            text_keys
+            "SELECT 1 FROM pending_notifications "
+            f"WHERE customer_id IN ({text_marks}) "
+            "AND status IN ('pending','sent') LIMIT 1",
+            text_keys,
         ).fetchone()
         if active:
             conn.close()
             return {"ok": False, "reason": "active_escalation"}
+
+        # A provider call runs outside SQLite. Do not remove or anonymize its
+        # durable claim while a live worker may still send to this customer.
+        # Expired/released rows are safe to retire inside our write transaction;
+        # provider-confirmed and prepared retries then cannot resurrect PII.
+        if _has_table(conn, "operator_delivery_outbox"):
+            active_delivery = conn.execute(
+                "SELECT 1 FROM operator_delivery_outbox "
+                f"WHERE conversation_id IN ({text_marks}) "
+                "AND status != 'confirmed' AND claim_token != '' "
+                "AND lease_until > ? LIMIT 1",
+                text_keys + [datetime.now(timezone.utc).timestamp()],
+            ).fetchone()
+            if active_delivery:
+                conn.close()
+                return {"ok": False, "reason": "active_delivery"}
+    else:
+        text_marks = ""
+
+    def _table(name: str) -> bool:
+        return _has_table(conn, name)
+
+    def _delete_where(table: str, column: str, values) -> int:
+        values = list(values)
+        if not values or not _table(table):
+            return 0
+        marks = ",".join("?" for _ in values)
+        try:
+            return conn.execute(
+                f"DELETE FROM {table} WHERE {column} IN ({marks})", values
+            ).rowcount
+        except sqlite3.OperationalError as exc:
+            # Legacy optional tables do not all share the customer_id column.
+            if "no such column" in str(exc).casefold():
+                return 0
+            raise
+
+    reservation_ids = []
+    if conversation_values and _table("mermaid_reservations"):
+        marks = ",".join("?" for _ in conversation_values)
+        reservation_ids = [
+            row[0] for row in conn.execute(
+                "SELECT public_id FROM mermaid_reservations "
+                f"WHERE conversation_id IN ({marks})",
+                sorted(conversation_values),
+            ).fetchall()
+        ]
+    document_ids = []
+    document_paths = []
+    if reservation_ids and _table("mermaid_documents"):
+        marks = ",".join("?" for _ in reservation_ids)
+        document_rows = conn.execute(
+            "SELECT public_id,path FROM mermaid_documents "
+            f"WHERE reservation_public_id IN ({marks})",
+            reservation_ids,
+        ).fetchall()
+        document_ids = [row[0] for row in document_rows]
+        document_paths = [row[1] for row in document_rows if row[1]]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for document_path in set(document_paths):
+        conn.execute(
+            "INSERT OR IGNORE INTO data_retention_file_deletions "
+            "(identifier_type,identifier_value,path,created_at) VALUES (?,?,?,?)",
+            (identifier_type, identifier_value, document_path, now_iso),
+        )
 
     deleted = 0
     anonymized = 0
     skipped_learnings = 0
 
     if action == "delete":
-        # WA/IG/FB messages by phone identifiers
-        if phones:
-            ph = list(phones)
-            placeholders = ",".join("?" for _ in ph)
-            cur = conn.execute(
-                f"DELETE FROM whatsapp_threads WHERE phone IN ({placeholders})", ph)
-            deleted += cur.rowcount
-        # pending_notifications (only resolved — active was already guarded)
+        deleted += _delete_where(
+            "mermaid_card_deliveries", "conversation_id", conversation_values
+        )
+        deleted += _delete_where(
+            "mermaid_card_deliveries", "document_public_id", document_ids
+        )
+        deleted += _delete_where(
+            "mermaid_delivery_jobs", "reservation_public_id", reservation_ids
+        )
+        deleted += _delete_where(
+            "mermaid_documents", "reservation_public_id", reservation_ids
+        )
+        deleted += _delete_where(
+            "mermaid_checkout_links", "reservation_public_id", reservation_ids
+        )
+        deleted += _delete_where(
+            "mermaid_demo_payments", "reservation_public_id", reservation_ids
+        )
+        deleted += _delete_where(
+            "mermaid_reservation_events", "reservation_public_id", reservation_ids
+        )
         if text_keys:
-            placeholders = ",".join("?" for _ in text_keys)
-            cur = conn.execute(
-                f"DELETE FROM pending_notifications WHERE customer_id IN "
-                f"({placeholders}) AND status NOT IN ('pending', 'sent')",
-                text_keys)
-            deleted += cur.rowcount
-            cur = conn.execute(
-                f"DELETE FROM appointments WHERE conversation_id IN ({placeholders})",
-                text_keys)
-            deleted += cur.rowcount
-            cur = conn.execute(
-                f"DELETE FROM conversation_status WHERE conversation_id IN ({placeholders})",
-                text_keys)
-            deleted += cur.rowcount
-        # customer_interactions uses INTEGER FK
-        cur = conn.execute(
-            "DELETE FROM customer_interactions WHERE customer_id = ?", (cust_pk,))
-        deleted += cur.rowcount
-        # bookings/service_bookings use INTEGER FK (best-effort — schema may differ)
-        try:
-            cur = conn.execute("DELETE FROM bookings WHERE customer_id = ?", (cust_pk,))
-            deleted += cur.rowcount
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cur = conn.execute("DELETE FROM service_bookings WHERE customer_id = ?", (cust_pk,))
-            deleted += cur.rowcount
-        except sqlite3.OperationalError:
-            pass
-        # Approved learnings — preserve if flag is set
+            deleted += _delete_mermaid_crew_assistance(conn, text_keys)
+        deleted += _delete_where(
+            "mermaid_reservations", "public_id", reservation_ids
+        )
+        deleted += _delete_where(
+            "mermaid_model_events", "conversation_id", conversation_values
+        )
+        deleted += _delete_where(
+            "mermaid_customer_intakes", "conversation_id", conversation_values
+        )
+        deleted += _delete_where(
+            "mermaid_customer_intakes", "customer_id", customer_ids
+        )
+        deleted += _delete_where(
+            "whatsapp_booking_state", "phone", conversation_values
+        )
+        deleted += _delete_where("whatsapp_threads", "phone", conversation_values)
+        deleted += _delete_where(
+            "operator_delivery_outbox", "conversation_id", text_keys
+        )
+        if text_keys:
+            deleted += conn.execute(
+                "DELETE FROM pending_notifications "
+                f"WHERE customer_id IN ({text_marks}) "
+                "AND status NOT IN ('pending','sent')",
+                text_keys,
+            ).rowcount
+            deleted += conn.execute(
+                f"DELETE FROM appointments WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).rowcount
+            deleted += conn.execute(
+                f"DELETE FROM conversation_status WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).rowcount
+        deleted += _delete_where(
+            "customer_interactions", "customer_id", customer_ids
+        )
+        for table in ("bookings", "service_bookings"):
+            deleted += _delete_where(table, "customer_id", customer_ids)
         if not keep_approved_learnings and text_keys:
-            placeholders = ",".join("?" for _ in text_keys)
-            try:
-                cur = conn.execute(
-                    f"DELETE FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
-                    text_keys)
-                deleted += cur.rowcount
-            except sqlite3.OperationalError:
-                pass
-        else:
-            # count what we skipped, for reporting
-            if text_keys:
-                placeholders = ",".join("?" for _ in text_keys)
-                try:
-                    cnt = conn.execute(
-                        f"SELECT COUNT(*) FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
-                        text_keys).fetchone()[0]
-                    skipped_learnings = cnt or 0
-                except sqlite3.OperationalError:
-                    pass
-        # Drop identifiers + customer row last
-        cur = conn.execute(
-            "DELETE FROM customer_identifiers WHERE customer_id = ?", (cust_pk,))
-        deleted += cur.rowcount
-        cur = conn.execute("DELETE FROM customers WHERE id = ?", (cust_pk,))
-        deleted += cur.rowcount
-
-    else:  # anonymize
+            deleted += _delete_where(
+                "escalation_learnings", "conversation_id", text_keys
+            )
+        elif text_keys and _table("escalation_learnings"):
+            skipped_learnings = conn.execute(
+                "SELECT COUNT(*) FROM escalation_learnings "
+                f"WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).fetchone()[0] or 0
+        deleted += _delete_where(
+            "customer_identifiers", "customer_id", customer_ids
+        )
+        deleted += _delete_where("customers", "id", customer_ids)
+    else:
         REDACTED = "[redacted]"
         REDACTED_MSG = "[redacted message]"
-        cur = conn.execute(
-            "UPDATE customers SET display_name = ? WHERE id = ?",
-            (REDACTED, cust_pk))
-        anonymized += cur.rowcount
-        cur = conn.execute(
-            "UPDATE customer_identifiers SET value = ? WHERE customer_id = ?",
-            (REDACTED, cust_pk))
-        anonymized += cur.rowcount
-        if phones:
-            ph = list(phones)
-            placeholders = ",".join("?" for _ in ph)
-            cur = conn.execute(
-                f"UPDATE whatsapp_threads SET text = ?, sender_name = ? "
-                f"WHERE phone IN ({placeholders})",
-                [REDACTED_MSG, REDACTED] + ph)
-            anonymized += cur.rowcount
-        if not keep_approved_learnings and text_keys:
-            placeholders = ",".join("?" for _ in text_keys)
-            try:
-                cur = conn.execute(
-                    f"UPDATE escalation_learnings SET human_answer = ? "
-                    f"WHERE conversation_id IN ({placeholders})",
-                    [REDACTED] + text_keys)
-                anonymized += cur.rowcount
-            except sqlite3.OperationalError:
-                pass
-        else:
-            if text_keys:
-                placeholders = ",".join("?" for _ in text_keys)
+        # Generated PDFs and their outbound payloads contain rendered customer
+        # details, so anonymization removes those artifacts and their files.
+        anonymized += _delete_where(
+            "mermaid_card_deliveries", "conversation_id", conversation_values
+        )
+        anonymized += _delete_where(
+            "mermaid_card_deliveries", "document_public_id", document_ids
+        )
+        anonymized += _delete_where(
+            "mermaid_delivery_jobs", "reservation_public_id", reservation_ids
+        )
+        anonymized += _delete_where(
+            "mermaid_documents", "reservation_public_id", reservation_ids
+        )
+        anonymized += _delete_where(
+            "mermaid_checkout_links", "reservation_public_id", reservation_ids
+        )
+        anonymized += _delete_where(
+            "mermaid_demo_payments", "reservation_public_id", reservation_ids
+        )
+        if reservation_ids and _table("mermaid_reservation_events"):
+            marks = ",".join("?" for _ in reservation_ids)
+            anonymized += conn.execute(
+                "UPDATE mermaid_reservation_events SET actor='[redacted]',"
+                "reason='[redacted]',payload_json='{}',"
+                "idempotency_key='[redacted]:' || lower(hex(randomblob(16))) "
+                f"WHERE reservation_public_id IN ({marks})",
+                reservation_ids,
+            ).rowcount
+        if reservation_ids and _table("mermaid_reservations"):
+            marks = ",".join("?" for _ in reservation_ids)
+            anonymized_intake = json.dumps(
+                {
+                    "trip_date": "1970-01-01",
+                    "adults": 0,
+                    "children": 0,
+                    "infants": 0,
+                    "customer_name": "[redacted]",
+                    "pickup_preference": "pier",
+                    "language": "en",
+                    "phase": "anonymized",
+                },
+                sort_keys=True,
+            )
+            anonymized += conn.execute(
+                "UPDATE mermaid_reservations SET "
+                "conversation_id='[redacted]:reservation:' || public_id,"
+                "zernio_account_id='',customer_name='[redacted]',intake_json=?,"
+                "summary_version=lower(hex(randomblob(32))),"
+                "payment_reference=NULL,quote_public_id=NULL,receipt_public_id=NULL,"
+                "updated_at=? "
+                f"WHERE public_id IN ({marks})",
+                [anonymized_intake, now_iso] + reservation_ids,
+            ).rowcount
+        if text_keys:
+            anonymized += _anonymize_mermaid_crew_assistance(
+                conn, text_keys, now_iso
+            )
+        if conversation_values and _table("mermaid_model_events"):
+            marks = ",".join("?" for _ in conversation_values)
+            anonymized += conn.execute(
+                "UPDATE mermaid_model_events SET "
+                "conversation_id='[redacted]:model:' || rowid,"
+                "message_id='[redacted]:' || rowid,response_json='{}',"
+                "error_kind='' "
+                f"WHERE conversation_id IN ({marks})",
+                sorted(conversation_values),
+            ).rowcount
+        if _table("mermaid_customer_intakes"):
+            anonymized += conn.execute(
+                "UPDATE mermaid_customer_intakes SET "
+                "conversation_id='[redacted]:intake:' || id,intake_json='{}' "
+                f"WHERE customer_id IN ({customer_marks})",
+                customer_ids,
+            ).rowcount
+        if conversation_values:
+            marks = ",".join("?" for _ in conversation_values)
+            anonymized += conn.execute(
+                "UPDATE whatsapp_booking_state SET fields_json='{}',flags_json='{}',"
+                "completed_bookings_json='[]',"
+                "phone='[redacted]:state:' || rowid "
+                f"WHERE phone IN ({marks})",
+                sorted(conversation_values),
+            ).rowcount
+            anonymized += conn.execute(
+                "UPDATE whatsapp_threads SET text=?,sender_name=?,"
+                "phone='[redacted]:thread:' || id,source_message_key='' "
+                f"WHERE phone IN ({marks})",
+                [REDACTED_MSG, REDACTED] + sorted(conversation_values),
+            ).rowcount
+        if text_keys and _table("operator_delivery_outbox"):
+            # Retain only non-identifying delivery metrics. Both action hashes
+            # are replaced because request ids and low-entropy messages can be
+            # guessed; a stale retry must not reconnect to this tombstone.
+            anonymized += conn.execute(
+                "UPDATE operator_delivery_outbox SET "
+                "action_key=lower(hex(randomblob(32))),"
+                "conversation_id='[redacted]:delivery:' || lower(hex(randomblob(16))),"
+                "scope='[redacted]',request_hash=lower(hex(randomblob(32))),"
+                "anchor='',payload_json='{}',result_json='{}',status='confirmed',"
+                "claim_token='',lease_until=0,last_error='' "
+                f"WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).rowcount
+        if text_keys:
+            anonymized += conn.execute(
+                "UPDATE pending_notifications SET relay_token=NULL,"
+                "customer_id='[redacted]:notification:' || id,"
+                "customer_name=?,subject=?,body=?,escalation_summary=NULL,"
+                "email_thread_key='',email_reply_subject='' "
+                f"WHERE customer_id IN ({text_marks})",
+                [REDACTED, REDACTED, REDACTED] + text_keys,
+            ).rowcount
+            anonymized += conn.execute(
+                "UPDATE appointments SET "
+                "conversation_id='[redacted]:appointment:' || id,"
+                "customer_name=?,title=?,date_time_label='',"
+                "proposed_times_json='[]',location='' "
+                f"WHERE conversation_id IN ({text_marks})",
+                [REDACTED, REDACTED] + text_keys,
+            ).rowcount
+            anonymized += conn.execute(
+                "UPDATE conversation_status SET "
+                "conversation_id='[redacted]:status:' || rowid "
+                f"WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).rowcount
+        anonymized += conn.execute(
+            "UPDATE customers SET display_name=?,summary='',notes='' "
+            f"WHERE id IN ({customer_marks})",
+            [REDACTED] + customer_ids,
+        ).rowcount
+        anonymized += conn.execute(
+            "UPDATE customer_identifiers SET "
+            "value='[redacted]:' || id "
+            f"WHERE customer_id IN ({customer_marks})",
+            customer_ids,
+        ).rowcount
+        anonymized += conn.execute(
+            "UPDATE customer_interactions SET summary=? "
+            f"WHERE customer_id IN ({customer_marks})",
+            [REDACTED] + customer_ids,
+        ).rowcount
+        if not keep_approved_learnings and text_keys and _table("escalation_learnings"):
+            anonymized += conn.execute(
+                "UPDATE escalation_learnings SET human_answer=? "
+                f"WHERE conversation_id IN ({text_marks})",
+                [REDACTED] + text_keys,
+            ).rowcount
+        elif text_keys and _table("escalation_learnings"):
+            skipped_learnings = conn.execute(
+                "SELECT COUNT(*) FROM escalation_learnings "
+                f"WHERE conversation_id IN ({text_marks})",
+                text_keys,
+            ).fetchone()[0] or 0
+
+    # Email conversations live in a JSON sidecar rather than SQLite.  Stage
+    # that privacy change before committing the database transaction so an
+    # unwritable sidecar cannot leave the request half-applied and impossible
+    # to retry with the original customer identifier.
+    email_path = _get_email_state_path()
+    if emails:
+        with email_state_file_lock(email_path):
+            if (
+                os.path.exists(email_path)
+                or os.path.exists(_legacy_email_archive_path(email_path))
+            ):
                 try:
-                    cnt = conn.execute(
-                        f"SELECT COUNT(*) FROM escalation_learnings WHERE conversation_id IN ({placeholders})",
-                        text_keys).fetchone()[0]
-                    skipped_learnings = cnt or 0
-                except sqlite3.OperationalError:
-                    pass
+                    email_state = _read_email_state_unlocked(
+                        email_path, {}, strict=True
+                    )
+                    if not isinstance(email_state, dict):
+                        raise ValueError("Email conversation state must be an object")
+                except (OSError, ValueError, TypeError):
+                    conn.rollback()
+                    conn.close()
+                    return {
+                        "ok": False,
+                        "action": action,
+                        "deletedCount": 0,
+                        "anonymizedCount": 0,
+                        "reason": "email_state_read_failed",
+                    }
+
+                email_needles = {str(value).strip().casefold() for value in emails}
+                email_threads = email_state.get("threads")
+                if not isinstance(email_threads, dict):
+                    email_threads = {}
+                matched_thread_keys = []
+                for thread_key, thread in email_threads.items():
+                    thread_data = thread if isinstance(thread, dict) else {}
+                    from_email = str(thread_data.get("from_email") or "").strip().casefold()
+                    if (
+                        from_email in email_needles
+                        or _email_thread_address(thread_key) in email_needles
+                    ):
+                        matched_thread_keys.append(thread_key)
+
+                if action == "delete":
+                    for thread_key in matched_thread_keys:
+                        del email_threads[thread_key]
+                        deleted += 1
+                else:
+                    redacted_threads = dict(email_threads)
+                    for thread_key in matched_thread_keys:
+                        thread = email_threads.get(thread_key)
+                        thread_data = thread if isinstance(thread, dict) else {}
+                        clean_messages = []
+                        raw_messages = thread_data.get("messages")
+                        if not isinstance(raw_messages, list):
+                            raw_messages = []
+                        for message in raw_messages:
+                            message_data = message if isinstance(message, dict) else {}
+                            clean_message = {
+                                key: message_data[key]
+                                for key in ("role", "ts", "timestamp", "created_at")
+                                if key in message_data
+                            }
+                            for key in ("text", "body", "from_email", "subject"):
+                                if key in message_data:
+                                    clean_message[key] = "[redacted]"
+                            clean_messages.append(clean_message)
+                        redacted_key = (
+                            "[redacted]:email-thread:" + os.urandom(12).hex()
+                        )
+                        redacted_threads[redacted_key] = {
+                            "fields": {},
+                            "flags": {},
+                            "completed_bookings": [],
+                            "from_email": "[redacted]",
+                            "subject": "[redacted]",
+                            "messages": clean_messages,
+                            "last_activity": thread_data.get("last_activity"),
+                        }
+                        del redacted_threads[thread_key]
+                        anonymized += 1
+                    email_threads = redacted_threads
+
+                email_state["threads"] = email_threads
+                sender_rates = email_state.get("sender_rates")
+                if isinstance(sender_rates, dict):
+                    email_state["sender_rates"] = {
+                        key: value
+                        for key, value in sender_rates.items()
+                        if str(key).strip().casefold() not in email_needles
+                    }
+
+                try:
+                    _write_email_state_unlocked(email_path, email_state)
+                except OSError:
+                    conn.rollback()
+                    conn.close()
+                    return {
+                        "ok": False,
+                        "action": action,
+                        "deletedCount": 0,
+                        "anonymizedCount": 0,
+                        "reason": "email_state_write_failed",
+                    }
 
     conn.commit()
     conn.close()
 
-    # Email JSON state — both delete and anonymize touch it.
-    email_path = _get_email_state_path()
-    if os.path.exists(email_path) and emails:
-        try:
-            with open(email_path, "r") as f:
-                state = json.load(f)
-        except Exception:
-            state = None
-        if state:
-            threads = state.get("threads", {})
-            to_drop = []
-            for tk, th in threads.items():
-                from_email = (th.get("from_email") or "").lower()
-                if from_email in {e.lower() for e in emails}:
-                    if action == "delete":
-                        to_drop.append(tk)
-                    else:
-                        th["from_email"] = "[redacted]"
-                        for m in th.get("messages", []) or []:
-                            m["text"] = "[redacted message]"
-                            if "from_email" in m:
-                                m["from_email"] = "[redacted]"
-            if action == "delete":
-                for tk in to_drop:
-                    threads.pop(tk, None)
-                    if action == "delete":
-                        deleted += 1
-            else:
-                anonymized += len([1 for tk, th in threads.items()
-                                   if (th.get("from_email") or "") == "[redacted]"])
+    file_cleanup_failed = False
+    if document_paths:
+        cleanup_conn = _get_conn()
+        for document_path in set(document_paths):
             try:
-                tmp = email_path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(state, f, ensure_ascii=False, indent=2)
-                os.replace(tmp, email_path)
-            except OSError:
+                os.remove(document_path)
+            except FileNotFoundError:
                 pass
+            except OSError:
+                file_cleanup_failed = True
+                continue
+            cleanup_conn.execute(
+                "DELETE FROM data_retention_file_deletions WHERE path=?",
+                (document_path,),
+            )
+        cleanup_conn.commit()
+        cleanup_conn.close()
+        if file_cleanup_failed:
+            return {
+                "ok": False,
+                "action": action,
+                "deletedCount": deleted,
+                "anonymizedCount": anonymized,
+                "reason": "document_delete_failed",
+            }
 
     return {
         "ok": True,
@@ -6887,7 +8410,11 @@ def get_pending_notifications(status: str = "pending") -> list:
     return result
 
 
-def delete_escalation(escalation_id: int) -> bool:
+def delete_escalation(
+    escalation_id: int,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
     """Brief 172: hard-delete a pending_notifications row. Returns True if a
     row was deleted. Used by the dashboard Escalations page trash button (SR's
     UX — archive first, then from archive view you can delete permanently).
@@ -6900,30 +8427,135 @@ def delete_escalation(escalation_id: int) -> bool:
       - email_thread_state.json.flags.fully_escalated cleared (drives email list).
     Without this cleanup the dashboard shows escalated=true forever with
     no matching /escalations row -- issue #23 root cause."""
-    # Brief 254: clear orphan flags BEFORE the DELETE.
-    # resolve_conversation_from_escalation reads customer_id + channel from
-    # the row, so it must run while the row still exists.
-    resolve_conversation_from_escalation(escalation_id)
-
     conn = _get_conn()
-    cur = conn.execute("DELETE FROM pending_notifications WHERE id = ?", (escalation_id,))
-    changed = cur.rowcount > 0
-    conn.commit()
-    conn.close()
+    customer_id = ""
+    esc_channel = "whatsapp"
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id, channel, content_revision "
+            "FROM pending_notifications WHERE id = ?",
+            (escalation_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        customer_id, esc_channel, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        # Brief 254 cleanup is part of the same write transaction as deletion;
+        # otherwise a newer reused revision could appear between validation and
+        # the destructive write.
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO conversation_status "
+            "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
+            "VALUES (?, ?, 'resolved', ?, 0, NULL) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET status = 'resolved', "
+            "ai_muted = 0, human_takeover_at = NULL, updated_at = excluded.updated_at",
+            (customer_id, esc_channel or "whatsapp", now),
+        )
+        conn.execute(
+            "UPDATE whatsapp_booking_state SET flags_json = "
+            "json_set(COALESCE(flags_json, '{}'), '$.fully_escalated', json('false')) "
+            "WHERE phone = ?",
+            (customer_id,),
+        )
+        changed = conn.execute(
+            "DELETE FROM pending_notifications WHERE id = ?", (escalation_id,)
+        ).rowcount > 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if esc_channel == "email" and customer_id:
+        email_clear_fully_escalated_flag(
+            customer_id, require_no_active_review=True
+        )
     return changed
 
 
-def update_notification_status(notification_id: int, status: str) -> bool:
+def delete_mermaid_escalation(
+    escalation_id: int,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
+    """Delete one Mermaid review and derive freezes from every row left."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    customer_id = ""
+    channel = "whatsapp"
+    has_active_review = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT customer_id,channel,content_revision FROM pending_notifications "
+            "WHERE id=? AND notification_type IN ('escalation','relay')",
+            (escalation_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        customer_id, channel = str(row[0]), str(row[1] or "whatsapp")
+        _require_escalation_revision(row[2], expected_content_revision)
+        changed = conn.execute(
+            "DELETE FROM pending_notifications WHERE id=?", (escalation_id,)
+        ).rowcount > 0
+        has_active_review, _has_hard_review = _sync_mermaid_escalation_freezes(
+            conn, customer_id, channel, now
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if channel == "email" and customer_id and not has_active_review:
+        email_clear_fully_escalated_flag(
+            customer_id, require_no_active_review=True
+        )
+    return changed
+
+
+def update_notification_status(
+    notification_id: int,
+    status: str,
+    *,
+    expected_content_revision: int | None = None,
+) -> bool:
     """Update the status of a pending notification. Returns True if row updated."""
     conn = _get_conn()
-    cur = conn.execute(
-        "UPDATE pending_notifications SET status = ? WHERE id = ?",
-        (status, notification_id)
-    )
-    changed = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return changed
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, content_revision FROM pending_notifications WHERE id = ?",
+            (notification_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        current_status, current_revision = row
+        _require_escalation_revision(
+            current_revision, expected_content_revision
+        )
+        revision_delta = int(
+            expected_content_revision is not None and current_status != status
+        )
+        conn.execute(
+            "UPDATE pending_notifications SET status = ?, "
+            "content_revision = content_revision + ? WHERE id = ?",
+            (status, revision_delta, notification_id),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def get_relay_by_token(relay_token: str) -> "dict | None":

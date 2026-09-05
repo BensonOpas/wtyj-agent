@@ -46,12 +46,15 @@ def test_email_reply_sends_via_smtp_and_marks_replied(mock_smtp, mock_append):
         notification_type="escalation", channel="email",
         customer_id=customer_email, customer_name="Test Customer",
         subject="[ESCALATION] activation call", body="full chat log here",
+        email_thread_key=f"subj:{customer_email}:activation-call",
+        email_reply_subject="Re: activation call",
     )
 
     token = _login()
-    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
-                     json={"answer": "Wednesday 4pm works. Calendar invite incoming."},
-                     headers=_auth(token))
+    with patch("dashboard.api.state_registry.email_thread_customer", return_value=customer_email):
+        r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                        json={"answer": "Wednesday 4pm works. Calendar invite incoming."},
+                        headers=_auth(token))
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["ok"] is True
@@ -66,9 +69,13 @@ def test_email_reply_sends_via_smtp_and_marks_replied(mock_smtp, mock_append):
     assert args[2] == "Wednesday 4pm works. Calendar invite incoming."
 
     # Brief 233: hard-escalation email reply persists with role='operator'.
-    mock_append.assert_called_once_with(
-        customer_email, "Wednesday 4pm works. Calendar invite incoming.",
-        role="operator")
+    mock_append.assert_called_once()
+    append_args, append_kwargs = mock_append.call_args
+    assert append_args == (
+        customer_email, "Wednesday 4pm works. Calendar invite incoming."
+    )
+    assert append_kwargs["role"] == "operator"
+    assert append_kwargs["source_message_key"].startswith("operator-email-action:")
 
     escs = state_registry.get_all_escalations()
     matched = next((e for e in escs if e["id"] == esc_id), None)
@@ -107,12 +114,15 @@ def test_email_reply_returns_500_on_smtp_failure(mock_smtp):
         notification_type="escalation", channel="email",
         customer_id=customer_email, customer_name="Test",
         subject="[ESCALATION]", body="x",
+        email_thread_key=f"subj:{customer_email}:smtp-error",
+        email_reply_subject="Re: smtp error",
     )
 
     token = _login()
-    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
-                     json={"answer": "test"},
-                     headers=_auth(token))
+    with patch("dashboard.api.state_registry.email_thread_customer", return_value=customer_email):
+        r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                        json={"answer": "test"},
+                        headers=_auth(token))
     assert r.status_code == 500
     assert "smtp down" in r.json()["detail"].lower()
 
@@ -138,12 +148,15 @@ def test_email_reply_accepts_message_field_from_sr_frontend(mock_smtp, mock_appe
         notification_type="escalation", channel="email",
         customer_id=customer_email, customer_name="Test",
         subject="[ESCALATION]", body="x",
+        email_thread_key=f"subj:{customer_email}:sr-message",
+        email_reply_subject="Re: sr message",
     )
 
     token = _login()
-    r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
-                     json={"message": "Reply via SR's {message} field"},
-                     headers=_auth(token))
+    with patch("dashboard.api.state_registry.email_thread_customer", return_value=customer_email):
+        r = client.post(f"/dashboard/api/escalations/{esc_id}/reply",
+                        json={"message": "Reply via SR's {message} field"},
+                        headers=_auth(token))
     assert r.status_code == 200, r.text
     args, _ = mock_smtp.call_args
     assert args[2] == "Reply via SR's {message} field"

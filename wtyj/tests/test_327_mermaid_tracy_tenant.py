@@ -115,7 +115,7 @@ def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     assert cfg["features"]["booking_flow"] is False
     assert cfg["workflow"] == {
         "type": "mermaid_reservation_demo",
-        "catalog_version": "mermaid-demo-v6-2026-09-04",
+        "catalog_version": "mermaid-demo-v7-2026-09-04",
         "availability_source": "demo_assumed",
     }
     assert cfg["channel_account_allowlist"] == {
@@ -131,14 +131,16 @@ def test_mermaid_template_has_no_provider_credentials_and_stays_strict_empty(
     assert "1boks" not in json.dumps(cfg).lower()
 
 
-def test_mermaid_is_in_default_deploy_and_rollback_sets(mermaid_config):
+def test_mermaid_is_protected_from_shared_deploy_and_rollback(mermaid_config):
     deploy = (REPO_ROOT / "wtyj" / "scripts" / "process_deploy_queue.sh").read_text()
     rollback = (REPO_ROOT / "wtyj" / "scripts" / "rollback.sh").read_text()
 
-    assert "ali-car-rental mermaid consulta-despertares" in deploy
-    assert 'mermaid) HEALTH_PORTS="$HEALTH_PORTS 8102"' in deploy
-    assert "/root/clients/mermaid" in rollback
-    assert "8101 8102 8103" in rollback
+    assert "adamus ali-car-rental consulta-despertares unboks wibrandt" in deploy
+    assert "mermaid)" in deploy
+    assert "docker tag wtyj-agent:latest" in deploy
+    assert "/root/clients/mermaid" not in rollback
+    assert "8001 8002 8101 8103 8004 8100 9001" in rollback
+    assert "8102" not in rollback
 
 
 def test_mermaid_versioned_runtime_package_is_secret_free_and_loopback_only():
@@ -161,7 +163,7 @@ def test_mermaid_versioned_runtime_package_is_secret_free_and_loopback_only():
     expected_compose = """# docker-compose.yml for tenant mermaid
 services:
   agent:
-    image: wtyj-agent
+    image: ${MERMAID_IMAGE:?MERMAID_IMAGE must pin an immutable Tracy revision}
     container_name: wtyj-mermaid
     restart: unless-stopped
     ports:
@@ -196,8 +198,10 @@ def test_mermaid_whatsapp_uses_authoritative_structured_demo_prompt(
     # Q&A prose deliberately no longer defines Mermaid's booking policy.
     prompt = mermaid_understanding.system_prompt()
     assert "You are TRACY, Mermaid's virtual reservation assistant" in prompt
-    for key in ("included", "what_to_bring", "accessibility", "contact"):
+    for key in ("included", "what_to_bring", "contact"):
         assert mermaid_config["faq"][key] in prompt
+    assert mermaid_config["faq"]["accessibility"] not in prompt
+    assert "Guests who use a wheelchair are welcome" in prompt
     assert "never claim to have checked inventory" in prompt
     assert "round_trip means" in prompt
     assert "Queued is not active" in prompt

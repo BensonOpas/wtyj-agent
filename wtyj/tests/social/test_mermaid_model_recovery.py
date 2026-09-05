@@ -1,5 +1,6 @@
 """Real buffered worker + SQLite; all model and customer provider calls stubbed."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from types import SimpleNamespace
@@ -57,10 +58,16 @@ def test_failed_event_recovers_once_without_caching_fallback(review_runtime, loc
     assert "failure-one" not in state["flags"].get("mermaid_seen_message_ids", [])
     assert not state["flags"].get("mermaid_cached_reply")
     _due()
-    model.return_value = {**_understood("question", "Recovered answer"), "language": locale}
+    recovered_answer = (
+        "Mi por yuda bo ku e pregunta." if locale == "pap" else "Recovered answer"
+    )
+    model.return_value = {
+        **_understood("question", recovered_answer),
+        "language": locale,
+    }
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
     assert model.call_count == send.call_count == 2
-    assert send.call_args.args[3] == "Recovered answer"
+    assert send.call_args.args[3] == recovered_answer
     assert send.call_args.kwargs["idempotency_key"] != fallback_key
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 0
@@ -83,6 +90,27 @@ def test_explicit_human_request_does_not_require_model_and_deduplicates(review_r
     assert _rows("SELECT notification_type,mode FROM pending_notifications") == [("escalation", "soft")]
     assert not state_registry.get_ai_muted(CONVERSATION)
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"]["customer_name"] == "Test Guest"
+
+
+def test_embedded_human_request_remains_available_during_model_outage(review_runtime):
+    model, send, _controls = review_runtime
+    model.side_effect = AssertionError("embedded human requests must bypass the model")
+
+    _flush(
+        "embedded-human-outage",
+        "My husband uses a wheelchair. Could I speak with the team?",
+    )
+
+    assert model.call_count == 0
+    assert send.call_count == 1
+    from agents.social.mermaid_response_policy import copy as policy_copy
+
+    reply = send.call_args.args[3]
+    assert policy_copy("review_queued", "en") in reply
+    assert "welcome to Mermaid" in reply
+    assert "prepared to welcome guests who use wheelchairs" in reply
+    assert state_registry.get_active_escalation_mode(CONVERSATION) == "soft"
+    assert not state_registry.get_ai_muted(CONVERSATION)
 
 
 def test_repeated_failure_sends_one_notice_and_attempts_are_bounded(review_runtime):
@@ -155,6 +183,316 @@ def test_manual_mute_and_tenant_pause_block_offline_human_acknowledgement(review
 def test_ordinary_people_mentions_do_not_use_offline_route():
     for text in ("Does a person need to bring ID?", "I want to speak to a real person. Also change the price.", "How many people fit?"):
         assert recovery.explicit_human_request(text) is None
+
+
+@pytest.mark.parametrize(
+    "locale,text",
+    {
+        "en": "My husband uses a wheelchair. Could I speak to the team?",
+        "nl": "Mijn man gebruikt een rolstoel. Kan ik met een medewerker spreken?",
+        "de": "Mein Mann benutzt einen Rollstuhl. Kann ich mit einem Mitarbeiter sprechen?",
+        "es": "Mi esposo usa una silla de ruedas. ¿Puedo hablar con un agente?",
+        "pap": "Mi kasa ta usa stul di rueda. Mi por papia ku un hende di e tim?",
+        "pt": "Meu marido usa uma cadeira de rodas. Posso falar com um atendente?",
+    }.items(),
+)
+def test_mixed_wheelchair_detail_preserves_explicit_person_request(locale, text):
+    assert recovery.contains_explicit_human_request(text) == locale
+
+
+@pytest.mark.parametrize(
+    "locale,text",
+    {
+        "en": "Could I speak to the team? My husband uses a wheelchair.",
+        "nl": "Kan ik met een medewerker spreken? Mijn man gebruikt een rolstoel.",
+        "de": "Kann ich mit einem Mitarbeiter sprechen? Mein Mann benutzt einen Rollstuhl.",
+        "es": "¿Puedo hablar con un agente? Mi esposo usa una silla de ruedas.",
+        "pap": "Mi por papia ku un hende di e tim? Mi kasa ta usa stul di rueda.",
+        "pt": "Posso falar com um atendente? Meu marido usa uma cadeira de rodas.",
+    }.items(),
+)
+def test_person_request_before_wheelchair_detail_is_preserved(locale, text):
+    assert recovery.contains_explicit_human_request(text) == locale
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I need a human-readable PDF.",
+        "No quiero hablar con una persona, solo quiero reservar.",
+        "Não quero falar com uma pessoa, só quero reservar.",
+        "My husband said I want to speak to a real person, but I do not.",
+    ],
+)
+def test_embedded_person_detector_rejects_non_requests_and_negation(text):
+    assert recovery.contains_explicit_human_request(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Would it be possible to speak with someone from the team?",
+        "Could someone from the team call me?",
+        "Could I speak with the Mermaid team?",
+    ],
+)
+def test_common_polite_team_requests_are_detected(text):
+    assert recovery.contains_explicit_human_request(text) == "en"
+
+
+def test_model_result_cannot_supply_server_owned_human_request_provenance():
+    result = _understood("details", "Noted")
+    result["understanding_source"] = "explicit_human_request"
+
+    assert recovery._valid_result(result, "My husband uses a wheelchair.") is False
+
+
+def _complete_papiamentu_result(**updates):
+    result = {
+        "language": "pap",
+        "mermaid_action": "question",
+        "reply": "Desayuno, almuerso di barbekiú, refresko i djus ta inkluí.",
+        "has_open_question": True,
+        "guest_question_excerpt": "Kiko ta inkluí?",
+        "calendar_request": "none",
+        "status_request": "none",
+        "assistance_request": "none",
+        "other_question_reply": "",
+        "security_event": "none",
+        "confidence": "high",
+        "requires_human": False,
+        "fields": {},
+    }
+    result.update(updates)
+    return result
+
+
+@pytest.mark.parametrize(
+    "field,text",
+    [
+        ("reply", "Nos ta ofrece pickup na hotel."),
+        ("reply", "Aworaki mi ta prepara bo oferta."),
+        ("reply", "E beach house ta habrí."),
+        ("reply", "E katálogo ta kla pa bo."),
+        ("reply", "E lansementu ta programá."),
+        ("reply", "Hiba un pet pa tapa solo."),
+        ("other_question_reply", "E período ta kla."),
+        ("other_question_reply", "Mi ta atendé e kombersashon aki."),
+    ],
+)
+def test_papiamentu_output_gate_rejects_known_informal_or_mixed_forms(field, text):
+    result = _complete_papiamentu_result(**{field: text})
+
+    assert recovery._valid_result(result, "Kiko ta inkluí?") is False
+
+
+def test_papiamentu_output_gate_accepts_reviewed_formal_copy():
+    assert recovery._valid_result(
+        _complete_papiamentu_result(), "Kiko ta inkluí?"
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "E beibi ta drumi.",
+        "E kuminda ta piká.",
+        "E kashi ta será.",
+        "Mi ta skirbi vino komo un palabra.",
+    ],
+)
+def test_papiamentu_output_gate_does_not_globally_ban_legitimate_words(reply):
+    assert recovery._valid_result(
+        _complete_papiamentu_result(reply=reply),
+        "Kiko ta inkluí?",
+    ) is True
+
+
+def test_papiamentu_output_gate_rejects_obvious_english_reply_labeled_pap():
+    result = _complete_papiamentu_result(
+        reply="Breakfast and lunch are included in the trip.",
+    )
+
+    assert recovery._valid_result(result, "Kiko ta inkluí?") is False
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "E peri\u0301odo ta kla.",
+        "E per\u200bíodo ta kla.",
+    ],
+)
+def test_papiamentu_output_gate_rejects_unicode_obfuscation(reply):
+    assert recovery._valid_result(
+        _complete_papiamentu_result(reply=reply),
+        "Kiko ta inkluí?",
+    ) is False
+
+
+def test_generation_normalizes_model_strings_to_nfc_before_persisting(review_runtime):
+    model = Mock(
+        return_value=_complete_papiamentu_result(
+            reply="Desayuno i almuerso ta inklui\u0301.",
+        )
+    )
+    result = recovery.generate(
+        {
+            "from": CONVERSATION,
+            "message_id": "pap-nfc-generation",
+            "text": "Kiko ta inkluí?",
+        },
+        "pap",
+        model,
+    )
+
+    assert model.call_count == 1
+    assert result["reply"] == "Desayuno i almuerso ta inkluí."
+    status, raw = _rows(
+        "SELECT status,response_json FROM mermaid_model_events "
+        "WHERE message_id='pap-nfc-generation'"
+    )[0]
+    assert status == "generated"
+    assert json.loads(raw)["reply"] == "Desayuno i almuerso ta inkluí."
+
+
+def test_invalid_generated_cache_is_revalidated_and_refreshed(review_runtime):
+    cached = _complete_papiamentu_result(
+        reply="Breakfast and lunch are included in the trip.",
+    )
+    conn = recovery._conn()
+    try:
+        conn.execute(
+            "INSERT INTO mermaid_model_events "
+            "(conversation_id,message_id,status,attempts,response_json,created_at) "
+            "VALUES (?,?,'generated',3,?,?)",
+            (CONVERSATION, "pap-stale-cache", json.dumps(cached), 1.0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    refreshed = _complete_papiamentu_result(
+        reply="Desayuno i almuerso ta inkluí.",
+    )
+    model = Mock(return_value=refreshed)
+
+    result = recovery.generate(
+        {
+            "from": CONVERSATION,
+            "message_id": "pap-stale-cache",
+            "text": "Kiko ta inkluí?",
+        },
+        "pap",
+        model,
+    )
+
+    assert model.call_count == 1
+    assert result == refreshed
+    status, attempts, raw = _rows(
+        "SELECT status,attempts,response_json FROM mermaid_model_events "
+        "WHERE message_id='pap-stale-cache'"
+    )[0]
+    assert (status, attempts) == ("generated", 1)
+    assert json.loads(raw)["reply"] == refreshed["reply"]
+
+
+def test_papiamentu_output_gate_ignores_discarded_raw_reply_on_server_owned_route():
+    result = _complete_papiamentu_result(
+        status_request="pickup_pricing",
+        reply="Unrequested model pickup prose",
+    )
+
+    assert recovery._valid_result(result, "Kuantu e transporte ta kosta?") is True
+
+
+def test_papiamentu_output_gate_ignores_discarded_human_request_reply():
+    result = _complete_papiamentu_result(
+        mermaid_action="request_human",
+        requires_human=True,
+        reply="Mi ta usa pickup aworaki.",
+    )
+
+    assert recovery._valid_result(result, "Mi tin un pregunta di alergia.") is True
+
+
+def test_papiamentu_output_gate_ignores_discarded_assistance_reply():
+    result = _complete_papiamentu_result(
+        mermaid_action="details",
+        requires_human=True,
+        assistance_request="wheelchair_note",
+        reply="The team must approve this request before booking can continue.",
+    )
+
+    assert recovery._valid_result(
+        result,
+        "Mi kasá ta usa stul di rueda. Boso por yuda ku e stul?",
+        expected_locale="pap",
+    ) is True
+
+
+def test_papiamentu_output_gate_checks_faq_on_server_owned_assistance_route():
+    result = _complete_papiamentu_result(
+        mermaid_action="details",
+        assistance_request="wheelchair_note",
+        reply="Discarded raw reply.",
+        other_question_reply="Breakfast is included.",
+    )
+
+    assert recovery._valid_result(
+        result,
+        "Mi kasá ta usa stul di rueda. Boso por yuda ku e stul?",
+        expected_locale="pap",
+    ) is False
+
+
+def test_papiamentu_output_gate_rejects_mislabeled_papiamentu_reply():
+    result = _complete_papiamentu_result(
+        language="en",
+        reply="Mi ta usa pickup aworaki.",
+    )
+    assert recovery._valid_result(result, "Kiko ta inkluí?") is False
+
+
+@pytest.mark.parametrize("guest_text", ["Unda e boto ta sali?", "Ta bon", "Yes"])
+def test_papiamentu_output_gate_detects_mislabeled_papiamentu_from_reply(
+    guest_text,
+):
+    result = _complete_papiamentu_result(
+        language="en",
+        reply="Pickup ta inkluí.",
+    )
+    assert recovery._valid_result(result, guest_text, expected_locale="en") is False
+
+
+def test_papiamentu_output_gate_uses_expected_conversation_locale():
+    result = _complete_papiamentu_result(
+        language="en",
+        reply="E sistema mester baliá primero.",
+    )
+    assert recovery._valid_result(result, "Sí", expected_locale="pap") is False
+
+
+def test_papiamentu_output_gate_does_not_block_normal_english_pickup_copy():
+    result = _complete_papiamentu_result(
+        language="en",
+        reply="Your pickup is included.",
+    )
+    assert recovery._valid_result(result, "Is pickup included?") is True
+
+
+@pytest.mark.parametrize(
+    "locale,text",
+    {
+        "en": "I do not want to talk to sales. Could I speak to the team?",
+        "nl": "Ik wil niet met verkoop praten. Kan ik met een medewerker spreken?",
+        "de": "Ich will nicht mit dem Verkauf reden. Kann ich mit einem Mitarbeiter sprechen?",
+        "es": "No quiero hablar con ventas. ¿Puedo hablar con un agente?",
+        "pap": "Mi no ke papia ku benta. Mi por papia ku un hende di e tim?",
+        "pt": "Não quero falar com vendas. Posso falar com um atendente?",
+    }.items(),
+)
+def test_negated_clause_does_not_hide_later_positive_person_request(locale, text):
+    assert recovery.contains_explicit_human_request(text) == locale
 
 
 def test_retry_backoff_and_expired_worker_cannot_replace_new_generation(review_runtime, monkeypatch):
@@ -455,13 +793,22 @@ def test_captured_sdk_repeated_review_keeps_faq_once(review_runtime, monkeypatch
     fields = case['before_fields']
     state_registry.wa_save_booking_state(CONVERSATION, {'mermaid_intake': fields}, {})
     state_registry.create_pending_notification('escalation', 'whatsapp', CONVERSATION, 'Test Guest', 'Review', 'Saved', mode='soft')
-    client, _ = _sdk_result(monkeypatch, **case['tool_input'])
+    # The retained BASE-047 output predates the formal-language gate and
+    # contains Spanish spellings. Keep the raw fixture as audit evidence while
+    # exercising this routing regression with its corrected production form.
+    tool_input = dict(case['tool_input'])
+    if case['id'] == 'BASE-047-T6':
+        tool_input['other_question_reply'] = (
+            "Desayuno, almuerso di barbekiú, refresko i djus ta inkluí. "
+            "Bo mester yega na Fishermen's Pier pa 06:45."
+        )
+    client, _ = _sdk_result(monkeypatch, **tool_input)
     _flush('captured-review-faq', case['guest_text'])
-    locale = case['tool_input']['language']
-    if case['tool_input']['status_request'] == 'wildlife_guarantee':
+    locale = tool_input['language']
+    if tool_input['status_request'] == 'wildlife_guarantee':
         expected = policy.wildlife_guarantee_reply(locale, {'review': 'queued'})
     else:
-        expected = case['tool_input']['other_question_reply'] + '\n\n' + policy.copy('review_queued', locale)
+        expected = tool_input['other_question_reply'] + '\n\n' + policy.copy('review_queued', locale)
     assert client.messages.create.call_count == send.call_count == 1
     assert send.call_args.args[3] == expected
     assert _rows('SELECT notification_type,mode FROM pending_notifications') == [('escalation', 'soft')]

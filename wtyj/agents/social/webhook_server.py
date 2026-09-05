@@ -85,6 +85,9 @@ async def lifespan(app):
     )
     if workflow_type == "ali_quote":
         _run_ali_document_retention_cleanup()
+    elif workflow_type == "mermaid_reservation_demo":
+        repaired = state_registry.reconcile_mermaid_escalation_freezes()
+        log("mermaid_escalation_state_reconciled", **repaired)
     # Every WhatsApp tenant needs durable recovery after provider acceptance.
     # Ali additionally runs its workflow schedulers and customer heartbeat.
     recovery_stop = threading.Event()

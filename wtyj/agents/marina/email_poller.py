@@ -2,7 +2,7 @@
 # bluemarlin/agents/marina/email_poller.py
 # Last modified: Brief 077
 # Purpose: Core orchestrator. IMAP → marina_agent → calendar → sheets → SMTP
-import email, json, time, os, re, uuid, random, string, sys
+import copy, email, json, time, os, re, uuid, random, string, sys
 from datetime import datetime, timezone, timedelta
 from email.utils import parseaddr
 
@@ -28,6 +28,7 @@ from shared import escalation_dispatcher  # noqa: F401
 # email-channel escalation silently no-op'd alert delivery (see issue #17).
 # Do not remove unless _fire_escalation_alerts moves to a shared module.
 from dashboard import api as _dashboard_api_for_dispatcher_registration  # noqa: F401
+from dashboard import operator_delivery
 from agents.marina import marina_agent
 from agents.marina import sheets_writer
 from agents.marina import gws_calendar
@@ -119,7 +120,85 @@ def _business_sender_emails() -> set:
 
 # _decode_subj, log — moved to email_adapter.py (Brief 189)
 
+
+def _active_whatsapp_operator_relay(
+    from_email: str,
+    support_email: str,
+    subject: str,
+) -> dict | None:
+    """Resolve one trusted, still-actionable WhatsApp relay email."""
+    if not support_email or from_email.strip().lower() != support_email.strip().lower():
+        return None
+    token_match = re.search(r"\[RELAY-([a-f0-9]{12})\]", subject or "")
+    if token_match is None:
+        return None
+    relay = state_registry.get_relay_by_token(token_match.group(1))
+    return relay if relay and relay.get("channel") == "whatsapp" else None
+
+
+def _prepare_whatsapp_operator_relay(relay: dict, guidance: str) -> dict:
+    """Generate and freeze the exact customer payload before provider delivery."""
+    phone = str(relay["customer_id"])
+    booking_state = state_registry.wa_get_booking_state(phone)
+    fields = booking_state.get("fields", {})
+    flags = dict(booking_state.get("flags", {}))
+    agent_flags = dict(flags)
+    agent_flags["awaiting_relay"] = True
+    for name in ("relay_token", "reply_times"):
+        agent_flags.pop(name, None)
+    relay_result = marina_agent.process_message(
+        phone,
+        "",
+        guidance,
+        fields,
+        agent_flags,
+        channel="whatsapp",
+        messages=state_registry.wa_get_history(phone, limit=10),
+    )
+    relay_reply = relay_result.get("reply", "") if isinstance(relay_result, dict) else ""
+    if (
+        not isinstance(relay_reply, str)
+        or not relay_reply.strip()
+        or relay_result.get("generation_failed")
+    ):
+        raise ValueError("Assistant generation failed; no operator relay was prepared")
+    return {
+        "text": relay_reply,
+        "role": "assistant",
+        "notification_id": int(relay["id"]),
+        "clear_relay": True,
+        "response": {"ok": True, "reply": relay_reply, "channel": "whatsapp"},
+    }
+
+
+def _deliver_whatsapp_operator_relay(relay: dict, guidance: str) -> tuple[dict, bool]:
+    """Deliver one email-origin operator answer with durable retry identity."""
+    notification_id = int(relay["id"])
+    return operator_delivery.deliver(
+        conversation_id=str(relay["customer_id"]),
+        scope=f"operator-email-relay:{notification_id}",
+        original={
+            "notification_id": notification_id,
+            "relay_token": str(relay.get("relay_token") or ""),
+            "guidance": guidance,
+        },
+        request_id=f"operator-email-relay:{notification_id}",
+        prepare=lambda: _prepare_whatsapp_operator_relay(relay, guidance),
+        sender=send_whatsapp_message,
+    )
+
+_EMAIL_STATE_BASELINES = {}
+
+
+def _is_email_state_path(path):
+    return os.path.basename(str(path)) == "email_thread_state.json"
+
+
 def load_json(path, default):
+    if _is_email_state_path(path):
+        state = state_registry.email_state_read(path, default)
+        _EMAIL_STATE_BASELINES[os.path.abspath(path)] = copy.deepcopy(state)
+        return state
     try:
         with open(path, "r") as f:
             return json.load(f)
@@ -127,6 +206,15 @@ def load_json(path, default):
         return default
 
 def save_json(path, obj):
+    if _is_email_state_path(path):
+        key = os.path.abspath(path)
+        base = _EMAIL_STATE_BASELINES.get(key, {})
+        merged = state_registry.email_state_merge_save(path, base, obj)
+        if isinstance(obj, dict):
+            obj.clear()
+            obj.update(copy.deepcopy(merged))
+        _EMAIL_STATE_BASELINES[key] = copy.deepcopy(merged)
+        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -155,7 +243,7 @@ def _un_archive_thread_if_deleted(th: dict) -> bool:
 
 
 def _cleanup_stale_data(state, now):
-    """Prune threads >30d old (no active hold, no pending relay) and trim processed_hashes.
+    """Archive inactive threads in the governed sidecar and trim hashes.
 
     Brief 162: defensive guards against the class of bug where an early-return
     code path forgets to set last_activity. A missing or zero last_activity
@@ -170,6 +258,8 @@ def _cleanup_stale_data(state, now):
         last_raw = th.get("last_activity") or 0
         flags = th.get("flags", {})
         # Brief 162: skip if any protection flag is set
+        if flags.get("deleted"):
+            continue
         if flags.get("hold_created"):
             continue
         if flags.get("awaiting_relay"):
@@ -192,11 +282,12 @@ def _cleanup_stale_data(state, now):
         if last < cutoff:
             to_delete.append(tk)
     if to_delete:
-        with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
-            for tk in to_delete:
-                f.write(json.dumps({"archived_at": now, "thread_key": tk, "data": threads[tk]}, ensure_ascii=False) + "\n")
-                del threads[tk]
-        log(f"Archived {len(to_delete)} stale threads (>{THREAD_RETENTION_DAYS}d)")
+        for tk in to_delete:
+            threads[tk].setdefault("flags", {})["deleted"] = True
+        log(
+            f"Moved {len(to_delete)} stale threads to the governed archive "
+            f"(>{THREAD_RETENTION_DAYS}d)"
+        )
     # Prune processed_hashes by count (keep last 5000)
     try:
         conn = state_registry._get_conn()
@@ -334,6 +425,18 @@ def _should_skip_marina_for_mute(from_email: str) -> bool:
     conversation has been muted via operator takeover; the loop should
     log + persist + mark seen + continue without calling marina_agent."""
     return state_registry.get_ai_muted(from_email or "")
+
+
+def _has_fully_escalated_review(from_email: str, flags: dict) -> bool:
+    """Derive the email review gate from SQLite as well as its JSON projection.
+
+    The two stores cannot be committed atomically.  A fresh hard escalation in
+    SQLite must therefore keep the review route active even if an older reply
+    concurrently clears a stale ``fully_escalated`` sidecar flag.
+    """
+    return bool((flags or {}).get("fully_escalated")) or (
+        state_registry.get_active_escalation_mode(from_email or "") == "hard"
+    )
 
 
 def _build_action_context(th):
@@ -489,6 +592,9 @@ def main():
                 subj = _decode_subj(msg.get("Subject", ""))
                 body_raw = extract_text(msg)
                 body = strip_quotes(body_raw)
+                _wa_operator_relay = _active_whatsapp_operator_relay(
+                    from_email, demo_support_email, subj
+                )
 
                 # Skip system/automated emails (noreply, mailer-daemon, etc.)
                 if any(from_email.lower().startswith(p) for p in _SYSTEM_EMAIL_PREFIXES):
@@ -511,6 +617,30 @@ def main():
                         im.uid("store", uid, "+FLAGS", r"(\Seen)")
                         log(f"Skipped business-sender email from {from_email} (subject: {subj[:60]}) — not a customer message")
                         continue
+
+                # Operator email replies to WhatsApp relays are durable provider
+                # actions, not customer mail. Process them before customer rate,
+                # thread, and anti-loop guards. Marking the generic fingerprint
+                # remains safe: while the work item is active this branch retries
+                # the same outbox action; after confirmation it makes a crash
+                # before the IMAP Seen write a harmless duplicate.
+                if _wa_operator_relay is not None:
+                    _relay_fingerprint = (
+                        f"{from_email.strip().lower()}|"
+                        f"{normalize_subject(subj).strip().lower()}|{body.strip()}"
+                    )
+                    state_registry.mark_as_processed(_relay_fingerprint)
+                    _wa_phone = str(_wa_operator_relay["customer_id"])
+                    _relay_delivery, _relay_replayed = (
+                        _deliver_whatsapp_operator_relay(_wa_operator_relay, body)
+                    )
+                    log(
+                        f"RELAY: confirmed WhatsApp relay sent to {_wa_phone} "
+                        f"(replayed={_relay_replayed})"
+                    )
+                    im.uid("store", uid, "+FLAGS", r"(\Seen)")
+                    save_json(THREAD_STATE_PATH, state)
+                    continue
 
                 # Per-sender rate limit (cross-thread)
                 _sr = state.setdefault("sender_rates", {})
@@ -611,38 +741,6 @@ def main():
                             break
                     if customer_th is None:
                         # Check WhatsApp relay
-                        _wa_relay = state_registry.get_relay_by_token(relay_token_in)
-                        if _wa_relay and _wa_relay["channel"] == "whatsapp":
-                            _wa_phone = _wa_relay["customer_id"]
-                            _wa_state = state_registry.wa_get_booking_state(_wa_phone)
-                            _wa_fields = _wa_state.get("fields", {})
-                            _wa_flags = _wa_state.get("flags", {})
-                            _wa_history = state_registry.wa_get_history(_wa_phone, limit=10)
-                            _wa_agent_flags = dict(_wa_flags)
-                            for _rk in ("relay_token", "reply_times"):
-                                _wa_agent_flags.pop(_rk, None)
-                            relay_result = marina_agent.process_message(
-                                _wa_phone, "", body,
-                                _wa_fields, _wa_agent_flags,
-                                channel="whatsapp", messages=_wa_history,
-                            )
-                            relay_reply = relay_result.get("reply", "")
-                            if relay_reply:
-                                send_whatsapp_message(_wa_phone, relay_reply)
-                                state_registry.wa_store_message(
-                                    _wa_phone, "assistant", relay_reply)
-                                log(f"RELAY: WhatsApp relay sent to {_wa_phone}")
-                            _wa_flags.pop("awaiting_relay", None)
-                            _wa_flags.pop("relay_token", None)
-                            _wa_flags.pop("relay_question", None)
-                            state_registry.wa_save_booking_state(
-                                _wa_phone, _wa_fields, _wa_flags,
-                                _wa_state.get("completed_bookings", []))
-                            state_registry.update_notification_status(
-                                _wa_relay["id"], "replied")
-                            im.uid("store", uid, "+FLAGS", r"(\Seen)")
-                            save_json(THREAD_STATE_PATH, state)
-                            continue
                         log(f"RELAY: no pending relay for token={relay_token_in} — skipping (may be already replied)")
                         im.uid("store", uid, "+FLAGS", r"(\Seen)")
                         save_json(THREAD_STATE_PATH, state)
@@ -766,7 +864,7 @@ def main():
                     continue
 
                 # Fully escalated guard — still calls marina_agent (one Claude call), skip booking flow
-                if th["flags"].get("fully_escalated"):
+                if _has_fully_escalated_review(from_email, th["flags"]):
                     _esc_flags = dict(th.get("flags", {}))
                     for _rk in ("awaiting_relay", "relay_token", "relay_question",
                                 "relay_customer_email", "relay_reply_subject"):
@@ -803,7 +901,9 @@ def main():
                         state_registry.create_pending_notification(
                             'relay', 'email', from_email, _cname,
                             f"[RELAY-{_relay_token}] {_ref} - {_cname}",
-                            _relay_alert, relay_token=_relay_token)
+                            _relay_alert, relay_token=_relay_token,
+                            email_thread_key=thread_key,
+                            email_reply_subject="Re: " + subj)
                         log(f"Escalated semi-relay: {from_email} re: {_relay_q[:60]}")
 
                     if result.get("requires_human") and not result.get("semi_escalation"):
@@ -820,7 +920,8 @@ def main():
                             f"Customer: {_cname} <{from_email}>\n"
                             f"New issue: {_esc_note}\n\n"
                             f"=== CHAT LOG ===\n" + "\n".join(_chat_lines),
-                            mode="hard")
+                            mode="hard", email_thread_key=thread_key,
+                            email_reply_subject="Re: " + subj)
                         log(f"Escalated re-escalation: {from_email}")
 
                     smtp_send(from_email, "Re: " + subj, result["reply"],
@@ -1106,7 +1207,9 @@ def main():
                         'relay', 'email', from_email,
                         _cname or "Unknown",
                         f"[RELAY-{relay_token}] {_ref} - {_cname}",
-                        _relay_alert, relay_token=relay_token)
+                        _relay_alert, relay_token=relay_token,
+                        email_thread_key=thread_key,
+                        email_reply_subject="Re: " + subj)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
@@ -1174,7 +1277,8 @@ def main():
                         customer_name_esc or "Unknown",
                         f"[ESCALATION] {booking_ref_esc} - {customer_name_esc} ({from_email}) - {_esc_summary}",
                         escalation_alert,
-                        mode="hard")
+                        mode="hard", email_thread_key=thread_key,
+                        email_reply_subject="Re: " + subj)
                     im.uid("store", uid, "+FLAGS", r"(\Seen)")
                     th["reply_times"].append(now)
                     th["last_customer_hash"] = customer_hash
@@ -1213,7 +1317,9 @@ def main():
                             )
                             state_registry.create_pending_notification(
                                 'escalation', 'email', from_email, _cname,
-                                _esc_subject, _esc_body, mode="soft")
+                                _esc_subject, _esc_body, mode="soft",
+                                email_thread_key=thread_key,
+                                email_reply_subject="Re: " + subj)
                             bm_logger.log("booking_flow_off_escalated", email=from_email)
                             # Send Marina's conversational reply, then skip to next email
                             smtp_send(from_email, "Re: " + subj, reply_text,
@@ -1291,7 +1397,8 @@ def main():
                                         f"Booking failed {_retry_count} times due to API error.\n"
                                         f"Error: {_manifest_error[:300]}\n"
                                         f"Fields: {json.dumps(fields_now, indent=2, ensure_ascii=False)}",
-                                        mode="hard")
+                                        mode="hard", email_thread_key=thread_key,
+                                        email_reply_subject="Re: " + subj)
                                     bm_logger.log("email_manifest_escalated", email=from_email,
                                                   retry_count=_retry_count)
                                 th["flags"]["booking_confirmed"] = False

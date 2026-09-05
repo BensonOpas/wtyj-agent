@@ -1,7 +1,7 @@
 # docker-compose.yml for tenant mermaid
 services:
   agent:
-    image: wtyj-agent
+    image: ${MERMAID_IMAGE:?MERMAID_IMAGE must pin an immutable Tracy revision}
     container_name: wtyj-mermaid
     restart: unless-stopped
     ports:

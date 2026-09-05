@@ -13,7 +13,8 @@ IDENTIFIER = "mermaid_conversation_id"
 DETAIL_KEYS = (
     "customer_name", "contact_phone", "language", "trip_date", "adults",
     "children", "infants", "child_ages", "pickup_preference", "pickup_location",
-    "dietary_requirements", "accessibility_notes", "special_requests", "phase",
+    "dietary_requirements", "accessibility_notes", "wheelchair_relationship",
+    "special_requests", "phase",
 )
 
 
@@ -50,9 +51,25 @@ def capture(conn, conversation_id, *, intake=None, name="", at=None):
     if row:
         customer_id = row[0]
     else:
-        customer_id = conn.execute(
-            "INSERT INTO customers(display_name,first_seen,last_seen) VALUES(?,?,?)",
-            (name, at, at)).lastrowid
+        # The social ingress already creates a canonical phone or Zernio
+        # conversation identity. Reuse that exact source identifier so the
+        # Mermaid intake cannot become an undeletable second customer file.
+        canonical = conn.execute(
+            "SELECT ci.customer_id FROM customer_identifiers ci "
+            "JOIN customers c ON c.id=ci.customer_id "
+            "WHERE ci.value=? AND ci.type IN "
+            "('phone','wa_conversation_id','conversation_id') AND c.active=1 "
+            "ORDER BY c.first_seen,c.id LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        customer_id = (
+            canonical[0]
+            if canonical
+            else conn.execute(
+                "INSERT INTO customers(display_name,first_seen,last_seen) VALUES(?,?,?)",
+                (name, at, at),
+            ).lastrowid
+        )
         conn.execute("INSERT INTO customer_identifiers(customer_id,type,value,first_seen) VALUES(?,?,?,?)",
                      (customer_id, IDENTIFIER, conversation_id, at))
     conn.execute("UPDATE customers SET first_seen=MIN(first_seen,?), last_seen=MAX(last_seen,?) WHERE id=?",

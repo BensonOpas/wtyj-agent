@@ -3,10 +3,41 @@
 # Idempotent: safe to run on cron every 30 min — no-ops when nothing to do.
 # Honors $SKIP_OFF_HOURS_CHECK=1 (set by CI's deploy-production which already
 # decided off-hours is OK and may be at the boundary).
-set -e
+set -euo pipefail
+umask 077
 
 SOURCE_ROOT="${WTYJ_SOURCE_ROOT:-/root/wtyj-agent-source}"
 export DEPLOY_QUEUE_PATH="${DEPLOY_QUEUE_PATH:-/root/wtyj_deploy_queue.json}"
+DEPLOY_LOCK_PATH="${WTYJ_DEPLOY_LOCK_PATH:-/root/wtyj-production-deploy.lock}"
+# Mermaid runs a reviewed, tenant-scoped immutable image. It is deliberately
+# absent from this shared-image rollout. Use deploy_mermaid_release.sh for
+# Tracy releases so a generic :latest deploy can never replace that image.
+DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus ali-car-rental consulta-despertares unboks wibrandt}"
+
+for client in $DEPLOY_CLIENTS; do
+  case "$client" in
+    mermaid)
+      echo "Refusing generic deployment of protected Mermaid tenant; use deploy_mermaid_release.sh"
+      exit 1
+      ;;
+    bluemarlin|adamus|ali-car-rental|consulta-despertares|unboks|wibrandt) ;;
+    *)
+      echo "Refusing unknown shared deployment target: $client"
+      exit 1
+      ;;
+  esac
+done
+
+# Serialize every production image/container mutation with scoped Mermaid
+# releases. Acquire this before claiming queue work so a busy deploy does not
+# strand a claim in the in_progress state.
+mkdir -p "$(dirname "$DEPLOY_LOCK_PATH")"
+exec 9>"$DEPLOY_LOCK_PATH"
+if ! flock -n 9; then
+  echo "Another production deployment holds $DEPLOY_LOCK_PATH; leaving the queue untouched"
+  exit 0
+fi
+
 cd "$SOURCE_ROOT"
 
 # Off-hours check (skip if CI already decided)
@@ -39,27 +70,41 @@ START=$(date +%s)
 # Pre-deploy snapshot
 bash "$SOURCE_ROOT/wtyj/scripts/pre_deploy_snapshot.sh" "$SHA"
 
-# Deploy paying clients + internal sandbox (image already built by canary).
-# Runtime compose files may intentionally pin a tenant-specific tag. Refresh
-# those local wtyj-agent tags from latest before forcing container recreation.
+# Deploy shared-image clients (image already built by canary). Runtime compose
+# files may intentionally pin a local shared-image tag. Refresh those tags from
+# latest before forcing container recreation. Mermaid is protected above and
+# can only be changed through its tenant-scoped release script.
 STATUS="success"
-DEPLOY_CLIENTS="${WTYJ_DEPLOY_CLIENTS:-adamus ali-car-rental mermaid consulta-despertares unboks wibrandt}"
 HEALTH_PORTS=""
 VERIFY_DESPERTARES=0
 LATEST_IMAGE_ID=$(docker image inspect --format '{{.Id}}' wtyj-agent:latest)
 for client in $DEPLOY_CLIENTS; do
+  if [ -L "/root/clients/$client" ]; then
+    echo "refusing symlinked runtime client dir: /root/clients/$client"
+    STATUS="failed"
+    break
+  fi
   if [ ! -d "/root/clients/$client" ]; then
     echo "skip missing runtime client dir: /root/clients/$client"
     continue
   fi
   cd /root/clients/$client
   if ! (
+    COMPOSE_CONFIG=$(docker compose config)
+    if grep -Eq '^[[:space:]]*container_name:[[:space:]]*wtyj-mermaid[[:space:]]*$' <<< "$COMPOSE_CONFIG"; then
+      echo "protected Mermaid container found in shared deployment target $client"
+      exit 1
+    fi
     COMPOSE_IMAGES=$(docker compose config --images)
     APP_IMAGE_FOUND=0
     for image in $COMPOSE_IMAGES; do
       case "$image" in
         sha256:*)
           echo "unverifiable raw image digest for $client: $image"
+          exit 1
+          ;;
+        wtyj-agent:tracy-*|wtyj-agent:mermaid-*)
+          echo "protected tenant-scoped image found in shared deployment target $client: $image"
           exit 1
           ;;
         wtyj-agent|wtyj-agent:*)
@@ -107,7 +152,6 @@ for client in $DEPLOY_CLIENTS; do
     bluemarlin) HEALTH_PORTS="$HEALTH_PORTS 8001" ;;
     adamus) HEALTH_PORTS="$HEALTH_PORTS 8002" ;;
     ali-car-rental) HEALTH_PORTS="$HEALTH_PORTS 8101" ;;
-    mermaid) HEALTH_PORTS="$HEALTH_PORTS 8102" ;;
     consulta-despertares)
       HEALTH_PORTS="$HEALTH_PORTS 8103"
       VERIFY_DESPERTARES=1
@@ -129,7 +173,7 @@ if [ "$STATUS" = "success" ]; then
     done
     if [ "$OK" = "0" ]; then
       STATUS="failed"
-      bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
+      WTYJ_DEPLOY_LOCK_HELD=1 bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
       break
     fi
   done
@@ -142,7 +186,7 @@ if [ "$STATUS" = "success" ] && [ "$VERIFY_DESPERTARES" = "1" ]; then
   if [ "$FOLLOW_UP_CODE" = "404" ] || [ "$FOLLOW_UP_CODE" = "000" ]; then
     echo "Consulta Despertares follow-up route verification failed: HTTP $FOLLOW_UP_CODE"
     STATUS="failed"
-    bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
+    WTYJ_DEPLOY_LOCK_HELD=1 bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
   fi
 
   # Probe the stable reply endpoint without credentials and with an invalid
@@ -155,7 +199,7 @@ if [ "$STATUS" = "success" ] && [ "$VERIFY_DESPERTARES" = "1" ]; then
   if [ "$REPLY_CODE" = "404" ] || [ "$REPLY_CODE" = "405" ] || [ "$REPLY_CODE" = "000" ]; then
     echo "Consulta Despertares reply route verification failed: HTTP $REPLY_CODE"
     STATUS="failed"
-    bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
+    WTYJ_DEPLOY_LOCK_HELD=1 bash "$SOURCE_ROOT/wtyj/scripts/rollback.sh" all || true
   else
     echo "Consulta Despertares reply route matched POST: HTTP $REPLY_CODE"
   fi

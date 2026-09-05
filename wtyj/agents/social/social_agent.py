@@ -1036,11 +1036,21 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     flags = state.get("flags", {})
     completed_bookings = state.get("completed_bookings", [])
     last_activity = state.get("last_activity")
+    from shared import mermaid_catalog
+    mermaid_demo = (
+        channel == "whatsapp" and mermaid_catalog.reservation_demo_enabled()
+    )
 
     # Stale conversation reset — 24h inactivity gap means new conversation
     if _maybe_reset_stale_conversation(last_activity, fields, flags, completed_bookings):
         bm_logger.log("whatsapp_stale_reset", phone=phone)
+        if mermaid_demo:
+            flags["mermaid_session_started_at"] = datetime.now(timezone.utc).isoformat()
         state_registry.wa_store_message(phone, "system", "Conversation reset after 24h inactivity")
+        # Mermaid's tenant-specific handler rereads state from the database.
+        # Persist the reset before that early return so a new session cannot
+        # silently reload the stale intake and suppress its first welcome.
+        state_registry.wa_save_booking_state(phone, fields, flags, completed_bookings)
 
     # Anti-loop guard — rate limit per phone
     _reply_times = flags.get("reply_times", [])
@@ -1056,8 +1066,7 @@ def handle_incoming_whatsapp_message(message: dict, channel: str = "whatsapp",
     # Mermaid's demo reservation flow is deterministic and tenant-scoped.
     # It runs before the generic model orchestrator so prices, availability,
     # confirmations, and later payment state can never be model-invented.
-    from shared import mermaid_catalog
-    if channel == "whatsapp" and mermaid_catalog.reservation_demo_enabled():
+    if mermaid_demo:
         from agents.social.mermaid_reservation_workflow import handle_demo_message
         return handle_demo_message(message, include_media=include_media, use_model=True)
 

@@ -39,7 +39,7 @@ def test_iso_string_old_archives():
         }
     })
     email_poller._cleanup_stale_data(state, time.time())
-    assert "subj:bob@example.com:old" not in state["threads"]
+    assert state["threads"]["subj:bob@example.com:old"]["flags"]["deleted"] is True
 
 
 def test_numeric_epoch_still_works():
@@ -60,7 +60,7 @@ def test_numeric_epoch_still_works():
     })
     email_poller._cleanup_stale_data(state, time.time())
     assert "subj:carol@example.com:legacy" in state["threads"]
-    assert "subj:dan@example.com:legacy_old" not in state["threads"]
+    assert state["threads"]["subj:dan@example.com:legacy_old"]["flags"]["deleted"] is True
 
 
 def test_malformed_iso_string_does_not_archive_or_raise():

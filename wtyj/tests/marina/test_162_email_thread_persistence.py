@@ -28,7 +28,7 @@ def test_cleanup_archives_truly_stale_thread():
         }
     })
     email_poller._cleanup_stale_data(state, now)
-    assert "subj:x@y.com:old" not in state["threads"], "Stale thread should be archived"
+    assert state["threads"]["subj:x@y.com:old"]["flags"]["deleted"] is True
 
 
 def test_cleanup_keeps_fresh_thread():
@@ -131,9 +131,7 @@ def test_cleanup_archives_stale_plain_thread_after_fix():
         }
     })
     email_poller._cleanup_stale_data(state, now)
-    assert "subj:x@y.com:genuinely_stale" not in state["threads"], (
-        "Plain stale thread should still be archived after Brief 162"
-    )
+    assert state["threads"]["subj:x@y.com:genuinely_stale"]["flags"]["deleted"] is True
 
 
 # --- Group C: Calvin regression scenarios ---

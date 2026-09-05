@@ -1,7 +1,12 @@
 {
-  "version": "mermaid-response-policy-342-v3",
-  "native_review": {
-    "pap": "pending_qualified_curacao_reviewer"
+  "version": "mermaid-response-policy-342-v5",
+  "language_review": {
+    "pap": {
+      "status": "formal_written_curacao_reference_review_complete",
+      "standard": "Fundashon pa Planifikashon di Idioma, Ortografia i Lista di palabra Papiamentu",
+      "register": "professional_written_curacao_papiamentu",
+      "reviewed_scope": "deterministic production copy and generated-output instructions"
+    }
   },
   "weekdays": {
     "en": [
@@ -183,17 +188,17 @@
     "pap": {
       "calendar": "E fechanan aki ta sigui nos programa publiká: {dates}. Ki fecha bo ke?",
       "operating_days": "Nos dianan di biahe publiká ta {days}.",
-      "no_dates": "No tin mas fecha programá den e período ei. Skohe un otro fecha, por fabor.",
+      "no_dates": "No tin mas fecha programá den e periodo ei. Skohe un otro fecha, por fabor.",
       "review_queued": "Bo petishon ta warda pa e tim di Mermaid revisá. Mi por sigui kontestá pregunta general tokante e biahe.",
-      "review_active": "Un miembro di e tim ta atendé e kombersashon aki.",
-      "review_none": "No tin un petishon pa e tim revisá registrá pa e kombersashon aki.",
-      "payment_unpaid": "Bo pago di demo no ta registrá komo kompletá ainda. Den e demo aki no ta kobra plaka di berdat.",
-      "payment_paid": "Bo pago simulá ta registrá komo kompletá. No a kobra plaka di berdat.",
+      "review_active": "Un miembro di e tim ta atendé e kòmbersashon aki.",
+      "review_none": "No tin un petishon pa e tim revisá registrá pa e kòmbersashon aki.",
+      "payment_unpaid": "Bo pago di demo no ta registrá komo kompletá ainda. Den e demo aki no ta kobra plaka di bèrdat.",
+      "payment_paid": "Bo pago simulá ta registrá komo kompletá. No a kobra plaka di bèrdat.",
       "payment_none": "Ora bo konfirmá e detayenan di e biahe, mi ta manda bo oferta PDF i e link di pago demo aki den WhatsApp.",
-      "delivery_delivered": "E dokumento ta registrá komo entregá den e kombersashon di WhatsApp aki.",
-      "delivery_waiting": "Entrega di e dokumento den e kombersashon di WhatsApp aki no ta konfirmá ainda.",
+      "delivery_delivered": "E dokumento ta registrá komo entregá den e kòmbersashon di WhatsApp aki.",
+      "delivery_waiting": "Entrega di e dokumento den e kòmbersashon di WhatsApp aki no ta konfirmá ainda.",
       "delivery_failed": "No a logra entregá e dokumento. E datonan di bo reservashon ta wardá ainda.",
-      "delivery_none": "No tin entrega di dokumento registrá pa e kombersashon aki.",
+      "delivery_none": "No tin entrega di dokumento registrá pa e kòmbersashon aki.",
       "pickup_round_trip": "E preis indiká pa vehíkulo ta inkluí buska bo i trese bo bèk na bo alohamentu.",
       "pickup_unknown": "E preis indiká no ta konfirmá ainda si e biahe di regreso ta inkluí; e tim mester konfirmá esei.",
       "security_blocked": "Mi por yuda ku pregunta tokante e biahe di Mermaid, pero mi no por kambia preis aprobá, inventá pago ni kompartí informashon privá.",
@@ -206,7 +211,7 @@
       "pickup_need_party": "Kuantu adulto, mucha di 4–12 aña i mucha di 0–3 aña ta bai?",
       "pickup_offer_review": "Pa e grupo aki, e tim mester konfirmá transporte adekuá i su preis.",
       "pickup_unpriced": "E tim mester konfirmá e preis pa transporte.",
-      "pickup_schedule": "E ora di pickup programá den e demo aki ta {time}, ora lokal di Kòrsou.",
+      "pickup_schedule": "E ora programá pa pasa buska bo den e demo aki ta {time}, ora lokal di Kòrsou.",
       "pickup_current_amount": "E preis aktual pa transporte ta {currency} {amount} pa reservashon.",
       "wildlife_guarantee": "Ta posibel pa mira turtuga i otro bestia, pero no tin garantia ku bo lo mira nan."
     },
@@ -266,11 +271,16 @@
       "money": "plaka",
       "accommodation": "alohamentu",
       "team": "tim",
+      "guest": "bishitante",
+      "wheelchair": "stul di rueda",
+      "crew": "tripulashon",
+      "assistance": "asistensia",
+      "current_availability": "disponibilidat aktual",
       "snorkeling_mask": "máskara di snòrkel",
       "food_included_example": "Desayuno, almuerso di barbekiú, refresko i djus ta inkluí.",
-      "paid_drinks_example": "Serbes i biña ta kosta ekstra.",
+      "paid_drinks_example": "Serbes i biña ta kosta èkstra.",
       "cash_for_optional_drinks_example": "Hiba sèn kèsh si bo ke serbes òf biña.",
-      "pickup_choice_example": "Bo ke nos pasa buska bo, òf bo ta bai na e pier ku bo mes transporte?",
+      "pickup_choice_example": "Bo ke nos pasa buska bo, òf bo ta bai Fishermen’s Pier ku bo mes transporte?",
       "phone_number": "number di telefòn",
       "weekdays_monday_to_sunday": [
         "djaluna",
@@ -297,12 +307,14 @@
         "desèmber"
       ],
       "hat": "sombré",
-      "cap": "pet",
+      "cap": "pèchi",
       "sunscreen": "krema solar",
-      "bring_example": "Hiba toaya, krema solar, un sombré òf pet, i paña di landa.",
+      "bring_example": "Hiba toaya, krema solar, un sombré òf pèchi, i paña di landa.",
       "contact_number_example": "Na ki number di telefòn nos por alkansá bo, inkluyendo kódigo di pais? Ta pa avisunan importante di e biahe, manera un kanselashon pa mal tempu.",
       "contact_number_retry_example": "Bo por manda e number di telefòn kompleto ku kódigo di pais, kuminsando ku +? Asina mi por warda un number di kontakto pa avisunan di e biahe.",
-      "details_acknowledgement_example": "Danki. Mi a nota e datonan."
+      "details_acknowledgement_example": "Danki. Mi a nota e datonan.",
+      "wheelchair_assistance_example": "Sí, no tin problema. Nos ta prepará pa risibí bishitantenan ku ta usa stul di rueda. Mi a registrá un nota pa e tripulashon por prepará pa duna asistensia.",
+      "wheelchair_withdrawal_example": "Mi a komprondé. Mi a kita e nota tokante e stul di rueda for di e reservashon aki."
     }
   },
   "security": {

@@ -56,7 +56,15 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
+            umask 077
             export WTYJ_SOURCE_ROOT=/root/wtyj-agent-source
+            export WTYJ_DEPLOY_LOCK_PATH=/root/wtyj-production-deploy.lock
+            exec 9>"$WTYJ_DEPLOY_LOCK_PATH"
+            if ! flock -n 9; then
+              echo "Another production deployment is active; refusing a concurrent canary mutation"
+              exit 1
+            fi
+            export WTYJ_DEPLOY_LOCK_HELD=1
             cd "$WTYJ_SOURCE_ROOT" && git pull
             SHA=$(git rev-parse --short HEAD)
             chmod +x wtyj/scripts/*.sh

@@ -140,7 +140,8 @@ def imap_connect():
 
 # ========= SENDING =========
 def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, references=None, reply_to=None,
-              html_body: str = None, pdf_attachment: tuple[str, bytes] | None = None):
+              html_body: str = None, pdf_attachment: tuple[str, bytes] | None = None,
+              message_id: str | None = None):
     """Brief 204: Gmail app password mode when EMAIL_PASSWORD is set; else
     Microsoft OAuth XOAUTH2 (existing path).
 
@@ -164,7 +165,9 @@ def smtp_send(to_addr: str, subject: str, body: str, in_reply_to=None, reference
     msg["From"] = formataddr((customer_facing_agent_name(), EMAIL_ADDR))
     msg["To"] = to_addr
     msg["Subject"] = subject
-    msg["Message-ID"] = make_msgid(domain=EMAIL_ADDR.split("@")[1])
+    if message_id and ("\r" in message_id or "\n" in message_id):
+        raise ValueError("Invalid Message-ID")
+    msg["Message-ID"] = message_id or make_msgid(domain=EMAIL_ADDR.split("@")[1])
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:

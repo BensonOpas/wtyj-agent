@@ -9,6 +9,7 @@ state.json
 payment_state.json
 social_state.json
 email_thread_state.json
+email_thread_state.json.lock
 bluemarlin/data/*
 !bluemarlin/data/.gitkeep
 wtyj/data/*

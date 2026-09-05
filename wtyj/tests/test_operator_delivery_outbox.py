@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
 
+from agents.marina import email_poller
 from dashboard import api, operator_delivery
 from shared import state_registry
 
@@ -231,12 +233,138 @@ def test_escalation_paths_freeze_prepare_and_only_apply_confirmed_effects(
     assert len(resolutions) == 1
     assert len(generations) == (0 if mode == "hard" else 1)
     assert rows("pending_notifications")[0]["status"] == "replied"
+    assert state_registry.get_active_escalation_mode(CONVERSATION) is None
+    assert state_registry.get_conversation_status(CONVERSATION) == "resolved"
     assert rows("photo_library")[0]["used_count"] == int(media)
     assert len(rows("whatsapp_threads")) == 1 + int(guidance and media)
     assert rows("whatsapp_threads")[0]["text"] == (req.text if mode == "hard" else "Generated 1")
     assert asyncio.run(endpoint(17, req)) == response
     assert len(sends) == 2
     assert rows("photo_library")[0]["used_count"] == int(media)
+
+
+def test_inbound_during_provider_send_closes_unchanged_answered_work_item():
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode) "
+        "VALUES (18,'escalation','whatsapp',?,'Question','Original','pending','2026-09-04','hard')",
+        (CONVERSATION,),
+    )
+    conn.commit()
+    conn.close()
+    state_registry.set_ai_muted(CONVERSATION, True)
+
+    def sender(*_args, **_kwargs):
+        state_registry.wa_store_message(CONVERSATION, "user", "One more detail")
+        return True
+
+    operator_delivery.deliver(
+        conversation_id=CONVERSATION,
+        scope="escalation:18:reply:hard",
+        original={"text": "Answer"},
+        request_id="inbound-during-send",
+        prepare=lambda: {
+            **payload("Answer"),
+            "notification_id": 18,
+        },
+        sender=sender,
+    )
+
+    assert rows("pending_notifications")[0]["status"] == "replied"
+    assert state_registry.get_active_escalation_mode(CONVERSATION) is None
+    assert state_registry.get_ai_muted(CONVERSATION) is False
+    assert rows("operator_delivery_outbox")[0]["status"] == "confirmed"
+
+
+def test_reescalation_during_provider_send_preserves_new_revision_and_relay():
+    state_registry.create_pending_notification(
+        "escalation", "whatsapp", CONVERSATION, "Guest",
+        "Original question", "Original body", mode="soft",
+    )
+    state_registry.wa_save_booking_state(
+        CONVERSATION,
+        {"name": "Guest"},
+        {
+            "awaiting_relay": True,
+            "relay_token": "old-token",
+            "relay_question": "Original question",
+        },
+    )
+    notification_id = rows("pending_notifications")[0]["id"]
+
+    def sender(*_args, **_kwargs):
+        state_registry.wa_store_message(CONVERSATION, "user", "This is a different issue")
+        state_registry.wa_save_booking_state(
+            CONVERSATION,
+            {"name": "Guest"},
+            {
+                "awaiting_relay": True,
+                "relay_token": "new-token",
+                "relay_question": "Different issue",
+            },
+        )
+        assert state_registry.create_pending_notification(
+            "escalation", "whatsapp", CONVERSATION, "Guest",
+            "Different issue", "New body", mode="hard",
+        ) == notification_id
+        return True
+
+    operator_delivery.deliver(
+        conversation_id=CONVERSATION,
+        scope=f"escalation:{notification_id}:reply:soft",
+        original={"text": "Original answer"},
+        request_id="reescalation-during-send",
+        prepare=lambda: {
+            **payload("Original answer"),
+            "role": "assistant",
+            "notification_id": notification_id,
+            "clear_relay": True,
+        },
+        sender=sender,
+    )
+
+    notification = rows("pending_notifications")[0]
+    assert notification["status"] == "pending"
+    assert notification["subject"] == "Different issue"
+    assert notification["content_revision"] == 2
+    assert state_registry.get_active_escalation_mode(CONVERSATION) == "hard"
+    flags = state_registry.wa_get_booking_state(CONVERSATION)["flags"]
+    assert flags["awaiting_relay"] is True
+    assert flags["relay_token"] == "new-token"
+    assert flags["relay_question"] == "Different issue"
+
+
+def test_stale_dashboard_revision_cannot_close_new_whatsapp_issue(monkeypatch):
+    notification_id = state_registry.create_pending_notification(
+        "escalation", "whatsapp", CONVERSATION, "Guest",
+        "Original question", "Original body", mode="hard",
+    )
+    viewed_revision = rows("pending_notifications")[0]["content_revision"]
+    assert viewed_revision == 1
+    assert state_registry.create_pending_notification(
+        "escalation", "whatsapp", CONVERSATION, "Guest",
+        "New question", "New body", mode="hard",
+    ) == notification_id
+    sends = []
+    monkeypatch.setattr(api, "send_whatsapp_message", lambda *a, **k: sends.append((a, k)))
+
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(api.reply_to_escalation(
+            notification_id,
+            api.EscalationReplyRequest(
+                message="Answer based on the old screen",
+                request_id="stale-wa-view",
+                content_revision=viewed_revision,
+            ),
+        ))
+    assert failed.value.status_code == 409
+    assert "changed" in failed.value.detail
+    assert sends == []
+    notification = rows("pending_notifications")[0]
+    assert notification["status"] == "pending"
+    assert notification["content_revision"] == 2
+    assert rows("operator_delivery_outbox") == []
 
 
 def test_regular_inbox_preserves_request_identity_across_both_routes(monkeypatch):
@@ -260,6 +388,15 @@ def test_regular_inbox_preserves_request_identity_across_both_routes(monkeypatch
 
 
 def test_guidance_generation_failure_does_not_freeze_or_send_booking_fallback(monkeypatch):
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode) "
+        "VALUES (17,'escalation','whatsapp',?,'Question','Body','pending','2026-09-04','soft')",
+        (CONVERSATION,),
+    )
+    conn.commit()
+    conn.close()
     monkeypatch.setattr(api.state_registry, "get_all_escalations", lambda: [{
         "id": 17, "channel": "whatsapp", "customer_id": CONVERSATION, "mode": "soft",
     }])
@@ -302,3 +439,652 @@ def test_soft_operator_input_is_relay_even_without_persisted_relay_state(monkeyp
     assert seen_flags == [{"preserved": True, "awaiting_relay": True}]
     assert prepared["text"] == "Please meet your guide at the pier."
     assert state_registry.wa_get_booking_state(CONVERSATION)["flags"] == {"preserved": True}
+
+
+def _active_email_relay():
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,relay_token,channel,customer_id,subject,body,status,created_at,mode) "
+        "VALUES (29,'relay','abc123def456','whatsapp',?,'Question','Body','sent','2026-09-04','hard')",
+        (CONVERSATION,),
+    )
+    conn.execute(
+        "CREATE TABLE mermaid_reservations ("
+        "tenant_slug TEXT,conversation_id TEXT,human_takeover INTEGER,updated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO mermaid_reservations VALUES ('mermaid',?,1,'before')",
+        (CONVERSATION,),
+    )
+    conn.commit()
+    conn.close()
+    state_registry.set_ai_muted(CONVERSATION, True)
+    state_registry.wa_save_booking_state(
+        CONVERSATION,
+        {"name": "Guest"},
+        {
+            "awaiting_relay": True,
+            "relay_token": "abc123def456",
+            "relay_question": "Question",
+            "fully_escalated": True,
+            "preserved": True,
+        },
+    )
+    return state_registry.get_relay_by_token("abc123def456")
+
+
+def test_operator_email_whatsapp_relay_retries_one_frozen_payload_and_releases_mermaid(
+    monkeypatch,
+):
+    relay = _active_email_relay()
+    generations, sends = [], []
+    monkeypatch.setattr(
+        email_poller.marina_agent,
+        "process_message",
+        lambda *_a, **_k: generations.append(True)
+        or {"reply": f"Prepared answer {len(generations)}"},
+    )
+
+    def sender(*args, **kwargs):
+        sends.append((args, kwargs))
+        return len(sends) > 1
+
+    monkeypatch.setattr(email_poller, "send_whatsapp_message", sender)
+    with pytest.raises(operator_delivery.OperatorDeliveryUnconfirmed):
+        email_poller._deliver_whatsapp_operator_relay(relay, "Tell them the answer")
+
+    assert generations == [True]
+    assert rows("pending_notifications")[0]["status"] == "sent"
+    assert rows("mermaid_reservations")[0]["human_takeover"] == 1
+    assert state_registry.get_ai_muted(CONVERSATION) is True
+    assert rows("whatsapp_threads") == []
+
+    result, replayed = email_poller._deliver_whatsapp_operator_relay(
+        relay, "Tell them the answer"
+    )
+    assert replayed is False
+    assert result == {
+        "ok": True,
+        "reply": "Prepared answer 1",
+        "channel": "whatsapp",
+    }
+    assert sends[0] == sends[1]
+    assert sends[0][1]["confirm_delivery"] is True
+    assert sends[0][1]["idempotency_key"].startswith("unboks-operator-")
+    assert rows("pending_notifications")[0]["status"] == "replied"
+    assert rows("mermaid_reservations")[0]["human_takeover"] == 0
+    assert state_registry.get_ai_muted(CONVERSATION) is False
+    flags = state_registry.wa_get_booking_state(CONVERSATION)["flags"]
+    assert flags == {"fully_escalated": False, "preserved": True}
+    assert [row["text"] for row in rows("whatsapp_threads")] == ["Prepared answer 1"]
+
+    assert email_poller._deliver_whatsapp_operator_relay(
+        relay, "Tell them the answer"
+    ) == (result, True)
+    assert generations == [True]
+    assert len(sends) == 2
+    assert len(rows("operator_delivery_outbox")) == 1
+
+
+def test_operator_email_relay_requires_trusted_sender_and_actionable_whatsapp_row():
+    relay = _active_email_relay()
+    subject = "Re: [RELAY-abc123def456] Guest"
+    assert email_poller._active_whatsapp_operator_relay(
+        "Crew@Example.com", "crew@example.com", subject
+    ) == relay
+    assert email_poller._active_whatsapp_operator_relay(
+        "attacker@example.com", "crew@example.com", subject
+    ) is None
+    state_registry.update_notification_status(relay["id"], "replied")
+    assert email_poller._active_whatsapp_operator_relay(
+        "crew@example.com", "crew@example.com", subject
+    ) is None
+
+
+def test_operator_email_relay_runs_before_customer_mail_guards():
+    source = Path(email_poller.__file__).read_text()
+    relay_branch = source.index("if _wa_operator_relay is not None:")
+    assert relay_branch < source.index("# Per-sender rate limit", relay_branch)
+    assert relay_branch < source.index("# ---- BM-003", relay_branch)
+    assert relay_branch < source.index("# Anti-loop guard", relay_branch)
+
+
+def test_dashboard_email_retry_after_local_failure_does_not_resend_and_releases_mermaid(
+    monkeypatch, tmp_path,
+):
+    customer = "guest@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [
+                    {"role": "customer", "ts": "2026-09-04T10:00:00+00:00", "body": "Question"}
+                ],
+                "fields": {},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode) "
+        "VALUES (41,'escalation','email',?,'Question','Body','pending','2026-09-04','hard')",
+        (customer,),
+    )
+    conn.execute(
+        "CREATE TABLE mermaid_reservations ("
+        "tenant_slug TEXT,conversation_id TEXT,human_takeover INTEGER,updated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO mermaid_reservations VALUES ('mermaid',?,1,'before')",
+        (customer,),
+    )
+    conn.commit()
+    conn.close()
+    state_registry.set_ai_muted(customer, True)
+
+    prepared, sends = [], []
+
+    def prepare():
+        prepared.append(True)
+        return {
+            "to": customer,
+            "subject": "Re: Question",
+            "text": "Exact operator answer",
+            "role": "operator",
+            "notification_id": 41,
+            "response": {"ok": True, "reply": "Exact operator answer", "channel": "email"},
+        }
+
+    def sender(*args, **kwargs):
+        sends.append((args, kwargs))
+
+    original_append = state_registry.email_append_assistant_message
+    append_calls = []
+
+    def fail_after_first_append(*args, **kwargs):
+        result = original_append(*args, **kwargs)
+        append_calls.append(True)
+        if len(append_calls) == 1:
+            raise RuntimeError("synthetic local commit failure")
+        return result
+
+    monkeypatch.setattr(
+        state_registry, "email_append_assistant_message", fail_after_first_append
+    )
+    delivery_args = dict(
+        conversation_id=customer,
+        scope="escalation:41:reply:email",
+        original={"text": "Exact operator answer"},
+        request_id="email-action-41",
+        prepare=prepare,
+        sender=sender,
+    )
+    with pytest.raises(RuntimeError, match="synthetic local commit failure"):
+        operator_delivery.deliver_email(**delivery_args)
+
+    assert prepared == [True]
+    assert len(sends) == 1
+    assert sends[0][1]["message_id"].startswith("<unboks-operator-")
+    assert rows("operator_delivery_outbox")[0]["status"] == "provider_confirmed"
+    assert rows("pending_notifications")[0]["status"] == "pending"
+
+    result, replayed = operator_delivery.deliver_email(**delivery_args)
+    assert replayed is False
+    assert result == {"ok": True, "reply": "Exact operator answer", "channel": "email"}
+    assert prepared == [True]
+    assert len(sends) == 1
+    assert rows("operator_delivery_outbox")[0]["status"] == "confirmed"
+    assert rows("pending_notifications")[0]["status"] == "replied"
+    assert rows("mermaid_reservations")[0]["human_takeover"] == 0
+    assert state_registry.get_ai_muted(customer) is False
+    stored = json.loads(email_state_path.read_text())["threads"][thread_key]
+    outbound = [m for m in stored["messages"] if m.get("role") == "operator"]
+    assert len(outbound) == 1
+    assert outbound[0]["source_message_key"].startswith("operator-email-action:")
+    assert stored["flags"]["fully_escalated"] is False
+
+    assert operator_delivery.deliver_email(**delivery_args) == (result, True)
+    assert len(sends) == 1
+
+
+def test_email_flag_clear_failure_retries_after_effects_without_resending(
+    monkeypatch, tmp_path,
+):
+    customer = "flag-retry@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [{
+                    "role": "customer",
+                    "ts": "2026-09-04T10:00:00+00:00",
+                    "body": "Question",
+                }],
+                "fields": {},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode) "
+        "VALUES (42,'escalation','email',?,'Question','Body','pending','2026-09-04','hard')",
+        (customer,),
+    )
+    conn.commit()
+    conn.close()
+
+    sends = []
+    original_clear = state_registry.email_clear_fully_escalated_flag
+    clear_calls = []
+
+    def fail_first_clear(*args, **kwargs):
+        clear_calls.append(True)
+        if len(clear_calls) == 1:
+            raise RuntimeError("synthetic sidecar clear failure")
+        return original_clear(*args, **kwargs)
+
+    monkeypatch.setattr(
+        state_registry, "email_clear_fully_escalated_flag", fail_first_clear
+    )
+    delivery_args = dict(
+        conversation_id=customer,
+        scope="escalation:42:reply:email",
+        original={"text": "Answer"},
+        request_id="email-action-42",
+        prepare=lambda: {
+            "to": customer,
+            "subject": "Re: Question",
+            "text": "Answer",
+            "role": "operator",
+            "thread_key": thread_key,
+            "notification_id": 42,
+            "response": {"ok": True, "channel": "email"},
+        },
+        sender=lambda *args, **kwargs: sends.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic sidecar clear failure"):
+        operator_delivery.deliver_email(**delivery_args)
+    assert len(sends) == 1
+    assert rows("operator_delivery_outbox")[0]["status"] == "effects_committed"
+    assert rows("pending_notifications")[0]["status"] == "replied"
+
+    result, replayed = operator_delivery.deliver_email(**delivery_args)
+    assert result == {"ok": True, "channel": "email"}
+    assert replayed is False
+    assert len(sends) == 1
+    assert rows("operator_delivery_outbox")[0]["status"] == "confirmed"
+    stored = json.loads(email_state_path.read_text())["threads"][thread_key]
+    assert stored["flags"]["fully_escalated"] is False
+
+
+def test_email_reescalation_during_smtp_preserves_new_revision_and_freeze(
+    monkeypatch, tmp_path,
+):
+    customer = "smtp-race@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [{
+                    "role": "customer",
+                    "ts": "2026-09-04T10:00:00+00:00",
+                    "body": "Original question",
+                }],
+                "fields": {},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    notification_id = state_registry.create_pending_notification(
+        "escalation", "email", customer, "Guest",
+        "Original question", "Original body", mode="hard",
+        email_thread_key=thread_key,
+        email_reply_subject="Re: Question",
+    )
+    state_registry.set_ai_muted(customer, True, "email")
+
+    def sender(*_args, **_kwargs):
+        assert state_registry.create_pending_notification(
+            "escalation", "email", customer, "Guest",
+            "Updated question", "New body", mode="hard",
+            email_thread_key=thread_key,
+            email_reply_subject="Re: Question",
+        ) == notification_id
+
+    operator_delivery.deliver_email(
+        conversation_id=customer,
+        scope=f"escalation:{notification_id}:reply:email",
+        original={"text": "Original answer"},
+        request_id="smtp-reescalation",
+        prepare=lambda: {
+            "to": customer,
+            "subject": "Re: Question",
+            "text": "Original answer",
+            "role": "operator",
+            "thread_key": thread_key,
+            "notification_id": notification_id,
+            "response": {"ok": True, "channel": "email"},
+        },
+        sender=sender,
+    )
+
+    notification = rows("pending_notifications")[0]
+    assert notification["status"] == "pending"
+    assert notification["subject"] == "Updated question"
+    assert notification["content_revision"] == 2
+    assert state_registry.get_active_escalation_mode(customer) == "hard"
+    assert state_registry.get_ai_muted(customer) is True
+    stored = json.loads(email_state_path.read_text())["threads"][thread_key]
+    assert stored["flags"]["fully_escalated"] is True
+    assert len([m for m in stored["messages"] if m.get("role") == "operator"]) == 1
+    assert rows("operator_delivery_outbox")[0]["status"] == "confirmed"
+
+
+def test_stale_dashboard_revision_cannot_close_new_email_issue(monkeypatch, tmp_path):
+    customer = "stale-view@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [{
+                    "role": "customer",
+                    "ts": "2026-09-04T10:00:00+00:00",
+                    "body": "Original question",
+                }],
+                "fields": {},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    notification_id = state_registry.create_pending_notification(
+        "escalation", "email", customer, "Guest",
+        "Original question", "Original body", mode="hard",
+        email_thread_key=thread_key,
+        email_reply_subject="Re: Question",
+    )
+    viewed_revision = rows("pending_notifications")[0]["content_revision"]
+    assert state_registry.create_pending_notification(
+        "escalation", "email", customer, "Guest",
+        "New question", "New body", mode="hard",
+        email_thread_key=thread_key,
+        email_reply_subject="Re: Question",
+    ) == notification_id
+    sends = []
+    monkeypatch.setattr(api, "smtp_send", lambda *a, **k: sends.append((a, k)))
+
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(api.reply_to_escalation(
+            notification_id,
+            api.EscalationReplyRequest(
+                message="Answer based on the old screen",
+                request_id="stale-email-view",
+                content_revision=viewed_revision,
+            ),
+        ))
+    assert failed.value.status_code == 409
+    assert "changed" in failed.value.detail
+    assert sends == []
+    notification = rows("pending_notifications")[0]
+    assert notification["status"] == "pending"
+    assert notification["content_revision"] == 2
+    assert rows("operator_delivery_outbox") == []
+
+
+def test_email_reescalation_immediately_before_sidecar_clear_stays_active(
+    monkeypatch, tmp_path,
+):
+    customer = "pre-clear-race@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [{
+                    "role": "customer",
+                    "ts": "2026-09-04T10:00:00+00:00",
+                    "body": "Original question",
+                }],
+                "fields": {},
+                "flags": {"fully_escalated": True},
+            }
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    original_id = state_registry.create_pending_notification(
+        "escalation", "email", customer, "Guest",
+        "Original question", "Original body", mode="hard",
+        email_thread_key=thread_key,
+        email_reply_subject="Re: Question",
+    )
+    original_clear = state_registry.email_clear_fully_escalated_flag
+    clear_calls = []
+
+    def reescalate_then_clear(*args, **kwargs):
+        clear_calls.append(True)
+        state_registry.create_pending_notification(
+            "escalation", "email", customer, "Guest",
+            "New issue", "New issue body", mode="hard",
+            email_thread_key=thread_key,
+            email_reply_subject="Re: Question",
+        )
+        return original_clear(*args, **kwargs)
+
+    monkeypatch.setattr(
+        state_registry, "email_clear_fully_escalated_flag", reescalate_then_clear
+    )
+    operator_delivery.deliver_email(
+        conversation_id=customer,
+        scope=f"escalation:{original_id}:reply:email",
+        original={"text": "Original answer"},
+        request_id="pre-clear-reescalation",
+        prepare=lambda: {
+            "to": customer,
+            "subject": "Re: Question",
+            "text": "Original answer",
+            "role": "operator",
+            "thread_key": thread_key,
+            "notification_id": original_id,
+            "response": {"ok": True, "channel": "email"},
+        },
+        sender=lambda *_a, **_k: None,
+    )
+
+    notifications = rows("pending_notifications")
+    assert [row["status"] for row in notifications] == ["replied", "pending"]
+    assert clear_calls == [True]
+    stored = json.loads(email_state_path.read_text())
+    assert stored["threads"][thread_key]["flags"]["fully_escalated"] is True
+
+    # SQLite is authoritative for both processing and dashboard projection,
+    # even if an older sidecar writer has projected a stale false flag.
+    stored["threads"][thread_key]["flags"]["fully_escalated"] = False
+    email_state_path.write_text(json.dumps(stored))
+    assert email_poller._has_fully_escalated_review(customer, {}) is True
+    conversations = state_registry.email_list_conversations()
+    assert conversations[0]["status"] == "escalated"
+
+
+def test_stale_email_poller_save_preserves_concurrent_operator_transcript(
+    monkeypatch, tmp_path,
+):
+    customer = "merge@example.com"
+    thread_key = f"subj:{customer}:question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            thread_key: {
+                "messages": [{
+                    "role": "customer",
+                    "ts": "2026-09-04T10:00:00+00:00",
+                    "body": "Question",
+                }],
+                "fields": {},
+                "flags": {},
+            }
+        },
+        "message_id_index": {},
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    email_poller._EMAIL_STATE_BASELINES.clear()
+    stale = email_poller.load_json(
+        str(email_state_path), {"threads": {}, "message_id_index": {}}
+    )
+
+    state_registry.email_append_assistant_message(
+        customer,
+        "Confirmed operator answer",
+        role="operator",
+        source_message_key="operator-email-action:merge-proof",
+        strict=True,
+        thread_key=thread_key,
+    )
+    stale["threads"][thread_key]["fields"]["language"] = "pap"
+    stale["threads"][thread_key]["messages"].append({
+        "role": "customer",
+        "ts": "2026-09-04T10:01:00+00:00",
+        "body": "Danki",
+    })
+    email_poller.save_json(str(email_state_path), stale)
+
+    stored = json.loads(email_state_path.read_text())["threads"][thread_key]
+    assert stored["fields"]["language"] == "pap"
+    assert [message["body"] for message in stored["messages"]] == [
+        "Question", "Confirmed operator answer", "Danki",
+    ]
+
+
+def test_email_escalation_keeps_original_subject_thread_when_sender_has_two(
+    monkeypatch, tmp_path,
+):
+    customer = "multi-subject@example.com"
+    escalated_key = f"subj:{customer}:wheelchair question"
+    newer_key = f"subj:{customer}:unrelated question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    email_state_path.write_text(json.dumps({
+        "threads": {
+            escalated_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T10:00:00Z", "body": "Help"}],
+                "fields": {}, "flags": {"fully_escalated": True},
+                "last_activity": "2026-09-04T10:00:00Z",
+            },
+            newer_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T11:00:00Z", "body": "Menu"}],
+                "fields": {}, "flags": {},
+                "last_activity": "2026-09-04T11:00:00Z",
+            },
+        }
+    }))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode,"
+        "email_thread_key,email_reply_subject) "
+        "VALUES (43,'escalation','email',?,'Internal alert','Body','pending','2026-09-04','hard',?,?)",
+        (customer, escalated_key, "Re: Wheelchair question"),
+    )
+    conn.commit()
+    conn.close()
+    sends = []
+    monkeypatch.setattr(api, "smtp_send", lambda *a, **k: sends.append((a, k)))
+
+    result = asyncio.run(api.reply_to_escalation(
+        43,
+        api.EscalationReplyRequest(message="We can help.", request_id="exact-email-thread"),
+    ))
+    assert result == {"ok": True, "reply": "We can help.", "channel": "email"}
+    assert sends[0][0][1] == "Re: Wheelchair question"
+    state = json.loads(email_state_path.read_text())["threads"]
+    assert len([m for m in state[escalated_key]["messages"] if m.get("role") == "operator"]) == 1
+    assert [m for m in state[newer_key]["messages"] if m.get("role") == "operator"] == []
+
+
+@pytest.mark.parametrize("route", ["reply", "guidance"])
+def test_missing_exact_escalation_thread_never_falls_back_to_other_subject(
+    monkeypatch, tmp_path, route,
+):
+    customer = "missing-thread@example.com"
+    escalated_key = f"subj:{customer}:wheelchair question"
+    unrelated_key = f"subj:{customer}:unrelated question"
+    email_state_path = tmp_path / "email_thread_state.json"
+    state = {
+        "threads": {
+            escalated_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T10:00:00Z", "body": "Help"}],
+                "fields": {}, "flags": {"fully_escalated": True},
+                "last_activity": "2026-09-04T10:00:00Z",
+            },
+            unrelated_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T11:00:00Z", "body": "Menu"}],
+                "fields": {}, "flags": {},
+                "last_activity": "2026-09-04T11:00:00Z",
+            },
+        }
+    }
+    email_state_path.write_text(json.dumps(state))
+    monkeypatch.setattr(
+        state_registry, "_get_email_state_path", lambda: str(email_state_path)
+    )
+    conn = operator_delivery._connect()
+    conn.execute(
+        "INSERT INTO pending_notifications "
+        "(id,notification_type,channel,customer_id,subject,body,status,created_at,mode,"
+        "email_thread_key,email_reply_subject) "
+        "VALUES (44,'escalation','email',?,'Internal alert','Body','pending','2026-09-04',?,?,?)",
+        (customer, "soft", escalated_key, "Re: Wheelchair question"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Simulate retention/manual cleanup removing only the exact source thread.
+    del state["threads"][escalated_key]
+    email_state_path.write_text(json.dumps(state))
+    escalation = next(e for e in state_registry.get_all_escalations() if e["id"] == 44)
+    assert escalation["email_thread_key"] == escalated_key
+    assert escalation["phone"] == f"email::{escalated_key}"
+
+    sends = []
+    monkeypatch.setattr(api, "smtp_send", lambda *a, **k: sends.append((a, k)))
+    endpoint = api.reply_to_escalation if route == "reply" else api.guidance_to_marina
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(endpoint(
+            44,
+            api.EscalationReplyRequest(
+                message="Please answer the original question.",
+                request_id=f"missing-exact-{route}",
+            ),
+        ))
+    assert failed.value.status_code == 409
+    assert "exact email thread" in failed.value.detail
+    assert sends == []
+    assert rows("pending_notifications")[0]["status"] == "pending"
+    unrelated = json.loads(email_state_path.read_text())["threads"][unrelated_key]
+    assert [m for m in unrelated["messages"] if m.get("role") in {"operator", "marina"}] == []

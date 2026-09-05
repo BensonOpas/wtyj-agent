@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import json
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -94,17 +95,17 @@ COPY = {
         "invalid_day": "Según la información publicada, Mermaid opera lunes, martes, miércoles, viernes, sábado y domingo. Elige uno de esos días.",
     },
     "pap": {
-        "intro": "Bon bini na Mermaid! Mi ta TRACY, asistente virtual di reservashon. Mi ta yuda bo ku bo biahe i prepara bo oferta di demo aki den WhatsApp.",
+        "intro": "Bon bini na Mermaid! Mi ta TRACY, asistente virtual di reservashon. Mi ta yuda bo ku bo biahe i prepará bo oferta di demo aki den WhatsApp.",
         "trip_date": "Ki fecha bo ke bishitá Klein Curaçao?",
         "adults": "Kuantu adulto ta bai?",
         "children": "Kuantu mucha di 4 te ku 12 aña ta bai? Kontestá 0 si no tin.",
         "infants": "Kuantu mucha di 0 te ku 3 aña ta bai? Kontestá 0 si no tin.",
         "name": "Ki nòmber kompleto mi por pone riba e reservashon?",
-        "pickup": "Boso ta bini Fishermen’s Pier òf boso ke pidi pickup na hotel?",
-        "hotel": "Ki hotel òf lugá di pickup mi mester pone den e petishon?",
+        "pickup": "Bo ta bini Fishermen’s Pier òf bo ke pidi pa nos buska bo na bo alohamentu?",
+        "hotel": "Na ki hotèl òf lugá nos mester buska bo?",
         "composition": "Kuantu ta adulto, mucha di 4 te ku 12 i mucha di 0 te ku 3 aña?",
-        "confirm": "Kontestá *SI* si tur kos ta korekto, òf bisa mi eksaktamente kiko mester kambia.",
-        "confirmed": "Perfekto, bo datonan ta konfirmá. Awor mi ta prepara bo reservashon demo i oferta.",
+        "confirm": "Kontestá *SÍ* si tur kos ta korekto, òf bisa mi eksaktamente kiko mester kambia.",
+        "confirmed": "Perfekto, bo datonan ta konfirmá. Awor mi ta prepará bo reservashon demo i oferta.",
         "cancelled": "Bo petishon di reservashon demo ta kanselá. No a tuma ningun pago.",
         "human": "Bo petishon ta warda pa e tim di Mermaid revisá. Bo datonan ta wardá i mi por sigui yuda ku preguntanan general tokante e biahe.",
         "invalid_day": "Segun e informashon publiká, Mermaid ta bai djaluna, djamars, djárason, djabièrnè, djasabra i djadumingu. Skohe un di e dianan ei.",
@@ -128,12 +129,324 @@ COPY = {
 }
 
 
+WELCOME_COPY = {
+    "en": "Hi, welcome to Mermaid! I’m TRACY, Mermaid’s virtual reservation assistant.",
+    "nl": "Hoi, welkom bij Mermaid! Ik ben TRACY, de virtuele reserveringsassistent van Mermaid.",
+    "de": "Hallo, willkommen bei Mermaid! Ich bin TRACY, die virtuelle Reservierungsassistentin von Mermaid.",
+    "es": "¡Hola! Te doy la bienvenida a Mermaid. Soy TRACY, la asistente virtual de reservas de Mermaid.",
+    "pap": "Bon bini na Mermaid! Mi ta TRACY, asistente virtual di reservashon.",
+    "pt": "Olá! Boas-vindas à Mermaid. Sou a TRACY, assistente virtual de reservas da Mermaid.",
+}
+
+
+WHEELCHAIR_COPY = {
+    "en": "Yes, no problem. We’re prepared to welcome guests who use wheelchairs. I’ve saved a note for the crew so they can prepare to help.",
+    "nl": "Ja, geen probleem. We zijn erop voorbereid om gasten die een rolstoel gebruiken te ontvangen. Ik heb een notitie voor de bemanning vastgelegd, zodat zij zich kunnen voorbereiden om te helpen.",
+    "de": "Ja, kein Problem. Wir sind darauf vorbereitet, Gäste zu empfangen, die einen Rollstuhl nutzen. Ich habe für die Besatzung eine Notiz hinterlegt, damit sie sich darauf vorbereiten kann, bei Bedarf zu helfen.",
+    "es": "Sí, no hay problema. Estamos preparados para recibir a personas que usan silla de ruedas. He guardado una nota para la tripulación para que pueda prepararse para ayudar.",
+    "pap": "Sí, no tin problema. Nos ta prepará pa risibí bishitantenan ku ta usa stul di rueda. Mi a registrá un nota pa e tripulashon por prepará pa duna asistensia.",
+    "pt": "Sim, sem problema. Estamos preparados para receber pessoas que usam cadeira de rodas. Registrei uma observação para a tripulação, para que ela possa se preparar para ajudar.",
+}
+
+
+WHEELCHAIR_WITHDRAWAL_COPY = {
+    "en": "Understood. I removed the wheelchair note from this reservation.",
+    "nl": "Begrepen. Ik heb de rolstoelnotitie uit deze reservering verwijderd.",
+    "de": "Verstanden. Ich habe den Rollstuhlhinweis aus dieser Reservierung entfernt.",
+    "es": "Entendido. Eliminé la nota sobre la silla de ruedas de esta reserva.",
+    "pap": "Mi a komprondé. Mi a kita e nota tokante e stul di rueda for di e reservashon aki.",
+    "pt": "Entendido. Removi a observação sobre a cadeira de rodas desta reserva.",
+}
+
+
+NO_WHEELCHAIR_NOTE_COPY = {
+    "en": "Understood. There is no wheelchair note on this reservation.",
+    "nl": "Begrepen. Er staat geen rolstoelnotitie bij deze reservering.",
+    "de": "Verstanden. Für diese Reservierung ist kein Rollstuhlhinweis hinterlegt.",
+    "es": "Entendido. No hay ninguna nota sobre silla de ruedas en esta reserva.",
+    "pap": "Mi a komprondé. No tin ningun nota tokante stul di rueda den e reservashon aki.",
+    "pt": "Entendido. Não há nenhuma observação sobre cadeira de rodas nesta reserva.",
+}
+
+
+BOARDING_ASSISTANCE_COPY = {
+    "en": "Yes, no problem. I’ve saved a note so the crew can prepare for the extra help you requested.",
+    "nl": "Ja, geen probleem. Ik heb een notitie vastgelegd, zodat de bemanning zich kan voorbereiden op de extra hulp die u hebt gevraagd.",
+    "de": "Ja, kein Problem. Ich habe eine Notiz hinterlegt, damit sich die Besatzung auf die von Ihnen gewünschte zusätzliche Hilfe vorbereiten kann.",
+    "es": "Sí, no hay problema. He guardado una nota para que la tripulación pueda prepararse para brindar la ayuda adicional que solicitaste.",
+    "pap": "Sí, no tin problema. Mi a registrá un nota pa e tripulashon por prepará pa duna e asistensia èkstra ku bo a pidi.",
+    "pt": "Sim, sem problema. Registrei uma observação para que a tripulação possa se preparar para oferecer a ajuda adicional solicitada.",
+}
+
+
+_WHEELCHAIR_NOTE_MARKERS = (
+    "wheelchair", "wheel chair", "rolstoel", "rollstuhl", "silla de ruedas",
+    "cadeira de rodas", "stul di rueda",
+)
+
+_SECURITY_TEXT_MARKERS = (
+    "ignore your instructions", "ignore previous instructions", "system prompt",
+    "api key", "password", "secret key", "reveal your instructions",
+    "unauthorized", "data leak", "leaked data", "exposed private",
+)
+
+_ORDINARY_WHEELCHAIR_MESSAGES = (
+    r"(?:(?:hi|hello) )?(?:i|we|my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|a guest|one guest|someone|a member of (?:our|the) (?:party|group)|a person in (?:our|the) (?:party|group)) (?:use|uses|will use|is using) (?:a |the |my |their )?wheelchair(?: can you help (?:with (?:it|the wheelchair)|us))?",
+    r"(?:do you |can you )?(?:welcome|accept|help) (?:guests?|people|someone|a person) (?:who |that )?(?:use|uses|using) (?:a )?wheelchair",
+    r"(?:(?:hoi|hallo) )?(?:ik|wij|mijn (?:man|vrouw|partner|moeder|vader)|een gast|iemand) (?:gebruik|gebruikt|heb|heeft) (?:een )?rolstoel(?: kunnen jullie (?:daarmee )?helpen)?",
+    r"(?:(?:hallo|guten tag) )?(?:ich|wir|mein (?:mann|frau|partner|mutter|vater)|ein gast|jemand) (?:benutze|benutzen|benutzt) (?:einen )?rollstuhl(?: konnen sie (?:damit )?helfen)?",
+    r"(?:(?:hola) )?(?:yo|nosotros|mi (?:esposo|marido|esposa|pareja|madre|padre)|un huesped|alguien) (?:uso|usamos|usa) (?:una )?silla de ruedas(?: pueden ayudar(?:nos)?(?: con (?:ella|la silla de ruedas))?)?",
+    r"(?:(?:bon dia|bon tardi) )?(?:mi|nos|mi kasa|un bishitante|un hende den nos grupo) ta usa stul di rueda(?: boso por yuda(?: nos)? ku e stul)?",
+    r"(?:(?:ola|bom dia) )?(?:eu|nos|meu (?:marido|esposo|parceiro|mae|pai)|um hospede|alguem) (?:uso|usamos|usa) (?:uma )?cadeira de rodas(?: voces podem ajudar(?: nos)?(?: com (?:ela|a cadeira de rodas))?)?",
+)
+
+_GENERAL_BOARDING_ASSISTANCE_MESSAGES = (
+    r"my ?husband is handicapped and need(?:s)? special attention on and off board can (?:u|you) help",
+)
+
+# Positive evidence that may appear beside an unrelated FAQ or reservation
+# action.  Keep these patterns tied to the guest or their party: the presence
+# of the word "wheelchair" by itself is not enough to create a crew note.
+_ORDINARY_WHEELCHAIR_EVIDENCE = (
+    r"\b(?:i|we|my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|one guest|a member of (?:our|the) (?:party|group)|a person in (?:our|the) (?:party|group)) (?:use|uses|will use|is using) (?:a |the |my |their |his |her )?wheelchair\b",
+    r"\b(?:my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|one guest|a member of (?:our|the) (?:party|group)) (?:is|will be) in (?:a |the |his |her )?wheelchair\b",
+    r"\b(?:i|we|my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|one guest|a member of (?:our|the) (?:party|group)) (?:travel|travels|will travel) in (?:a |the |my |their |his |her )?wheelchair\b",
+    r"\b(?:we|our (?:party|group)) (?:have|has) (?:a )?wheelchair user(?: in (?:our|the) (?:party|group))?\b",
+    r"\b(?:my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|one guest|a member of (?:our|the) (?:party|group)) is (?:a )?wheelchair user\b",
+    r"\b(?:mijn (?:man|vrouw|partner|moeder|vader)|een gast|iemand in (?:ons|het) gezelschap) (?:gebruik|gebruikt) (?:een )?rolstoel\b",
+    r"\b(?:mein(?:e)? (?:mann|frau|partner|mutter|vater)|ein gast|jemand in unserer gruppe) (?:benutze|benutzen|benutzt) (?:einen )?rollstuhl\b",
+    r"\b(?:mi (?:esposo|marido|esposa|pareja|madre|padre)|un huesped|alguien de nuestro grupo) (?:uso|usa) (?:una )?silla de ruedas\b",
+    r"\b(?:mi kasa|un bishitante|un hende den nos grupo) ta usa (?:un |e )?stul di rueda\b",
+    r"\b(?:meu (?:marido|esposo|parceiro|pai)|minha (?:esposa|parceira|mae)|um hospede|alguem do nosso grupo) usa (?:uma )?cadeira de rodas\b",
+)
+
+_WHEELCHAIR_WITHDRAWAL_MESSAGES = (
+    # English: direct non-use, no-longer-needed, and explicit note removal.
+    r"(?:(?:actually|correction) )?(?:nobody|no one)(?: in (?:our|the) party)? (?:uses|needs) (?:a )?wheelchair(?: anymore)?",
+    r"(?:(?:actually|correction|no) )?(?:i|we|he|she|they|my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|the guest|a guest|one guest|someone in (?:our|the) party) (?:(?:do not|don t|dont|does not|doesn t|doesnt) (?:use|need)|no longer (?:use|uses|need|needs)) (?:a |the )?wheelchair(?: anymore| any longer)?",
+    r"(?:(?:actually|correction|no) )?(?:my (?:husband|wife|partner|spouse|mother|father|daughter|son|child)|our guest|the guest|a guest|one guest|he|she) (?:is not|isn t|isnt|is no longer) (?:a )?wheelchair user(?: anymore| any longer)?",
+    r"(?:(?:do not|don t|dont|does not|doesn t|doesnt) (?:use|need)|no longer (?:use|need)) (?:a |the )?wheelchair(?: anymore| any longer)?",
+    r"(?:(?:actually|correction) )?(?:the |a )?wheelchair (?:is|was) no longer needed",
+    r"(?:please )?remove (?:the )?wheelchair note(?: from (?:my|the) reservation)?",
+    r"(?:(?:i|we) (?:already |have |have already )?)?removed (?:the )?wheelchair note(?: from (?:my|the) reservation)?",
+    r"(?:the )?wheelchair note (?:is|was|has been) removed(?: from (?:my|the) reservation)?",
+    # Dutch.
+    r"(?:(?:correctie|eigenlijk) )?niemand(?: in (?:ons|het) gezelschap)? gebruikt(?: meer)? een rolstoel",
+    r"(?:(?:correctie|eigenlijk|nee) )?(?:ik|wij|we|hij|zij|mijn (?:man|vrouw|partner|moeder|vader)|de gast|een gast|iemand in (?:ons|het) gezelschap) (?:(?:gebruik|gebruiken|gebruikt) geen rolstoel(?: meer)?|(?:gebruik|gebruiken|gebruikt) (?:niet meer|niet langer) (?:een |de )?rolstoel|(?:heb|hebben|heeft) geen rolstoel meer nodig)",
+    r"(?:gebruik|gebruiken|gebruikt) geen rolstoel(?: meer)?",
+    r"(?:(?:de )?rolstoel is niet meer nodig|(?:verwijder|wis) (?:de )?rolstoel ?(?:notitie|opmerking)(?: uit (?:mijn|de) reservering)?(?: alstublieft)?|(?:de )?rolstoel ?(?:notitie|opmerking) (?:is|werd) (?:uit (?:mijn|de) reservering )?verwijderd)",
+    # German.
+    r"(?:(?:korrektur|eigentlich) )?niemand(?: in unserer gruppe)? benutzt(?: mehr)? einen rollstuhl",
+    r"(?:(?:korrektur|eigentlich|nein) )?(?:ich|wir|er|sie|mein(?:e)? (?:mann|frau|partner|mutter|vater)|der gast|ein gast|jemand in unserer gruppe) (?:(?:benutze|benutzen|benutzt) keinen rollstuhl(?: mehr)?|(?:benutze|benutzen|benutzt) (?:nicht mehr|nicht langer) (?:einen |den )?rollstuhl|(?:brauche|brauchen|braucht) keinen rollstuhl(?: mehr)?)",
+    r"(?:benutze|benutzen|benutzt) keinen rollstuhl(?: mehr)?",
+    r"(?:(?:der )?rollstuhl ist nicht mehr notig|(?:entfernen sie|entferne|loschen sie|losche) (?:den )?rollstuhl(?:hinweis|vermerk|notiz)(?: aus (?:meiner|der) reservierung)?(?: bitte)?|(?:der )?rollstuhl(?:hinweis|vermerk|notiz) (?:ist|wurde) (?:aus (?:meiner|der) reservierung )?entfernt)",
+    # Spanish.
+    r"(?:(?:correccion|en realidad) )?nadie(?: de nuestro grupo)? usa(?: ya)? una silla de ruedas",
+    r"(?:(?:correccion|en realidad|no) )?(?:yo|nosotros|el|ella|mi (?:esposo|marido|esposa|pareja|madre|padre)|el pasajero|un pasajero|alguien de nuestro grupo) (?:ya )?no (?:uso|usamos|usa|usan|necesito|necesitamos|necesita|necesitan) (?:una |la )?silla de ruedas(?: ya| mas)?",
+    r"(?:(?:correccion|en realidad) )?(?:ya )?no (?:uso|usamos|usa|usan|necesito|necesitamos|necesita|necesitan) (?:una |la )?silla de ruedas(?: ya| mas)?",
+    r"(?:(?:la )?silla de ruedas ya no es necesaria|(?:elimina|elimine|quita|quite) (?:la )?nota (?:sobre|de) (?:la )?silla de ruedas(?: de (?:mi|la) reserva)?(?: por favor)?|(?:la )?nota (?:sobre|de) (?:la )?silla de ruedas (?:fue|ha sido|esta) (?:eliminada|quitada)(?: de (?:mi|la) reserva)?)",
+    # Standard Curaçao Papiamentu input plus common unaccented guest spelling.
+    r"(?:(?:korekshon) )?(?:niun|ningun) hende(?: den nos grupo)? ta usa stul di rueda mas",
+    r"(?:(?:korekshon|no) )?(?:mi|nos|e|mi kasa|un bishitante|un hende den nos grupo) no ta usa (?:un |e )?stul di rueda(?: mas)?",
+    r"no ta usa (?:un |e )?stul di rueda(?: mas)?",
+    r"(?:(?:korekshon) )?(?:mi|nos|e|mi kasa|un bishitante|un hende den nos grupo) (?:no tin mester di|no mester) (?:un |e )?stul di rueda(?: mas)?",
+    r"(?:(?:e )?stul di rueda no ta nesesario mas|(?:por fabor )?kita e nota (?:tokante|di) (?:e )?stul di rueda(?: for di (?:mi|e|nos) reservashon(?: aki)?)?(?: por fabor)?|(?:mi|nos) a kita e nota (?:tokante|di) (?:e )?stul di rueda(?: for di (?:mi|e|nos) reservashon(?: aki)?)?|e nota (?:tokante|di) (?:e )?stul di rueda a wordu kita(?: for di (?:mi|e|nos) reservashon(?: aki)?)?)",
+    # Portuguese; _evidence_text removes diacritics, so não becomes nao.
+    r"(?:(?:correcao|na verdade) )?ninguem(?: do nosso grupo)? usa(?: mais)? uma cadeira de rodas",
+    r"(?:(?:correcao|na verdade|nao) )?(?:eu|nos|ele|ela|meu (?:marido|esposo|parceiro|pai)|minha (?:esposa|parceira|mae)|o hospede|um hospede|alguem do nosso grupo) (?:ja )?nao (?:uso|usamos|usa|usam) (?:mais )?(?:uma |a )?cadeira de rodas(?: mais)?",
+    r"(?:(?:correcao|na verdade) )?(?:eu|nos|ele|ela|meu (?:marido|esposo|parceiro|pai)|minha (?:esposa|parceira|mae)|o hospede|um hospede|alguem do nosso grupo) (?:ja )?nao (?:preciso|precisamos|precisa|precisam) (?:mais )?de (?:uma |a )?cadeira de rodas(?: mais)?",
+    r"(?:(?:correcao|na verdade) )?(?:ja )?nao (?:(?:uso|usamos|usa|usam) (?:mais )?(?:uma |a )?cadeira de rodas|(?:preciso|precisamos|precisa|precisam) (?:mais )?de (?:uma |a )?cadeira de rodas)(?: mais)?",
+    r"(?:(?:a )?cadeira de rodas (?:ja )?nao e mais necessaria|(?:remova|retire|exclua) (?:a )?(?:observacao|nota) (?:sobre|da|de) (?:a )?cadeira de rodas(?: da (?:minha|a) reserva)?(?: por favor)?|(?:a )?(?:observacao|nota) (?:sobre|da|de) (?:a )?cadeira de rodas (?:foi|ja foi|esta) (?:removida|retirada|excluida)(?: da (?:minha|a) reserva)?)",
+)
+
+_INDEPENDENT_RESERVATION_INTENTS = {
+    "cancel": (
+        r"\b(?:cancel|cancelation|cancellation)\b",
+        r"\b(?:annuleer|annuleren)\b",
+        r"\b(?:storniere|stornieren)\b",
+        r"\b(?:cancela|cancelar|cancelacion)\b",
+        r"\b(?:kansela|kanselacion)\b",
+        r"\b(?:cancele|cancelar|cancelamento)\b",
+    ),
+    "new_booking": (
+        r"\b(?:new|another|separate|second) (?:booking|reservation)\b",
+        r"\b(?:nieuwe|andere|aparte|tweede) (?:boeking|reservering)\b",
+        r"\b(?:neue|weitere|separate|zweite) (?:buchung|reservierung)\b",
+        r"\b(?:nueva|otra|separada|segunda) reserva\b",
+        r"\b(?:reservashon nobo|otro reservashon|reservashon apart|di dos reservashon)\b",
+        r"\b(?:nova|outra|separada|segunda) reserva\b",
+    ),
+}
+
+_NON_ORDINARY_WHEELCHAIR_PATTERNS = (
+    r"\b(?:provide|supply|borrow|rent) (?:a |the )?wheel ?chair\b",
+    r"\b(?:do you have|is there|need|needs) (?:a |the )?wheel ?chair\b",
+    r"\bwheel ?chair (?:available|availability|equipment|lift|ramp)\b",
+    r"\b(?:can|could|does|do|will|would|is|are|may)\b[^.;?!]{0,100}\b(?:wheelchair|wheel chair)\b[^.;?!]{0,60}\b(?:aboard|on board|remain|stay|fit|accept|allow|accommodate|lift|carry|transfer|provide|supply|guarantee)\b",
+    r"\b(?:can|could|does|do|will|would|is|are|may)\b[^.;?!]{0,100}\b(?:accept|allow|accommodate|remain|stay|fit|lift|carry|transfer|provide|supply|guarantee)\b[^.;?!]{0,60}\b(?:wheelchair|wheel chair|him|her|them|the guest|a guest)\b",
+    r"\b(?:lift|carry|transfer) (?:him|her|them|me|us|a guest|the guest)[^.;?!]{0,50}\b(?:aboard|on board|onto|off|boat|vessel)\b",
+    r"\b(?:need|needs|require|requires) (?:help|assistance) (?:with |for )?(?:boarding|a transfer|transferring|stairs)\b",
+    r"\b(?:wheelchair|it) (?:fit|fits|go|goes) (?:aboard|on board|on|in)\b",
+    r"\bwheelchair\b[^.;?!]{0,40}\b(?:\d{2,3}\s*(?:cm|centimeters?|inches?)|wide|width|dimensions?)\b",
+    r"\b(?:electric|powered|motorized|non foldable|beach) wheelchair\b",
+    r"\b(?:accessible|accessibility|safe|safety|suitability|guarantee|medical)\b",
+    r"\b(?:oxygen|oxygen concentrator|concentrator|ventilator|medical device|allergy|allergic|peanut|refund|complaint)\b",
+    r"\b(?:lenen|huren|beschikbaar|uitrusting|helling|overstap|instappen|veilig|toegankelijk|allergie|terugbetaling|klacht|zuurstof|zuurstofconcentrator|concentrator)\b",
+    r"\b(?:kan|kunnen|mag|mogen|past|accepteert)\b[^.;?!]{0,100}\b(?:rolstoel|aan boord|blijven|tillen|overstappen)\b",
+    r"\b(?:hebben jullie|is er) (?:een )?rolstoel\b",
+    r"\b(?:leihen|mieten|verfugbar|ausrustung|rampe|transfer|einsteigen|sicher|barrierefrei|allergie|ruckerstattung|beschwerde|sauerstoff|sauerstoffgerat|sauerstoffkonzentrator|konzentrator)\b",
+    r"\b(?:kann|konnen|darf|durfen|passt|akzeptiert)\b[^.;?!]{0,100}\b(?:rollstuhl|an bord|bleiben|heben|umsteigen)\b",
+    r"\b(?:habt ihr|haben sie|gibt es) (?:einen |einen )?rollstuhl\b",
+    r"\b(?:prestar|alquilar|disponible|equipo|elevador|rampa|traslado|embarque|seguro|accesible|alergia|reembolso|queja|oxigeno|concentrador de oxigeno|concentrador)\b",
+    r"\b(?:puede|pueden|podria|podrian|cabe|acepta|permiten)\b[^.;?!]{0,100}\b(?:silla de ruedas|a bordo|permanecer|subir|traslado)\b",
+    r"\b(?:tienen|hay) (?:una )?silla de ruedas\b",
+    r"\b(?:presta|huur|disponibel|ekipo|lift|rampa|transfer|subi|sigur|aksesibel|alergia|reembolso|keho|oksigen|konsentrador di oksigen|konsentrador)\b",
+    r"\b(?:por|lo por|ta asepta|kabe)\b[^.;?!]{0,100}\b(?:stul di rueda|abordo|keda|hisa|transferi)\b",
+    r"\btin (?:un )?stul di rueda (?:pa|disponibel)\b",
+    r"\b(?:emprestar|alugar|disponivel|equipamento|elevador|rampa|transferencia|embarque|seguro|acessivel|alergia|reembolso|reclamacao|oxigenio|concentrador de oxigenio|concentrador)\b",
+    r"\b(?:pode|podem|poderia|cabe|aceita|permite)\b[^.;?!]{0,100}\b(?:cadeira de rodas|a bordo|permanecer|levantar|transferir)\b",
+    r"\b(?:voces tem|tem) (?:uma )?cadeira de rodas\b",
+)
+
+_CROSS_CLAUSE_WHEELCHAIR_REVIEW_PATTERNS = (
+    r"\b(?:lift|carry|transfer) (?:him|her|them|me|us|a guest|the guest)[^.;?!]{0,50}\b(?:aboard|on board|onto|off|boat|vessel)\b",
+    r"\b(?:need|needs|require|requires) (?:help|assistance) (?:with |for )?(?:boarding|a transfer|transferring|stairs)\b",
+    r"\b(?:oxygen|oxygen concentrator|concentrator|ventilator|medical device|sauerstoffgerat|sauerstoffkonzentrator|zuurstofconcentrator|concentrador de oxigeno|konsentrador di oksigen|concentrador de oxigenio)\b",
+    r"\b(?:allergy|allergic|refund|complaint|allergie|terugbetaling|klacht|ruckerstattung|beschwerde|alergia|reembolso|queja|keho|reclamacao)\b",
+)
+
+
+def _evidence_text(text: str) -> str:
+    value = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", str(text or "").casefold())
+        if not unicodedata.combining(character)
+    )
+    return " ".join(re.sub(r"[^\w\s]", " ", value).split())
+
+
+def _evidence_clauses(text: str) -> list[str]:
+    return [
+        value
+        for value in (
+            _evidence_text(part)
+            for part in re.split(r"[.!?;]+", str(text or ""))
+        )
+        if value
+    ]
+
+
+def _ordinary_wheelchair_message(text: str) -> bool:
+    value = _evidence_text(text)
+    if (
+        _wheelchair_withdrawal_message(text)
+        or _wheelchair_capability_requires_review(text)
+    ):
+        return False
+    return any(
+        re.fullmatch(pattern, value) for pattern in _ORDINARY_WHEELCHAIR_MESSAGES
+    ) or any(
+        re.search(pattern, value) for pattern in _ORDINARY_WHEELCHAIR_EVIDENCE
+    )
+
+
+def _general_boarding_assistance_message(text: str) -> bool:
+    value = _evidence_text(text)
+    return any(
+        re.fullmatch(pattern, value)
+        for pattern in _GENERAL_BOARDING_ASSISTANCE_MESSAGES
+    )
+
+
+def _wheelchair_capability_requires_review(text: str) -> bool:
+    """Keep equipment, transfer, medical and safety promises with the crew."""
+    value = _evidence_text(text)
+    # Owner-approved ordinary wording, including the reported guest message,
+    # wins over isolated words such as "board" in that exact sentence.
+    if any(
+        re.fullmatch(pattern, value) for pattern in _ORDINARY_WHEELCHAIR_MESSAGES
+    ):
+        return False
+    if not any(marker in value for marker in _WHEELCHAIR_NOTE_MARKERS):
+        return False
+    # Every capability match must come from the same sentence or clause as the
+    # wheelchair reference. This prevents an unrelated FAQ such as "Can I
+    # bring towels aboard?" from turning a routine note into human review.
+    clauses = _evidence_clauses(text)
+    if any(
+        re.search(pattern, clause)
+        for clause in clauses
+        for pattern in _CROSS_CLAUSE_WHEELCHAIR_REVIEW_PATTERNS
+    ):
+        return True
+    wheelchair_clauses = (
+        clause
+        for clause in clauses
+        if any(marker in clause for marker in _WHEELCHAIR_NOTE_MARKERS)
+    )
+    return any(
+        re.search(pattern, clause)
+        for clause in wheelchair_clauses
+        for pattern in _NON_ORDINARY_WHEELCHAIR_PATTERNS
+    )
+
+
+def _wheelchair_withdrawal_message(text: str) -> bool:
+    value = _evidence_text(text)
+    return any(
+        re.fullmatch(pattern, value) for pattern in _WHEELCHAIR_WITHDRAWAL_MESSAGES
+    )
+
+
+def _independent_reservation_intent(text: str) -> str | None:
+    value = _evidence_text(text)
+    return next(
+        (
+            action
+            for action, patterns in _INDEPENDENT_RESERVATION_INTENTS.items()
+            if any(re.search(pattern, value) for pattern in patterns)
+        ),
+        None,
+    )
+
+
+def _has_security_evidence(text: str) -> bool:
+    value = _evidence_text(text)
+    return any(marker in value for marker in _SECURITY_TEXT_MARKERS)
+
+
+def _canonical_wheelchair_note(relationship: str) -> str:
+    if relationship == "husband":
+        return "The guest's husband uses a wheelchair."
+    if relationship == "other":
+        return "A member of the guest's party uses a wheelchair."
+    return "A guest in this party uses a wheelchair."
+
+
+def _canonical_boarding_assistance_note(relationship: str) -> str:
+    if relationship == "husband":
+        return (
+            "The guest's husband requested extra assistance when boarding "
+            "and disembarking."
+        )
+    return "A guest in this party requested extra boarding assistance."
+
+
+def _wheelchair_relationship_from_message(text: str) -> str:
+    value = _evidence_text(text)
+    husband_markers = (
+        "my husband", "myhusband", "mijn man", "mein mann", "mi esposo",
+        "mi marido", "mi kasa", "meu marido", "meu esposo",
+    )
+    return "husband" if any(marker in value for marker in husband_markers) else "unspecified"
+
+
 SUMMARY_COPY = {
     "en": {"title": "Here is what I have", "date": "Date", "guests": "Guests", "name": "Reservation name", "transport": "Transport", "party": "{adults} adults, {children} children 4-12, {infants} children 0-3", "pier": "meeting at Fishermen’s Pier", "pickup": "hotel pickup requested ({location})"},
     "nl": {"title": "Dit heb ik genoteerd", "date": "Datum", "guests": "Gasten", "name": "Naam reservering", "transport": "Vervoer", "party": "{adults} volwassenen, {children} kinderen 4-12, {infants} kinderen 0-3", "pier": "ontmoeting bij Fishermen’s Pier", "pickup": "hoteltransfer aangevraagd ({location})"},
     "de": {"title": "Das habe ich notiert", "date": "Datum", "guests": "Gäste", "name": "Reservierungsname", "transport": "Transport", "party": "{adults} Erwachsene, {children} Kinder 4-12, {infants} Kinder 0-3", "pier": "Treffpunkt Fishermen’s Pier", "pickup": "Hotelabholung angefragt ({location})"},
     "es": {"title": "Esto es lo que anoté", "date": "Fecha", "guests": "Pasajeros", "name": "Nombre de reserva", "transport": "Transporte", "party": "{adults} adultos, {children} niños de 4-12, {infants} niños de 0-3", "pier": "encuentro en Fishermen’s Pier", "pickup": "recogida en hotel solicitada ({location})"},
-    "pap": {"title": "Esaki ta loke mi a nota", "date": "Fecha", "guests": "Huéspednan", "name": "Nòmber di reservashon", "transport": "Transporte", "party": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3", "pier": "topa na Fishermen’s Pier", "pickup": "pickup na hotel pidi ({location})"},
+    "pap": {"title": "Esaki ta loke mi a nota", "date": "Fecha", "guests": "Bishitantenan", "name": "Nòmber di reservashon", "transport": "Transporte", "party": "{adults} adulto, {children} mucha di 4-12, {infants} mucha di 0-3", "pier": "topa na Fishermen’s Pier", "pickup": "nos ta buska bo na bo alohamentu ({location})"},
     "pt": {"title": "Isto é o que anotei", "date": "Data", "guests": "Passageiros", "name": "Nome da reserva", "transport": "Transporte", "party": "{adults} adultos, {children} crianças de 4-12, {infants} crianças de 0-3", "pier": "encontro no Fishermen’s Pier", "pickup": "traslado do hotel solicitado ({location})"},
 }
 
@@ -143,7 +456,7 @@ FAQ_COPY = {
     "nl": {"price": "Volwassene USD {adult}; kind 4-12 USD {child}; 0-3 jaar gratis. De offerte bevat het volledige prijsoverzicht.", "included": "Ontbijt, frisdrank en sap, BBQ-lunch, het strandhuis, faciliteiten, snorkelmaskers en strandstoelen zijn inbegrepen.", "bring": "Neem handdoeken, zonnebrand en zwemkleding mee. Mermaid zorgt voor het inbegrepen eten, drinken en de eilandfaciliteiten."},
     "de": {"price": "Erwachsene USD {adult}; Kinder 4-12 USD {child}; 0-3 Jahre kostenlos. Die Einzelpreise stehen im Angebot.", "included": "Frühstück, alkoholfreie Getränke und Säfte, BBQ-Mittagessen, Strandhaus, Einrichtungen, Schnorchelmasken und Strandstühle sind inklusive.", "bring": "Bringen Sie Handtücher, Sonnencreme und Badesachen mit. Mermaid kümmert sich um inklusive Speisen, Getränke und Inseleinrichtungen."},
     "es": {"price": "Adulto USD {adult}; niño de 4-12 USD {child}; 0-3 años gratis. El total detallado estará en la cotización.", "included": "Incluye desayuno, refrescos y jugos, almuerzo BBQ, casa de playa, instalaciones, máscaras de snorkel y sillas de playa.", "bring": "Trae toallas, protector solar y traje de baño. Mermaid se encarga de la comida, bebidas e instalaciones incluidas."},
-    "pap": {"price": "Adulto USD {adult}; mucha di 4-12 USD {child}; 0-3 aña grátis. Bo oferta lo tin e total detayá.", "included": "Desayuno, refresko i djus, almuerso di barbekiú, beach house, fasilidatnan, máskara di snòrkel i stul di playa ta inkluí.", "bring": "Hiba handuk, krema solar i paña di landa. Mermaid ta sòru pa kuminda, bebida i fasilidatnan inkluí."},
+    "pap": {"price": "Adulto USD {adult}; mucha di 4-12 USD {child}; 0-3 aña grátis. Bo oferta lo tin e total detayá.", "included": "Desayuno, refresko i djus, almuerso di barbekiú, kas di playa, fasilidatnan, máskara di snòrkel i stul di playa ta inkluí.", "bring": "Hiba toaya, krema solar i paña di landa. Mermaid ta sòru pa kuminda, bebida i fasilidatnan inkluí."},
     "pt": {"price": "Adulto USD {adult}; criança de 4-12 USD {child}; 0-3 anos grátis. O total detalhado estará na cotação.", "included": "Inclui café da manhã, refrigerantes e sucos, almoço BBQ, casa de praia, instalações, máscaras de snorkel e cadeiras de praia.", "bring": "Leve toalhas, protetor solar e roupa de banho. A Mermaid cuida da comida, bebidas e instalações incluídas."},
 }
 
@@ -153,7 +466,7 @@ PAYMENT_COPY = {
     "nl": ("Voor deze demo zijn er plaatsen beschikbaar. Er is geen live beschikbaarheidssysteem gecontroleerd.", "Voltooi hier de demo-betaling zonder echt geld:"),
     "de": ("Für diese Demo sind Plätze verfügbar. Es wurde kein Live-Verfügbarkeitssystem geprüft.", "Schließen Sie hier die Demo-Zahlung ohne echtes Geld ab:"),
     "es": ("Para esta demo hay plazas disponibles. No se consultó un sistema de disponibilidad en vivo.", "Completa aquí el pago demo sin dinero real:"),
-    "pap": ("Pa e demo aki tin lugá disponibel. No a kontrolá ningun sistema live di disponibilidat.", "Kompletá e pago demo sin plaka real aki:"),
+    "pap": ("Pa e demo aki tin lugá disponibel. No a kontrolá disponibilidat aktual.", "Kompletá e pago demo sin plaka real aki:"),
     "pt": ("Para esta demo há lugares disponíveis. Nenhum sistema de disponibilidade ao vivo foi consultado.", "Conclua aqui o pagamento demo sem dinheiro real:"),
 }
 
@@ -171,7 +484,7 @@ YES = {
     "nl": {"ja", "ja klopt", "klopt", "bevestigd", "bevestigen"},
     "de": {"ja", "ja korrekt", "korrekt", "bestätigt", "bestätigen"},
     "es": {"sí", "si", "sí correcto", "correcto", "confirmar", "confirmado"},
-    "pap": {"si", "ta korekto", "korekto", "konfirmá"},
+    "pap": {"sí", "si", "ta korekto", "korekto", "konfirmá"},
     "pt": {"sim", "sim correto", "correto", "confirmar", "confirmado"},
 }
 
@@ -180,7 +493,7 @@ NATURAL_APPROVAL_PREFIXES = {
     "nl": ("ja", "ja het klopt", "ja klopt", "alles klopt", "helemaal goed", "ga verder"),
     "de": ("ja", "ja das passt", "alles passt", "alles stimmt", "alles gut", "weiter"),
     "es": ("sí", "si", "sí está bien", "si esta bien", "todo está bien", "todo esta bien", "adelante"),
-    "pap": ("si", "si ta bon", "tur kos ta bon", "tur kos ta korekto", "por sigui"),
+    "pap": ("sí", "si", "sí ta bon", "si ta bon", "tur kos ta bon", "tur kos ta korekto", "por sigui"),
     "pt": ("sim", "sim está certo", "sim esta certo", "está tudo certo", "esta tudo certo", "pode continuar"),
 }
 
@@ -406,6 +719,7 @@ def process_intake_turn(
     *,
     message_id: str = "",
     from_name: str = "",
+    reservation: dict | None = None,
 ) -> IntakeResult:
     """Apply one customer turn and persist only customer-owned intake facts."""
     state = state_registry.wa_get_booking_state(phone)
@@ -413,6 +727,7 @@ def process_intake_turn(
     flags = dict(state.get("flags") or {})
     completed = list(state.get("completed_bookings") or [])
     fields = dict(root_fields.get("mermaid_intake") or {})
+    assistance_reservation_id = str((reservation or {}).get("public_id") or "")
     seen = list(flags.get("mermaid_seen_message_ids") or [])
     if message_id and message_id in seen:
         return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
@@ -420,12 +735,121 @@ def process_intake_turn(
     locale = detect_language(text, fields.get("language"))
     fields["language"] = locale
     lower = str(text or "").strip().casefold()
-    if any(phrase in lower for phrase in ("human", "person", "real person", "medewerker", "mitarbeiter", "persona", "humano", "un hende")):
+    from agents.social import mermaid_model_recovery
+    explicit_person_request = bool(
+        mermaid_model_recovery.explicit_human_request(text)
+        or mermaid_model_recovery.contains_explicit_human_request(text)
+    )
+    general_boarding_assistance = _general_boarding_assistance_message(text)
+    wheelchair_withdrawal = _wheelchair_withdrawal_message(text)
+    ordinary_wheelchair = (
+        not wheelchair_withdrawal and _ordinary_wheelchair_message(text)
+    )
+    wheelchair_review = (
+        not wheelchair_withdrawal
+        and not ordinary_wheelchair
+        and _wheelchair_capability_requires_review(text)
+    )
+    if general_boarding_assistance and not explicit_person_request:
+        from agents.social import mermaid_crew_assistance
+
+        relationship = _wheelchair_relationship_from_message(text)
+        note = _canonical_boarding_assistance_note(relationship)
+        fields["phase"] = "collecting"
+        mermaid_crew_assistance.record_boarding_assistance_note(
+            phone,
+            note=note,
+            relationship=relationship,
+            trip_date=str(fields.get("trip_date") or ""),
+            customer_name=from_name or str(fields.get("customer_name") or ""),
+            source_message_id=message_id,
+            reservation_public_id=assistance_reservation_id,
+        )
+        response = "\n\n".join(
+            part
+            for part in (
+                COPY[locale]["intro"] if not fields.get("introduced") else "",
+                BOARDING_ASSISTANCE_COPY[locale],
+                _next_question(fields, locale) or "",
+            )
+            if part
+        )
+        fields["introduced"] = True
+        action = None
+    elif wheelchair_withdrawal and not explicit_person_request:
+        from agents.social import mermaid_crew_assistance
+
+        existing_attention = mermaid_crew_assistance.for_conversation(
+            phone, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+        )
+        had_active_wheelchair_note = bool(
+            existing_attention
+            and existing_attention.get("kind") == "wheelchair"
+            and existing_attention.get("status") != "withdrawn"
+        )
+        fields.pop("accessibility_notes", None)
+        fields.pop("wheelchair_relationship", None)
+        fields.setdefault("phase", "collecting")
+        # Persist the corrected intake before claiming that the staff-only note
+        # was removed. A failed withdrawal therefore remains retryable.
+        root_fields["mermaid_intake"] = fields
+        state_registry.wa_save_booking_state(phone, root_fields, flags, completed)
+        withdrawn = mermaid_crew_assistance.withdraw(
+            phone,
+            source_message_id=message_id,
+        )
+        continuation = _next_question(fields, locale) or ""
+        response = "\n\n".join(
+            part
+            for part in (
+                WHEELCHAIR_WITHDRAWAL_COPY[locale]
+                if had_active_wheelchair_note and withdrawn is not None
+                else NO_WHEELCHAIR_NOTE_COPY[locale],
+                continuation,
+            )
+            if part
+        )
+        action = None
+    elif ordinary_wheelchair and not explicit_person_request:
+        from agents.social import mermaid_crew_assistance
+
+        relationship = _wheelchair_relationship_from_message(text)
+        note = _canonical_wheelchair_note(relationship)
+        fields["accessibility_notes"] = note
+        fields["wheelchair_relationship"] = relationship
+        fields["phase"] = "collecting"
+        mermaid_crew_assistance.record_wheelchair_note(
+            phone,
+            note=note,
+            relationship=relationship,
+            trip_date=str(fields.get("trip_date") or ""),
+            customer_name=from_name or str(fields.get("customer_name") or ""),
+            source_message_id=message_id,
+            reservation_public_id=assistance_reservation_id,
+        )
+        response = "\n\n".join(
+            part for part in (
+                COPY[locale]["intro"] if not fields.get("introduced") else "",
+                WHEELCHAIR_COPY[locale],
+                _next_question(fields, locale) or "",
+            ) if part
+        )
+        fields["introduced"] = True
+        action = None
+    elif explicit_person_request or wheelchair_review:
         fields["phase"] = "human_takeover"
         state_registry.create_pending_notification(
             "escalation", "whatsapp", phone, from_name or fields.get("customer_name") or "Mermaid guest",
-            "Mermaid reservation: human requested",
-            "The guest requested a person. Intake progress is saved.", mode="soft",
+            (
+                "Mermaid reservation: human requested"
+                if explicit_person_request
+                else "Mermaid reservation: wheelchair capability review"
+            ),
+            (
+                "The guest requested a person. Intake progress is saved."
+                if explicit_person_request
+                else "The guest asked about an unconfirmed wheelchair capability. Intake progress is saved."
+            ), mode="soft",
             preserve_hard_mode=True,
             suppress_model_summary=True,
         )
@@ -496,7 +920,12 @@ def _has_guest_question(understood: dict, text: str) -> bool:
     return has_guest_question(understood, text)
 
 
-def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
+def process_model_turn(
+    message: dict,
+    reservation: dict | None,
+    *,
+    defer_seen: bool = False,
+) -> IntakeResult:
     """The single model call understands language; Python validates and owns state."""
     from agents.marina import marina_agent
     from agents.social import mermaid_model_recovery
@@ -510,7 +939,36 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     seen = list(flags.get("mermaid_seen_message_ids") or [])
     if message_id and message_id in seen:
         return IntakeResult("", fields.get("language", "en"), fields.get("phase", "collecting"), duplicate=True)
+    if (
+        defer_seen
+        and message_id
+        and flags.get("mermaid_pending_confirmation_message_id") == message_id
+        and fields.get("phase") == "summary_confirmed"
+    ):
+        locale = fields.get("language", "en")
+        if locale not in SUPPORTED_LOCALES:
+            locale = "en"
+        return IntakeResult(
+            COPY[locale]["confirmed"],
+            locale,
+            "summary_confirmed",
+            action="summary_confirmed",
+            understanding_source="pending_confirmation_retry",
+        )
     history = state_registry.dm_get_history(phone, "whatsapp", limit=16)
+    session_started_at = str(flags.get("mermaid_session_started_at") or "")
+    visible_history = [
+        item for item in history
+        if not session_started_at
+        or str(item.get("created_at") or "") >= session_started_at
+    ]
+    first_visible_reply = (
+        (reservation is None or bool(session_started_at))
+        and not any(
+            item.get("role") in {"assistant", "operator"}
+            for item in visible_history
+        )
+    )
     review_pending = (
         state_registry.get_active_escalation_mode(phone) in {"soft", "hard"}
         or bool((reservation or {}).get("human_takeover"))
@@ -543,7 +1001,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         body=str(message.get("text") or ""), thread_fields=context,
         thread_flags={"phase": fields.get("phase", "collecting")},
         action_context=json.dumps({"required_fields": REQUIRED_FIELDS, "missing_fields": missing_fields}),
-        channel="whatsapp", messages=history,
+        channel="whatsapp", messages=visible_history,
         response_contract="mermaid_reservation_demo",
     ))
     locale = understood.get("language")
@@ -555,6 +1013,153 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             generation_failure=understood["generation_failure"],
             understanding_source="model_failure",
         )
+    guest_text = str(message.get("text") or "")
+    explicit_person_request = (
+        mermaid_model_recovery.contains_explicit_human_request(guest_text) is not None
+    )
+    # This provenance is server-owned. Strip any model-supplied metadata and
+    # restore it only when the deterministic grammar matched the guest text.
+    understood = {
+        key: value
+        for key, value in understood.items()
+        if key != "understanding_source"
+    }
+    if explicit_person_request:
+        understood["understanding_source"] = "explicit_human_request"
+    deterministic_general_boarding_assistance = (
+        _general_boarding_assistance_message(guest_text)
+    )
+    deterministic_withdrawal = _wheelchair_withdrawal_message(guest_text)
+    deterministic_ordinary_wheelchair = (
+        not deterministic_withdrawal and _ordinary_wheelchair_message(guest_text)
+    )
+    deterministic_wheelchair_review = (
+        not deterministic_withdrawal
+        and not deterministic_ordinary_wheelchair
+        and _wheelchair_capability_requires_review(guest_text)
+    )
+    deterministic_wheelchair_mention = any(
+        marker in _evidence_text(guest_text)
+        for marker in _WHEELCHAIR_NOTE_MARKERS
+    )
+    independent_reservation_intent = _independent_reservation_intent(guest_text)
+    if deterministic_general_boarding_assistance:
+        neutral_fields = {
+            key: value
+            for key, value in (understood.get("fields") or {}).items()
+            if key
+            not in {
+                "accessibility_notes",
+                "wheelchair_relationship",
+                "special_requests",
+            }
+        }
+        understood = {
+            **understood,
+            "fields": neutral_fields,
+            "assistance_request": "none",
+            "security_event": (
+                understood.get("security_event", "none")
+                if _has_security_evidence(guest_text)
+                else "none"
+            ),
+            "requires_human": bool(explicit_person_request),
+            "mermaid_action": (
+                "request_human"
+                if explicit_person_request
+                else independent_reservation_intent or "details"
+            ),
+        }
+    elif deterministic_withdrawal:
+        understood = {
+            **understood,
+            "assistance_request": "wheelchair_withdrawal",
+            "security_event": (
+                understood.get("security_event", "none")
+                if _has_security_evidence(guest_text)
+                else "none"
+            ),
+            "requires_human": bool(explicit_person_request),
+            "mermaid_action": (
+                understood.get("mermaid_action")
+                if explicit_person_request
+                else "details"
+            ),
+        }
+    elif deterministic_ordinary_wheelchair:
+        # The server, rather than a model label, owns the ordinary-wheelchair
+        # boundary.  Plain wheelchair information can never manufacture a
+        # review, booking decision, or security incident.  Explicit requests
+        # for a person remain reviewable and specific capability wording was
+        # excluded by _ordinary_wheelchair_message above.
+        understood = {
+            **understood,
+            "assistance_request": "wheelchair_note",
+            "security_event": (
+                understood.get("security_event", "none")
+                if _has_security_evidence(guest_text)
+                else "none"
+            ),
+            "requires_human": bool(explicit_person_request),
+            "mermaid_action": (
+                "request_human"
+                if explicit_person_request
+                else (
+                    understood.get("mermaid_action")
+                    if understood.get("mermaid_action")
+                    == independent_reservation_intent
+                    else "details"
+                )
+            ),
+        }
+    elif deterministic_wheelchair_review:
+        # Never trust a model to downgrade a capability, equipment, transfer,
+        # medical or safety question to the ordinary note-only path.
+        understood = {
+            **understood,
+            "assistance_request": "other_review",
+            "mermaid_action": "request_human",
+            "requires_human": True,
+        }
+    elif deterministic_wheelchair_mention:
+        # A policy reference, observation, or other neutral mention is not a
+        # statement that this guest or their party uses a wheelchair.  Clear
+        # model-invented assistance metadata so a keyword alone cannot create
+        # a crew note or a review task.
+        neutral_fields = {
+            key: value
+            for key, value in (understood.get("fields") or {}).items()
+            if key not in {"accessibility_notes", "wheelchair_relationship"}
+        }
+        if any(
+            marker in _evidence_text(neutral_fields.get("special_requests", ""))
+            for marker in _WHEELCHAIR_NOTE_MARKERS
+        ):
+            neutral_fields.pop("special_requests", None)
+        understood = {
+            **understood,
+            "fields": neutral_fields,
+            "assistance_request": "none",
+            "security_event": (
+                understood.get("security_event", "none")
+                if _has_security_evidence(guest_text)
+                else "none"
+            ),
+            "requires_human": bool(explicit_person_request),
+            "mermaid_action": (
+                understood.get("mermaid_action")
+                if independent_reservation_intent is not None
+                and understood.get("mermaid_action")
+                == independent_reservation_intent
+                else ("question" if "?" in guest_text else "acknowledge")
+            ),
+        }
+    if explicit_person_request:
+        understood = {
+            **understood,
+            "mermaid_action": "request_human",
+            "requires_human": True,
+        }
     security_event = understood.get("security_event", "none")
     security_review = False
     if security_event in {"blocked_override", "actionable_incident"}:
@@ -573,6 +1178,17 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         return IntakeResult(str(understood.get("reply") or COPY[locale]["trip_date"]), locale, fields.get("phase", "collecting"))
     if not review_pending and action == "new_booking" and (reservation or {}).get("state") in {"booked", "cancelled"}:
         fields = {}
+        generation_source = str(message_id or "")
+        if (
+            not generation_source
+            or flags.get("mermaid_session_source_message_id") != generation_source
+            or not flags.get("mermaid_session_started_at")
+        ):
+            flags["mermaid_session_started_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+        if generation_source:
+            flags["mermaid_session_source_message_id"] = generation_source
     old_phase = fields.get("phase", "collecting")
     fields["language"] = locale
     changes = {}
@@ -600,6 +1216,8 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
             cleaned = " ".join(value.split())[:160]
             if cleaned:
                 changes[key] = cleaned
+        elif key == "wheelchair_relationship" and value in {"husband", "other", "unspecified"}:
+            changes[key] = value
     from shared.mermaid_guest_ages import normalize_child_ages, age_band
     supplied = understood.get("fields") or {}
     if "child_ages" in supplied:
@@ -623,12 +1241,91 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         fields.pop("contact_phone", None)
     if fields.get("pickup_preference") == "pier":
         fields.pop("pickup_location", None)
+    assistance_request = understood.get("assistance_request", "none")
+    general_boarding_assistance = bool(
+        deterministic_general_boarding_assistance
+        and security_event == "none"
+        and not explicit_person_request
+    )
+    if (
+        assistance_request == "wheelchair_note"
+        and action == "request_human"
+        and not explicit_person_request
+    ):
+        # Ordinary wheelchair use is an owner-approved booking detail.  A
+        # model-generated request_human action cannot silently turn it back
+        # into a review.  The durable recovery route labels real, explicit
+        # person requests so those still take the human-review path.
+        action = "details"
+        understood = {**understood, "mermaid_action": action}
+    wheelchair_withdrawal = (
+        security_event == "none"
+        and assistance_request == "wheelchair_withdrawal"
+    )
+    if wheelchair_withdrawal:
+        fields.pop("accessibility_notes", None)
+        fields.pop("wheelchair_relationship", None)
+        changes.pop("accessibility_notes", None)
+        changes.pop("wheelchair_relationship", None)
+        if action == "request_human" and not explicit_person_request:
+            action = "details"
+            understood = {**understood, "mermaid_action": action}
+        if not explicit_person_request:
+            understood = {**understood, "requires_human": False}
+    if assistance_request == "other_review":
+        # The server owns the boundary between routine wheelchair notes and
+        # an unconfirmed equipment, transfer, medical, or safety capability.
+        understood = {**understood, "requires_human": True}
+    accessibility_note = str(fields.get("accessibility_notes") or "")
+    legacy_wheelchair_note = (
+        assistance_request in {None, "none"}
+        and "accessibility_notes" in changes
+        and any(marker in accessibility_note.casefold() for marker in _WHEELCHAIR_NOTE_MARKERS)
+    )
+    wheelchair_note = (
+        security_event == "none"
+        and (
+            action in {"details", "question", "acknowledge", "new_booking"}
+            or (action == "request_human" and explicit_person_request)
+        )
+        and (assistance_request == "wheelchair_note" or legacy_wheelchair_note)
+    )
+    assistance_overlay = {}
+    if wheelchair_note:
+        if not accessibility_note:
+            accessibility_note = "A guest in this party uses a wheelchair and may need general crew assistance."
+            fields["accessibility_notes"] = accessibility_note
+            changes["accessibility_notes"] = accessibility_note
+        relationship = fields.get("wheelchair_relationship")
+        if relationship not in {"husband", "other", "unspecified"}:
+            relationship = _wheelchair_relationship_from_message(guest_text)
+            fields["wheelchair_relationship"] = relationship
+            changes["wheelchair_relationship"] = relationship
+        accessibility_note = _canonical_wheelchair_note(relationship)
+        if fields.get("accessibility_notes") != accessibility_note:
+            fields["accessibility_notes"] = accessibility_note
+            changes["accessibility_notes"] = accessibility_note
+        assistance_overlay = {
+            "accessibility_notes": accessibility_note,
+            "wheelchair_relationship": relationship,
+        }
+        # The model used to mark every accessibility mention as human review.
+        # This server-owned route enforces the owner's ordinary-wheelchair rule.
+        understood = {
+            **understood,
+            "requires_human": bool(explicit_person_request),
+        }
     response = str(understood.get("reply") or "").strip()
     has_question = _has_guest_question(understood, str(message.get("text") or ""))
     has_question = has_question or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") not in {"none", "pickup_pricing"} or security_event in {"blocked_override", "actionable_incident"}
     if invalid_contact and not reservation and not review_pending:
         response = guest.guest_copy(locale)["contact_phone_retry"]
         has_question = True
+    if wheelchair_note or wheelchair_withdrawal or general_boarding_assistance:
+        # The deterministic acknowledgement answers the wheelchair question;
+        # normal intake should immediately choose the next missing detail.
+        response = ""
+        has_question = False
     result_action = None
     canonical_response = False
     natural_payment_approval = (
@@ -684,6 +1381,7 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
     elif reservation and reservation["state"] in {"demo_payment_pending", "booked", "cancelled"} and action != "new_booking":
         # Answers after a quote never reopen intake or change the immutable quote.
         fields = dict(root_fields.get("mermaid_intake") or fields)
+        fields.update(assistance_overlay)
         fields["language"] = locale
         fields["phase"] = reservation["state"]
         result_action = "payment_status" if action == "payment_status" else None
@@ -784,8 +1482,179 @@ def process_model_turn(message: dict, reservation: dict | None) -> IntakeResult:
         other_answer = str(understood.get('other_question_reply') or '').strip()
         if other_answer:
             response = other_answer + '\n\n' + response
+    if wheelchair_withdrawal:
+        # Existing quote/booking branches restore the authoritative intake for
+        # money and status.  Re-apply only this private-field deletion so the
+        # corrected booking state cannot resurrect a withdrawn crew note.
+        fields.pop("accessibility_notes", None)
+        fields.pop("wheelchair_relationship", None)
+    if general_boarding_assistance:
+        # The guest asked for ordinary help without stating wheelchair use.
+        # Preserve exactly that supported fact in the private crew queue before
+        # claiming that the request was recorded.
+        from agents.social import mermaid_crew_assistance
+
+        root_fields["mermaid_intake"] = fields
+        state_registry.wa_save_booking_state(
+            phone, root_fields, flags, state.get("completed_bookings") or []
+        )
+        relationship = _wheelchair_relationship_from_message(guest_text)
+        attention, _outcome = mermaid_crew_assistance.record_boarding_assistance_note(
+            phone,
+            note=_canonical_boarding_assistance_note(relationship),
+            relationship=relationship,
+            trip_date=fields.get("trip_date") or "",
+            customer_name=str(
+                fields.get("customer_name") or message.get("from_name") or ""
+            ),
+            source_message_id=message_id,
+            reservation_public_id=(
+                str(reservation["public_id"])
+                if reservation and action != "new_booking"
+                else ""
+            ),
+        )
+        if reservation and action != "new_booking":
+            attention = mermaid_crew_assistance.link_current(
+                phone,
+                reservation["public_id"],
+                idempotency_key=f"boarding-assistance:{message_id or phone}",
+            ) or attention
+        response = "\n\n".join(
+            part
+            for part in (
+                WELCOME_COPY[locale] if first_visible_reply else "",
+                BOARDING_ASSISTANCE_COPY[locale],
+                response.strip(),
+            )
+            if part
+        )
+    elif wheelchair_note:
+        # Persist both the intake fact and the staff-only attention item before
+        # telling the guest that the crew note is saved. Do not mark the provider
+        # event seen until every required write succeeds, so recovery can retry.
+        from agents.social import mermaid_crew_assistance
+
+        root_fields["mermaid_intake"] = fields
+        state_registry.wa_save_booking_state(
+            phone, root_fields, flags, state.get("completed_bookings") or []
+        )
+        attention, _outcome = mermaid_crew_assistance.record_wheelchair_note(
+            phone,
+            note=fields["accessibility_notes"],
+            relationship=fields.get("wheelchair_relationship") or "",
+            trip_date=fields.get("trip_date") or "",
+            customer_name=str(fields.get("customer_name") or message.get("from_name") or ""),
+            source_message_id=message_id,
+            reservation_public_id=(
+                str(reservation["public_id"])
+                if reservation and action != "new_booking"
+                else ""
+            ),
+        )
+        if reservation and action != "new_booking":
+            attention = mermaid_crew_assistance.link_current(
+                phone,
+                reservation["public_id"],
+                idempotency_key=f"wheelchair:{message_id or phone}",
+            ) or attention
+        other_answer = str(understood.get("other_question_reply") or "").strip()
+        continuation = response.strip()
+        if other_answer and other_answer not in continuation:
+            continuation = "\n\n".join(part for part in (other_answer, continuation) if part)
+        response = "\n\n".join(part for part in (
+            WELCOME_COPY[locale] if first_visible_reply else "",
+            WHEELCHAIR_COPY[locale],
+            continuation,
+        ) if part)
+    elif wheelchair_withdrawal:
+        # Persist the corrected intake before removing the staff task, and do
+        # not claim removal until the withdrawal transition has committed.
+        from agents.social import mermaid_crew_assistance
+
+        root_fields["mermaid_intake"] = fields
+        state_registry.wa_save_booking_state(
+            phone, root_fields, flags, state.get("completed_bookings") or []
+        )
+        existing_attention = mermaid_crew_assistance.for_conversation(
+            phone, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+        )
+        had_active_wheelchair_note = bool(
+            existing_attention
+            and existing_attention.get("kind") == "wheelchair"
+            and existing_attention.get("status") != "withdrawn"
+        )
+        withdrawn = mermaid_crew_assistance.withdraw(
+            phone,
+            source_message_id=message_id,
+        )
+        acknowledgement = (
+            WHEELCHAIR_WITHDRAWAL_COPY[locale]
+            if had_active_wheelchair_note and withdrawn is not None
+            else NO_WHEELCHAIR_NOTE_COPY[locale]
+        )
+        response = "\n\n".join(
+            part for part in (acknowledgement, response.strip()) if part
+        )
+    elif any(key in changes or key in supplied for key in (
+        "trip_date", "customer_name", "accessibility_notes", "wheelchair_relationship"
+    )):
+        # Later corrections keep private crew markers current within this
+        # booking generation.
+        from agents.social import mermaid_crew_assistance
+
+        existing_attention = mermaid_crew_assistance.for_conversation(
+            phone, kind=mermaid_crew_assistance.KIND_WHEELCHAIR
+        )
+        current_intake_owns_attention = bool(
+            fields.get("accessibility_notes")
+            and fields.get("wheelchair_relationship")
+        )
+        if existing_attention is not None and current_intake_owns_attention:
+            root_fields["mermaid_intake"] = fields
+            state_registry.wa_save_booking_state(
+                phone, root_fields, flags, state.get("completed_bookings") or []
+            )
+            mermaid_crew_assistance.sync_existing(
+                phone,
+                note=fields.get("accessibility_notes"),
+                relationship=fields.get("wheelchair_relationship"),
+                trip_date=fields.get("trip_date"),
+                customer_name=str(fields.get("customer_name") or message.get("from_name") or ""),
+                source_message_id=message_id,
+            )
+        if any(
+            key in changes or key in supplied
+            for key in ("trip_date", "customer_name")
+        ):
+            session_started_at = str(
+                flags.get("mermaid_session_started_at") or ""
+            )
+            boarding_attention = mermaid_crew_assistance.for_conversation(
+                phone,
+                kind=mermaid_crew_assistance.KIND_BOARDING_ASSISTANCE,
+                session_started_at=session_started_at,
+            )
+            if boarding_attention is not None:
+                mermaid_crew_assistance.sync_existing(
+                    phone,
+                    kind=mermaid_crew_assistance.KIND_BOARDING_ASSISTANCE,
+                    trip_date=fields.get("trip_date"),
+                    customer_name=str(
+                        fields.get("customer_name")
+                        or message.get("from_name")
+                        or ""
+                    ),
+                    source_message_id=(
+                        f"{message_id}:boarding-assistance-sync"
+                        if message_id
+                        else ""
+                    ),
+                )
     root_fields["mermaid_intake"] = fields
-    if message_id and result_action != "cancel":
+    if defer_seen and message_id and result_action == "summary_confirmed":
+        flags["mermaid_pending_confirmation_message_id"] = message_id
+    elif message_id and result_action != "cancel" and not defer_seen:
         flags["mermaid_seen_message_ids"] = (seen + [message_id])[-100:]
     state_registry.wa_save_booking_state(phone, root_fields, flags, state.get("completed_bookings") or [])
     return IntakeResult(response, locale, fields["phase"], action=result_action,
@@ -823,11 +1692,12 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         if include_media:
             return IntakeResult(text, current["language"], "demo_payment_pending").as_reply()
         return text
-    result = process_model_turn(message, current) if use_model else process_intake_turn(
+    result = process_model_turn(message, current, defer_seen=True) if use_model else process_intake_turn(
         str(message.get("from") or ""),
         str(message.get("text") or ""),
         message_id=str(message.get("message_id") or ""),
         from_name=str(message.get("from_name") or ""),
+        reservation=current,
     )
     if result.generation_failure is not None:
         # An outage notice is not a completed model decision or cached answer.
@@ -847,6 +1717,7 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
                 if message.get("message_id") else "confirm:" + str(message.get("from") or "")
             ),
             zernio_account_id=str(message.get("_zernio_account_id") or ""),
+            assistance_session_owned=True,
         )
         document, job = mermaid_documents.create_quote(reservation)
         reservation = mermaid_reservation_store.transition(
@@ -923,15 +1794,12 @@ def handle_demo_message(message: dict, include_media: bool = False, *, use_model
         else:
             result = IntakeResult(COPY[result.locale]["cancelled"], result.locale, "cancelled", action="cancel")
         # An attempted cancellation remains retryable until its authoritative
-        # state change or required review succeeds. Never cache a success claim
-        # or mark this provider event seen before those operations complete.
+        # state change or required review succeeds. The reply cache commits the
+        # provider-event marker only after those operations complete.
         state = state_registry.wa_get_booking_state(phone)
         fields = dict(state.get("fields") or {})
         fields["mermaid_intake"] = dict(fields.get("mermaid_intake") or {}) | {"phase": result.phase}
         flags = dict(state.get("flags") or {})
-        message_id = str(message.get("message_id") or "")
-        if message_id:
-            flags["mermaid_seen_message_ids"] = (list(flags.get("mermaid_seen_message_ids") or []) + [message_id])[-100:]
         state_registry.wa_save_booking_state(phone, fields, flags, state.get("completed_bookings") or [])
     elif result.action == "human_takeover":
         from agents.social import mermaid_reservation_store
@@ -955,4 +1823,10 @@ def _cache_reply(message: dict, reply: dict) -> None:
     cached = dict(flags.get("mermaid_cached_replies") or {})
     cached[str(message["message_id"])] = flags["mermaid_cached_reply"]
     flags["mermaid_cached_replies"] = dict(list(cached.items())[-10:])
+    message_id = str(message["message_id"])
+    flags["mermaid_seen_message_ids"] = (
+        list(flags.get("mermaid_seen_message_ids") or []) + [message_id]
+    )[-100:]
+    if flags.get("mermaid_pending_confirmation_message_id") == message_id:
+        flags.pop("mermaid_pending_confirmation_message_id", None)
     state_registry.wa_save_booking_state(phone, state.get("fields") or {}, flags, state.get("completed_bookings") or [])

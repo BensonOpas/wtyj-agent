@@ -274,6 +274,24 @@ successful apply, recreate only `wtyj-mermaid`, then repeat the health, paused
 state, allowlist, dashboard profile, and isolation checks before enabling any
 channel.
 
+For a reviewed application release, use the scoped wrapper instead of the
+shared deploy queue:
+
+```bash
+/root/wtyj-agent-source/wtyj/scripts/deploy_mermaid_release.sh \
+  --source /root/wtyj-agent-source \
+  --image wtyj-agent:tracy-<release-name>-<git-revision> \
+  --release /root/backups/mermaid-reservations/<release-name>-<git-revision>
+```
+
+The candidate image must already be built and tested. The wrapper shares one
+production-operation lock with CI, prepares compare-and-swap configuration
+snapshots, gracefully stops only Mermaid, backs up its database while stopped,
+and recreates only the `agent` service. It verifies the exact candidate image,
+the `unless-stopped` restart policy, local health, and unchanged identities for
+all six peer containers. A failed candidate restores the protected Mermaid
+files and previous compose image without restoring the live database.
+
 If apply reports an uncommitted target or preserved recovery file, leave the
 container stopped. The target may deliberately contain an invalid staging
 marker rather than stale credentials. A protected operator must reconcile the
@@ -314,9 +332,10 @@ Before every cutover, create a protected timestamped backup of Mermaid's
 and currently running image ID. Do not copy a live secret into Git or demo
 evidence.
 
-For an application-only rollback, restore Mermaid's saved compose/image target
-and recreate only `wtyj-mermaid`; the normal rollback script also includes
-Mermaid and checks port 8102 once this branch reaches `main`. For a channel
+For an application-only rollback, use Mermaid's protected release manifest to
+restore its saved compose/image target and recreate only `wtyj-mermaid`. The
+shared deploy and rollback scripts deliberately refuse Mermaid because they
+retag the multi-tenant `wtyj-agent:latest` image. For a channel
 rollback, disable AI and the Mermaid channel first, restore strict-empty account
 isolation, then disconnect only the dedicated demo account/profile. Do not
 remove the audit trail during a demo-day rollback.

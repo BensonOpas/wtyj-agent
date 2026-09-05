@@ -17,14 +17,100 @@ TRANSIENT_DELAY_SECONDS = 5
 OPERATOR_COOLDOWN_SECONDS = 900
 GENERATION_LEASE_SECONDS = 90
 LOCALES = ("en", "nl", "de", "es", "pap", "pt")
+_MARINA_COMPATIBILITY_KEYS = {
+    "intents",
+    "clarifications_needed",
+    "flags",
+    "internal_note",
+    "ali_vehicle_recommendation",
+    "ali_rental_change",
+    "ali_summary_action",
+    "ali_primary_intent",
+    "ali_lead_follow_up_action",
+}
 
-# Accepted outage-copy exception. Papiamentu remains subject to native review.
+# Forms that were materially wrong in their recorded Mermaid reply context.
+# This is deliberately not a dictionary of globally forbidden Papiamentu
+# words: legitimate vocabulary belongs in the model's contextual guidance.
+_PAPIAMENTU_BLOCKED_OUTPUT_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"(?<!\w)pickup(?!\w)",
+        r"(?<!\w)berdat(?!\w)",
+        r"(?<!\w)kombersashon(?!\w)",
+        r"(?<!\w)período(?!\w)",
+        r"(?<!\w)movilidat(?!\w)",
+        r"(?<!\w)aworaki(?!\w)",
+        r"(?<!\w)prepara(?!\w)",
+        r"(?<!\w)adjuntá(?!\w)",
+        r"(?<!\w)katálogo(?!\w)",
+        r"(?<!\w)lansementu(?!\w)",
+        r"(?<!\w)pet(?!\w)",
+        r"(?<!\w)september(?!\w)",
+        r"(?<!\w)zwemropa(?!\w)",
+        r"(?<!\w)kacho(?!\w)",
+        r"(?<!\w)pittu(?!\w)",
+        r"(?<!\w)almuerzo(?!\w)",
+        r"(?<!\w)almoerso(?!\w)",
+        r"(?<!\w)almorso(?!\w)",
+        r"(?<!\w)refresco(?!\w)",
+        r"(?<!\w)djùs(?!\w)",
+        r"(?<!\w)jugo(?!\w)",
+        r"(?<!\w)wijn(?!\w)",
+        r"(?<!\w)kèshi(?!\w)",
+        r"(?<!\w)konfirmasion(?!\w)",
+        r"(?<!\w)information(?!\w)",
+        r"beach\s+house",
+        r"roupa\s+di\s+bañu",
+        r"blokmènt\s+di\s+solo",
+        r"mi\s+number\s+tracy",
+        r"ta\s+kòrtèkt",
+        r"e\s+sistema\s+mester\s+baliá\s+primero",
+    )
+)
+
+# High-signal written Curaçao Papiamentu forms and structures.  They are used
+# only after the model or conversation has already selected Papiamentu.  This
+# catches an obvious whole-language mismatch; it is not an input-language
+# classifier and cannot establish grammatical or native-level quality.
+_PAPIAMENTU_OUTPUT_STRUCTURE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"(?<!\w)(?:aki|alohamentu|almuerso|asina|atrobe|beibi|biahe|bishitante(?:nan)?|"
+        r"danki|datonan|desayuno|djus|drumi|esaki|esei|hende|hiba|inkluí|kashi|kiko|kon|"
+        r"korekto|kòrsou|kuantu|kuminda|mester|nòmber|òf|pasobra|petishon|piká|prepará|"
+        r"refresko|registrá|reservashon|risibí|sèn|skohe|sòru|tambe|tokante|"
+        r"tripulashon|tur|unda|vino|wardá|yuda)(?!\w)",
+        r"(?<!\w)(?:mi|bo|nos|boso|e|nan)\s+(?:ta|a|lo|por|tin|ke|mester)(?!\w)",
+        r"(?<!\w)no\s+(?:ta|tin|por|a)(?!\w)",
+    )
+)
+
+_PAPIAMENTU_SHORT_OUTPUTS = {
+    "bon", "danki", "korekto", "klaro", "nò", "no", "sí", "si",
+}
+
+_PAPIAMENTU_CONTEXT_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:ta|tin|unda|aki|danki|inkluí)\b",
+        r"\bkiko\b",
+        r"\bpakiko\b",
+        r"\bmi\s+ta\b",
+        r"\bmi\s+(?:ke|kier|por|tin)\b",
+        r"\bbo\s+(?:ta|por|tin)\b",
+        r"\b(?:ki\s+ora|kon\s+ta|tur\s+kos|bon\s+bini)\b",
+        r"\b(?:reservashon|bishitante|biahe|stul\s+di\s+rueda)\b",
+    )
+)
+
+# Accepted outage-copy exception. Papiamentu uses the reviewed formal register.
 FAILURE_COPY = {
     "en": "I couldn't answer that just now. Your details are saved. Please try again shortly, or ask to speak to a person.",
     "nl": "Ik kon je net niet antwoorden. Je gegevens zijn opgeslagen. Probeer het zo nog eens of vraag om een medewerker.",
     "de": "Ich konnte gerade nicht antworten. Ihre Angaben sind gespeichert. Versuchen Sie es gleich noch einmal oder bitten Sie um einen Mitarbeiter.",
     "es": "No pude responderte en este momento. Tus datos están guardados. Inténtalo de nuevo en un momento o pide hablar con una persona.",
-    "pap": "Mi no a logra kontestá bo aworaki. Bo datonan ta wardá. Purba atrobe den un ratu òf pidi pa papia ku un hende di e tim.",
+    "pap": "Mi no a logra kontestá bo na e momento aki. Bo datonan ta wardá. Purba atrobe den un ratu òf pidi pa papia ku un hende di e tim.",
     "pt": "Não consegui responder agora. Seus dados estão salvos. Tente novamente em instantes ou peça para falar com uma pessoa.",
 }
 HUMAN_COPY = {
@@ -39,7 +125,7 @@ HUMAN_COPY = {
 # Issue #342 explicitly authorizes this narrow offline human-request route.
 # Whole-message requests only; ordinary mentions of people do not match.
 _HUMAN_REQUESTS = {
-    "en": r"(?:please )?(?:(?:i (?:want|need|would like) to|can i|could i) (?:speak|talk|chat) (?:to|with) (?:a |the )?(?:real person|human|person|staff member|team)|i (?:want|need|would like) (?:a |the )?(?:human|real person|staff member)|(?:speak|talk) (?:to|with) (?:a |the )?(?:human|real person|team))(?: please)?",
+    "en": r"(?:please )?(?:(?:i (?:want|need|would like) to|can i|could i) (?:speak|talk|chat) (?:to|with) (?:a |the )?(?:real person|human|person|staff member|team|mermaid team)|i (?:want|need|would like) (?:a |the )?(?:human|real person|staff member)|(?:speak|talk) (?:to|with) (?:a |the )?(?:human|real person|team|mermaid team)|would it be possible to (?:speak|talk|chat) (?:to|with) (?:someone from )?(?:the |mermaid )?team|could (?:someone|a person) from (?:the |mermaid )?team (?:call|contact) me)(?: please)?",
     "nl": r"(?:ik wil|ik wil graag|mag ik|kan ik) (?:met )?(?:een |de )?(?:echte )?(?:medewerker|persoon|mens|iemand van het team) (?:spreken|praten)(?: alstublieft| alsjeblieft)?",
     "de": r"(?:ich mochte|ich will|kann ich|ich wurde gern) (?:mit )?(?:einem |einer |dem )?(?:echten )?(?:mitarbeiter|menschen|person|team) (?:sprechen|reden)(?: bitte)?",
     "es": r"(?:quiero|quisiera|puedo) (?:hablar|conversar) con (?:una |un |el )?(?:persona(?: de verdad| real)?|humano|agente|equipo)(?: por favor)?",
@@ -47,11 +133,93 @@ _HUMAN_REQUESTS = {
     "pt": r"(?:quero|gostaria de|posso) (?:falar|conversar) com (?:uma |um |a )?(?:pessoa(?: de verdade| real)?|humano|atendente|equipe)(?: por favor)?",
 }
 
+_EMBEDDED_HUMAN_REQUESTS = {
+    "en": r"\b(?:(?:please )?let me (?:speak|talk|chat) (?:to|with)|(?:please )?(?:connect|put) me (?:through )?(?:to|with)|i (?:want|need|would like) to (?:speak|talk|chat) (?:to|with)) (?:someone|a person|a human|a real person|staff|the team|mermaid team)\b|\bwould it be possible to (?:speak|talk|chat) (?:to|with) (?:someone from )?(?:the |mermaid )?team\b|\bcould (?:someone|a person) from (?:the |mermaid )?team (?:call|contact) me\b",
+    "nl": r"\b(?:laat me (?:met )?(?:iemand|een persoon|een medewerker) (?:spreken|praten)|verbind me met (?:iemand|een persoon|een medewerker|het team)|ik wil (?:met )?(?:iemand|een persoon|een medewerker) (?:spreken|praten))\b",
+    "de": r"\b(?:lassen sie mich mit (?:jemandem|einer person|einem mitarbeiter) (?:sprechen|reden)|verbinden sie mich mit (?:jemandem|einer person|einem mitarbeiter|dem team)|ich will mit (?:jemandem|einer person|einem mitarbeiter) (?:sprechen|reden))\b",
+    "es": r"\b(?:dejame hablar con (?:alguien|una persona|un agente)|conectame con (?:alguien|una persona|un agente|el equipo)|quiero hablar con (?:alguien|una persona|un agente|el equipo))\b",
+    "pap": r"\b(?:laga mi papia ku (?:un hende|un persona|e tim)|konekta mi ku (?:un hende|un persona|e tim)|pasa mi pa (?:un hende|un persona|e tim)|mi ke papia ku (?:un hende|un persona|e tim))\b",
+    "pt": r"\b(?:deixe me falar com (?:alguem|uma pessoa|um atendente)|conecte me com (?:alguem|uma pessoa|um atendente|a equipe)|quero falar com (?:alguem|uma pessoa|um atendente|a equipe))\b",
+}
+
+_NEGATED_HUMAN_REQUESTS = (
+    r"\b(?:i do not|i don t|i dont) (?:want|need) to (?:speak|talk|chat)\b",
+    r"\bbut i do not\b", r"\bsaid i (?:want|need) to (?:speak|talk)\b",
+    r"\bik wil niet\b", r"\bniet (?:spreken|praten)\b",
+    r"\bich will nicht\b", r"\bnicht (?:sprechen|reden)\b",
+    r"\bno (?:quiero|deseo|necesito) hablar\b",
+    r"\bmi no (?:ke|kier) papia\b",
+    r"\bnao (?:quero|preciso) falar\b",
+)
+
+
+def _normalized_request_text(text: str) -> str:
+    normalized = "".join(c for c in unicodedata.normalize("NFKD", str(text).casefold()) if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w\s]", " ", normalized).split())
+
 
 def explicit_human_request(text: str) -> str | None:
-    normalized = "".join(c for c in unicodedata.normalize("NFKD", str(text).casefold()) if not unicodedata.combining(c))
-    normalized = " ".join(re.sub(r"[^\w\s]", " ", normalized).split())
+    normalized = _normalized_request_text(text)
     return next((locale for locale, pattern in _HUMAN_REQUESTS.items() if re.fullmatch(pattern, normalized)), None)
+
+
+def contains_explicit_human_request(text: str) -> str | None:
+    """Detect a person request embedded beside other customer details."""
+    normalized = _normalized_request_text(text)
+    # A reported quote followed by a denial is not the guest's request.
+    if re.search(r"\bsaid i (?:want|need) to (?:speak|talk)\b", normalized) and re.search(
+        r"\bbut i do not\b", normalized
+    ):
+        return None
+    # Preserve sentence boundaries before normalization. This catches a polite
+    # request placed either before or after a wheelchair detail while keeping
+    # every whole-message grammar strict inside its own clause.
+    clauses = re.split(
+        r"[.!?;]+|\b(?:but|pero|maar|aber|mas)\b",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    for clause in clauses:
+        clause_normalized = _normalized_request_text(clause)
+        if any(
+            re.search(pattern, clause_normalized)
+            for pattern in _NEGATED_HUMAN_REQUESTS
+        ):
+            continue
+        locale = explicit_human_request(clause)
+        if locale:
+            return locale
+        embedded = next(
+            (
+                locale for locale, pattern in _EMBEDDED_HUMAN_REQUESTS.items()
+                if re.search(pattern, clause_normalized)
+            ),
+            None,
+        )
+        if embedded:
+            return embedded
+    # The six whole-message grammars also cover polite forms such as "Could I"
+    # and "Mi por".  Accept them at the end of a mixed-detail message.  The
+    # end anchor prevents noun phrases such as "I need a human-readable PDF"
+    # from being truncated into a person request.
+    trailing = next(
+        (
+            locale for locale, pattern in _HUMAN_REQUESTS.items()
+            if re.search(r"(?:^|\s)(?:" + pattern + r")$", normalized)
+        ),
+        None,
+    )
+    if trailing:
+        return trailing
+    if any(re.search(pattern, normalized) for pattern in _NEGATED_HUMAN_REQUESTS):
+        return None
+    return next(
+        (
+            locale for locale, pattern in _EMBEDDED_HUMAN_REQUESTS.items()
+            if re.search(pattern, normalized)
+        ),
+        None,
+    )
 
 
 def error_metadata(exc: Exception | None = None) -> dict:
@@ -149,17 +317,90 @@ def _valid_schema_value(value, schema, *, allow_metadata=False):
     return "enum" not in schema or value in schema["enum"]
 
 
-def _valid_result(result, guest_text=""):
+def _normalize_nfc(value):
+    """Return a copy with every model-supplied string in canonical NFC."""
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, dict):
+        return {key: _normalize_nfc(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_nfc(item) for item in value]
+    return value
+
+
+def _has_disallowed_format_control(text: str) -> bool:
+    """Reject invisible controls while retaining ordinary joined emoji."""
+    for index, character in enumerate(text):
+        if unicodedata.category(character) != "Cf":
+            continue
+        if character in {"\u200c", "\u200d"}:
+            before = text[index - 1] if index else ""
+            after = text[index + 1] if index + 1 < len(text) else ""
+            if (
+                before
+                and after
+                and unicodedata.category(before).startswith("S")
+                and unicodedata.category(after).startswith("S")
+            ):
+                continue
+        return True
+    return False
+
+
+def _has_minimum_papiamentu_structure(text: str) -> bool:
+    """Detect an obvious whole-language mismatch in a PAP-designated reply."""
+    words = re.findall(r"[^\W\d_]+", text.casefold(), flags=re.UNICODE)
+    if not words:
+        return True
+    if len(words) <= 3 and any(word in _PAPIAMENTU_SHORT_OUTPUTS for word in words):
+        return True
+    return any(pattern.search(text) for pattern in _PAPIAMENTU_OUTPUT_STRUCTURE_PATTERNS)
+
+
+def _valid_result(result, guest_text="", expected_locale=""):
     from agents.social.mermaid_understanding import MERMAID_TOOL, has_server_owned_reply
 
+    properties = MERMAID_TOOL["input_schema"]["properties"]
+    formal_papiamentu = True
+    if isinstance(result, dict):
+        # Validate only model text that can reach the guest. Server-owned
+        # selectors replace raw `reply` with deterministic copy, while the
+        # separate FAQ field can still be appended and must always pass the
+        # language/register gate. Schema validation below still covers the
+        # entire result, including discarded raw prose.
+        server_replaces_reply = has_server_owned_reply(result, guest_text)
+        customer_text = str(result.get("other_question_reply") or "")
+        if not server_replaces_reply:
+            customer_text += "\n" + str(result.get("reply") or "")
+        customer_text = unicodedata.normalize("NFC", customer_text)
+        papiamentu_context = (
+            result.get("language") == "pap"
+            or expected_locale == "pap"
+            or any(
+                pattern.search(text)
+                for text in (str(guest_text or ""), customer_text)
+                for pattern in _PAPIAMENTU_CONTEXT_PATTERNS
+            )
+        )
+        if papiamentu_context:
+            formal_papiamentu = (
+                not _has_disallowed_format_control(customer_text)
+                and not any(
+                    pattern.search(customer_text)
+                    for pattern in _PAPIAMENTU_BLOCKED_OUTPUT_PATTERNS
+                )
+                and _has_minimum_papiamentu_structure(customer_text)
+            )
     return (
         isinstance(result, dict) and not result.get("generation_failed")
         and isinstance(result.get("reply"), str)
         and isinstance(result.get("mermaid_action"), str)
+        and set(result).issubset(set(properties) | _MARINA_COMPATIBILITY_KEYS)
         # Marina appends compatibility metadata outside the Mermaid tool schema.
         # Only that top-level metadata is tolerated; declared/nested values
         # always use the model's single authoritative schema.
         and _valid_schema_value(result, MERMAID_TOOL["input_schema"], allow_metadata=True)
+        and formal_papiamentu
         and (bool(result["reply"].strip()) or has_server_owned_reply(result, guest_text))
     )
 
@@ -177,7 +418,7 @@ def _alert(conn, kind, now):
 def generate(message: dict, locale: str, call_model) -> dict:
     """One bounded attempt per invocation; the existing durable worker retries."""
     locale = locale if locale in LOCALES else "en"
-    explicit = explicit_human_request(message.get("text", ""))
+    explicit = contains_explicit_human_request(message.get("text", ""))
     if explicit:
         return {"language": explicit, "understanding_source": "explicit_human_request", "mermaid_action": "request_human", "requires_human": True, "has_open_question": False, "fields": {}, "reply": HUMAN_COPY[explicit]}
     conversation = str(message.get("from") or "")
@@ -194,8 +435,38 @@ def generate(message: dict, locale: str, call_model) -> dict:
         conn.execute("INSERT OR IGNORE INTO mermaid_model_events (conversation_id,message_id,status,created_at) VALUES (?,?,'new',?)", (conversation, message_id, now))
         row = conn.execute("SELECT * FROM mermaid_model_events WHERE conversation_id=? AND message_id=?", (conversation, message_id)).fetchone()
         if row["status"] == "generated":
-            conn.commit()
-            return json.loads(row["response_json"])
+            try:
+                cached_raw = json.loads(row["response_json"])
+                cached = _normalize_nfc(cached_raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                cached_raw = cached = None
+            if _valid_result(
+                cached,
+                str(message.get("text") or ""),
+                expected_locale=locale,
+            ):
+                if cached != cached_raw:
+                    conn.execute(
+                        "UPDATE mermaid_model_events SET response_json=? "
+                        "WHERE conversation_id=? AND message_id=?",
+                        (json.dumps(cached, ensure_ascii=False), conversation, message_id),
+                    )
+                conn.commit()
+                return cached
+            # A stored generation can predate the current output contract.
+            # Re-enter the normal bounded path so it is replaced atomically;
+            # never replay known-invalid customer text.
+            conn.execute(
+                "UPDATE mermaid_model_events SET status='new',attempts=0,"
+                "error_kind='',retryable=1,retry_at=0,notice_sent=0,response_json='{}' "
+                "WHERE conversation_id=? AND message_id=?",
+                (conversation, message_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM mermaid_model_events "
+                "WHERE conversation_id=? AND message_id=?",
+                (conversation, message_id),
+            ).fetchone()
         if row["status"] == "superseded" or row["attempts"] >= MAX_ATTEMPTS:
             conn.commit()
             return _failure(locale, _metadata(row, retryable=False))
@@ -222,8 +493,12 @@ def generate(message: dict, locale: str, call_model) -> dict:
     finally:
         conn.close()
     try:
-        result = call_model()
-        if not _valid_result(result, str(message.get("text") or "")):
+        result = _normalize_nfc(call_model())
+        if not _valid_result(
+            result,
+            str(message.get("text") or ""),
+            expected_locale=locale,
+        ):
             failure = (result or {}).get("model_error") if isinstance(result, dict) else None
             failure = failure if isinstance(failure, dict) else error_metadata()
         else:

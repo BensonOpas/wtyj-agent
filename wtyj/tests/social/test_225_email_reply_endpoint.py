@@ -1,5 +1,6 @@
 """Tests for Brief 225 — POST /messages/conversations/{id}/email/reply."""
 import sys, os, json
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
@@ -13,6 +14,12 @@ from fastapi.testclient import TestClient
 from agents.social.webhook_server import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_delivery_db(monkeypatch, tmp_path):
+    from shared import state_registry
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
 
 
 def _login():
@@ -150,3 +157,76 @@ def test_reply_500_on_smtp_failure(tmp_path, monkeypatch):
             headers=_auth(token))
     assert r.status_code == 500
     assert "Failed to send email reply" in r.json()["detail"]
+
+
+@patch("dashboard.api.smtp_send")
+def test_reply_targets_exact_subject_thread_and_replays_same_request(
+    mock_smtp, tmp_path, monkeypatch,
+):
+    from shared import state_registry
+    customer = "two-threads@example.com"
+    first_key = f"subj:{customer}:first subject"
+    second_key = f"subj:{customer}:second subject"
+    path = tmp_path / "email_thread_state.json"
+    path.write_text(json.dumps({
+        "threads": {
+            first_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T10:00:00Z", "body": "First"}],
+                "fields": {}, "flags": {},
+            },
+            second_key: {
+                "messages": [{"role": "customer", "ts": "2026-09-04T10:01:00Z", "body": "Second"}],
+                "fields": {}, "flags": {},
+            },
+        }
+    }))
+    monkeypatch.setattr(state_registry, "_get_email_state_path", lambda: str(path))
+    token = _login()
+    payload = {"body": "  Exact operator body  ", "request_id": "thread-two-action"}
+
+    first = client.post(
+        f"/dashboard/api/messages/conversations/email::{second_key}/email/reply",
+        json=payload, headers=_auth(token),
+    )
+    replay = client.post(
+        f"/dashboard/api/messages/conversations/email::{second_key}/email/reply",
+        json=payload, headers=_auth(token),
+    )
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json() == {"ok": True, "channel": "email"}
+    mock_smtp.assert_called_once()
+    assert mock_smtp.call_args.args[2] == "  Exact operator body  "
+    state = json.loads(path.read_text())["threads"]
+    assert [m for m in state[first_key]["messages"] if m.get("role") == "operator"] == []
+    outbound = [m for m in state[second_key]["messages"] if m.get("role") == "operator"]
+    assert len(outbound) == 1
+    assert outbound[0]["body"] == "  Exact operator body  "
+
+
+@patch("dashboard.api.smtp_send")
+def test_reply_rejects_forged_thread_and_exact_address_substring_collision(
+    mock_smtp, tmp_path, monkeypatch,
+):
+    from shared import state_registry
+    path = tmp_path / "email_thread_state.json"
+    path.write_text(json.dumps({
+        "threads": {
+            "subj:joann@example.com:question": {
+                "messages": [{"role": "customer", "ts": "2026-09-04T10:00:00Z", "body": "Hi"}],
+                "fields": {}, "flags": {},
+            }
+        }
+    }))
+    monkeypatch.setattr(state_registry, "_get_email_state_path", lambda: str(path))
+    token = _login()
+
+    collision = client.post(
+        "/dashboard/api/messages/conversations/ann@example.com/email/reply",
+        json={"body": "Do not send"}, headers=_auth(token),
+    )
+    forged = client.post(
+        "/dashboard/api/messages/conversations/email::subj:target@example.com:anything/email/reply",
+        json={"body": "Do not send"}, headers=_auth(token),
+    )
+    assert collision.status_code == forged.status_code == 404
+    mock_smtp.assert_not_called()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -29,6 +30,7 @@ class MermaidCancellationReviewRequired(MermaidReservationError):
 
 
 TERMINAL_STATES = {"cancelled", "booked"}
+SUMMARY_VERSION_KEY = "_reservation_summary_version"
 _schema_lock = threading.Lock()
 TRANSITIONS = {
     "demo_availability_approved": {"quote_ready", "cancelled"},
@@ -143,7 +145,7 @@ def _row(row: sqlite3.Row | None) -> dict | None:
     return value
 
 
-def _summary_version(intake: dict) -> str:
+def _summary_version(intake: dict, *, booking_generation: str = "") -> str:
     owned = {
         key: intake.get(key)
         for key in (
@@ -152,11 +154,20 @@ def _summary_version(intake: dict) -> str:
             "accessibility_notes", "special_requests", "language",
         )
     }
+    # Keep the legacy idempotency identity byte-for-byte compatible even
+    # though private assistance fields are no longer copied into intake_json.
+    if "wheelchair_relationship" in intake:
+        owned["wheelchair_relationship"] = intake["wheelchair_relationship"]
     # Omit the absent field to preserve identity for pre-contact reservations.
     if "contact_phone" in intake:
         owned["contact_phone"] = intake["contact_phone"]
     if intake.get("child_ages"):
         owned["child_ages"] = intake["child_ages"]
+    if booking_generation:
+        # A provider-stable booking generation distinguishes an explicitly new
+        # booking whose customer-owned details happen to match an earlier one.
+        # Empty generations retain the pre-upgrade identity byte-for-byte.
+        owned["_booking_generation"] = str(booking_generation)
     encoded = json.dumps(owned, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -225,6 +236,7 @@ def confirm_reservation(
     idempotency_key: str,
     actor: str = "tracy",
     zernio_account_id: str = "",
+    assistance_session_owned: bool = False,
 ) -> dict:
     """Create exactly one assumed-available reservation per confirmed summary."""
     required = {"trip_date", "adults", "children", "infants", "customer_name", "pickup_preference", "language"}
@@ -233,6 +245,9 @@ def confirm_reservation(
     if intake.get("phase") != "summary_confirmed":
         raise MermaidReservationError("summary is not confirmed")
     intake = dict(intake)
+    replay_summary_version = str(intake.pop(SUMMARY_VERSION_KEY, "") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", replay_summary_version):
+        replay_summary_version = ""
     contact = normalize_contact_phone(intake.get("contact_phone"))
     if contact:
         intake["contact_phone"] = contact
@@ -243,19 +258,167 @@ def confirm_reservation(
         if ages is None:
             raise MermaidReservationError("Child ages must match the supplied guest counts")
         intake = {**intake, "child_ages": ages}
-    version = _summary_version(intake)
+    from agents.social import mermaid_crew_assistance
+    assistance_session_started_at = (
+        mermaid_crew_assistance._conversation_session_started_at(conversation_id)
+    )
+    accessibility_note = str(intake.get("accessibility_notes") or "")
+    relationship_value = intake.get("wheelchair_relationship")
+    private_assistance = bool(
+        accessibility_note
+        and (
+            relationship_value in {"husband", "other", "unspecified"}
+            or any(
+                marker in accessibility_note.casefold()
+                for marker in (
+                    "wheelchair", "wheel chair", "rolstoel", "rollstuhl",
+                    "silla de ruedas", "cadeira de rodas", "stul di rueda",
+                )
+            )
+        )
+    )
+    version = _summary_version(
+        intake,
+        booking_generation=(
+            assistance_session_started_at if assistance_session_owned else ""
+        ),
+    )
+    if private_assistance:
+        existing_assistance_owner = ""
+        owner_conn = _conn()
+        try:
+            owner_row = owner_conn.execute(
+                "SELECT public_id FROM mermaid_reservations "
+                "WHERE tenant_slug='mermaid' AND conversation_id=? "
+                "AND summary_version=?",
+                (conversation_id, version),
+            ).fetchone()
+            if owner_row is not None:
+                existing_assistance_owner = str(owner_row["public_id"] or "")
+        finally:
+            owner_conn.close()
+        # Migrate a pre-feature saved intake before removing its private fields
+        # from the reservation snapshot. An explicit private fact on a changed
+        # summary also reasserts wheelchair ownership for that corrected
+        # reservation. Failure aborts confirmation rather than discarding it.
+        relationship = str(relationship_value or "unspecified")
+        if relationship not in {"husband", "other", "unspecified"}:
+            relationship = "unspecified"
+        mermaid_crew_assistance.record_wheelchair_note(
+            conversation_id,
+            note=accessibility_note,
+            relationship=relationship,
+            trip_date=str(intake.get("trip_date") or ""),
+            customer_name=str(intake.get("customer_name") or ""),
+            source_message_id=f"legacy-confirm:{conversation_id}:{version}",
+            reservation_public_id=existing_assistance_owner,
+        )
+    reassign_kinds = (
+        (mermaid_crew_assistance.KIND_WHEELCHAIR,)
+        if private_assistance
+        else ()
+    )
+    stored_intake = {
+        key: value
+        for key, value in intake.items()
+        if not (
+            private_assistance
+            and key in {"accessibility_notes", "wheelchair_relationship"}
+        )
+    }
+    # Keep only the one-way reservation identity after moving the private
+    # assistance details to the crew queue.  A caller replaying the returned
+    # reservation can then recover the original legacy hash without storing
+    # the wheelchair fact in the reservation snapshot.
+    stored_intake[SUMMARY_VERSION_KEY] = version
     now = _now()
     conn = _conn()
+    # The assistance table is private operational state. Initialize it before
+    # the reservation transaction so schema DDL cannot split that transaction.
+    mermaid_crew_assistance._ensure_schema(conn)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if replay_summary_version:
+            replay_row = conn.execute(
+                "SELECT * FROM mermaid_reservations WHERE tenant_slug='mermaid' "
+                "AND conversation_id=? AND summary_version=?",
+                (conversation_id, replay_summary_version),
+            ).fetchone()
+            if replay_row:
+                replay_intake = json.loads(replay_row["intake_json"] or "{}")
+                replay_intake.pop(SUMMARY_VERSION_KEY, None)
+                supplied_public = dict(stored_intake)
+                supplied_public.pop(SUMMARY_VERSION_KEY, None)
+                if replay_intake == supplied_public:
+                    mermaid_crew_assistance.link_reservation(
+                        conn,
+                        conversation_id,
+                        replay_row["public_id"],
+                        idempotency_key=idempotency_key
+                        or f"confirm:{conversation_id}:{replay_summary_version}",
+                        trip_date=str(intake.get("trip_date") or ""),
+                        session_started_at=assistance_session_started_at,
+                        reassign_kinds=reassign_kinds,
+                        allow_session_reassignment=assistance_session_owned,
+                    )
+                    conn.commit()
+                    return get_reservation(replay_row["public_id"], connection=conn)
         existing = conn.execute(
             "SELECT * FROM mermaid_reservations WHERE tenant_slug='mermaid' "
             "AND conversation_id=? AND summary_version=?",
             (conversation_id, version),
         ).fetchone()
         if existing:
+            if private_assistance:
+                existing_intake = json.loads(existing["intake_json"] or "{}")
+                if any(
+                    key in existing_intake
+                    for key in ("accessibility_notes", "wheelchair_relationship")
+                ):
+                    migrated_revision = int(existing["revision"]) + 1
+                    conn.execute(
+                        "UPDATE mermaid_reservations SET intake_json=?,revision=?,updated_at=? "
+                        "WHERE public_id=?",
+                        (
+                            json.dumps(stored_intake, ensure_ascii=False, sort_keys=True),
+                            migrated_revision,
+                            now,
+                            existing["public_id"],
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO mermaid_reservation_events "
+                        "(reservation_public_id,tenant_slug,event_type,from_state,to_state,"
+                        "actor,reason,idempotency_key,revision,payload_json,created_at) "
+                        "VALUES (?,'mermaid','crew_assistance_migrated',?,?,"
+                        "'system','Private assistance moved to the crew queue',?,?, '{}',?)",
+                        (
+                            existing["public_id"],
+                            existing["state"],
+                            existing["state"],
+                            f"crew-assistance-migrate:{existing['public_id']}",
+                            migrated_revision,
+                            now,
+                        ),
+                    )
+            mermaid_crew_assistance.link_reservation(
+                conn,
+                conversation_id,
+                existing["public_id"],
+                idempotency_key=idempotency_key or f"confirm:{conversation_id}:{version}",
+                trip_date=str(intake.get("trip_date") or ""),
+                session_started_at=assistance_session_started_at,
+                reassign_kinds=reassign_kinds,
+                allow_session_reassignment=assistance_session_owned,
+            )
+            existing = conn.execute(
+                "SELECT * FROM mermaid_reservations WHERE public_id=?",
+                (existing["public_id"],),
+            ).fetchone()
             conn.commit()
-            return _row(existing)
+            return get_reservation(existing["public_id"], connection=conn)
+        if _operator_review_active(conn, conversation_id):
+            raise MermaidReservationError("reservation is frozen for human takeover")
         if not contact:
             raise MermaidReservationError("a customer-supplied international contact number is required")
         public_id = "mer_" + uuid.uuid4().hex
@@ -273,7 +436,7 @@ def confirm_reservation(
                     "'demo_availability_approved', 1, 'demo_assumed', ?, ?, ?, ?)",
                     (
                         public_id, conversation_id, version, intake["customer_name"], intake["language"],
-                        json.dumps(intake, ensure_ascii=False, sort_keys=True), catalog["version"],
+                        json.dumps(stored_intake, ensure_ascii=False, sort_keys=True), catalog["version"],
                         json.dumps(snapshot, ensure_ascii=False, sort_keys=True), code,
                         str(zernio_account_id or ""), now, now,
                     ),
@@ -293,6 +456,16 @@ def confirm_reservation(
                 idempotency_key or f"confirm:{conversation_id}:{version}",
                 json.dumps({"availability_source": "demo_assumed", "catalog_version": catalog["version"]}), now,
             ),
+        )
+        mermaid_crew_assistance.link_reservation(
+            conn,
+            conversation_id,
+            public_id,
+            idempotency_key=idempotency_key or f"confirm:{conversation_id}:{version}",
+            trip_date=str(intake.get("trip_date") or ""),
+            session_started_at=assistance_session_started_at,
+            reassign_kinds=reassign_kinds,
+            allow_session_reassignment=assistance_session_owned,
         )
         conn.commit()
         return get_reservation(public_id, connection=conn)
@@ -373,7 +546,9 @@ def transition(
         if row is None:
             raise MermaidReservationError("reservation not found")
         current = _row(row)
-        if current["human_takeover"]:
+        if current["human_takeover"] or _operator_review_active(
+            conn, current["conversation_id"]
+        ):
             raise MermaidReservationError("reservation is frozen for human takeover")
         from_state = current["state"]
         if to_state not in TRANSITIONS.get(from_state, set()):
@@ -411,8 +586,8 @@ def transition(
         conn.close()
 
 
-def _cancellation_review_active(conn: sqlite3.Connection, conversation_id: str) -> bool:
-    """Read operator/review authority inside the cancellation write transaction."""
+def _operator_review_active(conn: sqlite3.Connection, conversation_id: str) -> bool:
+    """Read operator/review authority inside a reservation write transaction."""
     tables = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('conversation_status', 'pending_notifications')"
     ).fetchall()}
@@ -423,10 +598,19 @@ def _cancellation_review_active(conn: sqlite3.Connection, conversation_id: str) 
         return True
     return bool("pending_notifications" in tables and conn.execute(
         "SELECT 1 FROM pending_notifications WHERE customer_id=? "
-        "AND notification_type IN ('escalation', 'relay') AND status!='resolved' "
-        "AND mode IN ('soft', 'hard') LIMIT 1",
+        "AND notification_type IN ('escalation', 'relay') "
+        "AND status IN ('pending', 'sent') "
+        "AND (mode IS NULL OR mode IN ('soft', 'hard')) LIMIT 1",
         (conversation_id,),
     ).fetchone())
+
+
+def operator_review_active(conversation_id: str) -> bool:
+    conn = _conn()
+    try:
+        return _operator_review_active(conn, conversation_id)
+    finally:
+        conn.close()
 
 
 def cancel(public_id: str, *, idempotency_key: str, actor: str = "customer") -> dict:
@@ -443,7 +627,7 @@ def cancel(public_id: str, *, idempotency_key: str, actor: str = "customer") -> 
         ).fetchone()
         if paid or current["payment_reference"] or current["state"] in {"demo_paid", "booked"}:
             raise MermaidCancellationReviewRequired(current, "paid demo reservation cannot be cancelled automatically")
-        if current["human_takeover"] or _cancellation_review_active(conn, current["conversation_id"]):
+        if current["human_takeover"] or _operator_review_active(conn, current["conversation_id"]):
             raise MermaidCancellationReviewRequired(current, "reservation is frozen for human takeover")
         if current["state"] != "cancelled":
             if "cancelled" not in TRANSITIONS.get(current["state"], set()):
@@ -519,7 +703,9 @@ def complete_demo_payment(
         if row is None:
             raise MermaidReservationError("reservation not found")
         reservation = _row(row)
-        if reservation["human_takeover"]:
+        if reservation["human_takeover"] or _operator_review_active(
+            conn, reservation["conversation_id"]
+        ):
             raise MermaidReservationError("reservation is frozen for human takeover")
         if reservation["state"] == "booked":
             payment = conn.execute(

@@ -100,11 +100,25 @@ def test_papiamentu_request_delivers_standard_vocabulary_and_preserves_guest_evi
         assert word in request['system']
     assert 'standard written Curaçao Papiamentu' in request['system']
     assert 'professional' in request['system']
+    assert 'Do not use street Papiamentu' in request['system']
+    assert 'texting shortcuts' in request['system']
+    assert "use 'mucha di 0 te ku 3 aña' for the 0-3 fare band" in request['system']
+    assert "use 'biña' for optional wine" in request['system']
+    assert "'sèn kèsh' or 'plaka' for cash" in request['system']
+    assert "Use 'katalòk' and 'lansamentu'" in request['system']
+    assert "'beibi', 'piká', 'kashi', and 'vino' are not globally forbidden" in request['system']
     guide = json.loads(Path(config_loader._CONFIG_PATH).with_name('response_policy.json').read_text())['glossary']['pap']
     assert guide['months_january_to_december'] == ['yanüari', 'febrüari', 'mart', 'aprel', 'mei', 'yüni', 'yüli', 'ougùstùs', 'sèptèmber', 'òktober', 'novèmber', 'desèmber']
     for month in guide['months_january_to_december']:
         assert month in request['system']
-    for key in ('bring_example', 'contact_number_example', 'contact_number_retry_example', 'details_acknowledgement_example'):
+    for key in (
+        'bring_example',
+        'contact_number_example',
+        'contact_number_retry_example',
+        'details_acknowledgement_example',
+        'wheelchair_assistance_example',
+        'wheelchair_withdrawal_example',
+    ):
         assert guide[key] in request['system']
     assert 'For an ordinary question outside review, with no calendar, status or security route, put the complete answer to every part of the latest guest message in reply and leave other_question_reply empty. Never split such an answer between the two fields.' in request['system']
     user_prompt = json.loads(request['messages'][0]['content'])

@@ -49,10 +49,14 @@ def build_payment_url(base_url: str, reservation_id: str, secret: str, now: int 
             # Serialize minting with cancellation's state check and revocation.
             conn.execute("BEGIN IMMEDIATE")
             reservation = conn.execute(
-                "SELECT public_id FROM mermaid_reservations WHERE public_id=? AND tenant_slug='mermaid' AND state!='cancelled' AND human_takeover=0",
+                "SELECT public_id,conversation_id FROM mermaid_reservations "
+                "WHERE public_id=? AND tenant_slug='mermaid' "
+                "AND state!='cancelled' AND human_takeover=0",
                 (reservation_id,),
             ).fetchone()
-            if not reservation:
+            if not reservation or mermaid_reservation_store._operator_review_active(
+                conn, reservation["conversation_id"]
+            ):
                 raise ValueError("Mermaid reservation is unavailable")
             conn.execute("DELETE FROM mermaid_checkout_links WHERE expires_at < ?", (current,))
             conn.execute(
@@ -75,12 +79,14 @@ def resolve_checkout_token(token: str) -> tuple[str, int, str] | None:
     conn = mermaid_reservation_store._conn()
     try:
         row = conn.execute(
-            "SELECT l.reservation_public_id,l.expires_at FROM mermaid_checkout_links l "
+            "SELECT l.reservation_public_id,l.expires_at,r.conversation_id FROM mermaid_checkout_links l "
             "JOIN mermaid_reservations r ON r.public_id=l.reservation_public_id "
             "WHERE l.token_hash=? AND l.tenant_slug='mermaid' AND r.tenant_slug='mermaid' "
             "AND r.state!='cancelled' AND r.human_takeover=0 AND l.expires_at>=?",
             (_checkout_token_hash(token, secret), int(time.time())),
         ).fetchone()
+        if row and mermaid_reservation_store._operator_review_active(conn, row[2]):
+            row = None
     finally:
         conn.close()
     if not row:
@@ -111,7 +117,14 @@ def checkout_page(reservation_id: str, expires: int, signature: str, *, form_act
     if not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
-    if not reservation or reservation["state"] == "cancelled" or reservation["human_takeover"]:
+    if (
+        not reservation
+        or reservation["state"] == "cancelled"
+        or reservation["human_takeover"]
+        or mermaid_reservation_store.operator_review_active(
+            reservation["conversation_id"]
+        )
+    ):
         return Response(status_code=404)
     money = reservation["monetary_snapshot"]
     intake = reservation["intake"]

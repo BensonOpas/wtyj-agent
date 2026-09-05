@@ -36,9 +36,9 @@ def test_sender_under_rate_limit():
     assert len(_sr_times) == 6
 
 
-# ── T3: Thread >30d, no hold → archived and deleted ──
+# ── T3: Thread >30d, no hold → governed archive ──
 def test_old_thread_no_hold_archived():
-    """Thread older than 30 days without hold_created → removed from state."""
+    """Thread older than 30 days stays governed and is hidden from inbox."""
     from agents.marina import email_poller
     now = int(time.time())
     state = {
@@ -57,7 +57,7 @@ def test_old_thread_no_hold_archived():
     email_poller.ARCHIVE_PATH = archive_path
     try:
         email_poller._cleanup_stale_data(state, now)
-        assert "test_old" not in state["threads"]
+        assert state["threads"]["test_old"]["flags"]["deleted"] is True
     finally:
         email_poller.ARCHIVE_PATH = orig_archive
         os.unlink(archive_path)
@@ -115,9 +115,9 @@ def test_recent_thread_preserved():
             os.unlink(os.path.join(tempfile.gettempdir(), "test_archive_t5.jsonl"))
 
 
-# ── T6: Archive file contains correct JSON ──
+# ── T6: Archiving creates no raw shadow copy ──
 def test_archive_file_json():
-    """After archiving, JSONL file has thread_key, archived_at, data."""
+    """Archived thread remains governed; the legacy raw JSONL stays empty."""
     from agents.marina import email_poller
     now = int(time.time())
     original_data = {"last_activity": now - 31 * 86400, "flags": {}, "fields": {"name": "Archived"}}
@@ -132,13 +132,9 @@ def test_archive_file_json():
     try:
         email_poller._cleanup_stale_data(state, now)
         with open(archive_path, "r") as f:
-            line = f.readline().strip()
-        parsed = json.loads(line)
-        assert parsed["thread_key"] == "test_old"
-        assert "archived_at" in parsed
-        assert parsed["archived_at"] == now
-        assert "data" in parsed
-        assert parsed["data"]["fields"]["name"] == "Archived"
+            assert f.read() == ""
+        assert state["threads"]["test_old"]["flags"]["deleted"] is True
+        assert state["threads"]["test_old"]["fields"]["name"] == "Archived"
     finally:
         email_poller.ARCHIVE_PATH = orig_archive
         os.unlink(archive_path)
