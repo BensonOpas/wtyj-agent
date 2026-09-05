@@ -2965,3 +2965,19 @@ A stubbed workflow accepted structured critical replies that the real SDK adapte
 A second failure survived focused FAQ checks because they used requires_human=false. Real outputs retained requires_human=true during an existing review; an earlier queue renderer swallowed both a correct dedicated FAQ and a wildlife selector. Preserve the escalation/freeze action while letting narrowly eligible ordinary follow-ups reach authoritative renderers. Test the actual captured SDK shapes, generic action variations, duplicate events and final send controls. Never reuse raw status prose as a fallback.
 
 Preserve failed paid attempts and distinguish numeric assertions, semantic answer completeness and native-language acceptance. A deterministic replay of the same captured inputs is useful evidence for a routing fix, but cannot be relabeled as a fresh model-quality run. Pin the runtime inventory independently; deriving an expected file list only from an unpinned Dockerfile can falsely pass an empty inventory.
+---
+
+## Brief 342 — Loop safety must be terminal state, not better bot prose (2026-09-05)
+
+1. A reply-volume ceiling is not loop detection; even two automated replies can be customer-visible damage.
+2. Detecting a loop and then explaining the stop to the other bot continues the loop. The detecting turn must send zero provider text.
+3. A transient suppression is insufficient. The stop needs a durable per-conversation latch checked before cache and model work.
+4. Preserve the transcript and show an operator status rather than inserting a fake assistant message.
+5. A loop stop is operational evidence, not an escalation. Do not create a task that asks a human to resolve a condition already stopped.
+6. Sender metadata helps model understanding, but it remains untrusted context; sender-name equality alone is not a safe classifier.
+7. Keep language/intent understanding in the structured model boundary. Python should route on a validated boolean and own the irreversible state transition.
+8. Persist before any reservation, payment, cancellation, document, or escalation branch so a confirmed loop cannot mutate guest business state.
+9. Concurrent production releases must be treated as new baselines. Rebase onto the exact running revision before packaging, even after a green full suite.
+10. Build a tenant-only overlay from the exact live image when preserving recent runtime changes matters more than rebuilding a broad shared image.
+11. Verify the existing manual pause after every state save. A safety label must never accidentally reactivate the conversation.
+12. Production proof should inspect the authenticated list/detail contract without replaying the webhook or sending a real WhatsApp canary.
