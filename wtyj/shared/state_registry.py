@@ -660,6 +660,10 @@ def _get_conn():
         conn.execute("ALTER TABLE conversation_status ADD COLUMN ai_muted INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE conversation_status ADD COLUMN ai_mute_source TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     # Brief 213: conversation_status.human_takeover_at (ISO timestamp when muted)
     try:
         conn.execute("ALTER TABLE conversation_status ADD COLUMN human_takeover_at TEXT")
@@ -5602,13 +5606,14 @@ def set_ai_muted(conversation_id: str, muted: bool, channel: str = "whatsapp") -
     takeover_at = now if muted else None
     conn.execute(
         "INSERT INTO conversation_status "
-        "(conversation_id, channel, status, ai_muted, human_takeover_at, updated_at) "
-        "VALUES (?, ?, 'pending', ?, ?, ?) "
+        "(conversation_id, channel, status, ai_muted, human_takeover_at, updated_at, ai_mute_source) "
+        "VALUES (?, ?, 'pending', ?, ?, ?, ?) "
         "ON CONFLICT(conversation_id) DO UPDATE SET "
         "ai_muted = excluded.ai_muted, "
+        "ai_mute_source = excluded.ai_mute_source, "
         "human_takeover_at = excluded.human_takeover_at, "
         "updated_at = excluded.updated_at",
-        (conversation_id, channel, 1 if muted else 0, takeover_at, now))
+        (conversation_id, channel, 1 if muted else 0, takeover_at, now, "manual" if muted else ""))
     conn.commit()
     conn.close()
 
@@ -6416,6 +6421,8 @@ def _sync_mermaid_escalation_freezes(
     customer_id: str,
     channel: str,
     now: str,
+    *,
+    preserve_manual_mute: bool = False,
 ) -> tuple[bool, bool]:
     """Synchronize every Mermaid freeze from all active review rows.
 
@@ -6435,15 +6442,44 @@ def _sync_mermaid_escalation_freezes(
     ).fetchall()
     has_active_review = bool(active_modes)
     has_hard_review = any(row[0] == "hard" for row in active_modes)
+    has_reservations = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'mermaid_reservations'"
+    ).fetchone()
+    manual_mute = False
+    if preserve_manual_mute:
+        mute = conn.execute(
+            "SELECT ai_muted, ai_mute_source FROM conversation_status WHERE conversation_id=?",
+            (customer_id,),
+        ).fetchone()
+        if mute and mute[0]:
+            manual_mute = mute[1] == "manual"
+            if not mute[1] and not has_active_review:
+                # Upgrade an old standalone manual pause conservatively. A
+                # booking/escalation freeze is separate evidence of an orphan
+                # that the existing repair is allowed to release.
+                flag = conn.execute(
+                    "SELECT 1 FROM whatsapp_booking_state WHERE phone=? "
+                    "AND json_valid(COALESCE(flags_json, '{}')) "
+                    "AND json_extract(COALESCE(flags_json, '{}'), '$.fully_escalated')=1",
+                    (customer_id,),
+                ).fetchone()
+                frozen = has_reservations and conn.execute(
+                    "SELECT 1 FROM mermaid_reservations WHERE tenant_slug='mermaid' "
+                    "AND conversation_id=? AND human_takeover=1", (customer_id,),
+                ).fetchone()
+                manual_mute = not flag and not frozen
+    effective_mute = has_hard_review or manual_mute
     conversation_status = "open" if has_active_review else "resolved"
-    takeover_at = now if has_hard_review else None
+    takeover_at = now if effective_mute else None
 
     conn.execute(
         "INSERT INTO conversation_status "
-        "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
+        "(conversation_id, channel, status, updated_at, ai_muted, human_takeover_at, ai_mute_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(conversation_id) DO UPDATE SET "
         "status = excluded.status, ai_muted = excluded.ai_muted, "
+        "ai_mute_source = excluded.ai_mute_source, "
         "human_takeover_at = CASE WHEN excluded.ai_muted = 1 "
         "THEN COALESCE(conversation_status.human_takeover_at, "
         "excluded.human_takeover_at) ELSE NULL END, "
@@ -6453,8 +6489,9 @@ def _sync_mermaid_escalation_freezes(
             channel or "whatsapp",
             conversation_status,
             now,
-            1 if has_hard_review else 0,
+            1 if effective_mute else 0,
             takeover_at,
+            "manual" if manual_mute else "escalation" if has_hard_review else "",
         ),
     )
     conn.execute(
@@ -6463,10 +6500,6 @@ def _sync_mermaid_escalation_freezes(
         "'$.fully_escalated', json(?)) WHERE phone = ?",
         ("true" if has_hard_review else "false", customer_id),
     )
-    has_reservations = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-        "AND name = 'mermaid_reservations'"
-    ).fetchone()
     if has_reservations:
         conn.execute(
             "UPDATE mermaid_reservations SET human_takeover = ?, updated_at = ? "
@@ -6545,6 +6578,7 @@ def reconcile_mermaid_escalation_freezes() -> dict:
                 customer_id,
                 str(channel_row[0] if channel_row else "whatsapp"),
                 now,
+                preserve_manual_mute=True,
             )
             active += int(has_active)
             hard += int(has_hard)

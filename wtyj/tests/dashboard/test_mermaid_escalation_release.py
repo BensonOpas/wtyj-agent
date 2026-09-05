@@ -588,7 +588,10 @@ def test_startup_reconciliation_releases_orphaned_freezes():
         [],
     )
     state_registry.set_ai_muted(conversation_id, True, "whatsapp")
-
+    # This fixture models the old escalation-owned orphan, not a new explicit
+    # manual pause (which now records its independent source).
+    with state_registry._get_conn() as db:
+        db.execute("UPDATE conversation_status SET ai_mute_source='' WHERE conversation_id=?", (conversation_id,))
     result = state_registry.reconcile_mermaid_escalation_freezes()
 
     assert result == {"conversations": 1, "active": 0, "hard": 0}
@@ -778,3 +781,28 @@ def test_non_mermaid_takeover_and_handback_commit_mode_with_mute(monkeypatch):
     assert _content_revision(escalation_id) == 3
     assert state_registry.get_ai_muted(conversation_id) is False
     assert reservation_store.get_reservation(reservation["public_id"])["human_takeover"] is True
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_startup_preserves_standalone_manual_pause_and_explicit_resume(legacy):
+    conversation='manual-loop-pause'
+    state_registry.set_ai_muted(conversation,True)
+    if legacy:
+        with state_registry._get_conn() as db:
+            db.execute("UPDATE conversation_status SET ai_mute_source='' WHERE conversation_id=?",(conversation,))
+    for _ in range(2):
+        state_registry.reconcile_mermaid_escalation_freezes()
+        assert state_registry.get_ai_muted(conversation)
+    state_registry.set_ai_muted(conversation,False)
+    state_registry.reconcile_mermaid_escalation_freezes()
+    assert not state_registry.get_ai_muted(conversation)
+
+
+def test_manual_pause_is_independent_of_soft_review_on_restart():
+    conversation='manual-pause-soft-review'
+    notification=state_registry.create_pending_notification('escalation','whatsapp',conversation,'Test','Review','Saved',mode='soft')
+    state_registry.set_ai_muted(conversation,True)
+    state_registry.reconcile_mermaid_escalation_freezes()
+    assert state_registry.get_ai_muted(conversation)
+    # Explicit operator handback still resumes the conversation.
+    state_registry.release_mermaid_escalation(notification)
+    assert not state_registry.get_ai_muted(conversation)
