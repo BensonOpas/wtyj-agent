@@ -1,0 +1,8 @@
+# Mermaid-only safety overlay of the exact production image released at
+# 1739d9672d2c. Keep the protected runtime and recent pause-reconciliation fix,
+# replacing only the loop-stop backend surfaces reviewed in Brief 342.
+FROM wtyj-agent:tracy-replies-1739d9672d2c
+COPY wtyj/agents/social/mermaid_reservation_workflow.py /app/agents/social/mermaid_reservation_workflow.py
+COPY wtyj/agents/social/mermaid_understanding.py /app/agents/social/mermaid_understanding.py
+COPY wtyj/dashboard/api.py /app/dashboard/api.py
+COPY wtyj/shared/state_registry.py /app/shared/state_registry.py
