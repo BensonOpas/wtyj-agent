@@ -1,6 +1,10 @@
-# Mermaid Tracy audit remediation — 4 September 2026
+# Mermaid Tracy audit remediation — 5 September 2026
 
-Tracy is online on `9261d4a` with the engineering repairs and updated professional Curaçao Papiamentu guidance. The final image passed **530 tests** and **19/19 live checks**. **A4 native-language review and A8 complete acceptance remain open:** reference-backed copy and prompt-delivery checks do not certify perfect generated language.
+Tracy is online on source `5e125d9fa0e649d0927ea2f9f7cb08ee6ebebbc7` as image `wtyj-agent:tracy-formal-5e125d9fa0e6`. The exact release passed the **670-test** backend gate, a **233-test** final language/PDF gate, and **436 tests** in the isolated production-image environment. The formal Curaçao Papiamentu reference review is complete and deployed; native-human certification of arbitrary future generated sentences is a separate qualification and is not a pending engineering release item.
+
+The live Unboks dashboard is source `4bd070de9278c825fd81f050095c3955436efe18`, with **44 test files / 263 tests**, type-check, production build, and exact public-asset verification passing. Control failures now render as unavailable instead of paused, and pause/resume requires the explicit control. Escalation, reply, guidance, takeover, hand-back, resolve, unresolve, and delete mutations are fenced by the exact escalation revision so stale browser state cannot mute or change a newer case.
+
+Post-release checks show local and public Mermaid health at HTTP 200, zero container restarts, no OOM exit, authoritative `ai_auto_reply=true` and `whatsapp_inbox=true`, a strict one-account Zernio allowlist, empty failed-event and operator-delivery queues, no muted or blocked conversation, matching runtime hashes, and every live peer container unchanged. The legacy arbitrary-tenant Nginx fallback was migrated to the explicit `/api/unboks/` route; unknown tenant paths now return 404 without a tenant header. Private rollback material is retained for the application, dashboard, and Nginx changes. No live guest message or payment was sent during verification.
 
 ## Current deployed release — Curaçao Papiamentu
 
@@ -113,8 +117,8 @@ There were no live guest test sends, real payments/refunds, inventory operations
 
 ## Acceptance disposition
 
-- **A4:** Engineering controls and the official-reference review of fixed copy are complete. The glossary and deterministic copy use formal written Curaçao Papiamentu reviewed against the official FPI standard, and known transcript defects are blocked at the generated-output boundary. Native-human certification of arbitrary future model sentences remains open; historical samples are not presented as that certification.
+- **A4:** Engineering controls and the official-reference review of fixed copy are complete. The glossary and deterministic copy use formal written Curaçao Papiamentu reviewed against the official FPI standard, and known transcript defects are blocked at the generated-output boundary. Native-human certification of arbitrary future model sentences is outside engineering acceptance and is not presented as completed certification.
 - **A8:** The balanced 60+6 run, full assistant transcript review and independent evidence reconciliation are complete. Its raw 59/60 + 5/6 outcome, one presentation defect and one exact-copy false negative remain visible. The formatting correction has captured-output and exact-image test evidence; the retained raw score is not rewritten.
 - Missing dedicated FAQ content still yields truthful status only; the app cannot reconstruct an answer the model omitted. The model can also miss a structured route: the German coverage answer was factually correct but used generated prose. These are explicit extraction/classification limitations, not a claim that every future question will be answered correctly.
 
-A1–A8 have an explicit disposition. The current v5 language and reliability candidate still requires its ordinary release tests and deployment proof before its new changes are described as live.
+A1–A8 have an explicit disposition. The current formal-language and reliability release passed its release tests and production verification and is live.

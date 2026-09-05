@@ -36,12 +36,14 @@ separate and are not connected.
 The existing Mermaid public number `+599 9 560 1530` and existing public Meta
 profiles are out of scope for connection or mutation.
 
-Nr3 was checked live on `2026-09-03`: `mermaid` exists with status `active`,
-agent name `TRACY`, the exact dedicated number, connection status
-`Connected / healthy`, and a strict allowlist containing one verified account.
-`whatsapp_inbox` is enabled, `ai_auto_reply` is paused after the canary, and
-`facebook_dms` is off. Control-panel PR #94 contains the fail-closed activation
-guard and the callback repair and still requires its coordinated release.
+Nr3 was checked live again after the `2026-09-05` release: `mermaid` exists with
+status `active`, agent name `TRACY`, the exact dedicated number, connection
+status `Connected / healthy`, and a strict allowlist containing one verified
+account. `whatsapp_inbox` and `ai_auto_reply` are both enabled from authoritative
+Nr3 overrides, and `facebook_dms` is off. After the completed canary, the demo
+operating state is active. No timer, health read, dashboard polling failure, or
+routine deployment may turn either enabled toggle off. Pausing requires an
+explicit operator action or an incident response decision.
 
 ## Integration truth gate
 
@@ -111,14 +113,16 @@ proves the provider path; it does not waive the final release gate.
    false. One tester message through the allowlisted provider account must be
    stored as paused in Mermaid and must not appear in Ali, Roberto, or Unboks.
 5. **Controlled reply canary:** deliberately enable `ai_auto_reply`, send one
-   published-fact question, and verify exactly one stored TRACY reply. Pause
-   immediately again if identity, isolation, or reply-count checks fail.
+   published-fact question, and verify exactly one stored TRACY reply. Keep the
+   verified demo active. Pause only when identity, isolation, or reply-count
+   checks fail and an operator deliberately starts incident response.
 6. **Demo ready:** factual reply, escalation, takeover, hand-back, and isolation
    checks are recorded. `facebook_dms` stays false unless Facebook messaging is
    separately connected and canaried.
 
-Mermaid has completed steps 1 through 5 once. Step 6 and the repeat canaries
-remain pending the hardened release and full browser rehearsal.
+Mermaid has completed steps 1 through 5 once and the hardened runtime is live.
+Step 6 remains the operator's full browser rehearsal; it does not automatically
+change the authoritative active state.
 
 Do not skip directly from provisioning to enabled traffic. An absent allowlist
 is legacy-permissive; an empty strict allowlist is the required pre-connection
@@ -269,10 +273,10 @@ is an operator acknowledgement, not an automatic service-status check. The tool:
 
 The backup is credential-bearing. Keep it outside the repository and never
 attach it to an issue, PR, log, or demo record. Do not use `cp` to replace the
-live `client.json`, and do not export the live file for comparison. After an
-successful apply, recreate only `wtyj-mermaid`, then repeat the health, paused
-state, allowlist, dashboard profile, and isolation checks before enabling any
-channel.
+live `client.json`, and do not export the live file for comparison. After a
+successful apply, recreate only `wtyj-mermaid`, then repeat the health,
+authoritative active-state, allowlist, dashboard profile, and isolation checks
+before enabling any channel.
 
 For a reviewed application release, use the scoped wrapper instead of the
 shared deploy queue:
@@ -289,7 +293,8 @@ production-operation lock with CI, prepares compare-and-swap configuration
 snapshots, gracefully stops only Mermaid, backs up its database while stopped,
 and recreates only the `agent` service. It verifies the exact candidate image,
 the `unless-stopped` restart policy, local health, and unchanged identities for
-all six peer containers. A failed candidate restores the protected Mermaid
+every live peer container discovered at the start of the release. A failed
+candidate restores the protected Mermaid
 files and previous compose image without restoring the live database.
 
 If apply reports an uncommitted target or preserved recovery file, leave the

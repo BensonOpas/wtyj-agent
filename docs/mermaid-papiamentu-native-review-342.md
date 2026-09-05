@@ -37,7 +37,9 @@ review and acceptance by a qualified Curaçao Papiamentu language professional.
 
 The release standardizes `bèrdat`, `periodo`, `kòmbersashon`, `prepará`,
 `bishitante`, `bebé`, `mobilidat`, `lansamentu`, `toaya`, `kas di playa`, and
-the formal `pasa buska bo` transport wording. It removes fixed-output uses of
+the formal `pasa buska bo` transport wording. The final static inventory also
+uses `katalòk`, `lansamentu`, and `pèchi`; the output gate rejects the
+nonstandard or Dutch forms `katálogo`, `lansementu`, and `pet`. It removes fixed-output uses of
 `pickup`, `beibi`, `berdat`, `kombersashon`, `período`, `movilidat`, `aworaki`,
 unaccented `prepara`, `adjuntá`, and `beach house` from Papiamentu copy.
 
