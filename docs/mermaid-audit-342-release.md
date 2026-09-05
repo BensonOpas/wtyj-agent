@@ -1,5 +1,9 @@
 # Mermaid Tracy audit remediation — 5 September 2026
 
+**Current deployment:** reply-system repair `1739d9672d2cb48d535bb1cc909f5885263d4134`, started 2026-09-05 01:58:39 UTC. See [the current audit and verification](mermaid-reply-system-repair-2026-09-05.md). The service and controls are healthy, and the explicit loop-conversation pause survived startup. The last real-model check was rejected by Anthropic for insufficient credit; final model verification remains outstanding.
+
+The following release records are historical and retain their original point-in-time observations.
+
 Tracy is online on source `5e125d9fa0e649d0927ea2f9f7cb08ee6ebebbc7` as image `wtyj-agent:tracy-formal-5e125d9fa0e6`. The exact release passed the **670-test** backend gate, a **233-test** final language/PDF gate, and **436 tests** in the isolated production-image environment. The formal Curaçao Papiamentu reference review is complete and deployed; native-human certification of arbitrary future generated sentences is a separate qualification and is not a pending engineering release item.
 
 The live Unboks dashboard is source `4bd070de9278c825fd81f050095c3955436efe18`, with **44 test files / 263 tests**, type-check, production build, and exact public-asset verification passing. Control failures now render as unavailable instead of paused, and pause/resume requires the explicit control. Escalation, reply, guidance, takeover, hand-back, resolve, unresolve, and delete mutations are fenced by the exact escalation revision so stale browser state cannot mute or change a newer case.
