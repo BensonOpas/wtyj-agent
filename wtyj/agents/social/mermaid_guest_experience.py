@@ -71,11 +71,12 @@ def party_text(intake, locale):
         return ", ".join((copy.get(key + "_one", copy[key]) if intake.get(key) == 1 else copy[key]).format(count=intake[key])
                          for key in ("adults", "children", "infants") if intake.get(key))
     parts = []
-    adults = intake.get("adults", 0)
+    ages = normalize_child_ages(intake.get("child_ages", []), intake) or []
+    # Adult fare starts at 13; a teenager is still described with their age.
+    adults = intake.get("adults", 0) - sum(age_band(age) == "adults" for age in ages)
     if adults:
         parts.append(formal["adult_one" if adults == 1 else "adults"].format(count=adults))
-    ages = normalize_child_ages(intake.get("child_ages", []), intake) or []
-    for band in ("children", "infants"):
+    for band in ("adults", "children", "infants"):
         known = [age for age in ages if age_band(age) == band]
         for kind in ("child", "infant"):
             group = [age for age in known if ("infant" if age_months(age) < 12 else "child") == kind]
@@ -83,7 +84,7 @@ def party_text(intake, locale):
                 age_text = ", ".join(formal[age["unit"] + ("_one" if age["value"] == 1 else "")].format(value=age["value"]) for age in group)
                 label = formal[kind + ("_one" if len(group) == 1 else "s")].format(count=len(group))
                 parts.append(f"{label} ({age_text})")
-        unknown = intake.get(band, 0) - len(known)
+        unknown = 0 if band == "adults" else intake.get(band, 0) - len(known)
         if unknown > 0:
             parts.append(formal[band + "_unknown" + ("_one" if unknown == 1 else "")].format(count=unknown))
     return " · ".join(parts)

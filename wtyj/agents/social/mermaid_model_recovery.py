@@ -260,12 +260,16 @@ def _conn():
 
 
 def _metadata(row, *, retry_at=None, kind=None, retryable=None) -> dict:
+    can_retry = bool(row["retryable"]) if retryable is None else retryable
     return {
         "conversation_id": row["conversation_id"], "message_id": row["message_id"],
         "kind": kind or row["error_kind"],
-        "retryable": bool(row["retryable"]) if retryable is None else retryable,
+        "retryable": can_retry,
         "retry_at": row["retry_at"] if retry_at is None else retry_at,
-        "send_notice": not row["notice_sent"] and row["status"] not in {"generating", "superseded"},
+        # A recoverable attempt is internal work, not a failed conversation.
+        # The durable worker retries silently; notify once only at exhaustion
+        # or when the provider requires an operator's intervention.
+        "send_notice": not can_retry and not row["notice_sent"] and row["status"] not in {"generating", "superseded"},
         "superseded": row["status"] == "superseded",
     }
 
@@ -328,6 +332,18 @@ def _normalize_nfc(value):
     return value
 
 
+def _normalize_generated_result(value):
+    result = _normalize_nfc(value)
+    if isinstance(result, dict) and result.get("language") == "pap":
+        # The approved facility name is already used in Mermaid's PAP FAQ.
+        # Repair this exact, unambiguous English phrase before the strict
+        # register check, rather than discard an otherwise valid answer.
+        for key in ("reply", "other_question_reply"):
+            if isinstance(result.get(key), str):
+                result[key] = re.sub(r"(?<!\w)beach\s+house(?!\w)", "kas di playa", result[key], flags=re.IGNORECASE)
+    return result
+
+
 def _has_disallowed_format_control(text: str) -> bool:
     """Reject invisible controls while retaining ordinary joined emoji."""
     for index, character in enumerate(text):
@@ -357,7 +373,7 @@ def _has_minimum_papiamentu_structure(text: str) -> bool:
     return any(pattern.search(text) for pattern in _PAPIAMENTU_OUTPUT_STRUCTURE_PATTERNS)
 
 
-def _valid_result(result, guest_text="", expected_locale=""):
+def _validation_error(result, guest_text="", expected_locale=""):
     from agents.social.mermaid_understanding import MERMAID_TOOL, has_server_owned_reply
 
     properties = MERMAID_TOOL["input_schema"]["properties"]
@@ -373,12 +389,25 @@ def _valid_result(result, guest_text="", expected_locale=""):
         if not server_replaces_reply:
             customer_text += "\n" + str(result.get("reply") or "")
         customer_text = unicodedata.normalize("NFC", customer_text)
+        language_names = {
+            "en": "english|engels|englisch|inglés|ingles",
+            "nl": "dutch|nederlands|neerlandés|hulandes|holandés|holandês",
+            "de": "german|deutsch|duits|alemán|aleman|alemão",
+            "es": "spanish|español|spaans|spanisch|spañó",
+            "pt": "portuguese|português|portugees|portugiesisch|portugés",
+        }
+        result_locale = result.get("language")
+        target = language_names.get(result_locale) if isinstance(result_locale, str) else None
+        explicit_switch = bool(target and re.search(
+            r"(?:\b(?:in|na|en|auf|em|to)\s+(?:" + target + r")\b|\b(?:" + target + r")\s+(?:please|por fabor|por favor|alstublieft|bitte)\b)",
+            str(guest_text or ""), re.IGNORECASE,
+        ))
         papiamentu_context = (
             result.get("language") == "pap"
-            or expected_locale == "pap"
+            or (expected_locale == "pap" and not explicit_switch)
             or any(
                 pattern.search(text)
-                for text in (str(guest_text or ""), customer_text)
+                for text in (("" if explicit_switch else str(guest_text or "")), customer_text)
                 for pattern in _PAPIAMENTU_CONTEXT_PATTERNS
             )
         )
@@ -391,18 +420,29 @@ def _valid_result(result, guest_text="", expected_locale=""):
                 )
                 and _has_minimum_papiamentu_structure(customer_text)
             )
-    return (
-        isinstance(result, dict) and not result.get("generation_failed")
-        and isinstance(result.get("reply"), str)
-        and isinstance(result.get("mermaid_action"), str)
-        and set(result).issubset(set(properties) | _MARINA_COMPATIBILITY_KEYS)
-        # Marina appends compatibility metadata outside the Mermaid tool schema.
-        # Only that top-level metadata is tolerated; declared/nested values
-        # always use the model's single authoritative schema.
-        and _valid_schema_value(result, MERMAID_TOOL["input_schema"], allow_metadata=True)
-        and formal_papiamentu
-        and (bool(result["reply"].strip()) or has_server_owned_reply(result, guest_text))
-    )
+    if not isinstance(result, dict):
+        return "response_not_object"
+    if result.get("generation_failed"):
+        return "provider_failure"
+    if not isinstance(result.get("reply"), str):
+        return "reply_not_string"
+    if not isinstance(result.get("mermaid_action"), str):
+        return "action_not_string"
+    if not set(result).issubset(set(properties) | _MARINA_COMPATIBILITY_KEYS):
+        return "unknown_response_field"
+    for key, schema in properties.items():
+        if key in result and not _valid_schema_value(result[key], schema):
+            # Only fixed schema keys, never guest text or model values, reach logs.
+            return "schema_" + key
+    if not formal_papiamentu:
+        return "papiamentu_register"
+    if not result["reply"].strip() and not has_server_owned_reply(result, guest_text):
+        return "empty_reply"
+    return None
+
+
+def _valid_result(result, guest_text="", expected_locale=""):
+    return _validation_error(result, guest_text, expected_locale) is None
 
 
 def _alert(conn, kind, now):
@@ -437,7 +477,7 @@ def generate(message: dict, locale: str, call_model) -> dict:
         if row["status"] == "generated":
             try:
                 cached_raw = json.loads(row["response_json"])
-                cached = _normalize_nfc(cached_raw)
+                cached = _normalize_generated_result(cached_raw)
             except (TypeError, ValueError, json.JSONDecodeError):
                 cached_raw = cached = None
             if _valid_result(
@@ -493,12 +533,15 @@ def generate(message: dict, locale: str, call_model) -> dict:
     finally:
         conn.close()
     try:
-        result = _normalize_nfc(call_model())
-        if not _valid_result(
+        result = _normalize_generated_result(call_model())
+        rejection = _validation_error(
             result,
             str(message.get("text") or ""),
             expected_locale=locale,
-        ):
+        )
+        if rejection:
+            from shared.bm_logger import log
+            log("mermaid_model_response_rejected", reason=rejection, attempt=attempt)
             failure = (result or {}).get("model_error") if isinstance(result, dict) else None
             failure = failure if isinstance(failure, dict) else error_metadata()
         else:

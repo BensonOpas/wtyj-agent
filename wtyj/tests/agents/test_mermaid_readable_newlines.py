@@ -65,16 +65,16 @@ def test_captured_base059_sdk_reply_has_readable_paragraphs_and_same_state(runti
 
 def test_dedicated_faq_breaks_compose_with_existing_cleanup_and_recorded_review(runtime, monkeypatch):
     client, raw = _sdk(monkeypatch, reply='Acknowledged.',
-                       other_question_reply='Breakfast—BBQ.\\n\\n[HANDOFF]Arrival 06:45.')
+                       other_question_reply='Desayuno—barbekiú.\\n\\n[HANDOFF]Yega na 06:45.')
     state_registry.wa_save_booking_state('synthetic-guest', {'mermaid_intake': FIXTURE['before']['fields']}, {})
     state_registry.create_pending_notification(notification_type='escalation', channel='whatsapp',
         customer_id='synthetic-guest', customer_name='Synthetic Guest', subject='Synthetic review', body='Synthetic review', mode='soft')
     result = workflow.process_model_turn({'from': 'synthetic-guest', 'message_id': 'dedicated',
                                          'text': FIXTURE['guest_input']}, None)
-    assert result.text == 'Breakfast,BBQ.\n\nArrival 06:45.\n\n' + policy_copy('review_queued', 'pap')
+    assert result.text == 'Desayuno,barbekiú.\n\nYega na 06:45.\n\n' + policy_copy('review_queued', 'pap')
     assert state_registry.get_active_escalation_mode('synthetic-guest') == 'soft'
     assert not state_registry.get_ai_muted('synthetic-guest')
-    assert raw['other_question_reply'] == 'Breakfast—BBQ.\\n\\n[HANDOFF]Arrival 06:45.'
+    assert raw['other_question_reply'] == 'Desayuno—barbekiú.\\n\\n[HANDOFF]Yega na 06:45.'
     assert client.messages.create.call_count == 1
 
 

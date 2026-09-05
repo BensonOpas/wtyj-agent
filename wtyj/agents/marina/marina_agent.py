@@ -2218,10 +2218,13 @@ def process_message(
             and mermaid_understanding.has_server_owned_reply(result, body)
         )
         if not result.get("reply") and not server_owned_reply:
-            bm_logger.log("claude_empty_reply",
-                          intents=result.get("intents", []),
-                          channel=channel, from_id=from_email[:50],
-                          input_preview=str(result)[:200])
+            if response_contract == "mermaid_reservation_demo":
+                bm_logger.log("claude_empty_reply", channel=channel, response_contract=response_contract)
+            else:
+                bm_logger.log("claude_empty_reply",
+                              intents=result.get("intents", []),
+                              channel=channel, from_id=from_email[:50],
+                              input_preview=str(result)[:200])
             return fallback
 
         # Mermaid display fields may contain literal escaped paragraph breaks.

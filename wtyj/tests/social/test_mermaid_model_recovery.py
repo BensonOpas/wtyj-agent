@@ -49,9 +49,7 @@ def test_failed_event_recovers_once_without_caching_fallback(review_runtime, loc
     saved = _locale(locale)
     model.return_value = {"generation_failed": True, "reply": "English legacy fallback", "fields": {}}
     _flush("failure-one", "trip question")
-    assert send.call_count == 1, _rows("SELECT status,reason,last_error FROM inbound_processing_events")
-    assert send.call_args.args[3] == recovery.FAILURE_COPY[locale]
-    fallback_key = send.call_args.kwargs["idempotency_key"]
+    assert send.call_count == 0, _rows("SELECT status,reason,last_error FROM inbound_processing_events")
     assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
     state = state_registry.wa_get_booking_state(CONVERSATION)
     assert state["fields"]["mermaid_intake"] == saved
@@ -66,12 +64,12 @@ def test_failed_event_recovers_once_without_caching_fallback(review_runtime, loc
         "language": locale,
     }
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
-    assert model.call_count == send.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     assert send.call_args.args[3] == recovered_answer
-    assert send.call_args.kwargs["idempotency_key"] != fallback_key
+    assert "fallback" not in send.call_args.kwargs["idempotency_key"]
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 0
-    assert model.call_count == send.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     # This malformed output is local to the message, not a provider outage.
     assert _rows("SELECT COUNT(*) FROM pending_notifications WHERE notification_type='technical'") == [(0,)]
 
@@ -538,7 +536,7 @@ def test_newer_success_supersedes_old_failed_event_and_cached_legacy_failure_is_
     model.return_value = _understood("question", "New answer")
     _flush("new-success", "a safe followup")
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 0
-    assert model.call_count == send.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     assert _rows("SELECT status FROM inbound_processing_events WHERE message_id='old-failure'") == [("superseded",)]
     state = state_registry.wa_get_booking_state(CONVERSATION)
     state["flags"]["mermaid_cached_reply"] = {"message_id": "legacy", "reply": {"text": "Old cached failure"}}
@@ -609,11 +607,11 @@ def test_recovered_confirmation_creates_one_quote_and_provider_action(review_run
     assert reservation["state"] == "demo_payment_pending"
     assert _rows("SELECT COUNT(*) FROM mermaid_reservations") == [(1,)]
     assert len(mermaid_documents.documents_for_reservation(reservation["public_id"])) == 1
-    assert send.call_count == model.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     assert send.call_args.kwargs["idempotency_key"].startswith("mermaid-delivery:")
     assert not state_registry.wa_claim_inbound_processing("confirm-recovery", CONVERSATION, "whatsapp")
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 0
-    assert send.call_count == model.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
 
 
 def test_missing_credentials_do_not_attempt_sdk_call(review_runtime, monkeypatch):
@@ -634,7 +632,7 @@ def test_malformed_structured_output_is_retryable_without_business_mutations(rev
     original = _locale("es")
     model.return_value = {**_understood("confirm_summary", "Confirmed"), **malformed}
     _flush("malformed", "Yes")
-    assert send.call_args.args[3] == recovery.FAILURE_COPY["es"]
+    assert not send.called
     assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
 
@@ -683,7 +681,7 @@ def test_legacy_offline_intake_human_route_also_skips_summary_model(review_runti
 
 @pytest.mark.parametrize("field,bad_value", [
     (field, value)
-    for field in ("calendar_request", "status_request", "security_event")
+    for field in ("calendar_request", "status_request", "security_event", "date_request", "assistance_request")
     for value in ([], {}, None, "not_a_valid_selector")
 ] + [("guest_question_excerpt", value) for value in ([], {}, None, True)])
 def test_malformed_optional_model_fields_are_not_cached_and_same_event_recovers(review_runtime, field, bad_value):
@@ -692,7 +690,7 @@ def test_malformed_optional_model_fields_are_not_cached_and_same_event_recovers(
     model.return_value = {**_understood("question", "This malformed response must not be delivered"), field: bad_value}
     _flush("malformed-selector", "trip question")
     assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
-    assert send.call_args.args[3] == recovery.FAILURE_COPY["nl"]
+    assert not send.called
     assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
     _due()
@@ -701,7 +699,7 @@ def test_malformed_optional_model_fields_are_not_cached_and_same_event_recovers(
         "calendar_request": "none", "status_request": "none", "security_event": "none", "guest_question_excerpt": "trip question",
     }
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
-    assert model.call_count == send.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     assert send.call_args.args[3] == "Recovered answer"
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     assert _rows("SELECT status FROM mermaid_model_events") == [("generated",)]
@@ -726,12 +724,12 @@ def test_malformed_nested_fields_and_language_use_schema_recovery(review_runtime
     model.return_value = {**_understood("details", "Malformed"), **malformed}
     _flush("nested-malformed", "synthetic")
     assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
-    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert not send.called
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
     _due()
     model.return_value = _understood("question", "Recovered answer")
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
-    assert model.call_count == send.call_count == 2
+    assert model.call_count == 2 and send.call_count == 1
     assert send.call_args.args[3] == "Recovered answer"
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
 
@@ -964,7 +962,7 @@ def test_sdk_blank_ordinary_answer_remains_retryable_and_same_event_recovers(rev
     saved = dict(_locale("en"))
     client, structured = _sdk_result(monkeypatch, mermaid_action=action)
     _flush("sdk-empty-faq", "trip question")
-    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert not send.called
     assert _rows("SELECT status,error_kind,response_json FROM mermaid_model_events") == [("failed", "invalid_response", "{}")]
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == saved
     assert "sdk-empty-faq" not in state_registry.wa_get_booking_state(CONVERSATION)["flags"].get("mermaid_seen_message_ids", [])
@@ -972,7 +970,7 @@ def test_sdk_blank_ordinary_answer_remains_retryable_and_same_event_recovers(rev
     structured["reply"] = "Breakfast is included."
     structured["mermaid_action"] = "question"
     assert webhook_server._recover_stale_ali_inbound_once(ali_workflow=False) == 1
-    assert client.messages.create.call_count == send.call_count == 2
+    assert client.messages.create.call_count == 2 and send.call_count == 1
     assert send.call_args.args[3] == "Breakfast is included."
     assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
 
@@ -993,8 +991,8 @@ def test_sdk_empty_critical_route_still_rejects_malformed_schema(review_runtime,
     _model, send, _controls = review_runtime
     client, _ = _sdk_result(monkeypatch, **({"status_request": "wildlife_guarantee"} | malformed))
     _flush("sdk-empty-malformed", "trip question")
-    assert client.messages.create.call_count == send.call_count == 1
-    assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+    assert client.messages.create.call_count == 1 and send.call_count == 0
+    assert not send.called
     assert _rows("SELECT status,response_json FROM mermaid_model_events") == [("failed", "{}")]
 
 
@@ -1011,7 +1009,7 @@ def test_actual_sdk_empty_fields_normalization_is_narrow_and_preserves_intake(re
     )
     monkeypatch.setattr(marina_agent.anthropic, "Anthropic", Mock(return_value=client))
     _flush("sdk-fields", "Is breakfast included?")
-    assert client.messages.create.call_count == send.call_count == 1
+    assert client.messages.create.call_count == 1 and send.call_count == int(accepted)
     assert state_registry.wa_get_booking_state(CONVERSATION)["fields"]["mermaid_intake"] == original
     status, raw = _rows("SELECT status,response_json FROM mermaid_model_events")[0]
     if accepted:
@@ -1019,7 +1017,7 @@ def test_actual_sdk_empty_fields_normalization_is_narrow_and_preserves_intake(re
         assert status == "generated" and json.loads(raw)["fields"] == {}
         assert _rows("SELECT status FROM inbound_processing_events") == [("replied",)]
     else:
-        assert send.call_args.args[3] == recovery.FAILURE_COPY["en"]
+        assert not send.called
         assert status == "failed" and raw == "{}"
         assert _rows("SELECT status FROM inbound_processing_events") == [("recovering",)]
     assert _rows("SELECT COUNT(*) FROM mermaid_model_circuit") == [(0,)]
@@ -1102,3 +1100,19 @@ def test_invalid_response_probe_does_not_clear_concurrent_later_provider_failure
     assert _rows("SELECT error_kind,failed_at,blocked_until FROM mermaid_model_circuit") == [("billing", 1007.0, 1907.0)]
     assert _rows("SELECT status FROM pending_notifications") == [("pending",)]
     assert "billing" in _rows("SELECT body FROM pending_notifications")[0][0]
+
+@pytest.mark.parametrize('text', ['Can we continue in English?', 'English please', 'Mi ke sigui na ingles.'])
+def test_explicit_language_change_does_not_get_stuck_in_previous_papiamentu(text):
+    result={**_understood('question','Breakfast is included.'),'language':'en'}
+    assert recovery._valid_result(result,text,expected_locale='pap')
+    result['reply']='Pickup ta inkluí.'
+    assert not recovery._valid_result(result,text,expected_locale='pap')
+
+
+def test_approved_facility_translation_repairs_only_customer_prose():
+    result={'language':'pap','reply':'E beach house tin ducha.','other_question_reply':'E beach house ta na Klein Curaçao.','fields':{'customer_name':'Beach House Test'},'guest_question_excerpt':'beach house'}
+    normalized=recovery._normalize_generated_result(result)
+    assert normalized['reply']=='E kas di playa tin ducha.'
+    assert normalized['other_question_reply']=='E kas di playa ta na Klein Curaçao.'
+    assert normalized['fields']==result['fields'] and normalized['guest_question_excerpt']==result['guest_question_excerpt']
+    assert result['reply']=='E beach house tin ducha.'

@@ -1,5 +1,6 @@
 """Regression scenarios from Calvin's real booking, without customer sends."""
 from pathlib import Path
+from datetime import datetime, timezone
 from unittest.mock import Mock
 import pytest
 from pypdf import PdfReader
@@ -136,7 +137,7 @@ def receipt_job():
 def test_late_delivery_matches_document_with_changed_signature_once(status, expected, monkeypatch):
     doc,job=receipt_job()
     message=dict(id='provider-123',direction='outgoing',deliveryStatus=status,message='Actual provider wording.',
-        createdAt='2026-09-03T23:48:44Z',attachments=[{'url':f"https://demo.example/api/mermaid/api/public/mermaid-document/{doc['public_id']}?expires=old&signature=old"}])
+        createdAt=datetime.now(timezone.utc).isoformat(),attachments=[{'url':f"https://demo.example/api/mermaid/api/public/mermaid-document/{doc['public_id']}?expires=old&signature=old"}])
     response=Mock(status_code=200);response.json.return_value={'messages':[message]}
     read=Mock(return_value=response)
     monkeypatch.setattr(reconcile.provider,'_provider_account_get',read)

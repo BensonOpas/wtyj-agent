@@ -1963,6 +1963,17 @@ def _flush_buffer(buffer_key):
                         processing_token=processing_token,
                     )
                     return
+                if _zernio_channel == "whatsapp":
+                    from shared import mermaid_catalog
+                    if mermaid_catalog.reservation_demo_enabled():
+                        from agents.social.mermaid_autoreply_guard import repeated_automatic_reply
+                        if repeated_automatic_reply(combined_text, state_registry.dm_get_history(_zernio_conv, _zernio_channel, limit=20)):
+                            if not worker_is_current():
+                                return
+                            state_registry.dm_store_inbound_message(_zernio_conv, _zernio_channel, combined_text, _zernio_sender, ids)
+                            state_registry.inbound_processing_bulk_update(ids, "ignored", reason="mermaid_repeated_automatic_reply", processing_token=processing_token)
+                            log("mermaid_repeated_automatic_reply", action="reply_suppressed")
+                            return
                 # Callback-follow-up tenants need the structured WhatsApp
                 # agent even though they intentionally disable booking_flow.
                 _orchestrator_on = _use_whatsapp_orchestrator(_zernio_channel)

@@ -41,6 +41,17 @@ def test_formal_copy_uses_known_age_in_every_language(locale,expected):
 def test_unknown_age_uses_band_without_inventing_a_number():
  assert guest.party_text({'adults':1,'children':0,'infants':1},'en')=='1 adult · 1 child (0–3)'
 
+def test_teen_and_baby_ages_survive_together_without_changing_fares():
+ ages=[{'value':13,'unit':'years'},{'value':11,'unit':'months'}]
+ party={'adults':5,'children':0,'infants':1,'child_ages':ages}
+ assert normalize_child_ages(ages,party)==ages
+ assert guest.party_text(party,'en')=='4 adults · 1 child (13 years) · 1 infant (11 months)'
+ assert store._money_snapshot(party,mermaid_catalog.get_catalog())==store._money_snapshot({'adults':5,'children':0,'infants':1},mermaid_catalog.get_catalog())
+
+@pytest.mark.parametrize('value,unit,accepted',[(12,'years',True),(13,'years',True),(17,'years',True),(18,'years',False),(155,'months',True),(156,'months',True),(215,'months',True),(216,'months',False)])
+def test_child_age_boundary_includes_teenagers(value,unit,accepted):
+ assert (normalize_child_ages([{'value':value,'unit':unit}]) is not None)==accepted
+
 def test_validation_and_summary_identity_preserve_legacy():
  base={'trip_date':'2026-09-13','adults':3,'children':0,'infants':1,'customer_name':'C','pickup_preference':'pier','language':'en'}
  assert normalize_child_ages([{'value':9,'unit':'months'}],base)==[{'value':9,'unit':'months'}]

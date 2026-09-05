@@ -145,6 +145,7 @@ def test_formal_papiamentu_wheelchair_reply_saves_note_and_continues_booking(mon
         (
             workflow.WELCOME_COPY["pap"],
             PAP_WHEELCHAIR_ACK,
+            "Mi a registrá boso grupo: 3 adulto · 1 mucha (9 aña) · 1 bebé (11 luna).",
             workflow.COPY["pap"]["name"],
         )
     )
@@ -1583,3 +1584,69 @@ def test_withdrawal_after_quote_does_not_restore_private_intake_fields(monkeypat
     assert "wheelchair_relationship" not in intake
     assert assistance.for_conversation(phone)["status"] == "withdrawn"
     assert workflow.WHEELCHAIR_WITHDRAWAL_COPY["en"] in result.text
+
+@pytest.mark.parametrize('locale', ['en','nl','de','es','pap','pt'])
+def test_supplied_group_wheelchair_and_undecided_date_are_all_preserved(monkeypatch, locale):
+    from agents.social.mermaid_reply_planning import DATE_COPY
+    text = "i want to book a trip , we are 6 of us , 1 baby of 11 months , kid of 13 and 4 adults , my husband is in wheelchair , we dont know when we wanna go"
+    fields = {'adults':5,'children':0,'infants':1,'child_ages':[{'value':13,'unit':'years'},{'value':11,'unit':'months'}], 'wheelchair_relationship':'husband'}
+    model = Mock(return_value=_wheelchair_result(locale, fields=fields, date_request='undecided', date_request_excerpt='we dont know when we wanna go'))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.process_model_turn({'from':'undecided','message_id':'first','text':text},None)
+    saved=state_registry.wa_get_booking_state('undecided')['fields']['mermaid_intake']
+    assert saved['child_ages']==fields['child_ages'] and sum(saved[k] for k in ('adults','children','infants'))==6
+    assert DATE_COPY[locale][0] in result.text
+    assert workflow.COPY[locale]['trip_date'] not in result.text
+    assert '13' in result.text and '11' in result.text and result.text.count('?')==1
+    assert saved['date_selection']=='undecided' and 'trip_date' not in saved
+    assert not state_registry.get_ai_muted('undecided') and result.action is None
+    if locale=='en':
+        assert '4 adults · 1 child (13 years) · 1 infant (11 months)' in result.text
+
+
+def test_repeated_date_uncertainty_moves_on_without_inventing_or_confirming_date(monkeypatch):
+    model=Mock(return_value=_wheelchair_result('en', fields={'adults':2,'children':0,'infants':0}, assistance_request='none', requires_human=False, date_request='undecided', date_request_excerpt="don't know yet"))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    for index in range(2):
+        result=workflow.process_model_turn({'from':'later','message_id':str(index),'text':"We don't know yet"},None)
+    assert "choose the date later" in result.text and workflow.COPY['en']['name'] in result.text
+    assert result.phase=='collecting' and result.action is None
+    assert state_registry.wa_get_booking_state('later')['fields']['mermaid_intake']['date_selection']=='deferred'
+    model.return_value=_wheelchair_result('en', fields={'trip_date':'2026-09-13'}, assistance_request='none', requires_human=False, has_open_question=False, guest_question_excerpt='',reply='What name should I put on the reservation?')
+    result=workflow.process_model_turn({'from':'later','message_id':'date','text':'September 13'},None)
+    saved=state_registry.wa_get_booking_state('later')['fields']['mermaid_intake']
+    assert saved['trip_date']=='2026-09-13' and 'date_selection' not in saved
+
+
+@pytest.mark.parametrize('selector,value', [('calendar_request','next_week'),('status_request','wildlife_guarantee'),('status_request','pickup_coverage'),('assistance_request','wheelchair_note'),('assistance_request','other_review')])
+def test_protected_reply_keeps_separate_food_answer(monkeypatch,selector,value):
+    model=Mock(return_value=_wheelchair_result('en',fields={},assistance_request='none',requires_human=False,other_question_reply='Breakfast and a BBQ lunch are included.',other_question_excerpt='Is breakfast included?'))
+    model.return_value[selector]=value
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.process_model_turn({'from':'mixed','message_id':value,'text':'Is breakfast included? And my other question?'},None)
+    assert result.text.count('Breakfast and a BBQ lunch are included.')==1
+
+
+def test_calendar_pickup_wildlife_and_food_questions_all_get_answers(monkeypatch):
+    model=Mock(return_value=_wheelchair_result('en',fields={'adults':5,'children':0,'infants':1},assistance_request='none',requires_human=False,calendar_request='next_week',status_request='pickup_pricing',additional_status_requests=['wildlife_guarantee'],other_question_reply='Breakfast and a BBQ lunch are included.',other_question_excerpt='Is food included?'))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.process_model_turn({'from':'many','message_id':'many','text':'Which days next week? Pickup cost for six? Are turtles guaranteed? Is food included?'},None)
+    assert '125' in result.text and 'guarantee' in result.text and 'Breakfast and a BBQ lunch' in result.text
+    assert '2026-09-' in result.text
+    assert 'pickup_preference' not in state_registry.wa_get_booking_state('many')['fields']['mermaid_intake']
+
+
+def test_old_captured_assistance_copy_is_not_appended_twice(monkeypatch):
+    model=Mock(return_value=_wheelchair_result('pap',fields={'adults':2,'children':0,'infants':0},other_question_reply=workflow.WHEELCHAIR_COPY['pap']))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.process_model_turn({'from':'copy','message_id':'copy','text':'Mi kasa ta usa stul di rueda.'},None)
+    assert result.text.count(workflow.WHEELCHAIR_COPY['pap'])==1
+
+
+def test_old_captured_secondary_wildlife_answer_cannot_duplicate_protected_fact(monkeypatch):
+    from agents.social import mermaid_response_policy as policy
+    model=Mock(return_value=_wheelchair_result('en',fields={'adults':5,'children':0,'infants':1},assistance_request='none',requires_human=False,status_request='pickup_pricing',additional_status_requests=['wildlife_guarantee'],other_question_reply="Turtle sightings do happen, but they're never guaranteed."))
+    monkeypatch.setattr(marina_agent,'process_message',model)
+    result=workflow.process_model_turn({'from':'copy','message_id':'copy','text':'How much is pickup? Are turtles guaranteed?'},None)
+    assert "Turtle sightings do happen" not in result.text
+    assert result.text.count(policy.copy('wildlife_guarantee','en'))==1

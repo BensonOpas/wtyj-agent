@@ -6,7 +6,8 @@ def age_months(age):
 
 
 def age_band(age):
-    return "infants" if age_months(age) < 48 else "children"
+    months = age_months(age)
+    return "infants" if months < 48 else "children" if months < 156 else "adults"
 
 
 def normalize_child_ages(value, counts=None):
@@ -18,11 +19,11 @@ def normalize_child_ages(value, counts=None):
             return None
         if type(age["value"]) is not int or age["value"] < 0 or age["unit"] not in {"months", "years"}:
             return None
-        if age_months(age) >= 156:
+        if age_months(age) >= 216:
             return None
         result.append({"value": age["value"], "unit": age["unit"]})
     if counts:
-        for band in ("children", "infants"):
+        for band in ("adults", "children", "infants"):
             if band in counts and sum(age_band(a) == band for a in result) > counts[band]:
                 return None
     return result

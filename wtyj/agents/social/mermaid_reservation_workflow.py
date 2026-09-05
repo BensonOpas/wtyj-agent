@@ -675,6 +675,7 @@ def _summary(fields: dict, locale: str) -> str:
 
 
 def _next_question(fields: dict, locale: str) -> str | None:
+    from agents.social.mermaid_reply_planning import DATE_COPY
     if all(key in fields for key in ("adults", "children", "infants")) and sum(
         fields[key] for key in ("adults", "children", "infants")
     ) <= 0:
@@ -688,6 +689,11 @@ def _next_question(fields: dict, locale: str) -> str | None:
         "infants": "infants", "customer_name": "name", "pickup_preference": "pickup",
     }
     for field in REQUIRED_FIELDS:
+        if field == "trip_date" and not fields.get(field):
+            if fields.get("date_selection") == "undecided":
+                return DATE_COPY[locale][0]
+            if fields.get("date_selection") == "deferred":
+                continue
         if field == "contact_phone":
             if not normalize_contact_phone(fields.get(field)):
                 return guest.guest_copy(locale)["contact_phone_prompt"]
@@ -696,6 +702,8 @@ def _next_question(fields: dict, locale: str) -> str | None:
             return COPY[locale][prompt_keys[field]]
     if fields.get("pickup_preference") == "pickup_requested" and not fields.get("pickup_location"):
         return COPY[locale]["hotel"]
+    if not fields.get("trip_date"):
+        return DATE_COPY[locale][2]
     return None
 
 
@@ -1014,6 +1022,13 @@ def process_model_turn(
             understanding_source="model_failure",
         )
     guest_text = str(message.get("text") or "")
+    from agents.social import mermaid_reply_planning as reply_planning
+    date_request = reply_planning.date_request(understood, guest_text)
+    if ("other_question_excerpt" in understood or understood.get("status_request") == "wildlife_guarantee"
+            or "wildlife_guarantee" in (understood.get("additional_status_requests") or [])):
+        excerpt = understood.get("other_question_excerpt")
+        if not isinstance(excerpt, str) or not excerpt.strip() or excerpt not in guest_text or excerpt == understood.get("date_request_excerpt"):
+            understood = {**understood, "other_question_reply": ""}
     explicit_person_request = (
         mermaid_model_recovery.contains_explicit_human_request(guest_text) is not None
     )
@@ -1171,7 +1186,7 @@ def process_model_turn(
                       "mermaid_action": "request_human" if security_review or explicit_human else "acknowledge",
                       "requires_human": security_review or explicit_human}
     calendar_request = understood.get("calendar_request", "none")
-    if calendar_request in response_policy.CALENDAR_REQUESTS:
+    if calendar_request in response_policy.CALENDAR_REQUESTS or date_request:
         understood = {**understood, "fields": {k: v for k, v in (understood.get("fields") or {}).items() if k != "trip_date"}}
     action = understood.get("mermaid_action")
     if action not in {"details", "question", "confirm_summary", "cancel", "request_human", "payment_status", "new_booking", "acknowledge"}:
@@ -1229,12 +1244,20 @@ def process_model_turn(
             action = "details"
     elif fields.get("child_ages"):
         # A reduced group does not establish which child's age remains valid.
-        reduced = {key for key in ("children", "infants")
+        reduced = {key for key in ("adults", "children", "infants")
                    if key in changes and key in fields and changes[key] < fields[key]}
         if reduced:
             changes["child_ages"] = [age for age in fields["child_ages"] if age_band(age) not in reduced]
     changes = {key: value for key, value in changes.items() if fields.get(key) != value}
     fields.update(changes)
+    if date_request and (not reservation or action == "new_booking") and security_event == "none":
+        fields.pop("trip_date", None)
+        fields["date_selection"] = (
+            "deferred" if date_request == "defer" or fields.get("date_selection") in {"undecided", "deferred"}
+            else "undecided"
+        )
+    elif fields.get("trip_date"):
+        fields.pop("date_selection", None)
     if fields.get("child_ages") == []:
         fields.pop("child_ages")
     if invalid_contact and not reservation:
@@ -1317,6 +1340,7 @@ def process_model_turn(
         }
     response = str(understood.get("reply") or "").strip()
     has_question = _has_guest_question(understood, str(message.get("text") or ""))
+    has_question = has_question or bool(understood.get("additional_status_requests"))
     has_question = has_question or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") not in {"none", "pickup_pricing"} or security_event in {"blocked_override", "actionable_incident"}
     if invalid_contact and not reservation and not review_pending:
         response = guest.guest_copy(locale)["contact_phone_retry"]
@@ -1325,7 +1349,14 @@ def process_model_turn(
         # The deterministic acknowledgement answers the wheelchair question;
         # normal intake should immediately choose the next missing detail.
         response = ""
-        has_question = False
+        other = str(understood.get("other_question_reply") or "")
+        for acknowledgement in (WHEELCHAIR_COPY[locale], BOARDING_ASSISTANCE_COPY[locale]):
+            other = other.replace(acknowledgement, "")
+        understood = {**understood, "other_question_reply": other.strip()}
+        has_question = bool(understood.get("other_question_reply") or understood.get("additional_status_requests")) or calendar_request in response_policy.CALENDAR_REQUESTS or understood.get("status_request", "none") != "none"
+    if date_request and (not reservation or action == "new_booking") and not review_pending:
+        response = ""
+        has_question = True
     result_action = None
     canonical_response = False
     natural_payment_approval = (
@@ -1482,6 +1513,55 @@ def process_model_turn(
         other_answer = str(understood.get('other_question_reply') or '').strip()
         if other_answer:
             response = other_answer + '\n\n' + response
+    # Calendar and status are independent concerns, as are multiple protected
+    # questions in one turn. A single primary selector must not discard them.
+    decision_blocked = review_pending and action in {"confirm_summary", "new_booking", "cancel"}
+    if not canonical_response and result_action != "cancel" and not decision_blocked and security_event == "none":
+        requests = list(understood.get("additional_status_requests") or [])
+        if calendar_request in response_policy.CALENDAR_REQUESTS:
+            requests.insert(0, understood.get("status_request", "none"))
+        rendered = set() if calendar_request in response_policy.CALENDAR_REQUESTS else {understood.get("status_request")}
+        for request in requests:
+            if request in rendered or request == "none":
+                continue
+            rendered.add(request)
+            if request == "pickup_pricing":
+                answer = response_policy.pickup_pricing_reply(locale, fields, None if action == "new_booking" and not review_pending else reservation)
+            elif request == "pickup_coverage":
+                answer = response_policy.pickup_coverage_reply(locale)
+            elif request == "wildlife_guarantee":
+                answer = response_policy.wildlife_guarantee_reply(locale, response_policy.state_context(phone, reservation))
+            else:
+                answer = response_policy.status_reply(request, locale, response_policy.state_context(phone, reservation))
+            response = reply_planning.join_answers(response, answer)
+    # All protected selectors may share a turn with a separate, supported FAQ.
+    # Preserve that answer without reusing discarded model claims. Decisions
+    # (payment approval, cancellation, security) retain their strict priority.
+    if not canonical_response and result_action != "cancel" and not decision_blocked and security_event == "none":
+        protected = (calendar_request in response_policy.CALENDAR_REQUESTS
+                     or understood.get("status_request", "none") != "none"
+                     or review_pending or result_action == "human_takeover"
+                     or wheelchair_note or wheelchair_withdrawal
+                     or general_boarding_assistance or date_request or understood.get("additional_status_requests"))
+        if protected:
+            other_answer = str(understood.get("other_question_reply") or "").strip()
+            # Old wildlife responses put the guarantee itself in the FAQ
+            # slot. Require independent guest evidence before appending it
+            # to the authoritative guarantee, which already answers that.
+            if understood.get("status_request") == "wildlife_guarantee" or "wildlife_guarantee" in (understood.get("additional_status_requests") or []) or result_action == "human_takeover":
+                excerpt = understood.get("other_question_excerpt")
+                if not isinstance(excerpt, str) or not excerpt.strip() or excerpt not in guest_text:
+                    other_answer = ""
+            response = reply_planning.join_answers(other_answer, response)
+    if date_request and (not reservation or action == "new_booking") and not review_pending and not result_action and security_event == "none":
+        if fields.get("date_selection") == "deferred":
+            response = reply_planning.join_answers(reply_planning.DATE_COPY[locale][1], response)
+    party_ack = ""
+    if (wheelchair_note or general_boarding_assistance or date_request) and not canonical_response and (not reservation or action == "new_booking") and security_event == "none":
+        if any(key in changes for key in ("adults", "children", "infants", "child_ages")) and all(key in fields for key in ("adults", "children", "infants")):
+            party_ack = reply_planning.PARTY_COPY[locale].format(party=guest.party_text(fields, locale))
+    if party_ack:
+        response = reply_planning.join_answers(party_ack, response)
     if wheelchair_withdrawal:
         # Existing quote/booking branches restore the authoritative intake for
         # money and status.  Re-apply only this private-field deletion so the

@@ -25,6 +25,8 @@ def isolated(tmp_path, monkeypatch):
 
 
 def interpretation(fields=None, action="details", locale="en", reply="What comes next?"):
+    if locale == "pap" and reply == "What comes next?":
+        reply = "Mi a nota e datonan."
     return {"language": locale, "mermaid_action": action, "fields": fields or {}, "reply": reply, "confidence": "high", "requires_human": False}
 
 
@@ -49,7 +51,7 @@ def test_short_answer_journey_uses_one_understanding_call_per_turn(locale, monke
     assert understood.call_count == 7
     assert state_registry.wa_get_booking_state(phone)["fields"]["mermaid_intake"]["phase"] == "awaiting_summary_confirmation"
 
-    understood.return_value = interpretation(action="question", locale=locale, reply="The included facilities are in your quote.")
+    understood.return_value = interpretation(action="question", locale=locale, reply="Desayuno ta inkluí." if locale == "pap" else "Breakfast is included.")
     question = workflow.handle_demo_message({"from": phone, "text": "Is lunch included?", "message_id": "question"}, include_media=True, use_model=True)
     assert question["media"] is None
     assert mermaid_reservation_store.latest_for_conversation(phone) is None

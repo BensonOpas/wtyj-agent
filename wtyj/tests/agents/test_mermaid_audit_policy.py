@@ -319,11 +319,11 @@ def test_review_faq_fallback_keeps_protected_fact_routes(monkeypatch, route):
     result = workflow.process_model_turn(
         {'from': 'guest', 'message_id': 'protected-facts', 'text': 'Question?'}, None)
     if route == 'calendar':
-        expected = policy.calendar_reply('operating_days', 'en')
+        expected = _SAFE_FAQ['en'] + '\n\n' + policy.calendar_reply('operating_days', 'en')
     elif route == 'wildlife_guarantee':
         expected = policy.wildlife_guarantee_reply('en', {'review': 'queued'})
     elif route == 'pickup_coverage':
-        expected = policy.pickup_coverage_reply('en')
+        expected = _SAFE_FAQ['en'] + '\n\n' + policy.pickup_coverage_reply('en')
     else:
         expected = policy.pickup_pricing_reply('en', intake) + '\n\n' + _SAFE_FAQ['en']
     assert result.text == expected
