@@ -18,7 +18,9 @@ Caching: results are cached in-process for ICP_OVERRIDES_TTL_SECONDS
 (default 60s). Repeated calls within the window return the cached
 envelope without a network round-trip.
 
-Failure modes (all return empty {} and log a warning, never raise):
+Failure modes (all return an unavailable envelope and log a warning, never
+raise). Deployments with `TENANT_RUNTIME_CONTROLS_REQUIRED=true` interpret that
+state fail-closed; legacy deployments retain their historical defaults:
 - env vars unset / blank
 - network timeout / connection refused
 - 401 / 403 / 404 / 5xx
@@ -32,6 +34,7 @@ tenant, using the same tenant-bound bridge token and identity header as reads.
 import json
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -51,10 +54,14 @@ ICP_OVERRIDES_TTL_SECONDS = int(os.environ.get("ICP_OVERRIDES_TTL_SECONDS", "60"
 # request handling.
 _HTTP_TIMEOUT_SECONDS = 3.0
 _AUTO_REPLY_FEATURE_KEY = "ai_auto_reply"
+_WHATSAPP_INBOX_FEATURE_KEY = "whatsapp_inbox"
 
 
 # Module-level cache: (tenant_id) -> (fetched_at_unix, envelope_dict)
 _cache: dict = {}
+_cache_lock = threading.RLock()
+_cache_generation = 0
+_cache_request_sequence: dict[str, int] = {}
 
 
 def _resolve_tenant_id() -> Optional[str]:
@@ -94,39 +101,114 @@ def _empty_envelope(tenant_id: Optional[str], reason: str) -> dict:
     }
 
 
-def _cache_get(tenant_id: str) -> Optional[dict]:
-    entry = _cache.get(tenant_id)
-    if entry is None:
-        return None
-    fetched_at, envelope = entry
-    if time.time() - fetched_at > ICP_OVERRIDES_TTL_SECONDS:
-        return None
-    return envelope
+def _cache_get(
+    tenant_id: str, *, use_cache: bool = True
+) -> tuple[int, int, Optional[dict]]:
+    with _cache_lock:
+        generation = _cache_generation
+        entry = _cache.get(tenant_id) if use_cache else None
+        if entry is not None:
+            fetched_at, envelope = entry
+            if time.time() - fetched_at <= ICP_OVERRIDES_TTL_SECONDS:
+                return generation, 0, envelope
+        request_sequence = _cache_request_sequence.get(tenant_id, 0) + 1
+        _cache_request_sequence[tenant_id] = request_sequence
+        return generation, request_sequence, None
 
 
-def _cache_put(tenant_id: str, envelope: dict) -> None:
-    _cache[tenant_id] = (time.time(), envelope)
+def _cache_put(
+    tenant_id: str,
+    envelope: dict,
+    generation: int,
+    request_sequence: int,
+) -> dict:
+    """Cache only the newest current fetch; stale results fail closed.
+
+    A cache generation fences explicit invalidation (for example an operator
+    Pause).  The per-tenant request sequence additionally fences two
+    concurrent fresh GETs: an older enabled response can never overwrite or
+    reach its caller after a newer paused response has started.
+    """
+    with _cache_lock:
+        if generation != _cache_generation:
+            return _empty_envelope(tenant_id, "fetch invalidated while in flight")
+        if request_sequence != _cache_request_sequence.get(tenant_id):
+            return _empty_envelope(tenant_id, "fetch superseded while in flight")
+        _cache[tenant_id] = (time.time(), envelope)
+        return envelope
 
 
 def clear_cache() -> None:
     """Test hook. Drops the entire in-process cache. J3-N2-04: also
     resets the observability state so a --fresh CLI run shows clean
     counters."""
-    _cache.clear()
+    global _cache_generation
+    with _cache_lock:
+        _cache.clear()
+        _cache_request_sequence.clear()
+        _cache_generation += 1
     _reset_observability()
 
 
-def auto_reply_enabled(envelope: Optional[dict] = None) -> bool:
-    """Return the tenant's effective AI auto-reply state.
-
-    Missing or unavailable override data preserves the historical running
-    behavior. An explicit boolean from Nr 3 always wins.
-    """
+def _feature_toggle_value(feature_key: str, envelope: Optional[dict]) -> Optional[bool]:
     current = envelope if isinstance(envelope, dict) else fetch_overrides()
+    # Only a positively verified Nr3 response may enable a runtime control.
+    # Missing, false, null, or malformed availability all fail closed.
+    if current.get("available") is not True:
+        return None
     toggles = current.get("feature_toggles")
-    toggle = toggles.get(_AUTO_REPLY_FEATURE_KEY) if isinstance(toggles, dict) else None
+    toggle = toggles.get(feature_key) if isinstance(toggles, dict) else None
     value = toggle.get("value") if isinstance(toggle, dict) else None
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else None
+
+
+def _runtime_controls_required() -> bool:
+    """Whether this deployment requires explicit, available Nr3 toggles."""
+    return os.environ.get(
+        "TENANT_RUNTIME_CONTROLS_REQUIRED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def runtime_feature_state(
+    feature_key: str, envelope: Optional[dict] = None
+) -> Optional[bool]:
+    """Return ``True``/``False`` only for an authoritative control state.
+
+    ``None`` means a strict tenant cannot currently prove the state because
+    Nr3 is unavailable or the requested toggle is missing/malformed.  This is
+    deliberately distinct from an operator explicitly setting the control to
+    false so webhook callers can return a retryable error instead of silently
+    consuming customer messages.
+    """
+    value = _feature_toggle_value(feature_key, envelope)
+    if value is not None:
+        return value
+    if _runtime_controls_required():
+        return None
+    return True
+
+
+def auto_reply_state(envelope: Optional[dict] = None) -> Optional[bool]:
+    return runtime_feature_state(_AUTO_REPLY_FEATURE_KEY, envelope)
+
+
+def whatsapp_inbox_state(envelope: Optional[dict] = None) -> Optional[bool]:
+    return runtime_feature_state(_WHATSAPP_INBOX_FEATURE_KEY, envelope)
+
+
+def auto_reply_enabled(envelope: Optional[dict] = None) -> bool:
+    """Resolve automated replies with an opt-in strict deployment policy.
+
+    Strict deployments fail closed on missing or unavailable state. Legacy
+    deployments preserve the historical running default unless Nr3 explicitly
+    disables the feature.
+    """
+    return auto_reply_state(envelope) is True
+
+
+def whatsapp_inbox_enabled(envelope: Optional[dict] = None) -> bool:
+    """Resolve WhatsApp ingestion with the same strict opt-in policy."""
+    return whatsapp_inbox_state(envelope) is True
 
 
 def set_auto_reply_enabled(enabled: bool) -> dict:
@@ -166,7 +248,7 @@ def set_auto_reply_enabled(enabled: bool) -> dict:
             f"Agent control bridge returned HTTP {response.status_code}"
         )
     clear_cache()
-    envelope = fetch_overrides()
+    envelope = _fetch_overrides(force_refresh=True)
     if not envelope.get("available"):
         raise RuntimeError("Agent control state could not be verified")
     if auto_reply_enabled(envelope) is not bool(enabled):
@@ -258,6 +340,16 @@ def _record_observability(envelope: dict, outcome: str,
 
 
 def fetch_overrides() -> dict:
+    """Return the cached tenant envelope when it is still current."""
+    return _fetch_overrides(force_refresh=False)
+
+
+def fetch_overrides_fresh() -> dict:
+    """Bypass TTL cache for an immediate pre-action control check."""
+    return _fetch_overrides(force_refresh=True)
+
+
+def _fetch_overrides(*, force_refresh: bool) -> dict:
     """Single entry point for Nr 2 callers.
 
     Returns one of:
@@ -291,7 +383,9 @@ def fetch_overrides() -> dict:
             "no_tenant")
 
     # Cache check
-    cached = _cache_get(tenant_id)
+    generation, request_sequence, cached = _cache_get(
+        tenant_id, use_cache=not force_refresh
+    )
     if cached is not None:
         return _record(cached, "cache_hit", was_cache_hit=True)
 
@@ -299,11 +393,11 @@ def fetch_overrides() -> dict:
     token = os.environ.get("NR3_INTERNAL_API_TOKEN", "").strip()
     if not base_url:
         env = _empty_envelope(tenant_id, "NR3_INTERNAL_OVERRIDES_URL unset")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "url_unset")
     if not token:
         env = _empty_envelope(tenant_id, "NR3_INTERNAL_API_TOKEN unset")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "token_unset")
 
     # Compose URL. base_url may or may not end with a slash; rstrip then
@@ -321,29 +415,29 @@ def fetch_overrides() -> dict:
         _log.warning("icp_overrides bridge unreachable: %s",
                       type(exc).__name__)
         env = _empty_envelope(tenant_id, "bridge unreachable")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "network_error")
 
     if resp.status_code == 401:
         _log.warning("icp_overrides bridge returned 401 - check token")
         env = _empty_envelope(tenant_id, "401 unauthorized")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "401")
     if resp.status_code == 403:
         _log.warning("icp_overrides bridge returned 403 - identity mismatch")
         env = _empty_envelope(tenant_id, "403 identity mismatch")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "403")
     if resp.status_code == 404:
         _log.warning("icp_overrides bridge returned 404 - tenant unknown")
         env = _empty_envelope(tenant_id, "404 tenant unknown")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "404")
     if resp.status_code != 200:
         _log.warning("icp_overrides bridge returned unexpected status %d",
                       resp.status_code)
         env = _empty_envelope(tenant_id, f"unexpected status {resp.status_code}")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "unexpected_status")
 
     try:
@@ -351,7 +445,7 @@ def fetch_overrides() -> dict:
     except (ValueError, json.JSONDecodeError):
         _log.warning("icp_overrides bridge returned non-JSON body")
         env = _empty_envelope(tenant_id, "non-json body")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "non_json")
 
     # Sanity-check shape. The bridge returns {tenant_id, feature_toggles,
@@ -359,7 +453,7 @@ def fetch_overrides() -> dict:
     # fall back to empty rather than propagating bad data into Nr 2.
     if not isinstance(body, dict):
         env = _empty_envelope(tenant_id, "body not a dict")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "body_not_dict")
     body_tenant = body.get("tenant_id")
     if body_tenant != tenant_id:
@@ -369,7 +463,7 @@ def fetch_overrides() -> dict:
             "icp_overrides bridge tenant mismatch: requested %r, got %r",
             tenant_id, body_tenant)
         env = _empty_envelope(tenant_id, "tenant_id mismatch in body")
-        _cache_put(tenant_id, env)
+        env = _cache_put(tenant_id, env, generation, request_sequence)
         return _record(env, "tenant_mismatch")
     feature_toggles = body.get("feature_toggles")
     channel_connections = body.get("channel_connections")
@@ -409,5 +503,7 @@ def fetch_overrides() -> dict:
         "ai_agent_settings": ai_agent_settings,
         "response_timing": response_timing,
     }
-    _cache_put(tenant_id, envelope)
+    envelope = _cache_put(
+        tenant_id, envelope, generation, request_sequence
+    )
     return _record(envelope, "success")

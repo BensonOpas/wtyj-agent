@@ -14,6 +14,24 @@ DB_PATH = os.path.join(
     "..", "data", "state_registry.db"
 )
 
+# A buffered turn can legitimately wait for the tenant-configured debounce
+# hard cap (currently up to five minutes).  Once processing starts, model and
+# confirmed-provider work can include two independent 600-second model calls
+# plus provider/local commit time.  The conservative processing lease covers
+# that full path; generation fencing prevents an expired worker from acting if
+# recovery nevertheless reclaims it.  A real crash can therefore take up to
+# 22 minutes to recover, which is preferable to overlapping live workers until
+# a claim-scoped heartbeat is introduced.
+INBOUND_DEBOUNCE_LEASE_MARGIN_SECONDS = 15.0
+INBOUND_PROCESSING_LEASE_SECONDS = 1320.0
+INBOUND_RECOVERY_CLAIM_LEASE_SECONDS = 40.0
+VEHICLE_RECOMMENDATION_RECOVERY_LEASE_SECONDS = 300.0
+ZERNIO_FAILED_EVENT_LEASE_SECONDS = 1320.0
+
+
+class HandoffAccountReassignedError(PermissionError):
+    """A known foreign account cannot persist a tenant operator work item."""
+
 # Brief 217: optional callback set by dashboard.api at module-import time.
 # `dashboard.api` registers `_fire_escalation_alerts` here so that
 # create_pending_notification can fire alerts WITHOUT state_registry
@@ -307,6 +325,16 @@ def _get_conn():
         ("payload_json", "TEXT NOT NULL DEFAULT '{}'") ,
         ("heartbeat_sent_at", "TEXT NOT NULL DEFAULT ''"),
         ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("provider_retry_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("provider_retry_kind", "TEXT NOT NULL DEFAULT ''"),
+        ("batch_id", "TEXT NOT NULL DEFAULT ''"),
+        ("batch_position", "INTEGER NOT NULL DEFAULT 0"),
+        ("acceptance_batch_id", "TEXT NOT NULL DEFAULT ''"),
+        ("acceptance_position", "INTEGER NOT NULL DEFAULT 0"),
+        ("outbound_idempotency_key", "TEXT NOT NULL DEFAULT ''"),
+        ("outbound_attempted_at", "TEXT NOT NULL DEFAULT ''"),
+        ("lease_expires_at", "TEXT NOT NULL DEFAULT ''"),
+        ("processing_token", "TEXT NOT NULL DEFAULT ''"),
     ):
         try:
             conn.execute(
@@ -317,6 +345,31 @@ def _get_conn():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inbound_processing_conversation "
         "ON inbound_processing_events(conversation_id, updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbound_processing_batch "
+        "ON inbound_processing_events(batch_id, batch_position)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS zernio_failed_event_queue ("
+        "event_key TEXT PRIMARY KEY, "
+        "account_id TEXT NOT NULL, "
+        "conversation_id TEXT NOT NULL, "
+        "message_id TEXT NOT NULL, "
+        "payload_json TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "claim_token TEXT NOT NULL DEFAULT '', "
+        "available_at TEXT NOT NULL DEFAULT '', "
+        "lease_expires_at TEXT NOT NULL DEFAULT '', "
+        "attempt_count INTEGER NOT NULL DEFAULT 0, "
+        "last_error TEXT NOT NULL DEFAULT '', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_zernio_failed_event_due "
+        "ON zernio_failed_event_queue(status, available_at, lease_expires_at)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS whatsapp_threads ("
@@ -461,6 +514,13 @@ def _get_conn():
         "channel TEXT NOT NULL DEFAULT 'whatsapp', "
         "status TEXT NOT NULL DEFAULT 'pending', "
         "updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS inbound_operator_notifications ("
+        "action_key TEXT PRIMARY KEY, "
+        "notification_id INTEGER NOT NULL, "
+        "created_at TEXT NOT NULL"
         ")"
     )
     # Callback follow-ups are intentionally stored in each tenant's own
@@ -1293,6 +1353,280 @@ def wa_mark_as_processed(message_id: str):
     conn.close()
 
 
+def wa_claim_inbound_processing(
+    message_id: str,
+    conversation_id: str,
+    channel: str,
+    payload: dict | None = None,
+    *,
+    acceptance_batch_id: str = "",
+    acceptance_position: int = 0,
+) -> bool:
+    """Atomically claim a provider event and preserve its recovery payload.
+
+    Returns ``True`` only for the first delivery.  The legacy processed marker
+    and durable inbound ledger row share one SQLite transaction, so a crash or
+    write failure cannot consume a provider message ID without leaving enough
+    data for recovery.
+    """
+    if not message_id:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    serialized_payload = json.dumps(
+        payload or {}, ensure_ascii=False, separators=(",", ":"),
+    )
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO whatsapp_processed (message_id, created_at) "
+            "VALUES (?, ?)",
+            (message_id, now),
+        )
+        if claimed.rowcount == 0:
+            conn.rollback()
+            return False
+        recorded = conn.execute(
+            "INSERT OR IGNORE INTO inbound_processing_events "
+            "(message_id, conversation_id, channel, status, reason, last_error, "
+            "payload_json, batch_id, batch_position, "
+            "acceptance_batch_id, acceptance_position, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, 'received', '', '', ?, ?, ?, ?, ?, ?, ?)",
+            (
+                message_id,
+                conversation_id or "",
+                channel or "",
+                serialized_payload,
+                str(acceptance_batch_id or ""),
+                max(0, int(acceptance_position or 0)),
+                str(acceptance_batch_id or ""),
+                max(0, int(acceptance_position or 0)),
+                now,
+                now,
+            ),
+        )
+        if recorded.rowcount == 0:
+            # A durable ledger row already exists. Roll back the marker inserted
+            # above and treat this delivery as a replay.
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _inbound_lease_deadline(seconds: float) -> str:
+    return (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=max(0.0, float(seconds)))
+    ).isoformat()
+
+
+def _inbound_processing_batch_id(message_id: str) -> str:
+    """Return the stable opaque identity for a batch's first provider event."""
+    return hashlib.sha256(
+        ("whatsapp-inbound-batch-v1\x1f" + str(message_id)).encode("utf-8")
+    ).hexdigest()
+
+
+def _inbound_processing_token() -> str:
+    """Return an unguessable generation fence for one batch worker."""
+    return hashlib.sha256(os.urandom(32)).hexdigest()
+
+
+def inbound_processing_extend_batch_lease(
+    batch_id: str,
+    lease_seconds: float,
+) -> int:
+    """Keep every still-buffered member leased through one batch deadline."""
+    normalized_batch_id = str(batch_id or "").strip()
+    if not normalized_batch_id:
+        return 0
+    deadline = _inbound_lease_deadline(lease_seconds)
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE inbound_processing_events "
+            "SET lease_expires_at = CASE "
+            "WHEN lease_expires_at = '' OR lease_expires_at < ? THEN ? "
+            "ELSE lease_expires_at END "
+            "WHERE batch_id = ? AND status = 'received'",
+            (deadline, deadline, normalized_batch_id),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def inbound_processing_ordered_batch_ids(
+    message_ids: list[str],
+    batch_id: str,
+) -> list[str] | None:
+    """Return exact durable membership ordered by ``batch_position``.
+
+    ``None`` means the in-memory snapshot is partial, duplicated, or otherwise
+    differs from the durable action.  Callers must fail closed and leave the
+    non-terminal rows for whole-batch recovery.
+    """
+    ids = [str(message_id) for message_id in message_ids or [] if message_id]
+    normalized_batch_id = str(batch_id or "").strip()
+    if not normalized_batch_id or not ids or len(ids) != len(set(ids)):
+        return None
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT message_id, batch_position "
+            "FROM inbound_processing_events WHERE batch_id = ? "
+            "ORDER BY batch_position ASC, created_at ASC, message_id ASC",
+            (normalized_batch_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    ordered_ids = [str(row[0]) for row in rows]
+    positions = [int(row[1] or 0) for row in rows]
+    if (
+        len(ordered_ids) != len(ids)
+        or set(ordered_ids) != set(ids)
+        or positions != list(range(len(rows)))
+    ):
+        return None
+    return ordered_ids
+
+
+def inbound_processing_join_batch(
+    message_id: str,
+    batch_id: str = "",
+    position: int = 0,
+) -> str:
+    """Durably bind one accepted provider event to its debounce batch.
+
+    The first event creates the stable batch identity; later events join that
+    identity while the in-memory debounce buffer is open. Pre-ACK bindings may
+    be coalesced into that open batch, but a claimed or terminal batch cannot
+    be rebound into a different outbound turn.
+
+    Direct unit/legacy callers may buffer an event without a durable ledger row.
+    They still receive the deterministic identity, but no row is synthesized
+    because the original recovery payload is unavailable here.
+    """
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_message_id:
+        return ""
+    requested_batch_id = str(batch_id or "").strip()
+    desired_batch_id = requested_batch_id or _inbound_processing_batch_id(
+        normalized_message_id
+    )
+    normalized_position = max(0, int(position or 0))
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT conversation_id, channel, batch_id, batch_position, status "
+            "FROM inbound_processing_events WHERE message_id = ?",
+            (normalized_message_id,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return desired_batch_id
+        existing_batch_id = str(row[2] or "")
+        if existing_batch_id:
+            source = conn.execute(
+                "SELECT MIN(conversation_id), MAX(conversation_id), "
+                "MIN(channel), MAX(channel), "
+                "SUM(CASE WHEN status != 'received' THEN 1 ELSE 0 END) "
+                "FROM inbound_processing_events WHERE batch_id = ?",
+                (existing_batch_id,),
+            ).fetchone()
+            if (
+                str(row[4] or "") != "received"
+                or int(source[4] or 0) > 0
+            ):
+                conn.commit()
+                return ""
+            if not requested_batch_id or requested_batch_id == existing_batch_id:
+                conn.commit()
+                return existing_batch_id
+            if (
+                str(source[0] or "") != str(source[1] or "")
+                or str(source[2] or "") != str(source[3] or "")
+            ):
+                conn.rollback()
+                raise ValueError("Inbound batch has inconsistent ownership")
+            target = conn.execute(
+                "SELECT MIN(conversation_id), MAX(conversation_id), "
+                "MIN(channel), MAX(channel), "
+                "SUM(CASE WHEN status != 'received' THEN 1 ELSE 0 END), "
+                "COALESCE(MAX(batch_position), -1) "
+                "FROM inbound_processing_events WHERE batch_id = ?",
+                (requested_batch_id,),
+            ).fetchone()
+            target_exists = target[0] is not None
+            if target_exists and (
+                str(target[0] or "") != str(target[1] or "")
+                or str(target[2] or "") != str(target[3] or "")
+                or str(target[0] or "") != str(row[0] or "")
+                or str(target[2] or "") != str(row[1] or "")
+            ):
+                conn.rollback()
+                raise ValueError("Inbound batch cannot cross a conversation or channel")
+            if target_exists and int(target[4] or 0) > 0:
+                conn.commit()
+                return existing_batch_id
+            offset = int(target[5]) + 1 if target_exists else 0
+            conn.execute(
+                "UPDATE inbound_processing_events SET batch_id = ?, "
+                "batch_position = batch_position + ?, updated_at = ? "
+                "WHERE batch_id = ? AND status = 'received'",
+                (requested_batch_id, offset, now, existing_batch_id),
+            )
+            conn.commit()
+            return requested_batch_id
+        owner = conn.execute(
+            "SELECT conversation_id, channel, "
+            "SUM(CASE WHEN status != 'received' THEN 1 ELSE 0 END) "
+            "FROM inbound_processing_events WHERE batch_id = ? "
+            "GROUP BY conversation_id, channel LIMIT 1",
+            (desired_batch_id,),
+        ).fetchone()
+        if owner is not None and (
+            str(owner[0] or "") != str(row[0] or "")
+            or str(owner[1] or "") != str(row[1] or "")
+        ):
+            conn.rollback()
+            raise ValueError("Inbound batch cannot cross a conversation or channel")
+        if owner is not None and int(owner[2] or 0) > 0:
+            # Recovery/flush has sealed the requested batch. Keep this newly
+            # accepted event in its own stable batch instead of appending it to
+            # a snapshot already being processed.
+            desired_batch_id = _inbound_processing_batch_id(normalized_message_id)
+            normalized_position = 0
+        conn.execute(
+            "UPDATE inbound_processing_events "
+            "SET batch_id = ?, batch_position = ?, updated_at = ? "
+            "WHERE message_id = ? AND batch_id = ''",
+            (
+                desired_batch_id,
+                normalized_position,
+                now,
+                normalized_message_id,
+            ),
+        )
+        conn.commit()
+        return desired_batch_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def wa_store_external_operator_message(
     message_id: str,
     conversation_id: str,
@@ -1351,6 +1685,21 @@ def inbound_processing_record(message_id: str, conversation_id: str,
     if not message_id:
         return
     now = datetime.now(timezone.utc).isoformat()
+    retry_deferred = status == "recovering" or (
+        status == "processing"
+        and reason in {
+            "tenant_runtime_controls_unavailable",
+            "tenant_account_control_unavailable",
+        }
+    )
+    replace_lease = retry_deferred or status not in {
+        "received", "processing", "recovering",
+    }
+    lease_expires_at = now if retry_deferred else ""
+    provider_retry_increment = int(
+        status == "recovering" and reason == "provider_send_retry"
+    )
+    provider_retry_kind = (error or "")[:120] if provider_retry_increment else ""
     conn = _get_conn()
     serialized_payload = json.dumps(
         payload or {}, ensure_ascii=False, separators=(",", ":"),
@@ -1358,57 +1707,539 @@ def inbound_processing_record(message_id: str, conversation_id: str,
     conn.execute(
         "INSERT INTO inbound_processing_events "
         "(message_id, conversation_id, channel, status, reason, last_error, "
-        "payload_json, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "payload_json, lease_expires_at, provider_retry_count, provider_retry_kind, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(message_id) DO UPDATE SET "
         "conversation_id = excluded.conversation_id, "
         "channel = excluded.channel, "
         "status = excluded.status, "
         "reason = excluded.reason, "
         "last_error = excluded.last_error, "
+        "lease_expires_at = CASE WHEN ? THEN excluded.lease_expires_at "
+        "ELSE inbound_processing_events.lease_expires_at END, "
+        "provider_retry_count = inbound_processing_events.provider_retry_count "
+        "+ excluded.provider_retry_count, "
+        "provider_retry_kind = CASE WHEN excluded.provider_retry_kind != '' "
+        "THEN excluded.provider_retry_kind "
+        "ELSE inbound_processing_events.provider_retry_kind END, "
         "payload_json = CASE WHEN excluded.payload_json != '{}' "
         "THEN excluded.payload_json ELSE inbound_processing_events.payload_json END, "
-        "updated_at = excluded.updated_at",
-        (message_id, conversation_id or "", channel or "", status,
-         (reason or "")[:500], (error or "")[:500], serialized_payload, now, now)
+        "updated_at = excluded.updated_at "
+        "WHERE inbound_processing_events.status IN "
+        "('received', 'processing', 'recovering') "
+        "AND inbound_processing_events.processing_token = ''",
+        (
+            message_id,
+            conversation_id or "",
+            channel or "",
+            status,
+            (reason or "")[:500],
+            (error or "")[:500],
+            serialized_payload,
+            lease_expires_at,
+            provider_retry_increment,
+            provider_retry_kind,
+            now,
+            now,
+            int(replace_lease),
+        )
     )
     conn.commit()
     conn.close()
 
 
 def inbound_processing_update(message_id: str, status: str,
-                              reason: str = "", error: str = ""):
-    """Update a processing record; creates a minimal row if missing."""
+                              reason: str = "", error: str = "") -> bool:
+    """Update an unclaimed active record without reviving terminal state."""
     if not message_id:
-        return
+        return False
     now = datetime.now(timezone.utc).isoformat()
-    conn = _get_conn()
-    cur = conn.execute(
-        "UPDATE inbound_processing_events "
-        "SET status = ?, reason = ?, last_error = ?, updated_at = ? "
-        "WHERE message_id = ?",
-        (status, (reason or "")[:500], (error or "")[:500], now, message_id)
+    retry_deferred = status == "recovering" or (
+        status == "processing"
+        and reason in {
+            "tenant_runtime_controls_unavailable",
+            "tenant_account_control_unavailable",
+        }
     )
-    if cur.rowcount == 0:
-        conn.execute(
-            "INSERT INTO inbound_processing_events "
-            "(message_id, status, reason, last_error, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (message_id, status, (reason or "")[:500], (error or "")[:500],
-             now, now)
+    replace_lease = retry_deferred or status not in {
+        "received", "processing", "recovering",
+    }
+    lease_expires_at = now if retry_deferred else ""
+    provider_retry_increment = int(
+        status == "recovering" and reason == "provider_send_retry"
+    )
+    provider_retry_kind = (error or "")[:120] if provider_retry_increment else ""
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE inbound_processing_events "
+            "SET status = ?, reason = ?, last_error = ?, "
+            "lease_expires_at = CASE WHEN ? THEN ? ELSE lease_expires_at END, "
+            "provider_retry_count = provider_retry_count + ?, "
+            "provider_retry_kind = CASE WHEN ? != '' THEN ? "
+            "ELSE provider_retry_kind END, "
+            "processing_token = '', updated_at = ? "
+            "WHERE message_id = ? AND processing_token = '' "
+            "AND status IN ('received', 'processing', 'recovering')",
+            (
+                status,
+                (reason or "")[:500],
+                (error or "")[:500],
+                int(replace_lease),
+                lease_expires_at,
+                provider_retry_increment,
+                provider_retry_kind,
+                provider_retry_kind,
+                now,
+                message_id,
+            )
         )
-    conn.commit()
-    conn.close()
+        if cur.rowcount == 0:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO inbound_processing_events "
+                "(message_id, status, reason, last_error, lease_expires_at, "
+                "provider_retry_count, provider_retry_kind, processing_token, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+                (
+                    message_id,
+                    status,
+                    (reason or "")[:500],
+                    (error or "")[:500],
+                    lease_expires_at,
+                    provider_retry_increment,
+                    provider_retry_kind,
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+        return int(cur.rowcount or 0) == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def inbound_processing_quarantine(
+    message_id: str,
+    reason: str,
+    *,
+    processing_token: str = "",
+) -> bool:
+    """Terminally reject a stale tenant-mismatched recovery payload.
+
+    The provider message id remains recorded for deduplication, but customer
+    content and routing metadata are erased so a reassigned account cannot
+    leak its prior tenant's payload into the current runtime.
+    """
+    return inbound_processing_quarantine_batch(
+        [message_id], reason, processing_token=processing_token,
+    )
+
+
+def inbound_processing_quarantine_batch(
+    message_ids: list[str],
+    reason: str,
+    *,
+    processing_token: str = "",
+) -> bool:
+    """Atomically quarantine every member of a stale tenant-mismatched batch."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    if not ids:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    token = str(processing_token or "").strip()
+    placeholders = ",".join("?" for _ in ids)
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT status, processing_token FROM inbound_processing_events "
+            f"WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        if (
+            len(rows) != len(ids)
+            or any(str(row[0] or "") not in {
+                "received", "processing", "recovering",
+            } for row in rows)
+            or any(str(row[1] or "") != token for row in rows)
+        ):
+            conn.rollback()
+            return False
+        cur = conn.executemany(
+            "UPDATE inbound_processing_events "
+            "SET status = 'ignored', reason = ?, last_error = '', "
+            "payload_json = '{}', conversation_id = '', channel = '', "
+            "lease_expires_at = '', processing_token = '', updated_at = ? "
+            "WHERE message_id = ? AND processing_token = ? "
+            "AND status IN ('received', 'processing', 'recovering')",
+            [
+                (
+                    (reason or "recovery_payload_quarantined")[:500],
+                    now,
+                    message_id,
+                    token,
+                )
+                for message_id in ids
+            ],
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) == len(ids)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def inbound_processing_bulk_update(message_ids: list, status: str,
-                                   reason: str = "", error: str = ""):
-    """Update a batch of inbound processing records."""
-    seen = set()
-    for message_id in message_ids or []:
-        if message_id and message_id not in seen:
-            seen.add(message_id)
-            inbound_processing_update(message_id, status, reason=reason, error=error)
+                                   reason: str = "", error: str = "",
+                                   *, processing_token: str = "") -> bool:
+    """CAS-update a complete active batch without reviving terminal rows."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    if not ids:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    normalized_reason = (reason or "")[:500]
+    normalized_error = (error or "")[:500]
+    retry_deferred = status == "recovering" or (
+        status == "processing"
+        and reason in {
+            "tenant_runtime_controls_unavailable",
+            "tenant_account_control_unavailable",
+        }
+    )
+    replace_lease = retry_deferred or status not in {
+        "received", "processing", "recovering",
+    }
+    lease_expires_at = now if retry_deferred else ""
+    provider_retry_increment = int(
+        status == "recovering" and normalized_reason == "provider_send_retry"
+    )
+    provider_retry_kind = (
+        normalized_error[:120] if provider_retry_increment else ""
+    )
+    token = str(processing_token or "").strip()
+    placeholders = ",".join("?" for _ in ids)
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT message_id, status, processing_token "
+            f"FROM inbound_processing_events WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        if (
+            any(str(row[1] or "") not in {
+                "received", "processing", "recovering",
+            } for row in rows)
+            or any(str(row[2] or "") != token for row in rows)
+            or (token and len(rows) != len(ids))
+        ):
+            conn.rollback()
+            return False
+        existing = {str(row[0]) for row in rows}
+        for message_id in ids:
+            if message_id not in existing:
+                conn.execute(
+                    "INSERT INTO inbound_processing_events "
+                    "(message_id, status, reason, last_error, lease_expires_at, "
+                    "provider_retry_count, provider_retry_kind, processing_token, "
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+                    (
+                        message_id,
+                        status,
+                        normalized_reason,
+                        normalized_error,
+                        lease_expires_at,
+                        provider_retry_increment,
+                        provider_retry_kind,
+                        now,
+                        now,
+                    ),
+                )
+                continue
+            cur = conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET status = ?, reason = ?, last_error = ?, "
+                "lease_expires_at = CASE WHEN ? THEN ? "
+                "ELSE lease_expires_at END, "
+                "provider_retry_count = provider_retry_count + ?, "
+                "provider_retry_kind = CASE WHEN ? != '' THEN ? "
+                "ELSE provider_retry_kind END, "
+                "processing_token = '', updated_at = ? "
+                "WHERE message_id = ? AND processing_token = ? "
+                "AND status IN ('received', 'processing', 'recovering')",
+                (
+                    status,
+                    normalized_reason,
+                    normalized_error,
+                    int(replace_lease),
+                    lease_expires_at,
+                    provider_retry_increment,
+                    provider_retry_kind,
+                    provider_retry_kind,
+                    now,
+                    message_id,
+                    token,
+                ),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def inbound_processing_begin_batch(
+    message_ids: list[str],
+    *,
+    batch_id: str = "",
+    recovering: bool = False,
+    recovery_token: str = "",
+    processing_lease_seconds: float = INBOUND_PROCESSING_LEASE_SECONDS,
+) -> str | bool:
+    """Atomically start a batch and return its new worker-generation token."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    if not ids:
+        return ""
+    placeholders = ",".join("?" for _ in ids)
+    allowed = {"recovering"} if recovering else {"received"}
+    now = datetime.now(timezone.utc).isoformat()
+    lease_expires_at = _inbound_lease_deadline(processing_lease_seconds)
+    expected_token = str(recovery_token or "").strip()
+    new_token = _inbound_processing_token()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT message_id, status, batch_id, processing_token "
+            f"FROM inbound_processing_events "
+            f"WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        normalized_batch_id = str(batch_id or "").strip()
+        if (
+            (
+                normalized_batch_id
+                and (
+                    len(rows) != len(ids)
+                    or any(
+                        str(row[2] or "") != normalized_batch_id
+                        for row in rows
+                    )
+                )
+            )
+            or (
+                not normalized_batch_id
+                and rows
+                and len(rows) != len(ids)
+            )
+            or any(str(row[1] or "") not in allowed for row in rows)
+            or any(str(row[3] or "") != expected_token for row in rows)
+            or (recovering and not expected_token)
+        ):
+            conn.rollback()
+            return False
+        if normalized_batch_id:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM inbound_processing_events WHERE batch_id = ?",
+                (normalized_batch_id,),
+            ).fetchone()
+            if int(total[0] or 0) != len(ids):
+                conn.rollback()
+                return False
+        existing = {str(row[0]) for row in rows}
+        for position, message_id in enumerate(ids):
+            if message_id not in existing:
+                continue
+            conn.execute(
+                "UPDATE inbound_processing_events SET status = 'processing', "
+                "reason = 'batch_flush_started', last_error = '', "
+                "batch_id = CASE WHEN batch_id = '' THEN ? ELSE batch_id END, "
+                "batch_position = CASE WHEN batch_id = '' THEN ? "
+                "ELSE batch_position END, lease_expires_at = ?, "
+                "processing_token = ?, updated_at = ? WHERE message_id = ? "
+                "AND processing_token = ?",
+                (
+                    normalized_batch_id,
+                    position,
+                    lease_expires_at,
+                    new_token,
+                    now,
+                    message_id,
+                    expected_token,
+                ),
+            )
+        conn.executemany(
+            "INSERT INTO inbound_processing_events "
+            "(message_id, status, reason, last_error, batch_id, batch_position, "
+            "lease_expires_at, processing_token, created_at, updated_at) "
+            "VALUES (?, 'processing', 'batch_flush_started', '', ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    message_id,
+                    normalized_batch_id,
+                    position,
+                    lease_expires_at,
+                    new_token,
+                    now,
+                    now,
+                )
+                for position, message_id in enumerate(ids)
+                if message_id not in existing
+            ],
+        )
+        conn.commit()
+        return new_token
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def inbound_processing_claim_outbound_attempt(
+    message_ids: list[str],
+    idempotency_key: str,
+    batch_id: str,
+    *,
+    processing_token: str = "",
+) -> bool:
+    """Persist the one allowed direct-provider attempt for an inbound batch."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    key = str(idempotency_key or "").strip()
+    normalized_batch_id = str(batch_id or "").strip()
+    token = str(processing_token or "").strip()
+    if not ids or not key or not normalized_batch_id or not token:
+        return False
+    placeholders = ",".join("?" for _ in ids)
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT message_id, status, batch_id, outbound_idempotency_key, "
+            f"processing_token "
+            f"FROM inbound_processing_events WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM inbound_processing_events WHERE batch_id = ?",
+            (normalized_batch_id,),
+        ).fetchone()
+        if (
+            len(rows) != len(ids)
+            or int(total[0] or 0) != len(ids)
+            or any(str(row[1] or "") != "processing" for row in rows)
+            or any(str(row[2] or "") != normalized_batch_id for row in rows)
+            or any(str(row[3] or "") for row in rows)
+            or any(str(row[4] or "") != token for row in rows)
+        ):
+            conn.rollback()
+            return False
+        conn.executemany(
+            "UPDATE inbound_processing_events "
+            "SET outbound_idempotency_key = ?, outbound_attempted_at = ?, "
+            "updated_at = ? WHERE message_id = ? AND batch_id = ? "
+            "AND status = 'processing' AND outbound_idempotency_key = '' "
+            "AND processing_token = ?",
+            [
+                (key, now, now, message_id, normalized_batch_id, token)
+                for message_id in ids
+            ],
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def inbound_processing_is_current(
+    message_ids: list[str],
+    batch_id: str,
+    processing_token: str,
+    *,
+    required_status: str = "processing",
+    renew_lease_seconds: float | None = INBOUND_PROCESSING_LEASE_SECONDS,
+) -> bool:
+    """Check/freshen an exact worker generation before send or commit."""
+    ids = list(dict.fromkeys(
+        str(message_id) for message_id in message_ids or [] if message_id
+    ))
+    token = str(processing_token or "").strip()
+    normalized_batch_id = str(batch_id or "").strip()
+    if not ids or not token:
+        return False
+    placeholders = ",".join("?" for _ in ids)
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT message_id, status, batch_id, processing_token "
+            f"FROM inbound_processing_events WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        if (
+            len(rows) != len(ids)
+            or any(str(row[1] or "") != required_status for row in rows)
+            or any(str(row[3] or "") != token for row in rows)
+            or (
+                normalized_batch_id
+                and any(str(row[2] or "") != normalized_batch_id for row in rows)
+            )
+        ):
+            conn.rollback()
+            return False
+        if normalized_batch_id:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM inbound_processing_events WHERE batch_id = ?",
+                (normalized_batch_id,),
+            ).fetchone()
+            if int(total[0] or 0) != len(ids):
+                conn.rollback()
+                return False
+        if renew_lease_seconds is not None:
+            deadline = _inbound_lease_deadline(renew_lease_seconds)
+            cur = conn.execute(
+                f"UPDATE inbound_processing_events SET lease_expires_at = ?, "
+                f"updated_at = ? WHERE message_id IN ({placeholders}) "
+                "AND status = ? AND processing_token = ?",
+                [deadline, datetime.now(timezone.utc).isoformat(), *ids,
+                 required_status, token],
+            )
+            if int(cur.rowcount or 0) != len(ids):
+                conn.rollback()
+                return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def inbound_processing_mark_stale_failures(max_age_seconds: int = 300) -> int:
@@ -1417,17 +2248,21 @@ def inbound_processing_mark_stale_failures(max_age_seconds: int = 300) -> int:
     This closes the crash window where a message was received/buffered but the
     worker died before the timer or model/send path could finish.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat()
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    cutoff = (now_dt - timedelta(seconds=max_age_seconds)).isoformat()
+    now = now_dt.isoformat()
     conn = _get_conn()
     cur = conn.execute(
         "UPDATE inbound_processing_events "
         "SET status = 'processing_failed', "
         "reason = 'stale_non_terminal_state', "
         "last_error = 'Inbound processing did not reach a terminal state in time.', "
-        "updated_at = ? "
-        "WHERE status IN ('received', 'processing') AND updated_at < ?",
-        (now, cutoff)
+        "lease_expires_at = '', processing_token = '', updated_at = ? "
+        "WHERE status IN ('received', 'processing', 'recovering') "
+        "AND payload_json = '{}' AND ("
+        "(lease_expires_at != '' AND lease_expires_at <= ?) OR "
+        "(lease_expires_at = '' AND updated_at < ?))",
+        (now, now, cutoff)
     )
     conn.commit()
     count = cur.rowcount
@@ -1439,50 +2274,184 @@ def inbound_processing_claim_recoverable(
     max_age_seconds: int = 40,
     limit: int = 50,
 ) -> list[dict]:
-    """Claim durable WhatsApp turns abandoned before a terminal reply."""
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+    """Claim whole durable WhatsApp batches abandoned before a terminal reply.
+
+    ``limit`` is a batch limit, never a row limit.  Returning every member in
+    its original position keeps debounce input and provider idempotency stable
+    across repeated crashes.  Legacy unbatched rows are conservatively migrated
+    to singleton batches because their former in-memory membership is unknowable.
+    """
+    now_dt = datetime.now(timezone.utc)
+    cutoff = (now_dt - timedelta(seconds=max_age_seconds)).isoformat()
+    now = now_dt.isoformat()
+    recovery_lease_expires_at = (
+        now_dt + timedelta(seconds=INBOUND_RECOVERY_CLAIM_LEASE_SECONDS)
     ).isoformat()
-    now = datetime.now(timezone.utc).isoformat()
+
+    def expired_sql(prefix: str = "") -> str:
+        field = f"{prefix}." if prefix else ""
+        return (
+            "(("
+            f"{field}lease_expires_at != '' "
+            f"AND {field}lease_expires_at <= :lease_now"
+            ") OR ("
+            f"{field}lease_expires_at = '' AND ("
+            f"({field}status = 'received' "
+            f"AND {field}created_at < :legacy_cutoff) OR "
+            f"({field}status IN ('processing', 'recovering') "
+            f"AND {field}updated_at < :legacy_cutoff)"
+            ")))"
+        )
+
+    query_params = {
+        "lease_now": now,
+        "legacy_cutoff": cutoff,
+        "batch_limit": max(1, min(int(limit), 200)),
+    }
+    expired = expired_sql()
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "UPDATE inbound_processing_events AS inbound "
-            "SET status = 'superseded', reason = 'newer_outbound_exists', "
-            "updated_at = ? "
-            "WHERE status IN ('received', 'processing', 'recovering') "
-            "AND ((status IN ('received', 'processing') AND created_at < ?) "
-            "OR (status = 'recovering' AND updated_at < ?)) AND EXISTS ("
-            " SELECT 1 FROM whatsapp_threads AS thread "
-            " WHERE thread.phone = inbound.conversation_id "
-            " AND thread.role IN ('assistant', 'operator') "
-            " AND thread.created_at > inbound.created_at"
-            ")",
-            (now, cutoff, cutoff),
-        )
-        rows = conn.execute(
-            "SELECT message_id, conversation_id, channel, payload_json, "
-            "created_at, heartbeat_sent_at, attempt_count, reason, last_error "
-            "FROM inbound_processing_events AS inbound "
-            "WHERE status IN ('received', 'processing', 'recovering') "
-            "AND ((status IN ('received', 'processing') AND created_at < ?) "
-            "OR (status = 'recovering' AND updated_at < ?)) "
+        acceptance_batches = conn.execute(
+            "SELECT DISTINCT acceptance_batch_id FROM inbound_processing_events "
+            "WHERE batch_id = '' AND acceptance_batch_id != '' "
             "AND payload_json != '{}' "
-            "AND NOT EXISTS ("
-            " SELECT 1 FROM whatsapp_threads AS thread "
-            " WHERE thread.phone = inbound.conversation_id "
-            " AND thread.role IN ('assistant', 'operator') "
-            " AND thread.created_at > inbound.created_at"
-            ") ORDER BY created_at ASC LIMIT ?",
-            (cutoff, cutoff, max(1, min(int(limit), 200))),
+            "AND status IN ('received', 'processing', 'recovering') "
+            f"AND {expired}",
+            query_params,
         ).fetchall()
-        for row in rows:
+        for acceptance_batch in acceptance_batches:
+            conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET batch_id = acceptance_batch_id, "
+                "batch_position = acceptance_position "
+                "WHERE batch_id = '' AND acceptance_batch_id = ?",
+                (acceptance_batch[0],),
+            )
+        legacy_rows = conn.execute(
+            "SELECT message_id FROM inbound_processing_events "
+            "WHERE batch_id = '' AND payload_json != '{}' "
+            "AND status IN ('received', 'processing', 'recovering') "
+            f"AND {expired}",
+            query_params,
+        ).fetchall()
+        for legacy_row in legacy_rows:
+            conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET batch_id = ?, batch_position = 0 "
+                "WHERE message_id = ? AND batch_id = ''",
+                (
+                    _inbound_processing_batch_id(str(legacy_row[0] or "")),
+                    legacy_row[0],
+                ),
+            )
+        # Supersession is a batch transition. Comparing against the newest
+        # member prevents an older outbound from terminally changing only the
+        # first row of a multi-message debounce batch.
+        stale_batches = conn.execute(
+            "SELECT batch_id, conversation_id, MAX(created_at) "
+            "FROM inbound_processing_events "
+            "WHERE batch_id != '' "
+            "AND status IN ('received', 'processing', 'recovering') "
+            "GROUP BY batch_id, conversation_id "
+            f"HAVING SUM(CASE WHEN NOT {expired} THEN 1 ELSE 0 END) = 0",
+            query_params,
+        ).fetchall()
+        for batch_id, conversation_id, latest_created_at in stale_batches:
+            newer_outbound = conn.execute(
+                "SELECT 1 FROM whatsapp_threads "
+                "WHERE phone = ? AND role IN ('assistant', 'operator') "
+                "AND created_at > ? LIMIT 1",
+                (conversation_id, latest_created_at),
+            ).fetchone()
+            if newer_outbound is not None:
+                conn.execute(
+                    "UPDATE inbound_processing_events "
+                    "SET status = 'superseded', "
+                    "reason = 'newer_outbound_exists', lease_expires_at = '', "
+                    "processing_token = '', "
+                    "updated_at = :updated_at WHERE batch_id = :batch_id "
+                    "AND status IN "
+                    "('received', 'processing', 'recovering')",
+                    {"updated_at": now, "batch_id": batch_id},
+                )
+
+        # A terminal or payload-less sibling makes the original action
+        # ambiguous. Never resurrect such a partial batch; fail its stale
+        # remainder visibly instead. Atomic batch transitions below ensure new
+        # writes cannot normally enter this compatibility/corruption state.
+        incomplete_batches = conn.execute(
+            "SELECT batch_id FROM inbound_processing_events "
+            "WHERE batch_id != '' GROUP BY batch_id "
+            "HAVING SUM(CASE WHEN status NOT IN "
+            "('received', 'processing', 'recovering') OR payload_json = '{}' "
+            "THEN 1 ELSE 0 END) > 0 "
+            "AND SUM(CASE WHEN status IN "
+            "('received', 'processing', 'recovering') AND "
+            f"{expired} "
+            "THEN 1 ELSE 0 END) > 0",
+            query_params,
+        ).fetchall()
+        for incomplete_batch in incomplete_batches:
+            conn.execute(
+                "UPDATE inbound_processing_events "
+                "SET status = 'processing_failed', "
+                "reason = 'incomplete_durable_batch', "
+                "last_error = 'A batch member was already terminal; replay suppressed.', "
+                "lease_expires_at = '', processing_token = '', "
+                "updated_at = :updated_at "
+                "WHERE batch_id = :batch_id "
+                "AND status IN ('received', 'processing', 'recovering') "
+                f"AND {expired}",
+                {
+                    **query_params,
+                    "updated_at": now,
+                    "batch_id": incomplete_batch[0],
+                },
+            )
+        rows = conn.execute(
+            "WITH eligible_batches AS ("
+            " SELECT batch_id, MIN(created_at) AS first_created "
+            " FROM inbound_processing_events "
+            " WHERE batch_id != '' "
+            " GROUP BY batch_id "
+            " HAVING SUM(CASE WHEN status IN "
+            " ('received', 'processing', 'recovering') AND "
+            f"{expired} THEN 1 ELSE 0 END) > 0 "
+            " AND SUM(CASE WHEN status IN "
+            " ('received', 'processing', 'recovering') AND NOT ("
+            f" {expired}) THEN 1 ELSE 0 END) = 0 "
+            " AND SUM(CASE WHEN status NOT IN "
+            " ('received', 'processing', 'recovering') OR payload_json = '{}' "
+            " THEN 1 ELSE 0 END) = 0 "
+            " ORDER BY first_created ASC, batch_id ASC LIMIT :batch_limit"
+            ") "
+            "SELECT inbound.message_id, inbound.conversation_id, inbound.channel, "
+            "inbound.payload_json, inbound.created_at, inbound.heartbeat_sent_at, "
+            "inbound.attempt_count, inbound.reason, inbound.last_error, "
+            "inbound.status, inbound.batch_id, inbound.batch_position, "
+            "inbound.provider_retry_count, inbound.provider_retry_kind "
+            "FROM inbound_processing_events AS inbound "
+            "JOIN eligible_batches AS eligible ON eligible.batch_id = inbound.batch_id "
+            "WHERE inbound.status IN ('received', 'processing', 'recovering') "
+            "AND inbound.payload_json != '{}' "
+            "ORDER BY eligible.first_created ASC, inbound.batch_position ASC, "
+            "inbound.created_at ASC, inbound.message_id ASC",
+            query_params,
+        ).fetchall()
+        batch_tokens = {
+            str(row[10] or ""): _inbound_processing_token()
+            for row in rows
+        }
+        for batch_id, processing_token in batch_tokens.items():
             conn.execute(
                 "UPDATE inbound_processing_events SET status = 'recovering', "
-                "reason = 'stale_turn_reclaimed', attempt_count = attempt_count + 1, "
-                "updated_at = ? WHERE message_id = ?",
-                (now, row[0]),
+                "reason = 'stale_turn_reclaimed', "
+                "attempt_count = attempt_count + 1, "
+                "lease_expires_at = ?, processing_token = ?, updated_at = ? "
+                "WHERE batch_id = ? "
+                "AND status IN ('received', 'processing', 'recovering')",
+                (recovery_lease_expires_at, processing_token, now, batch_id),
             )
         conn.commit()
     finally:
@@ -1497,27 +2466,377 @@ def inbound_processing_claim_recoverable(
             "message_id": row[0], "conversation_id": row[1],
             "channel": row[2], "payload": payload, "created_at": row[4],
             "heartbeat_sent_at": row[5],
-            "attempt_count": int(row[6] or 0) + 1,
+            "attempt_count": int(row[6] or 0) + (
+                1 if str(row[9] or "") in {"received", "processing", "recovering"} else 0
+            ),
+            "provider_retry_count": int(row[12] or 0),
+            "provider_retry_kind": str(row[13] or ""),
             "recovery_reason": str(row[7] or ""),
             "recovery_error": str(row[8] or ""),
+            "batch_id": str(row[10] or ""),
+            "batch_position": int(row[11] or 0),
+            "processing_token": batch_tokens.get(str(row[10] or ""), ""),
         })
     return result
 
 
-def inbound_processing_mark_heartbeat(message_ids: list[str]) -> None:
-    """Record the single customer liveness message for a recovered batch."""
+def inbound_processing_mark_heartbeat(
+    message_ids: list[str],
+    *,
+    processing_token: str,
+) -> bool:
+    """Record one recovery heartbeat only for the current claimed generation."""
     ids = [str(value) for value in message_ids or [] if str(value)]
-    if not ids:
-        return
+    token = str(processing_token or "").strip()
+    if not ids or not token:
+        return False
+    placeholders = ",".join("?" for _ in ids)
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     try:
-        conn.executemany(
-            "UPDATE inbound_processing_events SET heartbeat_sent_at = ? "
-            "WHERE message_id = ? AND heartbeat_sent_at = ''",
-            [(now, message_id) for message_id in ids],
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT status, processing_token FROM inbound_processing_events "
+            f"WHERE message_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        if (
+            len(rows) != len(ids)
+            or any(str(row[0] or "") != "recovering" for row in rows)
+            or any(str(row[1] or "") != token for row in rows)
+        ):
+            conn.rollback()
+            return False
+        cur = conn.execute(
+            f"UPDATE inbound_processing_events SET heartbeat_sent_at = ? "
+            f"WHERE message_id IN ({placeholders}) "
+            "AND status = 'recovering' AND processing_token = ? "
+            "AND heartbeat_sent_at = ''",
+            [now, *ids, token],
         )
         conn.commit()
+        return int(cur.rowcount or 0) > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def zernio_failed_event_key(failed: dict) -> str:
+    """Return the stable opaque identity for one normalized failure event."""
+    account_id = str((failed or {}).get("account_id") or "").strip()
+    conversation_id = str(
+        (failed or {}).get("conversation_id") or ""
+    ).strip()
+    message_id = str((failed or {}).get("message_id") or "").strip()
+    if not account_id or not conversation_id or not message_id:
+        return ""
+    return hashlib.sha256(
+        (
+            "zernio-failed-event-v1\x1f"
+            + account_id
+            + "\x1f"
+            + conversation_id
+            + "\x1f"
+            + message_id
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def zernio_failed_event_accept(failed: dict) -> tuple[str, bool]:
+    """Durably enqueue a normalized failure before acknowledging Zernio."""
+    event_key = zernio_failed_event_key(failed)
+    if not event_key:
+        return "", False
+    account_id = str(failed.get("account_id") or "").strip()
+    conversation_id = str(failed.get("conversation_id") or "").strip()
+    message_id = str(failed.get("message_id") or "").strip()
+    payload_json = json.dumps(
+        failed, ensure_ascii=False, separators=(",", ":"),
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO zernio_failed_event_queue "
+            "(event_key, account_id, conversation_id, message_id, payload_json, "
+            "status, claim_token, available_at, lease_expires_at, attempt_count, "
+            "last_error, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', '', ?, '', 0, '', ?, ?)",
+            (
+                event_key,
+                account_id,
+                conversation_id,
+                message_id,
+                payload_json,
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return event_key, int(cur.rowcount or 0) == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def zernio_failed_event_claim_due(
+    *,
+    limit: int = 10,
+    lease_seconds: float = ZERNIO_FAILED_EVENT_LEASE_SECONDS,
+) -> list[dict]:
+    """Lease pending or expired failure events for crash-safe processing."""
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    lease_expires_at = (
+        now_dt + timedelta(seconds=max(0.0, float(lease_seconds)))
+    ).isoformat()
+    conn = _get_conn()
+    claims = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT event_key, payload_json, attempt_count "
+            "FROM zernio_failed_event_queue WHERE "
+            "(status = 'pending' AND available_at <= ?) OR "
+            "(status = 'processing' AND lease_expires_at != '' "
+            "AND lease_expires_at <= ?) "
+            "ORDER BY created_at ASC, event_key ASC LIMIT ?",
+            (now, now, max(1, min(int(limit), 100))),
+        ).fetchall()
+        for event_key, payload_json, attempt_count in rows:
+            claim_token = _inbound_processing_token()
+            cur = conn.execute(
+                "UPDATE zernio_failed_event_queue SET status = 'processing', "
+                "claim_token = ?, lease_expires_at = ?, "
+                "attempt_count = attempt_count + 1, updated_at = ? "
+                "WHERE event_key = ? AND ((status = 'pending' "
+                "AND available_at <= ?) OR (status = 'processing' "
+                "AND lease_expires_at != '' AND lease_expires_at <= ?))",
+                (
+                    claim_token,
+                    lease_expires_at,
+                    now,
+                    event_key,
+                    now,
+                    now,
+                ),
+            )
+            if cur.rowcount != 1:
+                continue
+            try:
+                failed = json.loads(payload_json or "{}")
+            except (TypeError, ValueError):
+                failed = {}
+            claims.append({
+                "event_key": str(event_key or ""),
+                "claim_token": claim_token,
+                "failed": failed if isinstance(failed, dict) else {},
+                "attempt_count": int(attempt_count or 0) + 1,
+                "lease_expires_at": lease_expires_at,
+            })
+        conn.commit()
+        return claims
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def zernio_failed_event_is_current(
+    event_key: str,
+    claim_token: str,
+    *,
+    renew_lease_seconds: float | None = ZERNIO_FAILED_EVENT_LEASE_SECONDS,
+) -> bool:
+    """Validate and optionally renew one exact failed-event worker claim."""
+    key = str(event_key or "").strip()
+    token = str(claim_token or "").strip()
+    if not key or not token:
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, claim_token FROM zernio_failed_event_queue "
+            "WHERE event_key = ?",
+            (key,),
+        ).fetchone()
+        if (
+            row is None
+            or str(row[0] or "") != "processing"
+            or str(row[1] or "") != token
+        ):
+            conn.rollback()
+            return False
+        if renew_lease_seconds is not None:
+            deadline = _inbound_lease_deadline(renew_lease_seconds)
+            cur = conn.execute(
+                "UPDATE zernio_failed_event_queue SET lease_expires_at = ?, "
+                "updated_at = ? WHERE event_key = ? AND status = 'processing' "
+                "AND claim_token = ?",
+                (
+                    deadline,
+                    datetime.now(timezone.utc).isoformat(),
+                    key,
+                    token,
+                ),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _zernio_failed_event_finish(
+    event_key: str,
+    claim_token: str,
+    status: str,
+) -> bool:
+    """CAS a claimed event terminal and scrub its tenant payload."""
+    if status not in {"completed", "ignored", "invalid"}:
+        raise ValueError("invalid Zernio failure terminal status")
+    key = str(event_key or "").strip()
+    token = str(claim_token or "").strip()
+    if not key or not token:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE zernio_failed_event_queue SET status = ?, "
+            "account_id = '', conversation_id = '', message_id = '', "
+            "payload_json = '{}', claim_token = '', available_at = '', "
+            "lease_expires_at = '', last_error = '', updated_at = ? "
+            "WHERE event_key = ? AND status = 'processing' AND claim_token = ?",
+            (status, now, key, token),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def zernio_failed_event_complete(event_key: str, claim_token: str) -> bool:
+    return _zernio_failed_event_finish(event_key, claim_token, "completed")
+
+
+def zernio_failed_event_complete_with_attention(
+    event_key: str, claim_token: str, failed: dict,
+) -> bool:
+    """Atomically surface an unmatched late failure and scrub its queue row."""
+    if zernio_failed_event_key(failed) != event_key or not claim_token:
+        return False
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, claim_token FROM zernio_failed_event_queue WHERE event_key = ?",
+            (event_key,),
+        ).fetchone()
+        if not row or str(row[0]) != "processing" or str(row[1]) != claim_token:
+            conn.rollback()
+            return False
+        from shared.tenant_guard import account_access_state
+
+        account_state = account_access_state(
+            str(failed.get("account_id") or ""), direction="inbound",
+        )
+        if account_state is None:
+            raise RuntimeError("tenant account controls unavailable")
+        if account_state is False:
+            raise HandoffAccountReassignedError("tenant account reassigned")
+        now = datetime.now(timezone.utc).isoformat()
+        _insert_durable_operator_item(conn, "zernio-failed:" + event_key, {
+            "notification_type": "escalation",
+            "channel": "whatsapp",
+            "customer_id": str(failed.get("conversation_id") or ""),
+            "customer_name": "Customer",
+            "subject": "[DELIVERY FAILED] Provider reported a late message failure",
+            "body": (
+                "The provider reported that an outbound message failed. "
+                "Do not treat it as delivered. Review the conversation and reply "
+                "manually if needed. Provider message reference: "
+                + str(failed.get("message_id") or "")
+            ),
+        }, now)
+        cur = conn.execute(
+            "UPDATE zernio_failed_event_queue SET status = 'completed', "
+            "account_id = '', conversation_id = '', message_id = '', payload_json = '{}', "
+            "claim_token = '', available_at = '', lease_expires_at = '', last_error = '', updated_at = ? "
+            "WHERE event_key = ? AND status = 'processing' AND claim_token = ?",
+            (now, event_key, claim_token),
+        )
+        if cur.rowcount != 1:
+            raise RuntimeError("failed event claim was lost")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def zernio_failed_event_ignore(event_key: str, claim_token: str) -> bool:
+    return _zernio_failed_event_finish(event_key, claim_token, "ignored")
+
+
+def zernio_failed_event_invalid(event_key: str, claim_token: str) -> bool:
+    return _zernio_failed_event_finish(event_key, claim_token, "invalid")
+
+
+def zernio_failed_event_retry(
+    event_key: str,
+    claim_token: str,
+    *,
+    error_code: str,
+    retry_delay_seconds: float = 30.0,
+) -> bool:
+    """Release an exact claim for a bounded-delay durable retry."""
+    key = str(event_key or "").strip()
+    token = str(claim_token or "").strip()
+    if not key or not token:
+        return False
+    available_at = _inbound_lease_deadline(retry_delay_seconds)
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE zernio_failed_event_queue SET status = 'pending', "
+            "claim_token = '', available_at = ?, lease_expires_at = '', "
+            "last_error = ?, updated_at = ? WHERE event_key = ? "
+            "AND status = 'processing' AND claim_token = ?",
+            (
+                available_at,
+                str(error_code or "processing_unavailable")[:120],
+                now,
+                key,
+                token,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -2179,14 +3498,54 @@ def wa_reconcile_vehicle_recommendation_failure(
         conn.close()
 
 
+def _vehicle_recommendation_recovery_claims(raw: object) -> list[dict]:
+    """Normalize durable failure claims, including legacy string entries."""
+    claims = []
+    for value in raw if isinstance(raw, list) else []:
+        if isinstance(value, dict):
+            message_id = str(value.get("message_id") or "").strip()
+            claim_token = str(value.get("claim_token") or "").strip()
+            lease_expires_at = str(value.get("lease_expires_at") or "").strip()
+        else:
+            # The old format stored only message ids and could wedge forever.
+            # Treat it as an expired, unfenced claim so the next provider retry
+            # can migrate and reclaim it.
+            message_id = str(value or "").strip()
+            claim_token = ""
+            lease_expires_at = ""
+        if message_id:
+            claims.append({
+                "message_id": message_id,
+                "claim_token": claim_token,
+                "lease_expires_at": lease_expires_at,
+            })
+    return claims
+
+
+def _vehicle_recommendation_claim_active(
+    claim: dict,
+    now: datetime,
+) -> bool:
+    try:
+        expires_at = datetime.fromisoformat(
+            str(claim.get("lease_expires_at") or "")
+        )
+    except (TypeError, ValueError):
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return bool(claim.get("claim_token")) and expires_at > now
+
+
 def wa_claim_vehicle_recommendation_failure(
     phone: str,
     provider_message_id: str,
 ) -> dict:
-    """Claim one known recommendation-part failure exactly once."""
+    """Lease one known recommendation-part failure for replay-safe recovery."""
     message_id = str(provider_message_id or "").strip()
     if not phone or not message_id or len(message_id) > 240:
         return {"matched": False}
+    now_dt = datetime.now(timezone.utc)
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -2224,16 +3583,32 @@ def wa_claim_vehicle_recommendation_failure(
             for value in flags.get("ali_vehicle_recommendation_handled_failures") or []
             if str(value or "").strip()
         ]
-        in_progress = [
-            str(value or "").strip()
-            for value in flags.get("ali_vehicle_recommendation_recovery_in_progress") or []
-            if str(value or "").strip()
-        ]
-        if message_id in handled or message_id in in_progress:
+        if message_id in handled:
             conn.commit()
             return {
                 "matched": True,
                 "already_handled": True,
+                "part": matched_part,
+            }
+        claims = _vehicle_recommendation_recovery_claims(
+            flags.get("ali_vehicle_recommendation_recovery_in_progress")
+        )
+        active_claim = next(
+            (
+                claim
+                for claim in claims
+                if claim["message_id"] == message_id
+                and _vehicle_recommendation_claim_active(claim, now_dt)
+            ),
+            None,
+        )
+        if active_claim is not None:
+            conn.commit()
+            return {
+                "matched": True,
+                "already_handled": True,
+                "recovery_in_progress": True,
+                "lease_expires_at": active_claim["lease_expires_at"],
                 "part": matched_part,
             }
         if matched_part not in {"carousel", "carousel_retry"}:
@@ -2243,8 +3618,23 @@ def wa_claim_vehicle_recommendation_failure(
                 "already_handled": True,
                 "part": matched_part,
             }
-        in_progress.append(message_id)
-        flags["ali_vehicle_recommendation_recovery_in_progress"] = in_progress[-20:]
+        claims = [
+            claim
+            for claim in claims
+            if claim["message_id"] != message_id
+            and _vehicle_recommendation_claim_active(claim, now_dt)
+        ]
+        claim_token = hashlib.sha256(os.urandom(32)).hexdigest()
+        lease_expires_at = (
+            now_dt
+            + timedelta(seconds=VEHICLE_RECOMMENDATION_RECOVERY_LEASE_SECONDS)
+        ).isoformat()
+        claims.append({
+            "message_id": message_id,
+            "claim_token": claim_token,
+            "lease_expires_at": lease_expires_at,
+        })
+        flags["ali_vehicle_recommendation_recovery_in_progress"] = claims[-20:]
         conn.execute(
             "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
             (json.dumps(flags, ensure_ascii=False), phone),
@@ -2254,6 +3644,8 @@ def wa_claim_vehicle_recommendation_failure(
         return {
             "matched": True,
             "already_handled": False,
+            "claim_token": claim_token,
+            "lease_expires_at": lease_expires_at,
             "failed_message_id": message_id,
             "part": matched_part,
             "stage": "individual" if matched_part == "carousel_retry" else "retry",
@@ -2381,7 +3773,12 @@ def wa_complete_vehicle_recommendation_recovery(
     """Persist recovery part IDs and release the transactional claim."""
     failed_id = str((recovery or {}).get("failed_message_id") or "").strip()
     state_hash = str((recovery or {}).get("hash") or "").strip()
-    if not failed_id or not re.fullmatch(r"[0-9a-f]{64}", state_hash):
+    claim_token = str((recovery or {}).get("claim_token") or "").strip()
+    if (
+        not failed_id
+        or not claim_token
+        or not re.fullmatch(r"[0-9a-f]{64}", state_hash)
+    ):
         return False
     conn = _get_conn()
     try:
@@ -2394,6 +3791,16 @@ def wa_complete_vehicle_recommendation_recovery(
             conn.rollback()
             return False
         flags = json.loads(row[0] or "{}")
+        claims = _vehicle_recommendation_recovery_claims(
+            flags.get("ali_vehicle_recommendation_recovery_in_progress")
+        )
+        if not any(
+            claim["message_id"] == failed_id
+            and claim["claim_token"] == claim_token
+            for claim in claims
+        ):
+            conn.rollback()
+            return False
         deliveries = flags.get("ali_vehicle_recommendation_deliveries") or []
         delivery = next((
             item for item in reversed(deliveries)
@@ -2431,9 +3838,12 @@ def wa_complete_vehicle_recommendation_recovery(
             handled.append(failed_id)
         flags["ali_vehicle_recommendation_handled_failures"] = handled[-20:]
         flags["ali_vehicle_recommendation_recovery_in_progress"] = [
-            str(value or "").strip()
-            for value in flags.get("ali_vehicle_recommendation_recovery_in_progress") or []
-            if str(value or "").strip() and str(value or "").strip() != failed_id
+            claim
+            for claim in claims
+            if not (
+                claim["message_id"] == failed_id
+                and claim["claim_token"] == claim_token
+            )
         ][-20:]
         conn.execute(
             "UPDATE whatsapp_booking_state SET flags_json = ? WHERE phone = ?",
@@ -3130,6 +4540,151 @@ def dm_get_history(conversation_id: str, channel: str, limit: int = 10) -> list:
     ).fetchall()
     conn.close()
     return [{"role": r[0], "text": r[1], "created_at": r[2]} for r in reversed(rows)]
+
+
+def _insert_durable_operator_item(conn, action_key: str, notification: dict, now: str) -> int:
+    """Insert exactly once inside the caller's claim-fenced transaction."""
+    existing = conn.execute(
+        "SELECT notification_id FROM inbound_operator_notifications WHERE action_key = ?",
+        (action_key,),
+    ).fetchone()
+    if existing:
+        if conn.execute(
+            "SELECT 1 FROM pending_notifications WHERE id = ?", (int(existing[0]),)
+        ).fetchone() is None:
+            # An operator may have removed the item while this turn was
+            # waiting on provider/control recovery. Do not turn the dangling
+            # dedup marker into proof that a promised handoff still exists.
+            raise RuntimeError("durable operator item is unavailable")
+        return int(existing[0])
+    notification_type = str(notification.get("notification_type") or "technical")
+    if notification_type not in {"technical", "escalation"}:
+        raise ValueError("invalid durable operator item type")
+    channel = str(notification.get("channel") or "whatsapp")
+    customer_id = str(notification.get("customer_id") or "")
+    cur = conn.execute(
+        "INSERT INTO pending_notifications "
+        "(notification_type, channel, customer_id, customer_name, subject, body, "
+        "status, created_at, mode) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+        (notification_type, channel, customer_id, str(notification.get("customer_name") or ""),
+         str(notification.get("subject") or ""), str(notification.get("body") or ""),
+         now, "soft" if notification_type == "escalation" else None),
+    )
+    notification_id = int(cur.lastrowid)
+    conn.execute(
+        "INSERT INTO inbound_operator_notifications (action_key, notification_id, created_at) "
+        "VALUES (?, ?, ?)", (action_key, notification_id, now),
+    )
+    if notification_type == "escalation":
+        conn.execute(
+            "INSERT INTO conversation_status (conversation_id, channel, status, deleted, updated_at) "
+            "VALUES (?, ?, 'open', 0, ?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "channel = excluded.channel, status = 'open', deleted = 0, updated_at = excluded.updated_at",
+            (customer_id, channel, now),
+        )
+    return notification_id
+
+
+def _inbound_processing_commit_operator_item(
+    message_ids: list[str],
+    batch_id: str,
+    processing_token: str,
+    *,
+    account_id: str,
+    notification: dict,
+    delivery_failure: bool = False,
+) -> int | None:
+    """Commit one operator item per durable turn under the current generation.
+
+    This deliberately performs no model/alert/provider I/O. The row and turn
+    dedup key are one transaction, so retry after a crash cannot create a
+    second handoff, even if an operator has already resolved the first one.
+    """
+    ids = list(dict.fromkeys(str(value) for value in message_ids or [] if value))
+    token = str(processing_token or "").strip()
+    normalized_batch_id = str(batch_id or "").strip()
+    if not ids or not token or not normalized_batch_id:
+        return None
+    channel = str(notification.get("channel") or "")
+    customer_id = str(notification.get("customer_id") or "")
+    if not channel or not customer_id:
+        raise ValueError("handoff destination missing")
+    action_key = hashlib.sha256(
+        "\x1f".join([
+            "delivery-failure" if delivery_failure else "handoff",
+            account_id, channel, normalized_batch_id, *sorted(ids),
+        ]).encode()
+    ).hexdigest()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT message_id, status, processing_token, conversation_id, channel "
+            "FROM inbound_processing_events WHERE batch_id = ?",
+            (normalized_batch_id,),
+        ).fetchall()
+        if (
+            len(rows) != len(ids)
+            or {str(row[0]) for row in rows} != set(ids)
+            or any(str(row[1]) != "processing" or str(row[2]) != token for row in rows)
+            or any(str(row[3]) != customer_id or str(row[4]) != channel for row in rows)
+        ):
+            conn.rollback()
+            return None
+        from shared.tenant_guard import account_access_state
+
+        account_state = account_access_state(account_id, direction="inbound")
+        if account_state is None:
+            raise RuntimeError("tenant account controls unavailable")
+        if account_state is False:
+            raise HandoffAccountReassignedError("tenant account reassigned")
+        now = datetime.now(timezone.utc).isoformat()
+        notification = dict(notification)
+        # Mermaid's dashboard exposes escalation/relay work items, not the
+        # generic technical table lane. Use soft review, never hard takeover.
+        notification["notification_type"] = "escalation"
+        notification_id = _insert_durable_operator_item(
+            conn, action_key, notification, now,
+        )
+        if delivery_failure:
+            cur = conn.execute(
+                "UPDATE inbound_processing_events SET status = 'send_failed', "
+                "reason = 'provider_send_failed', last_error = 'provider_delivery_unconfirmed', "
+                "processing_token = '', lease_expires_at = '', updated_at = ? "
+                "WHERE batch_id = ? AND status = 'processing' AND processing_token = ?",
+                (now, normalized_batch_id, token),
+            )
+            if cur.rowcount != len(ids):
+                raise RuntimeError("delivery failure claim was lost")
+        conn.commit()
+        return notification_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def inbound_processing_commit_handoff(
+    message_ids: list[str], batch_id: str, processing_token: str, *,
+    account_id: str, notification: dict,
+) -> int | None:
+    """Persist an idempotent handoff before a current worker promises it."""
+    return _inbound_processing_commit_operator_item(
+        message_ids, batch_id, processing_token,
+        account_id=account_id, notification=notification,
+    )
+
+
+def inbound_processing_commit_delivery_failure(
+    message_ids: list[str], batch_id: str, processing_token: str, *,
+    account_id: str, notification: dict,
+) -> int | None:
+    """Make a no-retry terminal transition only with durable operator attention."""
+    return _inbound_processing_commit_operator_item(
+        message_ids, batch_id, processing_token,
+        account_id=account_id, notification=notification, delivery_failure=True,
+    )
 
 
 def create_pending_notification(notification_type: str, channel: str,

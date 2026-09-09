@@ -17,6 +17,16 @@ ALI_RENTAL_LOCATION = "/api/ali-car-rental/"
 ALI_RENTAL_TENANT = "ali-car-rental"
 ALI_RENTAL_BEGIN_MARKER = "# BEGIN UNBOKS TENANT ali-car-rental"
 ALI_RENTAL_END_MARKER = "# END UNBOKS TENANT ali-car-rental"
+UNBOKS_LOCATION = "/api/unboks/"
+UNBOKS_TENANT = "unboks"
+UNBOKS_UPSTREAM = "http://127.0.0.1:8004/"
+UNBOKS_BEGIN_MARKER = "# BEGIN UNBOKS TENANT unboks"
+UNBOKS_END_MARKER = "# END UNBOKS TENANT unboks"
+FIXED_TENANT_UPSTREAMS = {
+    "mermaid": "http://127.0.0.1:8102/",
+    "ali-car-rental": "http://127.0.0.1:8101/",
+    "consulta-despertares": "http://127.0.0.1:8103/",
+}
 DASHBOARD_CACHE_MARKER = "UNBOKS DASHBOARD APP SHELL CACHE POLICY"
 NO_STORE_VALUE = "no-store, no-cache, must-revalidate, max-age=0"
 
@@ -163,6 +173,35 @@ def _ali_location_header(code: str) -> bool:
     )
 
 
+def _unboks_location_header(code: str) -> bool:
+    return bool(
+        re.fullmatch(
+            rf"location[ \t]+(?:\^~[ \t]+)?{re.escape(UNBOKS_LOCATION)}"
+            rf"[ \t]*\{{[ \t]*",
+            code,
+        )
+    )
+
+
+def _unsafe_dynamic_tenant_header(code: str) -> bool:
+    """Match the legacy route that treated every path slug as Unboks."""
+    return bool(
+        re.fullmatch(
+            r"location[ \t]+~[ \t]+\^/api/\(\?<tenant>\[\^/\]\+\)/"
+            r"\(\.\*\)\$[ \t]*\{[ \t]*",
+            code,
+        )
+    )
+
+
+def _api_regex_location_header(code: str) -> bool:
+    """Return true for any regex location rooted at the public API prefix."""
+    return bool(
+        re.match(r"^location[ \t]+~\*?[ \t]+", code)
+        and re.search(r"(?:\^|[\"'])?/api/", code)
+    )
+
+
 def _is_directive(code: str, directive: str, first_argument: str) -> bool:
     return bool(
         re.match(
@@ -171,6 +210,301 @@ def _is_directive(code: str, directive: str, first_argument: str) -> bool:
             code,
         )
     )
+
+
+def _validate_legacy_dynamic_upstream(lines: list[str], block: _Block) -> None:
+    proxy_passes = [
+        item
+        for item in _block_code(lines, block)
+        if re.match(r"^proxy_pass(?:[ \t]+|;)", item[2])
+    ]
+    expected = re.fullmatch(
+        rf"proxy_pass[ \t]+{re.escape(UNBOKS_UPSTREAM)}"
+        rf"\$2\$is_args\$args[ \t]*;",
+        proxy_passes[0][2] if len(proxy_passes) == 1 else "",
+    )
+    if len(proxy_passes) != 1 or proxy_passes[0][1] != 1 or not expected:
+        raise ValueError(
+            "legacy dynamic tenant route has an unexpected upstream; refusing rewrite"
+        )
+
+
+def _validate_explicit_unboks_location(lines: list[str], block: _Block) -> None:
+    code_lines = _block_code(lines, block)
+
+    proxy_passes = [
+        item
+        for item in code_lines
+        if re.match(r"^proxy_pass(?:[ \t]+|;)", item[2])
+    ]
+    if (
+        len(proxy_passes) != 1
+        or proxy_passes[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_pass[ \t]+{re.escape(UNBOKS_UPSTREAM)}[ \t]*;",
+            proxy_passes[0][2],
+        )
+    ):
+        raise ValueError(
+            f"location {UNBOKS_LOCATION} must proxy only to {UNBOKS_UPSTREAM}"
+        )
+
+    identity_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "proxy_set_header", "X-Tenant-Slug")
+    ]
+    if (
+        len(identity_headers) != 1
+        or identity_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_set_header[ \t]+X-Tenant-Slug[ \t]+"
+            rf"(?:\"{UNBOKS_TENANT}\"|'{UNBOKS_TENANT}'|{UNBOKS_TENANT})"
+            rf"[ \t]*;",
+            identity_headers[0][2],
+        )
+    ):
+        raise ValueError(
+            f"location {UNBOKS_LOCATION} must set the canonical Unboks identity"
+        )
+
+    hidden_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "proxy_hide_header", TENANT_HEADER)
+    ]
+    if (
+        len(hidden_headers) != 1
+        or hidden_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_hide_header[ \t]+{re.escape(TENANT_HEADER)}[ \t]*;",
+            hidden_headers[0][2],
+        )
+    ):
+        raise ValueError(
+            f"location {UNBOKS_LOCATION} must hide the upstream tenant header once"
+        )
+
+    tenant_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "add_header", TENANT_HEADER)
+    ]
+    if (
+        len(tenant_headers) != 1
+        or tenant_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"add_header[ \t]+{re.escape(TENANT_HEADER)}[ \t]+"
+            rf"(?:\"{UNBOKS_TENANT}\"|'{UNBOKS_TENANT}'|{UNBOKS_TENANT})"
+            rf"[ \t]+always[ \t]*;",
+            tenant_headers[0][2],
+        )
+    ):
+        raise ValueError(
+            f"location {UNBOKS_LOCATION} must emit one canonical tenant header"
+        )
+
+
+def _validate_fixed_tenant_location(
+    lines: list[str],
+    tenant: str,
+    upstream: str,
+) -> None:
+    path = f"/api/{tenant}/"
+    blocks = _find_blocks(
+        lines,
+        lambda code: _literal_location_header(code, path, "^~"),
+    )
+    if len(blocks) != 1:
+        raise ValueError(f"expected exactly one fixed location {path}, found {len(blocks)}")
+    code_lines = _block_code(lines, blocks[0])
+
+    proxy_passes = [
+        item
+        for item in code_lines
+        if re.match(r"^proxy_pass(?:[ \t]+|;)", item[2])
+    ]
+    if (
+        len(proxy_passes) != 1
+        or proxy_passes[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_pass[ \t]+{re.escape(upstream)}[ \t]*;",
+            proxy_passes[0][2],
+        )
+    ):
+        raise ValueError(f"location {path} must proxy only to {upstream}")
+
+    identity_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "proxy_set_header", "X-Tenant-Slug")
+    ]
+    if (
+        len(identity_headers) != 1
+        or identity_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_set_header[ \t]+X-Tenant-Slug[ \t]+"
+            rf"(?:\"{re.escape(tenant)}\"|'{re.escape(tenant)}'|{re.escape(tenant)})"
+            rf"[ \t]*;",
+            identity_headers[0][2],
+        )
+    ):
+        raise ValueError(f"location {path} must set its fixed tenant identity")
+
+    hidden_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "proxy_hide_header", TENANT_HEADER)
+    ]
+    if (
+        len(hidden_headers) != 1
+        or hidden_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"proxy_hide_header[ \t]+{re.escape(TENANT_HEADER)}[ \t]*;",
+            hidden_headers[0][2],
+        )
+    ):
+        raise ValueError(f"location {path} must hide one upstream tenant header")
+
+    tenant_headers = [
+        item
+        for item in code_lines
+        if _is_directive(item[2], "add_header", TENANT_HEADER)
+    ]
+    if (
+        len(tenant_headers) != 1
+        or tenant_headers[0][1] != 1
+        or not re.fullmatch(
+            rf"add_header[ \t]+{re.escape(TENANT_HEADER)}[ \t]+"
+            rf"(?:\"{re.escape(tenant)}\"|'{re.escape(tenant)}'|{re.escape(tenant)})"
+            rf"[ \t]+always[ \t]*;",
+            tenant_headers[0][2],
+        )
+    ):
+        raise ValueError(f"location {path} must emit one fixed tenant header")
+
+
+def _validate_unknown_path_fallback(lines: list[str]) -> None:
+    root_blocks = _find_blocks(
+        lines,
+        lambda code: _literal_location_header(code, "/"),
+    )
+    if len(root_blocks) != 1:
+        raise ValueError("API config must contain exactly one catch-all location /")
+    code_lines = _block_code(lines, root_blocks[0])
+    returns = [
+        item
+        for item in code_lines
+        if re.match(r"^return(?:[ \t]+|;)", item[2])
+    ]
+    unsafe_actions = [
+        item
+        for item in code_lines
+        if re.match(r"^(?:proxy_pass|rewrite|try_files)(?:[ \t]+|;)", item[2])
+    ]
+    if (
+        len(returns) != 1
+        or returns[0][1] != 1
+        or not re.fullmatch(r"return[ \t]+404[ \t]*;", returns[0][2])
+        or unsafe_actions
+    ):
+        raise ValueError("API catch-all location must return 404 without proxying")
+
+
+def _canonical_unboks_block(indent: str, newline: str) -> str:
+    child = indent + "    "
+    nested = child + "    "
+    lines = [
+        f"{indent}{UNBOKS_BEGIN_MARKER}",
+        f"{indent}location ^~ {UNBOKS_LOCATION} {{",
+        f"{child}proxy_set_header X-Tenant-Slug {UNBOKS_TENANT};",
+        "",
+        f"{child}if ($request_method = OPTIONS) {{",
+        f'{nested}add_header Access-Control-Allow-Origin "https://dashboard.unboks.org" always;',
+        f'{nested}add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;',
+        f'{nested}add_header Access-Control-Allow-Headers "Authorization, Content-Type, Accept, Origin, X-Tenant-Slug, Cache-Control, Pragma" always;',
+        f'{nested}add_header Access-Control-Allow-Credentials "true" always;',
+        f"{nested}add_header Access-Control-Max-Age 86400 always;",
+        f"{nested}return 204;",
+        f"{child}}}",
+        "",
+        f"{child}proxy_pass {UNBOKS_UPSTREAM};",
+        f"{child}proxy_set_header Host $host;",
+        f"{child}proxy_set_header X-Real-IP $remote_addr;",
+        f"{child}proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        f"{child}proxy_set_header X-Forwarded-Proto $scheme;",
+        f"{child}proxy_hide_header {TENANT_HEADER};",
+        f'{child}add_header {TENANT_HEADER} "{UNBOKS_TENANT}" always;',
+        f'{child}add_header Access-Control-Expose-Headers "{TENANT_HEADER}" always;',
+        f"{indent}}}",
+        f"{indent}{UNBOKS_END_MARKER}",
+    ]
+    return newline.join(lines) + newline
+
+
+def ensure_explicit_tenant_routing(text: str) -> str:
+    """Replace legacy arbitrary-slug routing with one explicit Unboks route.
+
+    Tenant-specific routes remain byte-identical. Any unknown ``/api/<slug>/``
+    path then reaches the server's canonical ``location / { return 404; }``.
+    The rewrite is deliberately limited to the recognized legacy fallback and
+    fails closed if a different API regex or upstream is present.
+    """
+    lines = text.splitlines(keepends=True)
+    regex_blocks = _find_blocks(lines, _api_regex_location_header)
+    legacy_blocks = _find_blocks(lines, _unsafe_dynamic_tenant_header)
+    legacy_starts = {block.start for block in legacy_blocks}
+    unsupported = [block for block in regex_blocks if block.start not in legacy_starts]
+    if unsupported:
+        raise ValueError("unsupported regex API location could bypass canonical routing")
+    for block in legacy_blocks:
+        _validate_legacy_dynamic_upstream(lines, block)
+
+    explicit_blocks = _find_blocks(lines, _unboks_location_header)
+    if len(explicit_blocks) > 1:
+        raise ValueError(
+            f"expected at most one location {UNBOKS_LOCATION}, found {len(explicit_blocks)}"
+        )
+    if not explicit_blocks and not legacy_blocks:
+        raise ValueError(
+            f"expected one explicit {UNBOKS_LOCATION} location or a recognized legacy fallback"
+        )
+    if explicit_blocks:
+        _validate_explicit_unboks_location(lines, explicit_blocks[0])
+
+    if legacy_blocks:
+        first_start = legacy_blocks[0].start
+        indent_line = lines[first_start]
+        indent = indent_line[: len(indent_line) - len(indent_line.lstrip(" \t"))]
+        newline = _line_ending(indent_line) or _default_line_ending(text)
+        replacement = "" if explicit_blocks else _canonical_unboks_block(indent, newline)
+        for block in reversed(legacy_blocks):
+            lines[block.start : block.end + 1] = (
+                replacement.splitlines(keepends=True)
+                if block.start == first_start
+                else []
+            )
+        stale_comments = {
+            "# Health check",
+            "# === Dynamic multi-tenant routing + CORS ===",
+        }
+        lines = [line for line in lines if line.strip() not in stale_comments]
+
+    updated = "".join(lines)
+    checked_lines = updated.splitlines(keepends=True)
+    remaining_regex = _find_blocks(checked_lines, _api_regex_location_header)
+    if remaining_regex:
+        raise ValueError("regex API location remains after canonical routing rewrite")
+    explicit_blocks = _find_blocks(checked_lines, _unboks_location_header)
+    if len(explicit_blocks) != 1:
+        raise ValueError(
+            f"expected exactly one location {UNBOKS_LOCATION}, found {len(explicit_blocks)}"
+        )
+    _validate_explicit_unboks_location(checked_lines, explicit_blocks[0])
+    for tenant, upstream in FIXED_TENANT_UPSTREAMS.items():
+        _validate_fixed_tenant_location(checked_lines, tenant, upstream)
+    _validate_unknown_path_fallback(checked_lines)
+    return updated
 
 
 def ensure_single_tenant_header(text: str) -> str:
@@ -511,6 +845,7 @@ def atomic_write(path: Path, content: str) -> bool:
 def apply_config_updates(api_config: Path, dashboard_config: Path) -> dict[str, bool]:
     """Validate both transformations before replacing either config file."""
     api_updated = ensure_single_tenant_header(_read_text(api_config))
+    api_updated = ensure_explicit_tenant_routing(api_updated)
     dashboard_updated = ensure_dashboard_shell_no_store(_read_text(dashboard_config))
     return atomic_write_many(
         {

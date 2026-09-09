@@ -11,6 +11,8 @@ os.environ.setdefault("ZERNIO_WEBHOOK_SECRET", "test")
 
 from unittest.mock import patch, MagicMock, call
 from datetime import datetime, timezone, timedelta
+import pytest
+
 from shared import state_registry, config_loader
 
 
@@ -21,8 +23,20 @@ def _cleanup(conversation_id):
     conn.execute("DELETE FROM pending_notifications WHERE customer_id = ?", (conversation_id,))
     # Clean dedup table too
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id LIKE 'test_138_%'")
+    conn.execute(
+        "DELETE FROM inbound_processing_events "
+        "WHERE conversation_id = ? OR message_id LIKE 'test_138_%'",
+        (conversation_id,),
+    )
     conn.commit()
     conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_zernio_account():
+    """These routing tests use the synthetic account declared below."""
+    with patch("shared.tenant_guard.is_account_allowed", return_value=True):
+        yield
 
 
 def _make_zernio_payload(conversation_id, text, sender_name="Test User",

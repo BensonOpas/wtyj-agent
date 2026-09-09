@@ -4,6 +4,8 @@
 
 import os
 import sys
+import hashlib
+import hmac
 import json
 import pytest
 from unittest.mock import patch, MagicMock
@@ -13,6 +15,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 os.environ["WHATSAPP_VERIFY_TOKEN"] = "test_token_067"
 os.environ["WHATSAPP_ACCESS_TOKEN"] = "test_access_token"
 os.environ["WHATSAPP_PHONE_NUMBER_ID"] = "990622044139349"
+os.environ["WHATSAPP_BUSINESS_ACCOUNT_ID"] = "967346842390828"
+os.environ["META_APP_SECRET"] = "test-meta-app-secret"
 
 from agents.social.whatsapp_client import parse_webhook_payload, send_text_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
@@ -242,6 +246,10 @@ def test_webhook_post_triggers_pipeline():
     # Clean up dedup for this test
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id = ?", ("wamid.INTEGRATION_TEST_068",))
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        ("wamid.INTEGRATION_TEST_068",),
+    )
     conn.commit()
     conn.close()
 
@@ -250,7 +258,18 @@ def test_webhook_post_triggers_pipeline():
     with patch("agents.social.webhook_server.send_text_message") as mock_send, \
          patch("agents.social.webhook_server.handle_incoming_whatsapp_message", return_value="Test reply"):
         mock_send.return_value = True
-        r = client.post("/webhooks/meta/whatsapp", json=payload)
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        signature = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), body, hashlib.sha256
+        ).hexdigest()
+        r = client.post(
+            "/webhooks/meta/whatsapp",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "X-Hub-Signature-256": signature,
+            },
+        )
         assert r.status_code == 200
         assert r.text == "OK"
         # Debounce: message is buffered, cancel timer and flush manually

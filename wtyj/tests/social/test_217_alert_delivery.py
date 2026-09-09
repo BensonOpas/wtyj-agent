@@ -800,10 +800,11 @@ def test_inbound_wa_from_operator_phone_resolves_zernio_route(monkeypatch):
               "message_id": "msgB240a", "account_id": "acctZER999"}
     monkeypatch.setattr(webhook_server, "parse_zernio_webhook",
                          lambda p: parsed)
-    monkeypatch.setattr(webhook_server.state_registry, "wa_has_been_processed",
-                         lambda mid: False)
-    monkeypatch.setattr(webhook_server.state_registry,
-                         "wa_mark_as_processed", lambda mid: None)
+    monkeypatch.setattr(
+        webhook_server.state_registry,
+        "wa_claim_inbound_processing",
+        lambda *args, **kwargs: True,
+    )
     monkeypatch.setattr(webhook_server.state_registry, "get_blocked",
                          lambda cid: False)
     monkeypatch.setattr(state_registry, "get_alert_settings",

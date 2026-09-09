@@ -311,6 +311,127 @@ jobs:
             print("Ali rental capability header and payload verified")
             PY
 
+            python3 - <<'PY'
+            import json
+            import subprocess
+            import urllib.error
+            import urllib.request
+
+            api_root = "https://api.unboks.org/api"
+            origin = "https://dashboard.unboks.org"
+            tenants = {
+                "mermaid": "wtyj-mermaid",
+                "ali-car-rental": "wtyj-ali-car-rental",
+                "unboks": "wtyj-unboks",
+            }
+
+            def request(path, *, method="GET", token="", payload=None):
+                headers = {"Accept": "application/json", "Origin": origin}
+                data = None
+                if token:
+                    headers["Authorization"] = "Bearer " + token
+                if payload is not None:
+                    headers["Content-Type"] = "application/json"
+                    data = json.dumps(payload).encode()
+                req = urllib.request.Request(
+                    api_root + path,
+                    data=data,
+                    headers=headers,
+                    method=method,
+                )
+                try:
+                    response = urllib.request.urlopen(req, timeout=15)
+                except urllib.error.HTTPError as exc:
+                    response = exc
+                body = response.read()
+                parsed = None
+                if body:
+                    try:
+                        parsed = json.loads(body)
+                    except json.JSONDecodeError:
+                        pass
+                return response.status, response.headers, parsed
+
+            def dashboard_password(container):
+                completed = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "python3",
+                        "-c",
+                        "import os; print(os.environ.get('DASHBOARD_PASSWORD', ''))",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                password = completed.stdout.rstrip("\n")
+                assert password, f"{container} has no dashboard password"
+                return password
+
+            tokens = {}
+            for slug, container in tenants.items():
+                status, headers, body = request(
+                    f"/{slug}/dashboard/api/login",
+                    method="POST",
+                    payload={"password": dashboard_password(container)},
+                )
+                assert status == 200, (slug, "login", status)
+                assert headers.get_all("X-Unboks-Tenant") == [slug], (
+                    slug,
+                    headers.get_all("X-Unboks-Tenant"),
+                )
+                assert isinstance(body, dict) and body.get("token"), (slug, "token")
+                tokens[slug] = body["token"]
+
+                status, headers, body = request(
+                    f"/{slug}/dashboard/api/client/profile",
+                    token=tokens[slug],
+                )
+                assert status == 200, (slug, "profile", status)
+                assert headers.get_all("X-Unboks-Tenant") == [slug], (
+                    slug,
+                    headers.get_all("X-Unboks-Tenant"),
+                )
+                assert isinstance(body, dict) and body.get("slug") == slug, (
+                    slug,
+                    body.get("slug") if isinstance(body, dict) else None,
+                )
+
+            for source, target in (
+                ("mermaid", "ali-car-rental"),
+                ("ali-car-rental", "mermaid"),
+                ("mermaid", "unboks"),
+                ("unboks", "mermaid"),
+            ):
+                status, headers, _ = request(
+                    f"/{target}/dashboard/api/client/profile",
+                    token=tokens[source],
+                )
+                assert status in {401, 403}, (source, target, status)
+                assert headers.get_all("X-Unboks-Tenant") == [target], (
+                    target,
+                    headers.get_all("X-Unboks-Tenant"),
+                )
+
+            unknown = "not-a-real-tenant"
+            status, headers, _ = request(f"/{unknown}/health")
+            assert status == 404, (unknown, "health", status)
+            assert not headers.get_all("X-Unboks-Tenant"), headers.get_all(
+                "X-Unboks-Tenant"
+            )
+            status, headers, _ = request(
+                f"/{unknown}/dashboard/api/client/profile",
+                token=tokens["unboks"],
+            )
+            assert status == 404, (unknown, "authenticated profile", status)
+            assert not headers.get_all("X-Unboks-Tenant"), headers.get_all(
+                "X-Unboks-Tenant"
+            )
+            print("Canonical tenant routing and authenticated isolation verified")
+            PY
+
             readlink -f "$CURRENT_LINK" | grep -q "$DASHBOARD_SHA"
             echo "Dashboard release $DASHBOARD_SHA is live and verified"
 

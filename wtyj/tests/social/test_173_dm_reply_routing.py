@@ -2,6 +2,8 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 os.environ.setdefault("DASHBOARD_PASSWORD", "testpass")
 
 from agents.social import whatsapp_client
@@ -9,6 +11,42 @@ from agents.social import whatsapp_client
 
 def _clear_cache():
     whatsapp_client._zernio_account_cache.clear()
+
+
+def test_confirmed_operator_send_never_downgrades_to_legacy_meta(monkeypatch):
+    sends = []
+    monkeypatch.setattr(whatsapp_client, "send_text_message", lambda **kwargs: sends.append(kwargs) or True)
+
+    assert whatsapp_client.send_whatsapp_message(
+        "+15551234567", "Operator reply", confirm_delivery=True,
+        idempotency_key="operator-action-1",
+    ) is False
+    assert sends == []
+    assert whatsapp_client.send_whatsapp_message("+15551234567", "Legacy reply") is True
+    assert len(sends) == 1
+
+
+@pytest.mark.parametrize("with_attachment", [False, True])
+@patch("agents.social.zernio_dm_client.send_dm_reply")
+@patch("agents.social.social_publisher.get_account_id")
+def test_mermaid_operator_action_key_reaches_provider(
+    mock_get_account, mock_send, with_attachment,
+):
+    _clear_cache()
+    mock_get_account.side_effect = lambda p: {"whatsapp": "mermaid-account"}.get(p, "")
+    mock_send.return_value = True
+    kwargs = {"attachment_url": "https://example.test/pier.jpg"} if with_attachment else {}
+
+    assert whatsapp_client.send_whatsapp_message(
+        "a" * 24, "Departure information", idempotency_key="mermaid-operator-action-123",
+        **kwargs,
+    ) is True
+
+    assert mock_send.call_args.kwargs["idempotency_key"] == "mermaid-operator-action-123"
+    if with_attachment:
+        assert mock_send.call_args.kwargs["attachment_url"] == kwargs["attachment_url"]
+    else:
+        assert mock_send.call_args.kwargs["confirm_delivery"] is True
 
 
 @patch("agents.social.zernio_dm_client.send_dm_reply")
@@ -74,6 +112,20 @@ def test_cache_hit_skips_fanout(mock_get_account, mock_send):
     assert mock_send.call_args[0][1] == "fb_acc"
     # get_account_id should not have been called at all
     assert mock_get_account.call_count == 0
+
+
+@patch("agents.social.zernio_dm_client.send_dm_reply")
+@patch("agents.social.social_publisher.get_account_id")
+def test_unconfirmed_cached_account_is_not_reposted_during_fanout(mock_get_account, mock_send):
+    _clear_cache()
+    whatsapp_client._zernio_account_cache["d" * 24] = "mermaid-account"
+    mock_get_account.side_effect = lambda p: {"whatsapp": "mermaid-account"}.get(p, "")
+    mock_send.return_value = False
+
+    assert whatsapp_client.send_whatsapp_message(
+        "d" * 24, "Pier photo", attachment_url="https://example.test/pier.jpg",
+    ) is False
+    mock_send.assert_called_once()
 
 
 @patch("agents.social.zernio_dm_client.send_dm_reply")

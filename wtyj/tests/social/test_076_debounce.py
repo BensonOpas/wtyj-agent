@@ -5,6 +5,7 @@
 import os
 import sys
 import time
+import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -24,8 +25,11 @@ from shared import state_registry
 # --- Cleanup fixture ---
 
 @pytest.fixture(autouse=True)
-def cleanup_buffers():
+def cleanup_buffers(monkeypatch, tmp_path):
     """Cancel all active timers and clear buffers before and after each test."""
+    monkeypatch.setattr(state_registry, "DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "990622044139349")
+    monkeypatch.setenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "test-waba-076")
     def _clear():
         with _buffer_lock:
             for phone, buf in list(_message_buffers.items()):
@@ -38,6 +42,20 @@ def cleanup_buffers():
 
 
 # --- Helpers ---
+
+def _buffer_accepted_message(message):
+    """Enter the same durable acceptance boundary as a Meta webhook."""
+    message = dict(message)
+    message.setdefault("message_id", f"test_076_{uuid.uuid4().hex}")
+    message.setdefault("platform", "whatsapp")
+    message.setdefault("channel", "whatsapp")
+    message.setdefault("business_account_id", "test-waba-076")
+    message.setdefault("phone_number_id", "990622044139349")
+    assert state_registry.wa_claim_inbound_processing(
+        message["message_id"], message["from"], "whatsapp", message,
+    ) is True
+    _buffer_message(message)
+    return message["message_id"]
 
 def _cleanup_phone(phone):
     conn = state_registry._get_conn()
@@ -73,7 +91,7 @@ def test_single_message_flush(mock_handle, mock_send):
     phone = "TEST_076_SINGLE_001"
     mock_handle.return_value = "Got it!"
     msg = {"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"}
-    _buffer_message(msg)
+    _buffer_accepted_message(msg)
     assert phone in _message_buffers
     assert len(_message_buffers[phone]["messages"]) == 1
     # Cancel timer and flush manually
@@ -92,10 +110,10 @@ def test_paused_tenant_stores_inbound_without_replying(
     phone = "TEST_076_PAUSED_001"
     _cleanup_phone(phone)
     monkeypatch.setattr(
-        "agents.social.webhook_server.icp_overrides.auto_reply_enabled",
-        lambda: False,
+        "agents.social.webhook_server.icp_overrides.auto_reply_state",
+        lambda envelope=None: False,
     )
-    _buffer_message({
+    _buffer_accepted_message({
         "from": phone,
         "text": "I still need help",
         "from_name": "Test",
@@ -121,9 +139,9 @@ def test_rapid_fire_batched(mock_handle, mock_send):
     """Multiple messages from same phone are concatenated into one."""
     phone = "TEST_076_BATCH_001"
     mock_handle.return_value = "Noted!"
-    _buffer_message({"from": phone, "text": "book snorkeling", "from_name": "Test", "message_type": "text"})
-    _buffer_message({"from": phone, "text": "for 4 people", "from_name": "Test", "message_type": "text"})
-    _buffer_message({"from": phone, "text": "march 27", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "book snorkeling", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "for 4 people", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "march 27", "from_name": "Test", "message_type": "text"})
     with _buffer_lock:
         _message_buffers[phone]["timer"].cancel()
     _flush_buffer(phone)
@@ -148,7 +166,7 @@ def test_buffer_uses_tenant_response_timing(monkeypatch):
             }
         },
     )
-    _buffer_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
     with _buffer_lock:
         timer = _message_buffers[phone]["timer"]
         timing = _message_buffers[phone]["timing"]
@@ -163,7 +181,7 @@ def test_blocked_conversation_flushes_immediately(monkeypatch):
         "agents.social.webhook_server.state_registry.get_blocked",
         lambda conversation_id: True,
     )
-    _buffer_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "hello", "from_name": "Test", "message_type": "text"})
     with _buffer_lock:
         timer = _message_buffers[phone]["timer"]
         timing = _message_buffers[phone]["timing"]
@@ -191,8 +209,8 @@ def test_random_timing_is_sampled_once_per_batch(monkeypatch):
             }
         },
     )
-    _buffer_message({"from": phone, "text": "one", "from_name": "Test", "message_type": "text"})
-    _buffer_message({"from": phone, "text": "two", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "one", "from_name": "Test", "message_type": "text"})
+    _buffer_accepted_message({"from": phone, "text": "two", "from_name": "Test", "message_type": "text"})
     with _buffer_lock:
         timer = _message_buffers[phone]["timer"]
         timing = _message_buffers[phone]["timing"]
@@ -211,8 +229,8 @@ def test_different_phones_separate(mock_handle, mock_send):
     phone_a = "TEST_076_PHONEA"
     phone_b = "TEST_076_PHONEB"
     mock_handle.return_value = "Reply!"
-    _buffer_message({"from": phone_a, "text": "hello", "from_name": "Alice", "message_type": "text"})
-    _buffer_message({"from": phone_b, "text": "hi there", "from_name": "Bob", "message_type": "text"})
+    _buffer_accepted_message({"from": phone_a, "text": "hello", "from_name": "Alice", "message_type": "text"})
+    _buffer_accepted_message({"from": phone_b, "text": "hi there", "from_name": "Bob", "message_type": "text"})
     with _buffer_lock:
         _message_buffers[phone_a]["timer"].cancel()
         _message_buffers[phone_b]["timer"].cancel()
@@ -274,20 +292,18 @@ def test_rate_limit_49_allows(mock_process):
 
 # --- Test 7: Batched message stores combined text in thread history ---
 
-@patch("agents.social.webhook_server.state_registry.wa_store_message")
+@patch("agents.social.webhook_server.state_registry.dm_store_inbound_message")
 @patch("agents.social.webhook_server.send_text_message")
 @patch("agents.social.webhook_server.handle_incoming_whatsapp_message")
 def test_batched_stores_combined_text(mock_handle, mock_send, mock_store):
     """Flushed batch stores the combined text in thread history."""
     phone = "TEST_076_STORE_001"
     mock_handle.return_value = "Got it!"
-    _buffer_message({"from": phone, "text": "msg1", "from_name": "Test", "message_type": "text"})
-    _buffer_message({"from": phone, "text": "msg2", "from_name": "Test", "message_type": "text"})
+    first_id = _buffer_accepted_message({"from": phone, "text": "msg1", "from_name": "Test", "message_type": "text"})
+    second_id = _buffer_accepted_message({"from": phone, "text": "msg2", "from_name": "Test", "message_type": "text"})
     with _buffer_lock:
         _message_buffers[phone]["timer"].cancel()
     _flush_buffer(phone)
-    # wa_store_message called as: wa_store_message(phone, "user", combined_text)
-    user_call = mock_store.call_args_list[0]
-    assert user_call[0][0] == phone
-    assert user_call[0][1] == "user"
-    assert user_call[0][2] == "msg1\nmsg2"
+    mock_store.assert_called_once_with(
+        phone, "whatsapp", "msg1\nmsg2", "Test", [first_id, second_id],
+    )

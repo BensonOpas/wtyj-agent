@@ -10,11 +10,12 @@ from datetime import datetime, timezone, timedelta
 
 import anthropic
 from shared import config_loader, state_registry, bm_logger
+from shared.public_business_config import (
+    get_public_business_identity, public_business_config,
+    redact_config_credentials, render_public_business_context,
+)
 
 _CURACAO_TZ = timezone(timedelta(hours=-4))
-
-_INTERNAL_KEYS = {"spreadsheet_id", "demo_support_email", "agent_signature",
-                  "calendar_id"}
 
 _SKIP_TOP_LEVEL = {"service_aliases"}
 
@@ -31,53 +32,16 @@ _DRAFT_DEFAULTS = {
 _VALID_CLASSES = {"A", "B", "C", "D"}
 
 
-def _strip_verify(obj):
-    """Recursively strip [VERIFY...] placeholder values from nested structures."""
-    if isinstance(obj, dict):
-        return {k: _strip_verify(v) for k, v in obj.items()
-                if not (isinstance(v, str) and v.startswith("[VERIFY"))}
-    if isinstance(obj, list):
-        return [_strip_verify(i) for i in obj
-                if not (isinstance(i, str) and i.startswith("[VERIFY"))]
-    return obj
-
-
 def _build_client_context() -> str:
-    """Auto-generate labeled sections from all customer-facing data in client.json.
-    Filters internal keys and [VERIFY] placeholders. New sections are automatically included."""
-    raw = config_loader.get_raw()
-    sections = []
-    for key, value in raw.items():
-        if key in _SKIP_TOP_LEVEL:
-            continue
-        if isinstance(value, dict):
-            clean = {}
-            for k, v in value.items():
-                if k in _INTERNAL_KEYS:
-                    continue
-                # Strip calendar_id from service departures
-                if isinstance(v, dict) and "slots" in v:
-                    v = dict(v)
-                    v["slots"] = [
-                        {dk: dv for dk, dv in dep.items() if dk not in _INTERNAL_KEYS}
-                        for dep in v.get("slots", [])
-                    ]
-                clean[k] = v
-            clean = _strip_verify(clean)
-            if clean:
-                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
-        elif isinstance(value, list):
-            clean = _strip_verify(value)
-            sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{json.dumps(clean, indent=2, ensure_ascii=False)}")
-        elif isinstance(value, str) and key not in _INTERNAL_KEYS:
-            if not value.startswith("[VERIFY"):
-                sections.append(f"=== {key.upper().replace('_', ' ')} ===\n{value}")
-    return "\n\n".join(sections)
+    """Render the same credential-free business projection used by Marina."""
+    return render_public_business_context(
+        config_loader.get_raw(), exclude=_SKIP_TOP_LEVEL,
+    )
 
 
 def _build_seasonal_context() -> str:
     """Build seasonal context from client.json seasonal_calendar."""
-    raw = config_loader.get_raw()
+    raw = public_business_config(config_loader.get_raw())
     cal = raw.get("seasonal_calendar", {})
     if not cal:
         return "No seasonal data configured."
@@ -150,9 +114,9 @@ def _build_seasonal_context() -> str:
 
 def _build_system_prompt(count: int) -> str:
     """Build the system prompt: role, brand rules, classification, voice, format."""
-    business = config_loader.get_business()
+    business = get_public_business_identity()
     business_name = business.get("name", "the business")
-    raw = config_loader.get_raw()
+    raw = public_business_config(config_loader.get_raw())
     sc = raw.get("social_content", {})
     brand_voice = sc.get("brand_voice", "premium, confident, clear")
     boundaries = sc.get("content_boundaries", ["competitors", "politics", "religion"])
@@ -334,6 +298,9 @@ def generate_drafts(count: int = 3, days_ahead: int = 7) -> list:
         client = anthropic.Anthropic(api_key=api_key)
         system_prompt = _build_system_prompt(count)
         user_prompt = _build_user_prompt(count, days_ahead)
+        prompt_config = config_loader.get_raw()
+        system_prompt = redact_config_credentials(system_prompt, prompt_config)
+        user_prompt = redact_config_credentials(user_prompt, prompt_config)
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
@@ -435,7 +402,7 @@ def distill_learnings() -> list:
         )
     rejection_summary = "\n\n".join(rej_lines)
 
-    business = config_loader.get_business()
+    business = get_public_business_identity()
     business_name = business.get("name", "the business")
 
     # Existing learnings to avoid duplicates
@@ -470,6 +437,9 @@ def distill_learnings() -> list:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
+        prompt_config = config_loader.get_raw()
+        system_prompt = redact_config_credentials(system_prompt, prompt_config)
+        user_prompt = redact_config_credentials(user_prompt, prompt_config)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -524,7 +494,7 @@ def analyze_training_examples() -> dict:
         bm_logger.log("analyze_no_examples")
         return {}
 
-    business = config_loader.get_business()
+    business = get_public_business_identity()
     business_name = business.get("name", "the business")
 
     examples_text = []
@@ -556,6 +526,9 @@ def analyze_training_examples() -> dict:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
+        prompt_config = config_loader.get_raw()
+        system_prompt = redact_config_credentials(system_prompt, prompt_config)
+        user_prompt = redact_config_credentials(user_prompt, prompt_config)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -611,7 +584,7 @@ def analyze_visual_style() -> list:
         bm_logger.log("visual_analyze_no_photos")
         return []
 
-    business = config_loader.get_business()
+    business = get_public_business_identity()
     business_name = business.get("name", "the business")
 
     # Pick up to 10 photos (most recent)
@@ -655,6 +628,10 @@ def analyze_visual_style() -> list:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
 
+        prompt_config = config_loader.get_raw()
+        for block in image_blocks:
+            if block.get("type") == "text":
+                block["text"] = redact_config_credentials(block["text"], prompt_config)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,

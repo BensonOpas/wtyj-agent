@@ -939,6 +939,7 @@ def commit_ali_turn_delivery(
     confirmation_delivery: str = "",
     confirmation_payload: str = "",
     confirmation_provider_message_ids: list[str] | None = None,
+    inbound_processing_token: str = "",
 ) -> bool:
     """Atomically commit provider-confirmed Ali state, timeline, and inbound rows.
 
@@ -970,6 +971,7 @@ def commit_ali_turn_delivery(
     ids = list(dict.fromkeys(
         str(value) for value in (inbound_message_ids or []) if str(value)
     ))
+    processing_token = str(inbound_processing_token or "").strip()
     recommendation_ids = []
     for value in recommendation_vehicle_ids or []:
         vehicle_id = str(value or "").strip()
@@ -1034,6 +1036,41 @@ def commit_ali_turn_delivery(
             raise AliQuoteError("invalid_quote_confirmation_delivery")
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            inbound_rows = conn.execute(
+                f"SELECT status, processing_token FROM inbound_processing_events "
+                f"WHERE message_id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            if processing_token:
+                owned_count = conn.execute(
+                    "SELECT COUNT(*) FROM inbound_processing_events "
+                    "WHERE processing_token = ?",
+                    (processing_token,),
+                ).fetchone()
+                if (
+                    len(inbound_rows) != len(ids)
+                    or int(owned_count[0] or 0) != len(ids)
+                    or any(str(item[0] or "") != "processing" for item in inbound_rows)
+                    or any(
+                        str(item[1] or "") != processing_token
+                        for item in inbound_rows
+                    )
+                ):
+                    conn.rollback()
+                    return False
+            elif any(str(item[1] or "") for item in inbound_rows) or any(
+                str(item[0] or "") not in {
+                    "received", "processing", "recovering",
+                }
+                for item in inbound_rows
+            ):
+                # Compatibility callers may omit an inbound ledger entirely,
+                # but cannot bypass an active generation or revive a terminal
+                # row that does exist.
+                conn.rollback()
+                return False
         row = conn.execute(
             "SELECT flags_json FROM whatsapp_booking_state WHERE phone = ?",
             (conversation_id,),
@@ -1069,8 +1106,11 @@ def commit_ali_turn_delivery(
             for message_id in ids:
                 conn.execute(
                     "UPDATE inbound_processing_events SET status = 'send_failed', "
-                    "reason = 'provider_send_failed', updated_at = ? WHERE message_id = ?",
-                    (now, message_id),
+                    "reason = 'provider_send_failed', lease_expires_at = '', "
+                    "processing_token = '', updated_at = ? WHERE message_id = ? "
+                    "AND status IN ('received', 'processing', 'recovering') "
+                    "AND processing_token = ?",
+                    (now, message_id, processing_token),
                 )
             conn.commit()
             return False
@@ -1078,8 +1118,11 @@ def commit_ali_turn_delivery(
             for message_id in ids:
                 conn.execute(
                     "UPDATE inbound_processing_events SET status = 'replied', "
-                    "reason = 'provider_send_ok', updated_at = ? WHERE message_id = ?",
-                    (now, message_id),
+                    "reason = 'provider_send_ok', lease_expires_at = '', "
+                    "processing_token = '', updated_at = ? WHERE message_id = ? "
+                    "AND status IN ('received', 'processing', 'recovering') "
+                    "AND processing_token = ?",
+                    (now, message_id, processing_token),
                 )
             conn.commit()
             return False
@@ -1210,9 +1253,12 @@ def commit_ali_turn_delivery(
         for message_id in ids:
             conn.execute(
                 "UPDATE inbound_processing_events SET status = 'replied', "
-                "reason = 'provider_send_ok', last_error = '', updated_at = ? "
-                "WHERE message_id = ?",
-                (now, message_id),
+                "reason = 'provider_send_ok', last_error = '', "
+                "lease_expires_at = '', processing_token = '', updated_at = ? "
+                "WHERE message_id = ? "
+                "AND status IN ('received', 'processing', 'recovering') "
+                "AND processing_token = ?",
+                (now, message_id, processing_token),
             )
         conn.commit()
     except Exception:

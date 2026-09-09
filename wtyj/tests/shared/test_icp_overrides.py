@@ -11,6 +11,7 @@ Asserts safety properties from the spec:
 - token is never returned to caller
 """
 import json
+import threading
 
 import pytest
 import requests
@@ -153,17 +154,79 @@ def test_successful_200_returns_envelope(monkeypatch, configured):
     assert captured["timeout"] == 3.0
 
 
-def test_auto_reply_state_uses_explicit_bridge_value_and_defaults_running():
+def test_runtime_channel_controls_require_explicit_available_bridge_values(
+    monkeypatch,
+):
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
     assert icp_overrides.auto_reply_enabled({
         "feature_toggles": {"ai_auto_reply": {"value": False}},
     }) is False
     assert icp_overrides.auto_reply_enabled({
         "feature_toggles": {"ai_auto_reply": {"value": True}},
-    }) is True
+    }) is False
     assert icp_overrides.auto_reply_enabled({
         "available": False,
         "feature_toggles": {},
+    }) is False
+    assert icp_overrides.auto_reply_enabled({
+        "available": True,
+        "feature_toggles": {},
+    }) is False
+    assert icp_overrides.auto_reply_enabled({
+        "available": "true",
+        "feature_toggles": {"ai_auto_reply": {"value": True}},
+    }) is False
+    assert icp_overrides.auto_reply_enabled({
+        "available": True,
+        "feature_toggles": {"ai_auto_reply": {"value": True}},
     }) is True
+
+    assert icp_overrides.whatsapp_inbox_enabled({
+        "available": True,
+        "feature_toggles": {"whatsapp_inbox": {"value": True}},
+    }) is True
+    assert icp_overrides.whatsapp_inbox_enabled({
+        "available": True,
+        "feature_toggles": {"whatsapp_inbox": {"value": False}},
+    }) is False
+    assert icp_overrides.whatsapp_inbox_enabled({
+        "available": False,
+        "feature_toggles": {"whatsapp_inbox": {"value": True}},
+    }) is False
+    assert icp_overrides.whatsapp_inbox_enabled({
+        "feature_toggles": {"whatsapp_inbox": {"value": True}},
+    }) is False
+    assert icp_overrides.whatsapp_inbox_state({
+        "available": False,
+        "feature_toggles": {"whatsapp_inbox": {"value": False}},
+    }) is None
+    assert icp_overrides.whatsapp_inbox_state({
+        "available": True,
+        "feature_toggles": {"whatsapp_inbox": {"value": False}},
+    }) is False
+    assert icp_overrides.auto_reply_state({
+        "available": True,
+        "feature_toggles": {},
+    }) is None
+
+
+def test_legacy_runtime_controls_preserve_historical_defaults(monkeypatch):
+    monkeypatch.delenv("TENANT_RUNTIME_CONTROLS_REQUIRED", raising=False)
+    unavailable = {"available": False, "feature_toggles": {}}
+    missing = {"available": True, "feature_toggles": {}}
+    explicit_off = {
+        "available": True,
+        "feature_toggles": {
+            "ai_auto_reply": {"value": False},
+            "whatsapp_inbox": {"value": False},
+        },
+    }
+    assert icp_overrides.auto_reply_enabled(unavailable) is True
+    assert icp_overrides.whatsapp_inbox_enabled(unavailable) is True
+    assert icp_overrides.auto_reply_enabled(missing) is True
+    assert icp_overrides.whatsapp_inbox_enabled(missing) is True
+    assert icp_overrides.auto_reply_enabled(explicit_off) is False
+    assert icp_overrides.whatsapp_inbox_enabled(explicit_off) is False
 
 
 def test_set_auto_reply_writes_current_tenant_and_verifies(monkeypatch, configured):
@@ -321,6 +384,89 @@ def test_clear_cache_forces_refetch(monkeypatch, configured):
     icp_overrides.clear_cache()
     icp_overrides.fetch_overrides()
     assert call_count["n"] == 2
+
+
+def test_pause_invalidation_prevents_inflight_true_from_reaching_caller(
+    monkeypatch, configured
+):
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
+    started = threading.Event()
+    release_stale = threading.Event()
+    stale_result = {}
+
+    running = _bridge_envelope()
+    paused = _bridge_envelope()
+    paused["feature_toggles"]["ai_auto_reply"]["value"] = False
+
+    def controlled_get(*_args, **_kwargs):
+        if threading.current_thread().name == "stale-nr3-fetch":
+            started.set()
+            assert release_stale.wait(timeout=5)
+            return _MockResponse(200, running)
+        return _MockResponse(200, paused)
+
+    monkeypatch.setattr(requests, "get", controlled_get)
+    monkeypatch.setattr(requests, "put", lambda *a, **k: _MockResponse(200, {}))
+
+    worker = threading.Thread(
+        target=lambda: stale_result.setdefault(
+            "envelope", icp_overrides.fetch_overrides()
+        ),
+        name="stale-nr3-fetch",
+    )
+    worker.start()
+    assert started.wait(timeout=5)
+
+    verified = icp_overrides.set_auto_reply_enabled(False)
+    assert icp_overrides.auto_reply_enabled(verified) is False
+    release_stale.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+    assert stale_result["envelope"]["available"] is False
+    assert icp_overrides.auto_reply_enabled(stale_result["envelope"]) is False
+    assert icp_overrides.auto_reply_enabled(icp_overrides.fetch_overrides()) is False
+
+
+def test_newer_fresh_pause_supersedes_older_inflight_enabled_fetch(
+    monkeypatch, configured
+):
+    monkeypatch.setenv("TENANT_RUNTIME_CONTROLS_REQUIRED", "true")
+    older_started = threading.Event()
+    release_older = threading.Event()
+    older_result = {}
+
+    running = _bridge_envelope()
+    paused = _bridge_envelope()
+    paused["feature_toggles"]["ai_auto_reply"]["value"] = False
+
+    def controlled_get(*_args, **_kwargs):
+        if threading.current_thread().name == "older-enabled-fetch":
+            older_started.set()
+            assert release_older.wait(timeout=5)
+            return _MockResponse(200, running)
+        return _MockResponse(200, paused)
+
+    monkeypatch.setattr(requests, "get", controlled_get)
+    worker = threading.Thread(
+        target=lambda: older_result.setdefault(
+            "envelope", icp_overrides.fetch_overrides_fresh()
+        ),
+        name="older-enabled-fetch",
+    )
+    worker.start()
+    assert older_started.wait(timeout=5)
+
+    newer = icp_overrides.fetch_overrides_fresh()
+    assert icp_overrides.auto_reply_state(newer) is False
+    release_older.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+    assert older_result["envelope"]["available"] is False
+    assert "superseded" in older_result["envelope"]["reason"]
+    assert icp_overrides.auto_reply_state(older_result["envelope"]) is None
+    assert icp_overrides.auto_reply_state(icp_overrides.fetch_overrides()) is False
 
 
 # --- url composition -------------------------------------------------

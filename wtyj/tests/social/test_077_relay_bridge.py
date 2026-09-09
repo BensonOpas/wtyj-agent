@@ -216,20 +216,69 @@ def test_relay_notification_uses_profile_name(mock_process, mock_sheets):
 
 # --- Test 2f: User message stored even when reply is empty ---
 
-def test_user_message_stored_on_empty_reply():
+def test_user_message_stored_on_empty_reply(monkeypatch):
     """_flush_buffer stores user message even if handle returns empty reply."""
     from unittest.mock import patch as _p, MagicMock
     phone = "TEST_089_STORE_001"
+    message_id = "test_089"
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "990622044139349")
+    monkeypatch.setenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "test-waba")
     _cleanup_phone(phone)
-    with _p("agents.social.webhook_server.handle_incoming_whatsapp_message", return_value="") as mock_handle, \
-         _p("agents.social.webhook_server.send_text_message") as mock_send:
-        from agents.social.webhook_server import _flush_buffer
-        from agents.social import webhook_server
+    from agents.social.webhook_server import _flush_buffer
+    from agents.social import webhook_server
+    conn = state_registry._get_conn()
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.execute(
+        "DELETE FROM whatsapp_processed WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.commit()
+    conn.close()
+    message = {
+        "from": phone,
+        "text": "lost message",
+        "from_name": "Test",
+        "message_id": message_id,
+        "platform": "whatsapp",
+        "channel": "whatsapp",
+        "business_account_id": "test-waba",
+        "phone_number_id": "990622044139349",
+    }
+    assert state_registry.wa_claim_inbound_processing(
+        message_id,
+        phone,
+        "whatsapp",
+        message,
+    ) is True
+    batch_id = state_registry.inbound_processing_join_batch(message_id)
+    with (
+        _p(
+            "agents.social.webhook_server.handle_incoming_whatsapp_message",
+            return_value="",
+        ) as mock_handle,
+        _p("agents.social.webhook_server.send_text_message") as mock_send,
+        _p(
+            "agents.social.webhook_server._whatsapp_inbox_still_enabled",
+            return_value=True,
+        ),
+        _p(
+            "agents.social.webhook_server.icp_overrides.auto_reply_state",
+            return_value=True,
+        ),
+        _p(
+            "agents.social.webhook_server.state_registry.get_blocked",
+            return_value=False,
+        ),
+    ):
         webhook_server._message_buffers[phone] = {
-            "messages": [{"from": phone, "text": "lost message", "from_name": "Test",
-                          "message_id": "test_089"}],
+            "messages": [message],
             "timer": None,
             "started": 0,
+            "phone": phone,
+            "batch_id": batch_id,
         }
         _flush_buffer(phone)
     # Reply was empty — send should NOT be called
@@ -240,6 +289,17 @@ def test_user_message_stored_on_empty_reply():
     assert len(user_msgs) == 1
     assert "lost message" in user_msgs[0]["text"]
     _cleanup_phone(phone)
+    conn = state_registry._get_conn()
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.execute(
+        "DELETE FROM whatsapp_processed WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.commit()
+    conn.close()
 
 
 # --- Test 2g: from_id uses customer_name over WhatsApp profile ---

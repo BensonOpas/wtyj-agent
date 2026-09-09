@@ -1,9 +1,10 @@
 # bluemarlin/shared/config_loader.py
 # Last modified: Brief 134
-# Purpose: Read-only client.json interface. Caches on first read. Never raises.
+# Purpose: Read-only client.json interface. Reloads changed files. Never raises.
 
 import json
 import os
+import threading
 
 # Brief 150 — client.json may live in different places:
 # - Inside the Docker container: /app/config/client.json (mounted by docker-compose)
@@ -15,18 +16,134 @@ import os
 _DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "client.json")
 _CONFIG_PATH = os.environ.get("CLIENT_CONFIG_PATH", _DEFAULT_CONFIG_PATH)
 _cache: dict = {}
+_cache_signature: tuple | None = None
+_cache_lock = threading.RLock()
+
+
+def _config_signature() -> tuple:
+    """Return an identity that changes for edits and atomic replacements."""
+    stat = os.stat(_CONFIG_PATH)
+    return (
+        os.path.abspath(_CONFIG_PATH),
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+    )
+
+
+def _invalidate_cache() -> None:
+    global _cache, _cache_signature
+    with _cache_lock:
+        _cache = {}
+        _cache_signature = None
+
+
+def _required_isolation_shape_valid(loaded: dict) -> bool:
+    """Validate security-critical config for strict-isolation deployments."""
+    required = os.environ.get(
+        "TENANT_ACCOUNT_ALLOWLIST_REQUIRED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not required:
+        return True
+    expected_tenant = (
+        os.environ.get("TENANT_ID", "")
+        or os.environ.get("TENANT_SLUG", "")
+    ).strip().lower()
+    top_level_slug = str(loaded.get("slug") or "").strip().lower()
+    business = loaded.get("business")
+    business_slug = (
+        str(business.get("slug") or "").strip().lower()
+        if isinstance(business, dict)
+        else ""
+    )
+    if top_level_slug and business_slug and top_level_slug != business_slug:
+        return False
+    configured_tenant = top_level_slug or business_slug
+    if not expected_tenant or configured_tenant != expected_tenant:
+        return False
+    allowlist = loaded.get("channel_account_allowlist")
+    if not isinstance(allowlist, dict) or allowlist.get("mode") != "strict":
+        return False
+    accounts = allowlist.get("zernio_accounts")
+    return isinstance(accounts, list) and all(
+        isinstance(value, str) and bool(value.strip()) for value in accounts
+    )
+
+
+def _strict_isolation_required() -> bool:
+    return os.environ.get(
+        "TENANT_ACCOUNT_ALLOWLIST_REQUIRED", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _failed_config_read() -> dict:
+    """Return legacy last-good state, but invalidate strict tenant state."""
+    global _cache, _cache_signature
+    if _strict_isolation_required():
+        _cache = {}
+        _cache_signature = None
+    return _cache
 
 
 def _load() -> dict:
-    global _cache
-    if _cache:
-        return _cache
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            _cache = json.load(f)
-    except Exception:
-        _cache = {}
-    return _cache
+    """Load the latest complete client config, preserving the last good read.
+
+    Nr 3 updates mounted ``client.json`` files with an atomic replace.  The old
+    cache kept the first version for the lifetime of the process, so a newly
+    persisted strict account allowlist required a container restart. Stat the
+    file on every access and reload only when its identity changes. Legacy
+    deployments retain their last complete read during a malformed
+    replacement. Strict-isolation deployments instead invalidate immediately
+    once a malformed or identity-mismatched document is stable, so an old
+    account allowlist cannot remain authorized indefinitely.
+    """
+    global _cache, _cache_signature
+    with _cache_lock:
+        try:
+            signature_before = _config_signature()
+        except OSError:
+            return _failed_config_read()
+        if _cache and signature_before == _cache_signature:
+            return _cache
+
+        # An atomic replace can land between stat() and open().  Retry once if
+        # the identity changed while reading so we never cache the superseded
+        # inode as though it were current.
+        for _attempt in range(2):
+            try:
+                with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                signature_after = _config_signature()
+            except (OSError, ValueError, TypeError):
+                # If an atomic replacement raced the read, retry its new
+                # inode once. A stable malformed document is authoritative
+                # failure for strict tenants and must revoke the warm cache.
+                try:
+                    signature_after = _config_signature()
+                except OSError:
+                    return _failed_config_read()
+                if signature_after != signature_before and _attempt == 0:
+                    signature_before = signature_after
+                    continue
+                return _failed_config_read()
+            if not isinstance(loaded, dict):
+                return _failed_config_read()
+            if not _required_isolation_shape_valid(loaded):
+                return _failed_config_read()
+            if signature_after != signature_before:
+                if _attempt == 0:
+                    signature_before = signature_after
+                    continue
+                # Two consecutive moving inodes are a detected transient;
+                # strict tenant ownership must fail closed instead of
+                # authorizing a stale warm allowlist. Legacy deployments keep
+                # their historical last-good compatibility behavior.
+                return _failed_config_read()
+            _cache = loaded
+            _cache_signature = signature_after
+            return _cache
+        return _failed_config_read()
 
 
 def _first_text(*values) -> str:
@@ -164,12 +281,80 @@ def get_raw() -> dict:
 
 # Brief 216: write-through edits from the dashboard's Your Info page.
 
+import fcntl as _fcntl
+import stat as _stat
 import tempfile as _tempfile
 
 _YOUR_INFO_WHITELIST = (
     "name", "email", "support_email", "phone", "whatsapp",
     "website", "location", "languages", "operating_days", "agent_name",
 )
+
+
+def _update_config(mutator) -> bool:
+    """Serialize every client.json read/modify/replace through one sidecar lock.
+
+    Nr3's host worker uses the same ``<client.json>.lock`` protocol. Reading
+    only after acquiring the lock prevents an unrelated dashboard edit from
+    restoring a stale provider allowlist.
+    """
+    directory = os.path.dirname(_CONFIG_PATH) or "."
+    lock_path = _CONFIG_PATH + ".lock"
+    lock_fd = None
+    tmp_path = None
+    try:
+        lock_fd = os.open(
+            lock_path,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        if not _stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            return False
+        os.fchmod(lock_fd, 0o600)
+        _fcntl.flock(lock_fd, _fcntl.LOCK_EX)
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as stream:
+            current = json.load(stream)
+        if not isinstance(current, dict) or not _required_isolation_shape_valid(current):
+            return False
+        mutator(current)
+        if not _required_isolation_shape_valid(current):
+            return False
+        with _tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=directory,
+            prefix=".client.",
+            suffix=".tmp",
+        ) as stream:
+            json.dump(current, stream, indent=2, ensure_ascii=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+            tmp_path = stream.name
+        os.replace(tmp_path, _CONFIG_PATH)
+        tmp_path = None
+        directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        return False
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        if lock_fd is not None:
+            try:
+                _fcntl.flock(lock_fd, _fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
+    _invalidate_cache()
+    return True
 
 
 def update_business_field(key: str, value) -> bool:
@@ -180,68 +365,23 @@ def update_business_field(key: str, value) -> bool:
     here AND at the endpoint layer (defense in depth — Pydantic strips
     unknown fields but the helper is also callable from internal code).
     Returns True on success, False on whitelist miss or disk error."""
-    global _cache
     if key not in _YOUR_INFO_WHITELIST:
         return False
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        return False
-    biz = dict(current.get("business", {}) or {})
-    biz[key] = value
-    current["business"] = biz
-    tmp_path = None
-    try:
-        dir_path = os.path.dirname(_CONFIG_PATH) or "."
-        with _tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False,
-            dir=dir_path, prefix=".client.", suffix=".tmp",
-        ) as tf:
-            json.dump(current, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        return False
-    _cache = {}
-    return True
+    def mutate(current: dict) -> None:
+        business = dict(current.get("business", {}) or {})
+        business[key] = value
+        current["business"] = business
+
+    return _update_config(mutate)
 
 
 def update_response_timing(value: dict) -> bool:
     """Persist tenant response timing under top-level response_timing."""
-    global _cache
     if not isinstance(value, dict):
         return False
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        return False
-    current["response_timing"] = dict(value)
-    tmp_path = None
-    try:
-        dir_path = os.path.dirname(_CONFIG_PATH) or "."
-        with _tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False,
-            dir=dir_path, prefix=".client.", suffix=".tmp",
-        ) as tf:
-            json.dump(current, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        return False
-    _cache = {}
-    return True
+    return _update_config(
+        lambda current: current.__setitem__("response_timing", dict(value))
+    )
 
 
 def update_ali_customer_dossier_enabled(enabled: bool) -> bool:
@@ -251,37 +391,15 @@ def update_ali_customer_dossier_enabled(enabled: bool) -> bool:
     editor. The authenticated, tenant-scoped dashboard endpoint performs the
     readiness check before calling this helper.
     """
-    global _cache
     if not isinstance(enabled, bool):
         return False
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        return False
-    features = current.get("features")
-    features = dict(features) if isinstance(features, dict) else {}
-    features["ali_customer_dossier_enabled"] = enabled
-    current["features"] = features
-    tmp_path = None
-    try:
-        dir_path = os.path.dirname(_CONFIG_PATH) or "."
-        with _tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False,
-            dir=dir_path, prefix=".client.", suffix=".tmp",
-        ) as tf:
-            json.dump(current, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        return False
-    _cache = {}
-    return True
+    def mutate(current: dict) -> None:
+        features = current.get("features")
+        features = dict(features) if isinstance(features, dict) else {}
+        features["ali_customer_dossier_enabled"] = enabled
+        current["features"] = features
+
+    return _update_config(mutate)
 
 
 def get_agent_personality() -> dict:
@@ -299,34 +417,11 @@ def get_agent_personality() -> dict:
 def update_agent_personality(value: dict) -> bool:
     """Persist tenant Agent Personality settings under top-level
     agent_personality."""
-    global _cache
     if not isinstance(value, dict):
         return False
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        return False
-    current["agent_personality"] = dict(value)
-    tmp_path = None
-    try:
-        dir_path = os.path.dirname(_CONFIG_PATH) or "."
-        with _tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False,
-            dir=dir_path, prefix=".client.", suffix=".tmp",
-        ) as tf:
-            json.dump(current, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        return False
-    _cache = {}
-    return True
+    return _update_config(
+        lambda current: current.__setitem__("agent_personality", dict(value))
+    )
 
 
 def get_product_settings() -> dict:
@@ -338,34 +433,11 @@ def get_product_settings() -> dict:
 
 def update_product_settings(value: dict) -> bool:
     """Persist tenant product/order settings under top-level product_settings."""
-    global _cache
     if not isinstance(value, dict):
         return False
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        return False
-    current["product_settings"] = dict(value)
-    tmp_path = None
-    try:
-        dir_path = os.path.dirname(_CONFIG_PATH) or "."
-        with _tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False,
-            dir=dir_path, prefix=".client.", suffix=".tmp",
-        ) as tf:
-            json.dump(current, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        return False
-    _cache = {}
-    return True
+    return _update_config(
+        lambda current: current.__setitem__("product_settings", dict(value))
+    )
 
 
 def your_info_whitelist() -> tuple:

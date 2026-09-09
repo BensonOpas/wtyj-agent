@@ -2,9 +2,15 @@ import asyncio
 from unittest.mock import patch
 
 from fastapi import HTTPException
+import pytest
 
 from agents.social.zernio_dm_client import WhatsAppWindowClosedError
 from dashboard import api
+
+
+@pytest.fixture(autouse=True)
+def isolated_outbox(monkeypatch, tmp_path):
+    monkeypatch.setattr(api.state_registry, "DB_PATH", str(tmp_path / "state.db"))
 
 
 def test_dashboard_whatsapp_reply_keeps_operator_text_verbatim():
@@ -21,10 +27,13 @@ def test_dashboard_whatsapp_reply_keeps_operator_text_verbatim():
             )
         )
 
-    send.assert_called_once_with(
-        "conversation-1", message, confirm_delivery=True
-    )
-    store.assert_called_once_with("conversation-1", "operator", message)
+    send.assert_called_once()
+    assert send.call_args.args == ("conversation-1", message)
+    assert send.call_args.kwargs["confirm_delivery"] is True
+    assert send.call_args.kwargs["idempotency_key"].startswith("unboks-operator-")
+    store.assert_not_called()  # Transcript now commits atomically with the outbox.
+    history = api.state_registry.wa_get_full_history("conversation-1")
+    assert [(row["role"], row["text"]) for row in history] == [("operator", message)]
     assert response["reply"] == message
     assert response["original_message_sent"] is True
 

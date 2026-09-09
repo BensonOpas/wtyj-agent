@@ -15,6 +15,41 @@ _MAX_REPLIES_PER_HOUR = 30
 _REPLY_WINDOW_SECONDS = 3600
 
 
+class HandoffPersistenceError(RuntimeError):
+    """A customer handoff promise must not outlive its operator work item."""
+
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u27BF"
+    "\u200D\uFE0F"
+    "]"
+)
+
+
+def _apply_reply_style_guards(reply: str, inbound_text: str) -> str:
+    """Apply optional tenant-authored style constraints after generation."""
+    persona = config_loader.get_raw().get("agent_persona", {}) or {}
+    cleaned = reply
+
+    for opener in persona.get("forbidden_reply_openers", []) or []:
+        opener_text = str(opener or "").strip()
+        if opener_text and cleaned.lower().startswith(opener_text.lower()):
+            cleaned = cleaned[len(opener_text):].lstrip()
+            break
+
+    if persona.get("enforce_emoji_mirroring") and not _EMOJI_RE.search(
+        inbound_text or ""
+    ):
+        cleaned = _EMOJI_RE.sub("", cleaned)
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
+
+
 def _build_dm_approved_answers_block(channel: str) -> str:
     """Brief 234: mirror of marina_agent._build_approved_answers_block for
     the IG/FB DM path. Returns an APPROVED ANSWERS prompt block listing
@@ -71,6 +106,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     # dedicated getter today — get_raw is the consistent escape hatch used elsewhere).
     persona = config_loader.get_raw().get("agent_persona", {})
     master_prompt = (persona.get("freeform_notes") or "").strip()
+    enforcement_notes = (persona.get("enforcement_notes") or "").strip()
     # Brief 206: booking_flow gate so the BOOKING REDIRECT block doesn't inject
     # for non-booking tenants (unboks etc.) where it would render a recursive
     # wa.me/<same-number-the-customer-is-on> redirect.
@@ -94,7 +130,16 @@ def _build_dm_system_prompt(channel: str) -> str:
     terminology = config_loader.get_raw().get("terminology", {})
     service_label = terminology.get("service_label", "service")
 
-    platform_name = "Instagram" if channel == "instagram_dm" else "Facebook"
+    # Brief 327: this Q&A agent serves every configured short-form channel.
+    # Keep the channel context explicit so WhatsApp and X/Twitter prompts are
+    # never mislabeled as Facebook DMs. This is presentation context only; it
+    # does not classify user text or change dispatch behavior.
+    channel_label = {
+        "whatsapp": "WhatsApp messages",
+        "instagram_dm": "Instagram DMs",
+        "facebook_dm": "Facebook DMs",
+        "twitter_dm": "X/Twitter DMs",
+    }.get(str(channel or "").strip().lower(), "messages on this channel")
 
     # Build service list
     service_lines = []
@@ -121,7 +166,7 @@ def _build_dm_system_prompt(channel: str) -> str:
     # Empty services/faq lists render as bare "SERVICES:\n" / "FAQ:\n" — same as
     # existing behavior (chr(10).join on an empty list = ""). No empty-state change.
     intro = (
-        f"You are {agent_name}, answering {platform_name} DMs for {company_name}.\n"
+        f"You are {agent_name}, answering {channel_label} for {company_name}.\n"
         f"Your customer-facing name is {agent_name}. Use this name only when natural. "
         "Do not overuse it, do not claim to be human, and do not imply any professional license or authority.\n"
         f"{agent_identity.agent_name_authority_rule(agent_name)}"
@@ -159,7 +204,10 @@ You CANNOT process {service_label} bookings in DMs. When someone wants to book, 
         parts.extend([services_block, faq_block])
         if booking_flow:
             parts.append(booking_redirect_block)
-        parts.extend([language_block, emoji_block, output_rule])
+        parts.extend([language_block, emoji_block])
+        if enforcement_notes:
+            parts.append(enforcement_notes)
+        parts.append(output_rule)
         return "\n\n".join(parts)
 
     # Fallback: no master prompt set — use hardcoded WRITING STYLE / AVOID blocks.
@@ -213,14 +261,44 @@ def _build_dm_user_prompt(text: str, sender_name: str, messages: list) -> str:
   Message: {text}"""
 
 
-def handle_incoming_dm(message: dict) -> str:
+def _handoff_reply(message: dict, reply: str, *, defer_handoff: bool):
+    business = config_loader.get_business()
+    agent = business.get("agent_name", "CSA")
+    notification = {
+        "notification_type": "escalation",
+        "channel": message["channel"],
+        "customer_id": message["conversation_id"],
+        "customer_name": message.get("sender_name") or "Unknown contact",
+        "subject": f"{agent} escalated a {message['channel']} conversation",
+        "body": (
+            f"Customer message:\n{message.get('text') or '[Attachment received]'}\n\n"
+            f"{agent}'s reply:\n{reply}\n\n"
+            f"({business.get('name', 'the business')} — auto-escalated by {agent} "
+            "based on conversation context.)"
+        ),
+        "mode": "soft",
+    }
+    if defer_handoff:
+        # The durable webhook owns the authoritative account/processing-token
+        # fence and commits this intent before making a customer promise.
+        return {"text": reply, "handoff_notification": notification}
+    try:
+        state_registry.create_pending_notification(**notification)
+    except Exception as exc:
+        raise HandoffPersistenceError("handoff persistence unavailable") from exc
+    return reply
+
+
+def handle_incoming_dm(message: dict, *, defer_handoff: bool = False) -> str | dict:
     """Process an incoming IG/FB DM. Own Claude call, Q&A only.
 
     Args:
         message: normalized dict with keys:
             conversation_id, platform, channel, sender_name, text, account_id
 
-    Returns: reply text, or empty string if rate limited or error.
+    Returns: reply text, or a text/handoff intent when deferral is requested.
+    Handoff persistence failures propagate instead of silently promising a
+    notification that was never saved.
     """
     conversation_id = message["conversation_id"]
     channel = message["channel"]
@@ -264,6 +342,21 @@ def handle_incoming_dm(message: dict) -> str:
                        channel=channel)
         return ""
 
+    attachment_policy = (
+        (config_loader.get_raw().get("agent_persona") or {}).get(
+            "unsupported_attachment_handoff"
+        ) or {}
+    )
+    attachment_reply = str(attachment_policy.get("reply") or "").strip()
+    if (
+        attachment_policy.get("enabled") is True
+        and attachment_reply
+        and message.get("attachments")
+    ):
+        # Q&A tenants explicitly opt into metadata-only human routing. Never
+        # fetch, transcribe, or infer the contents of an unsupported attachment.
+        return _handoff_reply(message, attachment_reply, defer_handoff=defer_handoff)
+
     # Get conversation history
     history = state_registry.dm_get_history(conversation_id, channel, limit=10)
     messages = [{"role": m["role"], "text": m["text"]} for m in history]
@@ -298,47 +391,21 @@ def handle_incoming_dm(message: dict) -> str:
         reply = reply.replace("[BOOKING_REF]", "").replace("[PAYMENT_LINK]", "")
         # Brief 201: strip em-dashes (Claude ignores brand_voice_rules on this).
         # Em-dash only — en-dashes and hyphens left alone.
-        reply = reply.replace("—", ",")
+        reply = re.sub(r"\s*—\s*", ", ", reply)
         # Strip markdown code fences if present
         reply = re.sub(r"^```(?:json)?\s*", "", reply)
         reply = re.sub(r"\s*```$", "", reply.strip())
+        reply = _apply_reply_style_guards(reply, text)
         # Clean up double spaces left by stripped placeholders
         while "  " in reply:
             reply = reply.replace("  ", " ")
         reply = reply.strip()
 
-        # Brief 206: detect [ESCALATE] sentinel from master prompt's ESCALATION
-        # SCRIPT. If present, strip it from the visible reply AND create a
-        # pending_notifications row so the escalation surfaces in the operator
-        # dashboard. The visible reply is unchanged (sans sentinel line).
+        # Sentinel detection produces an intent for durable webhook callers;
+        # notification persistence happens only after their final fences.
         escalate_requested = "[ESCALATE]" in reply
         if escalate_requested:
             reply = reply.replace("[ESCALATE]", "").rstrip()
-            try:
-                _company = config_loader.get_business().get("name", "the business")
-                _agent = config_loader.get_business().get("agent_name", "CSA")
-                state_registry.create_pending_notification(
-                    notification_type="escalation",
-                    channel=channel,
-                    customer_id=conversation_id,
-                    customer_name=sender_name or "Unknown contact",
-                    subject=f"{_agent} escalated a {channel} conversation",
-                    body=(
-                        f"Customer message:\n{text}\n\n"
-                        f"{_agent}'s reply:\n{reply}\n\n"
-                        f"({_company} — auto-escalated by {_agent} based on "
-                        f"conversation context.)"
-                    ),
-                    mode="soft",
-                )
-                bm_logger.log("dm_escalation_created",
-                               conversation_id=conversation_id[:20],
-                               channel=channel)
-            except Exception as e:
-                bm_logger.log("dm_escalation_create_failed",
-                               conversation_id=conversation_id[:20],
-                               channel=channel,
-                               error=str(e)[:200])
 
         if not reply:
             bm_logger.log("dm_empty_reply", conversation_id=conversation_id[:20],
@@ -347,8 +414,12 @@ def handle_incoming_dm(message: dict) -> str:
 
         bm_logger.log("dm_reply_generated", conversation_id=conversation_id[:20],
                        channel=channel)
+        if escalate_requested:
+            return _handoff_reply(message, reply, defer_handoff=defer_handoff)
         return reply
 
+    except HandoffPersistenceError:
+        raise
     except Exception as e:
         bm_logger.log("dm_agent_error", conversation_id=conversation_id[:20],
                        channel=channel, error=str(e)[:200])

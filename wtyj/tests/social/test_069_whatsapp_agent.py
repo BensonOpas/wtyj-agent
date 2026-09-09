@@ -4,6 +4,9 @@
 
 import os
 import sys
+import hashlib
+import hmac
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
@@ -13,6 +16,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 os.environ["WHATSAPP_VERIFY_TOKEN"] = "test_token_067"
 os.environ["WHATSAPP_ACCESS_TOKEN"] = "test_access_token"
 os.environ["WHATSAPP_PHONE_NUMBER_ID"] = "990622044139349"
+os.environ["WHATSAPP_BUSINESS_ACCOUNT_ID"] = "967346842390828"
+os.environ["META_APP_SECRET"] = "test-meta-app-secret"
 
 from agents.marina.marina_agent import _build_system_prompt, _build_user_prompt, process_message
 from agents.social.social_agent import handle_incoming_whatsapp_message
@@ -263,6 +268,10 @@ def test_webhook_stores_conversation():
 
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id = ?", (test_msg_id,))
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        (test_msg_id,),
+    )
     conn.commit()
     conn.close()
 
@@ -284,7 +293,18 @@ def test_webhook_stores_conversation():
          patch("agents.social.webhook_server.handle_incoming_whatsapp_message",
                return_value="We have Klein Curaçao and more!"):
         mock_send.return_value = True
-        r = client.post("/webhooks/meta/whatsapp", json=payload)
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        signature = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), body, hashlib.sha256
+        ).hexdigest()
+        r = client.post(
+            "/webhooks/meta/whatsapp",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "X-Hub-Signature-256": signature,
+            },
+        )
         assert r.status_code == 200
         # Debounce: message is buffered, cancel timer and flush manually
         with _buffer_lock:

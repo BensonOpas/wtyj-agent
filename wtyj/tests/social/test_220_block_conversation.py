@@ -190,8 +190,7 @@ def test_zernio_webhook_ignored_contact_stops_before_storage_and_agent():
 
         with patch.object(state_registry, "wa_store_message") as mock_wa, \
              patch.object(state_registry, "dm_store_message") as mock_dm, \
-             patch.object(state_registry, "wa_has_been_processed", return_value=False), \
-             patch.object(state_registry, "wa_mark_as_processed") as mock_processed, \
+             patch.object(state_registry, "wa_claim_inbound_processing", return_value=True) as mock_processed, \
              patch.object(state_registry, "match_ignored_contact", return_value=ignored) as mock_match, \
              patch.object(state_registry, "record_ignored_contact_event") as mock_event, \
              patch.object(webhook_server, "handle_incoming_whatsapp_message") as mock_agent, \
@@ -211,7 +210,8 @@ def test_zernio_webhook_ignored_contact_stops_before_storage_and_agent():
             }
             webhook_server._process_zernio_event({"raw": "payload"})
 
-        mock_processed.assert_called_once_with("test_msg_220_ignored")
+        mock_processed.assert_called_once()
+        assert mock_processed.call_args.args[0] == "test_msg_220_ignored"
         assert mock_match.call_count >= 1
         mock_event.assert_called_once()
         assert mock_wa.call_count == 0

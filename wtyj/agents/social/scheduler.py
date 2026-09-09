@@ -50,6 +50,12 @@ def execute_publish(draft: dict) -> dict:
     Handles image resolution, upload, and multi-platform publishing.
     Returns dict with ok, platforms, post_url keys."""
     draft_id = draft["id"]
+    platforms = draft.get("platforms", ["instagram"])
+
+    # Drafts may predate provisioning changes (and API platform defaults are
+    # not authority). Deny the whole request before generating/uploading media.
+    if not platforms or not all(social_publisher.is_publish_platform_allowed(p) for p in platforms):
+        return {"ok": False, "error": "Publishing platform is not enabled for this tenant"}
 
     # Auto-image: photo library → AI generation → text card fallback
     image_path = draft.get("image_path", "")
@@ -60,18 +66,18 @@ def execute_publish(draft: dict) -> dict:
 
     # Check dry run mode
     if state_registry.is_dry_run():
-        platforms = draft.get("platforms", ["instagram"])
         bm_logger.log("dry_run_publish", draft_id=draft_id, platforms=platforms,
                       image_path=image_path)
         state_registry.update_draft_status(draft_id, "published")
         return {"ok": True, "platforms": platforms, "post_url": "", "dry_run": True}
 
     # Upload image once
+    if not all(social_publisher.is_publish_platform_allowed(p) for p in platforms):
+        return {"ok": False, "error": "Publishing platform is not enabled for this tenant"}
     media_url = social_publisher.upload_media(image_path)
     if not media_url:
         return {"ok": False, "error": "Image upload failed"}
 
-    platforms = draft.get("platforms", ["instagram"])
     hashtags = draft.get("hashtags") or []
     results = {}
 

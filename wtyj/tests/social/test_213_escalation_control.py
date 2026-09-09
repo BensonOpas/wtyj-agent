@@ -351,6 +351,9 @@ def test_dm_ingestion_skips_when_muted(mock_parse, mock_typing, mock_wa_handler,
     # dedup short-circuits the next run before our mute check fires).
     _conn = state_registry._get_conn()
     _conn.execute("DELETE FROM whatsapp_processed WHERE message_id = 'msg_213_dm_test'")
+    _conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = 'msg_213_dm_test'"
+    )
     _conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (conv_id,))
     _conn.commit()
     _conn.close()
@@ -368,7 +371,8 @@ def test_dm_ingestion_skips_when_muted(mock_parse, mock_typing, mock_wa_handler,
         "text": "hello from muted convo",
     }
 
-    _process_zernio_event({"fake": "payload"})
+    with patch("shared.tenant_guard.is_account_allowed", return_value=True):
+        _process_zernio_event({"fake": "payload"})
 
     # Marina handlers must NOT have been called
     mock_dm_handler.assert_not_called()
@@ -386,6 +390,10 @@ def test_dm_ingestion_skips_when_muted(mock_parse, mock_typing, mock_wa_handler,
     conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (conv_id,))
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (conv_id,))
     conn.execute("DELETE FROM whatsapp_processed WHERE message_id = ?", ("msg_213_dm_test",))
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        ("msg_213_dm_test",),
+    )
     conn.commit()
     conn.close()
 
@@ -399,24 +407,67 @@ def test_whatsapp_flush_skips_when_muted(mock_dm_handler, mock_wa_handler):
 
     conv_id = "213_wa_flush_conv"
     phone = "+213111000111"
+    message_id = "msg_213_wa_test"
+    conn = state_registry._get_conn()
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.execute(
+        "DELETE FROM whatsapp_processed WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (conv_id,))
+    conn.commit()
+    conn.close()
     state_registry.set_ai_muted(conv_id, True, "whatsapp")
 
     # Pre-populate the message buffer with a single Zernio-WhatsApp message
     final_msg = {
+        "from": phone,
+        "from_name": "MutedCustomer",
         "text": "hi from muted convo",
         "_zernio_conversation_id": conv_id,
         "_zernio_account_id": "acct_test",
         "_zernio_channel": "whatsapp",
         "_zernio_sender_name": "MutedCustomer",
-        "message_id": "msg_213_wa_test",
+        "message_id": message_id,
     }
+    recovery_payload = {
+        "message_id": message_id,
+        "conversation_id": conv_id,
+        "platform": "whatsapp",
+        "channel": "whatsapp",
+        "account_id": "acct_test",
+        "sender_id": phone,
+        "sender_name": "MutedCustomer",
+        "text": "hi from muted convo",
+    }
+    assert state_registry.wa_claim_inbound_processing(
+        message_id,
+        conv_id,
+        "whatsapp",
+        recovery_payload,
+    ) is True
+    batch_id = state_registry.inbound_processing_join_batch(message_id)
     with webhook_server._buffer_lock:
         webhook_server._message_buffers[phone] = {
             "messages": [final_msg],
             "timer": None,
+            "phone": phone,
+            "batch_id": batch_id,
         }
 
-    webhook_server._flush_buffer(phone)
+    with (
+        patch("shared.tenant_guard.account_access_state", return_value=True),
+        patch.object(
+            webhook_server, "_whatsapp_inbox_still_enabled", return_value=True,
+        ),
+        patch.object(
+            webhook_server.icp_overrides, "auto_reply_state", return_value=True,
+        ),
+    ):
+        webhook_server._flush_buffer(phone)
 
     # Marina handlers must NOT have been called
     mock_wa_handler.assert_not_called()
@@ -433,6 +484,14 @@ def test_whatsapp_flush_skips_when_muted(mock_dm_handler, mock_wa_handler):
     conn = state_registry._get_conn()
     conn.execute("DELETE FROM conversation_status WHERE conversation_id = ?", (conv_id,))
     conn.execute("DELETE FROM whatsapp_threads WHERE phone = ?", (conv_id,))
+    conn.execute(
+        "DELETE FROM inbound_processing_events WHERE message_id = ?",
+        (message_id,),
+    )
+    conn.execute(
+        "DELETE FROM whatsapp_processed WHERE message_id = ?",
+        (message_id,),
+    )
     conn.commit()
     conn.close()
 
@@ -485,7 +544,7 @@ def test_hard_mode_whatsapp_reply_sends_verbatim_not_through_marina(monkeypatch)
 
     sent = {}
     monkeypatch.setattr(dapi, "send_whatsapp_message",
-                         lambda phone, text: sent.update(phone=phone, text=text) or True)
+                         lambda phone, text, **kwargs: sent.update(phone=phone, text=text, **kwargs) or True)
     marina_called = {"called": False}
     def fail_if_called(*a, **k):
         marina_called["called"] = True
@@ -506,6 +565,8 @@ def test_hard_mode_whatsapp_reply_sends_verbatim_not_through_marina(monkeypatch)
     assert sent.get("text") == operator_text, (
         f"send_whatsapp_message was called with {sent.get('text')!r}, "
         f"expected verbatim {operator_text!r}")
+    assert sent["confirm_delivery"] is True
+    assert sent["idempotency_key"].startswith("unboks-operator-")
     assert marina_called["called"] is False, (
         "marina_agent.process_message MUST NOT be called in hard-mode WhatsApp /reply")
 
@@ -527,7 +588,7 @@ def test_hard_mode_whatsapp_reply_stores_role_operator_not_assistant(monkeypatch
         body="needs help",
         mode="hard",
     )
-    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t: True)
+    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t, **kwargs: True)
 
     operator_text = "Operator reply for role storage test."
     token = _login()
@@ -638,7 +699,7 @@ def test_hard_mode_whatsapp_media_send_failure_does_not_store_reply(monkeypatch)
         headers=_auth(token),
     )
 
-    assert r.status_code == 500
+    assert r.status_code == 502
     history = state_registry.wa_get_history(customer_id, limit=5)
     assert not any(m["role"] == "operator" for m in history)
 
@@ -669,7 +730,7 @@ def test_soft_mode_whatsapp_reply_unchanged_still_routes_through_marina(monkeypa
         mode="soft",
     )
 
-    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t: True)
+    monkeypatch.setattr(dapi, "send_whatsapp_message", lambda p, t, **kwargs: True)
     monkeypatch.setattr(
         dapi.marina_agent, "process_message",
         lambda *a, **k: {"reply": "Marina-reformulated reply", "flags": {}})
