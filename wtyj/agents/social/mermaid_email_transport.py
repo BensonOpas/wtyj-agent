@@ -6,6 +6,7 @@ request is performed by ``ready`` or ``sender_address``.
 """
 
 from __future__ import annotations
+from shared.mermaid_maintenance import participating as _maintenance_participating
 
 import os
 from pathlib import Path
@@ -137,7 +138,7 @@ def _message(
     message = EmailMessage(policy=SMTP)
     parsed_sender = Address(addr_spec=sender)
     message["From"] = Address(
-        display_name=_display_name(), username=parsed_sender.username,
+        display_name=_header(content["sender_display_name"]) if content.get("sender_display_name") else _display_name(), username=parsed_sender.username,
         domain=parsed_sender.domain,
     )
     message["To"] = recipient
@@ -150,6 +151,7 @@ def _message(
     return message
 
 
+@_maintenance_participating('transport')
 def send_email(
     recipient: str, content: dict, pdf_attachment: tuple[str, bytes],
     *, message_id: str,

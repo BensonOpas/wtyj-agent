@@ -2135,12 +2135,12 @@ def process_message(
 
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if response_contract == "mermaid_reservation_demo" and not api_key:
+        if response_contract in {"mermaid_reservation_demo", "isluno_discovery", "isluno_conversation"} and not api_key:
             fallback["model_error"] = {"kind": "credentials", "retryable": False}
             return fallback
         client = (
             anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=30.0)
-            if response_contract == "mermaid_reservation_demo"
+            if response_contract in {"mermaid_reservation_demo", "isluno_discovery", "isluno_conversation"}
             else anthropic.Anthropic(api_key=api_key)
         )
         tool_schema = MARINA_TOOL
@@ -2155,6 +2155,16 @@ def process_message(
                 from_email, subject, body, thread_fields, thread_flags,
                 action_context, channel=channel, messages=messages,
             )
+        elif response_contract == "isluno_conversation":
+            from agents.social import isluno_conversation_understanding
+            system_prompt = isluno_conversation_understanding.system_prompt()
+            tool_schema = isluno_conversation_understanding.TOOL
+            user_prompt = json.dumps({"latest_guest": body, "saved_context": {k:v for k,v in thread_fields.items() if k != "history"}, "history": messages or []}, ensure_ascii=False, separators=(",", ":"))
+        elif response_contract == "isluno_discovery":
+            from agents.social import isluno_understanding
+            system_prompt = isluno_understanding.system_prompt()
+            tool_schema = isluno_understanding.TOOL
+            user_prompt = isluno_understanding.user_prompt(body, thread_fields, messages)
         else:
             system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
             user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
@@ -2212,6 +2222,10 @@ def process_message(
                           channel=channel, from_id=from_email[:50])
             return fallback
         result = dict(tool_use_block.input)
+        if response_contract == "isluno_conversation":
+            return isluno_conversation_understanding.validate(result, thread_fields["catalog"], require_hospitality=True)
+        if response_contract == "isluno_discovery":
+            return isluno_understanding.validate(result, thread_fields["catalog"])
         # A real Mermaid FAQ response used an empty string for no extracted
         # fields. Normalize only that empty representation; malformed values
         # containing information must still fail the recovery schema check.
@@ -2282,6 +2296,27 @@ def process_message(
         return result
 
     except Exception as _exc:
+        if response_contract in {"isluno_discovery", "isluno_conversation"}:
+            from shared.isluno_pricing import ItineraryError
+            if isinstance(_exc, ItineraryError):
+                # Keep only a fixed validator code and shape metadata; never log
+                # guest text, model output, fact values, or the prompt.
+                fallback["model_error"] = {"kind": "invalid_response", "code": _exc.code}
+                diagnostic = {}
+                if _exc.code == "invalid_discovery_facts":
+                    _keys = result.get("fact_keys") if isinstance(result, dict) else None
+                    diagnostic = {"fact_keys_type": type(_keys).__name__}
+                    if isinstance(_keys, list):
+                        diagnostic.update(fact_keys_count=len(_keys),
+                                          fact_keys_nonstring_count=sum(not isinstance(k, str) for k in _keys))
+                if _exc.code in {"invalid_reply_text_type", "invalid_reply_text_length", "invalid_next_question"}:
+                    from agents.social.isluno_hospitality import reply_diagnostics
+                    diagnostic.update(reply_diagnostics(result))
+                    _reason = getattr(locals().get("response"), "stop_reason", None)
+                    diagnostic["stop_reason"] = _reason if isinstance(_reason, str) and _reason in {"tool_use", "end_turn", "max_tokens", "stop_sequence", "pause_turn", "refusal"} else "unavailable"
+                bm_logger.log("isluno_model_contract_failed", code=_exc.code,
+                              channel=channel, **diagnostic)
+                return fallback
         if response_contract == "mermaid_reservation_demo":
             from agents.social.mermaid_model_recovery import error_metadata
             fallback["model_error"] = error_metadata(_exc)

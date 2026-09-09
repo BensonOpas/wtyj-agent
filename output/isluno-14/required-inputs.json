@@ -1,0 +1,225 @@
+{
+  "status": "Local runtime, ICP and dashboard artifacts verified; one selected release-time preflight and action authorization pending",
+  "tenant": "mermaid",
+  "brand": "Isluno",
+  "number_intended": "+1 223 276 0075",
+  "inputs": {
+    "target_host_or_project": "108.61.192.52",
+    "target_platform": "linux/amd64",
+    "current_backend_source_sha": null,
+    "current_backend_image_digest": "sha256:ed146176bbf4e116270b55a04771af5fb3cd5d0f62d124d8650aa7e1bac97552",
+    "approved_candidate_base_image_digest": null,
+    "current_compose_path": "/root/clients/mermaid/docker-compose.yml",
+    "current_compose_service": "agent",
+    "current_container_name": "wtyj-mermaid",
+    "current_database_path": "/root/clients/mermaid/data/state_registry.db",
+    "current_config_directory": "/root/clients/mermaid/config",
+    "current_frontend_host": null,
+    "current_frontend_release_path": "/var/www/unboks-dashboard/releases/2e41f4a209fbafc602419408696a25fa9791dc34",
+    "current_frontend_source_sha": null,
+    "current_frontend_pointer_path": "/var/www/unboks-dashboard/current",
+    "current_frontend_api_route": null,
+    "current_strict_account_id": null,
+    "number_ownership_evidence": null,
+    "sole_webhook_consumer_evidence": null,
+    "approved_media_base_url": null,
+    "approved_document_base_url": null,
+    "backup_destination_and_restore_verification": null,
+    "config_compare_and_swap_digest": null,
+    "approved_change_window": null,
+    "exact_release_authorization": null,
+    "inbound_admission_and_drain_mechanism": null,
+    "ingress_retry_or_durable_buffer_evidence": null
+  },
+  "provider_profile_change_proposed": false,
+  "live_canary_proposed": false,
+  "discovered_candidates": {
+    "target_host_or_project": {
+      "value": "108.61.192.52",
+      "status": "historical project record corroborated on September 8; not contacted",
+      "source": "target-discovery.json project_host_corroboration"
+    },
+    "target_platform": {
+      "value": "Linux VPS with Docker Compose; architecture unknown",
+      "status": "documented; current verification required",
+      "source": "Mermaid deployment script and dashboard workflow"
+    },
+    "current_backend_source_sha": {
+      "value": "e43d0d174d10b82ee0fd4a394828ea720d3996ad",
+      "status": "September 8 observation; must recheck before use",
+      "source": "target-discovery.json baseline / wtyj/briefs/isluno_baseline_manifest.json observed 2026-09-08"
+    },
+    "current_backend_image_digest": {
+      "value": "sha256:ed146176bbf4e116270b55a04771af5fb3cd5d0f62d124d8650aa7e1bac97552",
+      "status": "September 8 observation; must recheck before use",
+      "source": "target-discovery.json baseline / wtyj/briefs/isluno_baseline_manifest.json observed 2026-09-08"
+    },
+    "current_container_name": {
+      "value": "wtyj-mermaid",
+      "status": "September 8 observation; must recheck before use",
+      "source": "target-discovery.json baseline / wtyj/briefs/isluno_baseline_manifest.json observed 2026-09-08"
+    },
+    "current_frontend_source_sha": {
+      "value": "2e41f4a209fbafc602419408696a25fa9791dc34",
+      "status": "September 8 observation; must recheck before use",
+      "source": "target-discovery.json baseline / wtyj/briefs/isluno_baseline_manifest.json observed 2026-09-08"
+    },
+    "config_compare_and_swap_digest": {
+      "value": "1e8db71ac4fbe60d0a2eba42b96e066c77dce78d42e06cc493156c3dab5796a6",
+      "status": "September 8 observation; must recheck before use",
+      "source": "target-discovery.json baseline / wtyj/briefs/isluno_baseline_manifest.json observed 2026-09-08"
+    },
+    "current_compose_path": {
+      "value": "/root/clients/mermaid/docker-compose.yml",
+      "status": "documented; current verification required",
+      "source": "Candidate deploy_mermaid_release.sh / prepare_mermaid_reservation_release.py; not present on default branch at inspected path"
+    },
+    "current_compose_service": {
+      "value": "agent",
+      "status": "documented; current verification required",
+      "source": "Candidate deploy_mermaid_release.sh / prepare_mermaid_reservation_release.py; not present on default branch at inspected path"
+    },
+    "current_database_path": {
+      "value": "/root/clients/mermaid/data/state_registry.db",
+      "status": "documented; current verification required",
+      "source": "Candidate deploy_mermaid_release.sh / prepare_mermaid_reservation_release.py; not present on default branch at inspected path"
+    },
+    "current_config_directory": {
+      "value": "/root/clients/mermaid/config",
+      "status": "documented; current verification required",
+      "source": "Candidate deploy_mermaid_release.sh / prepare_mermaid_reservation_release.py; not present on default branch at inspected path"
+    },
+    "current_frontend_host": {
+      "value": "dashboard.unboks.org",
+      "status": "documented; current verification required",
+      "source": "Current GitHub deploy-dashboard.yml blob a2b9686b50c2ca9d58e5719b907ae7310a7280f8"
+    },
+    "current_frontend_pointer_path": {
+      "value": "/var/www/unboks-dashboard/current",
+      "status": "documented; current verification required",
+      "source": "Current GitHub deploy-dashboard.yml blob a2b9686b50c2ca9d58e5719b907ae7310a7280f8"
+    },
+    "current_frontend_release_path": {
+      "value": "/var/www/unboks-dashboard/releases/2e41f4a209fbafc602419408696a25fa9791dc34",
+      "status": "inferred from two sources; readlink verification required",
+      "source": "GitHub release root + September 8 baseline release"
+    },
+    "current_frontend_api_route": {
+      "value": "Mermaid Python upstream http://127.0.0.1:8102/",
+      "status": "documented upstream; public prefix/current routing requires verification",
+      "source": "Candidate ensure_dashboard_nginx.py"
+    },
+    "backup_destination_and_restore_verification": {
+      "value": "/root/backups/mermaid-reservations/<new-release-id>",
+      "status": "documented private root only; no new backup destination or restore verification approved",
+      "source": "Candidate deploy_mermaid_release.sh"
+    }
+  },
+  "inputs_semantics": "Existing inputs retain point-in-time observations and explicitly unfilled protected/release authority fields. Current candidates are in current-artifacts.json; source discovery remains historical provenance. ACTION.md supersedes historical unresolved-work descriptions.",
+  "remaining_verification": [
+    "One 120-second selected host preflight in ACTION.md: exact running Mermaid/ICP routing, stored single-account mapping, mounts, loaded dashboard/API paths, selected producer/watchdog fencing and fresh private config CAS. No provider API calls.",
+    "Conditional authorized execution proves retirement/quiescence, private consistent backup integrity, zero unresolved old work, exact sealed startup, tenant capabilities, static switch and verified reopening.",
+    "Final gatekeeper acceptance and action-specific release authorization including shared ICP/Nr2 impact. No agent outbound canary requested."
+  ],
+  "current_state_inspection": {
+    "record": "inspection-repeat-summary.json",
+    "status": "observed",
+    "verified_metadata_bindings": 10,
+    "first_attempt_preserved": "inspection-attempt.json",
+    "authorization_consumed": "calvin-gatekeeper-h1h7-repeat-approved; one additional attempt only",
+    "next_step": "Review observed bindings; protected/operator/provider facts and exact release action remain separately gated."
+  },
+  "verified_binding_scope": {
+    "target_host_or_project": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "target_platform": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_backend_image_digest": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_compose_path": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_compose_service": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_container_name": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_database_path": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_config_directory": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_frontend_pointer_path": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    },
+    "current_frontend_release_path": {
+      "observed_at": "2026-09-09T02:05:54.959347+00:00",
+      "source": "inspection-repeat-summary.json / private approved H1-H7 record",
+      "limitation": "Point-in-time metadata; reverify at action. Not execution authority."
+    }
+  },
+  "ingress_disposition": {
+    "record": "INGRESS-CUTOVER.md",
+    "evidence": "ingress-evidence.json",
+    "durable_acceptance": "matched-source transaction before200 for valid admitted messages",
+    "drain": "Coordinated implementation prepared; deployed runtime participation and first-install external boundary not verified",
+    "provider_contract": "public Zernio docs found; configured applicability unverified",
+    "authority": "offline analysis only; no additional access",
+    "implementation": "Accepted local implementation e2deab8; MAINTENANCE.md. Not deployed. Bootstrap external protection and configured inventory remain unresolved."
+  },
+  "current_runtime_package": {
+    "source_commit": "e2deab8c2ad6c4313324d5b94769b91a1f0ae168",
+    "manifest": "current-artifacts.json",
+    "source_archive_sha256": "d9841ef3070fed9cde8840a353ad7a9917400f7facfbd13d3ab50472c9b68c51",
+    "oci_digest": null
+  },
+  "c1_observation": {
+    "status": "observed_pending_independent_review",
+    "evidence": "c1-execution.json",
+    "observed_at": "2026-09-09T03:34:14.723107+00:00",
+    "private_binding_reference": "tmp/isluno-c1-calvin-c1-once/binding.json",
+    "account_fingerprint": "ca117468b3369f1961ebc941f6774f539d98f82be488dd433c0a2df4eb6a8c09",
+    "public_exact_account_id_withheld": true,
+    "scope": "Configured intent only; provider ownership/sole consumer and loaded configuration remain unverified. Observation is not future CAS authority."
+  },
+  "github_control_plane_discovery": {
+    "source_commit": "1ea5f95827a34a4f79c076b559cba5483ad38c80",
+    "repository": "unboks-org/unboks-internal-control-panel",
+    "admin_locator": "https://icp.unboks.org/admin/tenants/mermaid",
+    "provider_historically_documented": "Zernio",
+    "router_source_path": "/internal/api/zernio/webhook-router",
+    "tenant_forward_destination_source": "http://wtyj-mermaid:8001/webhooks/zernio",
+    "evidence": "EVIDENCE-ACQUISITION.md",
+    "status": "GitHub source/historical provenance only; current deployment/subscription/store binding and complete bootstrap disposition remain unverified",
+    "warning": "Admin/status surfaces may synchronize provider state; not approved read-only probes."
+  },
+  "current_candidate_package": {
+    "manifest": "current-artifacts.json",
+    "helpers": "release-helpers.json",
+    "action": "ACTION.md",
+    "sequence": "RELEASE-SEQUENCE.md"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "status": "offline_verification_pass",
+  "tests": 15,
+  "host_contacted": false,
+  "provider_contacted": false,
+  "external_test_spend_usd": 0,
+  "scope": "H1-H7 runner only; no accepted application source or artifact changes",
+  "files": [
+    {
+      "path": "wtyj/scripts/inspect_isluno_target.py",
+      "sha256": "9a19b292999a1c20641f93bbaad9c7e7adbd984c355ea6325234651ceda4b60f"
+    },
+    {
+      "path": "wtyj/tests/isluno/test_target_inspection.py",
+      "sha256": "1b1230cb6cdb77409450ab713473fba712e8a7ecec8f97352e8a84a4dd6d4e35"
+    }
+  ],
+  "verification_command": "python3 wtyj/tests/isluno/test_target_inspection.py",
+  "default_result": {
+    "status": "offline_default",
+    "host_contacted": false
+  },
+  "authority": "Local preparation only. No SSH or protected/provider inspection authorized.",
+  "review_corrections": [
+    "R-R1: owned process group terminated after direct-child exit; bounded reap; no delayed descendant activity across timeout/output/failure fixtures.",
+    "R-R2: dependent checks pinned to validated container ID; final same-running-identity guard within H7/session deadline; replacement/restart/stop/image-change fixtures fail closed.",
+    "R-R3: accept only legitimate terminal Docker template LF framing; actual two-LF full-flow fixture passes; malformed/interior/extra blank records still rejected. Prior live failure cause not confirmed; no retry authorized."
+  ]
+}

@@ -1,4 +1,5 @@
 """Two durable, tenant-scoped reminders for unfinished customer-initiated bookings."""
+from shared.mermaid_maintenance import participating as _maintenance_participating
 import hashlib
 import json
 import sqlite3
@@ -11,6 +12,8 @@ from shared import config_loader, state_registry
 
 
 def settings():
+    from agents.social.isluno_transition import blocked
+    if blocked():return {}
     raw = config_loader.get_raw()
     if raw.get('slug') != 'mermaid' or not raw.get('features', {}).get('mermaid_reminders'):
         return {}
@@ -79,6 +82,7 @@ def candidate_rows(c):
         ORDER BY u.id""").fetchall()
 
 
+@_maintenance_participating('scheduled')
 def run_once(now=None):
     global _next_scan
     config = settings()

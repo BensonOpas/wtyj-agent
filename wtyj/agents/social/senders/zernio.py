@@ -21,6 +21,15 @@ class ZernioSender(Sender):
         from shared.tenant_guard import is_account_allowed
         if not is_account_allowed(account_id, direction="outbound"):
             return False
+        if attachment_type == "isluno_fulfillment":
+            from agents.social.isluno_fulfillment import send_fulfillment
+            return send_fulfillment(conversation_id, account_id, attachment_url)
+        if attachment_type == "isluno_quote":
+            from agents.social.isluno_quote_delivery import send_job
+            return send_job(conversation_id, account_id, attachment_url)
+        if attachment_type == "isluno_discovery":
+            from agents.social.isluno_delivery import send_plan
+            return send_plan(conversation_id, account_id, attachment_url)
         if attachment_type == "mermaid_document_language":
             from agents.social.mermaid_document_language import send_picker
             return send_picker(conversation_id, account_id, attachment_url)

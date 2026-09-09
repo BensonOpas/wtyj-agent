@@ -1,3 +1,4 @@
+from shared.mermaid_maintenance import participating as _maintenance_participating
 # bluemarlin/agents/social/webhook_server.py
 # Created: Brief 067
 # Last modified: Brief 138
@@ -72,12 +73,16 @@ def _quote_confirmation_fallback_text(
 
 @asynccontextmanager
 async def lifespan(app):
+    from shared.mermaid_maintenance import initialize
+    initialize()
+    from agents.social.isluno_transition import requested,ensure,blocked
+    if requested():ensure()
     # Brief 190: content pipeline archived — scheduler only starts when explicitly enabled
     if config_loader.get_raw().get("features", {}).get("content_pipeline", False):
         from agents.social.scheduler import start_scheduler
         start_scheduler()
     from agents.social.ali_quote_workflow import resume_pending_processing
-    resume_pending_processing()
+    if not blocked():resume_pending_processing()
     recovery_stop = None
     recovery_thread = None
     workflow_type = str(
@@ -85,7 +90,7 @@ async def lifespan(app):
     )
     if workflow_type == "ali_quote":
         _run_ali_document_retention_cleanup()
-    elif workflow_type == "mermaid_reservation_demo":
+    elif workflow_type == "mermaid_reservation_demo" and not blocked():
         repaired = state_registry.reconcile_mermaid_escalation_freezes()
         log("mermaid_escalation_state_reconciled", **repaired)
     # Every WhatsApp tenant needs durable recovery after provider acceptance.
@@ -429,6 +434,7 @@ def _ali_recovery_heartbeat(conversation_id: str) -> str:
     return _ALI_HEARTBEAT_COPY.get(locale.lower(), _ALI_HEARTBEAT_COPY["en"])
 
 
+@_maintenance_participating('recovery')
 def _recover_stale_ali_inbound_once(
     max_age_seconds: int = 40,
     *,
@@ -466,6 +472,10 @@ def _recover_stale_ali_inbound_once(
             )
             continue
         processing_token = next(iter(recovery_tokens))
+        from agents.social.isluno_transition import quarantined_inbound
+        if quarantined_inbound(message_ids):
+            state_registry.inbound_processing_bulk_update(message_ids,"processing_failed",reason="isluno_legacy_quarantine",error="Legacy turn requires operator review; automatic replay disabled.",processing_token=processing_token)
+            continue
         stable_batch_id = durable_batch_id or hashlib.sha256(
             "\x1f".join(message_ids).encode("utf-8")
         ).hexdigest()
@@ -775,6 +785,11 @@ def _ali_inbound_recovery_loop(
             _recover_stale_ali_inbound_once(ali_workflow=ali_workflow)
         except Exception as exc:
             log("ali_inbound_recovery_failed", error=type(exc).__name__)
+        try:
+            from agents.social.isluno_recovery import run_once as run_isluno_recovery
+            run_isluno_recovery()
+        except Exception as exc:
+            log("isluno_recovery_scheduler_failed", error=type(exc).__name__)
         try:
             from agents.social.mermaid_abandoned_reminders import run_once
             run_once()
@@ -1180,6 +1195,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     return PlainTextResponse(content="OK", status_code=200)
 
 
+@_maintenance_participating('inbound', ids=lambda payload, accepted_messages=None: [msg.get('message_id','') for msg in (accepted_messages if accepted_messages is not None else parse_webhook_payload(payload))])
 def _process_whatsapp_event(
     payload: dict,
     accepted_messages: list[dict] | None = None,
@@ -1268,6 +1284,7 @@ def _process_whatsapp_event(
         log("webhook_process_error", source="meta_whatsapp", error=str(e))
 
 
+@_maintenance_participating('inbound', ids=lambda msg: [msg.get('message_id','')])
 def _buffer_message(msg):
     """Add message to per-phone debounce buffer. Schedule flush after window."""
     phone = msg["from"]
@@ -1522,6 +1539,7 @@ def _automated_send_still_enabled(
     )
 
 
+@_maintenance_participating('inbound', ids=lambda buffer_key: _message_ids((_message_buffers.get(buffer_key) or {}).get('messages') or []))
 def _flush_buffer(buffer_key):
     """Flush buffered messages: concatenate texts, process as single message."""
     with _buffer_lock:
@@ -2213,6 +2231,14 @@ def _flush_buffer(buffer_key):
                         return
                     if not batch_account_is_current():
                         return
+                    if (reply_media or {}).get('type') in {'isluno_discovery','isluno_quote','isluno_fulfillment'} and not reply_result.get('generation_failed'):
+                        try:
+                            from agents.social.isluno_recovery import reply_accepted
+                            reply_accepted(final_msg,reply_media)
+                        except Exception:
+                            # Provider acceptance cannot be undone by a local
+                            # projection failure or invite a second send.
+                            log('isluno_progress_record_failed',code='progress_store_unavailable')
                     if ali_turn_commit:
                         if not commit_ali_turn_delivery(
                             _zernio_conv,
@@ -2559,6 +2585,16 @@ async def receive_zernio_webhook(request: Request, background_tasks: BackgroundT
             )
             return PlainTextResponse(content="Unavailable", status_code=503)
         return PlainTextResponse(content="OK", status_code=200)
+    if payload.get('event') in {'message.failed','message.delivered','message.read'}:
+        from agents.social.isluno_transition import requested
+        if requested():
+            try:
+                from agents.social.isluno_callbacks import accept
+                accept(payload)
+            except Exception:
+                log('isluno_callback_accept_failed',code='callback_persistence_unavailable')
+                return PlainTextResponse(content='Unavailable',status_code=503)
+            return PlainTextResponse(content='OK',status_code=200)
     if payload.get("event") == "message.failed":
         failed = parse_zernio_failed_webhook(payload)
         if not failed:
@@ -3125,6 +3161,7 @@ def _process_zernio_failed_event(failed: dict, *, claim_is_current=None) -> bool
     return True
 
 
+@_maintenance_participating('scheduled')
 def _process_queued_zernio_failed_events_once(limit: int = 10) -> int:
     """Process leased failed events; every outcome remains crash-recoverable."""
     handled = 0
@@ -3211,6 +3248,7 @@ def _process_queued_zernio_failed_events_once(limit: int = 10) -> int:
     return handled
 
 
+@_maintenance_participating('inbound', ids=lambda payload, accepted_message=None, message_was_claimed=False: [(accepted_message or parse_zernio_webhook(payload) or {}).get('message_id','')], when=lambda payload, *a, **k: payload.get('event')=='message.received')
 def _process_zernio_event(
     payload: dict,
     accepted_message: dict | None = None,

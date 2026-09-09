@@ -1,0 +1,40 @@
+{
+  "packet_head": "b66bf6952075cd80d838abf2aef881449f2ea6bf",
+  "status": "stopped_before_mutation",
+  "preflight_dispatches": 1,
+  "remote_elapsed_seconds": 0.088,
+  "passed": [
+    "mermaid_binding"
+  ],
+  "stop_code": "icp_compose_unresolved",
+  "reason": "ICP has ordered base and override Compose files; runner only accepted a single path. Host misconfiguration is not established.",
+  "remaining_checks": "ICP selected stored account mapping, source routing, dashboard loaded routes, producer/watchdog fencing, private destination/free space were not reached",
+  "host_mutations": 0,
+  "provider_calls": 0,
+  "gates_changed": false,
+  "live_isluno_deployed": false,
+  "automatic_retry": false,
+  "recorded_at": "2026-09-09T05:28:30.316616+00:00",
+  "failed_payload_sha256": "38a3bc7cf4ebac8622e5761cff5ce6455a7722814c1c9913c92df1c21e3e43f7",
+  "corrected_runner_path": "wtyj/scripts/preflight_isluno_release.py",
+  "corrected_runner_sha256": "33dd186a91a635e2e304b988a4bd3727b0b90f0e1876e7dc3a8880dac4bc6643",
+  "corrected_tests_path": "wtyj/tests/scripts/test_isluno_release_preflight.py",
+  "corrected_tests_sha256": "efcc83fc0728b1be2d3f0588594eed8718a592714aad4d6d0af0e9c5fd21a565",
+  "correction_test_count": 9,
+  "correction_test_seconds": 0.277,
+  "correction_dispatched": false,
+  "conditional_deployment_authority": "Previously approved; failed one-run inspection does not provide a second attempt.",
+  "new_allowance_required": "One bounded corrected preflight attempt only; no repeat deployment approval requested.",
+  "nginx_correction_tests": {
+    "count": 4,
+    "seconds": 0.004,
+    "other_prior_checks_reused": 8,
+    "unique_current_checks": 12
+  },
+  "nginx_compatibility_tests": {
+    "count": 2,
+    "seconds": 0.002,
+    "unique_current_checks": 13,
+    "scope": "Returned literal SSL include and canonical app-shell cache rules; no additional file open"
+  }
+}

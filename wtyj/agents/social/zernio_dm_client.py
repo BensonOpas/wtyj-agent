@@ -1,3 +1,4 @@
+from shared.mermaid_maintenance import participating as _maintenance_participating
 # bluemarlin/agents/social/zernio_dm_client.py
 # Created: Brief 130
 # Purpose: Parse Zernio webhook payloads + send DM replies via Zernio Inbox API
@@ -543,6 +544,7 @@ def _parse_provider_time(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+@_maintenance_participating('transport')
 def _confirmed_text_reply(
     conversation_id: str,
     account_id: str,
@@ -1038,6 +1040,7 @@ def _preflight_vehicle_media(url: str) -> bool:
     return total > 0
 
 
+@_maintenance_participating('transport')
 def _post_recommendation_message(
     url: str,
     headers: dict,
@@ -2138,6 +2141,7 @@ def send_dm_vehicle_recommendation(
     return {"success": False, "delivery": "picker_failed"}
 
 
+@_maintenance_participating('transport')
 def send_dm_reply(conversation_id: str, account_id: str, text: str,
                   attachment_url: str = "",
                   attachment_type: str = "image",
@@ -2184,10 +2188,13 @@ def send_dm_reply(conversation_id: str, account_id: str, text: str,
         bm_logger.log("zernio_dm_sent", conversation_id=conversation_id[:20])
         return True
     except Exception as e:
+        from shared.mermaid_maintenance import retain_uncertain_outbound
+        retain_uncertain_outbound()
         bm_logger.log("zernio_dm_send_failed", conversation_id=conversation_id[:20],
                        error=str(e)[:200])
         return False
 
+@_maintenance_participating('transport')
 def send_dm_template(
     conversation_id: str,
     account_id: str,
@@ -2347,6 +2354,7 @@ def send_dm_template(
     )
 
 
+@_maintenance_participating('transport')
 def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: str,
                                   attachment_url: str,
                                   attachment_type: str = "image",
@@ -2651,6 +2659,7 @@ def send_dm_reply_with_attachment(conversation_id: str, account_id: str, text: s
         return False
 
 
+@_maintenance_participating('transport')
 def send_typing_indicator(conversation_id: str, account_id: str):
     """Send typing indicator via Zernio. Best-effort, no error on failure."""
     client = _get_client()

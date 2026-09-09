@@ -1,6 +1,7 @@
 """Signed, no-money checkout for Mermaid's WhatsApp reservation demonstration."""
 
 from __future__ import annotations
+from shared.mermaid_maintenance import participating as _maintenance_participating
 
 import hashlib
 import hmac
@@ -95,11 +96,16 @@ def resolve_checkout_token(token: str) -> tuple[str, int, str] | None:
 
 
 def short_checkout_page(token: str) -> Response:
+    from agents.social.isluno_transition import blocked
+    if blocked():return _page("Mermaid link retired", "<p>This legacy action is quarantined. Please contact the operator. No payment or booking has been made by this action.</p>", status=410)
     payment = resolve_checkout_token(token)
     return checkout_page(*payment, form_action="") if payment else Response(status_code=404)
 
 
+@_maintenance_participating('operator_writers')
 def complete_short_checkout(token: str, status: str) -> Response:
+    from agents.social.isluno_transition import blocked
+    if blocked():return _page("Mermaid link retired", "<p>This legacy action is quarantined. Please contact the operator. No payment or booking has been made by this action.</p>", status=410)
     payment = resolve_checkout_token(token)
     return complete_checkout(*payment, status) if payment else Response(status_code=404)
 
@@ -114,6 +120,8 @@ body{{margin:0;background:#eaf8f8;color:#063b46;font:16px/1.5 system-ui,sans-ser
 
 
 def checkout_page(reservation_id: str, expires: int, signature: str, *, form_action: str | None = None) -> Response:
+    from agents.social.isluno_transition import blocked
+    if blocked():return _page("Mermaid link retired", "<p>This legacy action is quarantined. Please contact the operator. No payment or booking has been made by this action.</p>", status=410)
     if not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
@@ -163,7 +171,10 @@ def success_message(reservation: dict, payment: dict) -> str:
 
 
 
+@_maintenance_participating('operator_writers')
 def complete_checkout(reservation_id: str, expires: int, signature: str, status: str) -> Response:
+    from agents.social.isluno_transition import blocked
+    if blocked():return _page("Mermaid link retired", "<p>This legacy action is quarantined. Please contact the operator. No payment or booking has been made by this action.</p>", status=410)
     if not mermaid_catalog.reservation_demo_enabled() or not mermaid_catalog.demo_features()["demo_payment"] or not verify_payment(reservation_id, expires, signature, _secret()):
         return Response(status_code=404)
     reservation = mermaid_reservation_store.get_reservation(reservation_id)
