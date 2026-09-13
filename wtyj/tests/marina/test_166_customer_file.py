@@ -220,17 +220,42 @@ def test_build_customer_file_block_populated():
     # for the replacement assertion at the prompt level.
 
 
-def test_system_prompt_includes_customer_file_when_passed():
-    customer_file = {
+def _sample_customer_file():
+    return {
         "id": 1, "display_name": "TestCustomer",
         "first_seen": "2026-01-01T00:00:00+00:00",
         "last_seen": "2026-01-01T00:00:00+00:00",
         "identifiers": [{"type": "email", "value": "test@test.test", "first_seen": ""}],
-        "recent_interactions": [],
+        "recent_interactions": [
+            {"channel": "email", "summary": "Asked about parking",
+             "created_at": "2026-01-02T00:00:00+00:00"},
+        ],
     }
-    prompt = marina_agent._build_system_prompt({}, channel="whatsapp", customer_file=customer_file)
+
+
+def test_user_prompt_includes_customer_file_when_passed():
+    """Brief 327: the CUSTOMER FILE block moved from the system prompt to the
+    user prompt (it changes every message and would invalidate the cache)."""
+    prompt = marina_agent._build_user_prompt(
+        "test@test.test", "subject", "hello", {}, {},
+        channel="whatsapp", customer_file=_sample_customer_file(),
+    )
     assert "CUSTOMER FILE" in prompt
     assert "TestCustomer" in prompt
+    assert "Asked about parking" in prompt
+
+
+def test_system_prompt_no_longer_includes_customer_file_block():
+    """Brief 327: even when a customer_file is available, the system prompt
+    must stay free of it so the cached prefix is stable across a conversation.
+
+    Asserts the precise block marker: the bare string "CUSTOMER FILE" still
+    legitimately appears in the CROSS-CHANNEL CONTINUITY rule."""
+    prompt = marina_agent._build_system_prompt(
+        {}, channel="whatsapp", customer_file=_sample_customer_file(),
+    )
+    assert "CUSTOMER FILE — use this context" not in prompt
+    assert "TestCustomer" not in prompt
 
 
 def test_system_prompt_without_customer_file_has_no_block():

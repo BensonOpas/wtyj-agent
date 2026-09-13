@@ -170,3 +170,71 @@ def test_process_message_falls_back_when_no_tool_use_block(mock_cls):
     result = marina_agent.process_message("x@y.com", "Hi", "hello", {}, {})
     # Fallback fires, no crash
     assert result["internal_note"] == "Fallback response — Claude API call failed or returned unparseable output."
+
+
+# --- Brief 327: prompt caching ---
+
+@patch("agents.marina.marina_agent.anthropic.Anthropic")
+def test_system_prompt_sent_as_cached_content_block(mock_cls):
+    """Brief 327: system must be a content-block list carrying an ephemeral
+    cache_control breakpoint, so the ~17k static prefix (tools + system) is
+    billed as a cache read instead of full-price input on every message."""
+    mock_cls.return_value.messages.create.return_value = _mock_tool_use_response({
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "Sure thing.", "clarifications_needed": [],
+        "requires_human": False, "flags": {}, "internal_note": "",
+    })
+
+    marina_agent.process_message("alice@test.com", "Hi", "Hello", {}, {})
+
+    system = mock_cls.return_value.messages.create.call_args.kwargs["system"]
+    assert isinstance(system, list), f"system must be a block list, got {type(system)}"
+    assert system[0]["type"] == "text"
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+@patch("agents.marina.marina_agent.anthropic.Anthropic")
+def test_cached_system_block_carries_real_prompt_content(mock_cls):
+    """Brief 327: guards against caching an empty/stubbed prefix — the real
+    constructed prompt must be what lands inside the cached block."""
+    mock_cls.return_value.messages.create.return_value = _mock_tool_use_response({
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "Sure thing.", "clarifications_needed": [],
+        "requires_human": False, "flags": {}, "internal_note": "",
+    })
+
+    marina_agent.process_message("alice@test.com", "Hi", "Hello", {}, {})
+
+    system = mock_cls.return_value.messages.create.call_args.kwargs["system"]
+    assert "BOOKING VALIDATION" in system[0]["text"]
+
+
+@patch("agents.marina.marina_agent.anthropic.Anthropic")
+def test_process_message_with_customer_file_returns_real_reply(mock_cls):
+    """Brief 327: the customer_file kwarg now routes to _build_user_prompt.
+    End-to-end guard that the whole try: block still completes and returns the
+    model reply rather than silently falling back."""
+    mock_cls.return_value.messages.create.return_value = _mock_tool_use_response({
+        "intents": ["inquiry"], "fields": {}, "confidence": "high",
+        "reply": "Good to hear from you again.", "clarifications_needed": [],
+        "requires_human": False, "flags": {}, "internal_note": "",
+    })
+    customer_file = {
+        "id": 1, "display_name": "TestCustomer",
+        "first_seen": "2026-01-01T00:00:00+00:00",
+        "last_seen": "2026-01-01T00:00:00+00:00",
+        "identifiers": [{"type": "email", "value": "alice@test.com", "first_seen": ""}],
+        "recent_interactions": [
+            {"channel": "email", "summary": "Asked about parking",
+             "created_at": "2026-01-02T00:00:00+00:00"},
+        ],
+    }
+
+    result = marina_agent.process_message(
+        "alice@test.com", "Hi", "Hello", {}, {}, customer_file=customer_file,
+    )
+
+    assert result["reply"] == "Good to hear from you again."
+    user_content = mock_cls.return_value.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "TestCustomer" in user_content
+    assert "Asked about parking" in user_content

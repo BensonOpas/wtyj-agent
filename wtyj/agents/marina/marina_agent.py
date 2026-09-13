@@ -1594,7 +1594,11 @@ def _build_system_prompt(thread_flags: dict, channel: str = "email",
             f"AGENT SIGNATURE: {signature}"
         )
 
-    _customer_file_block = _build_customer_file_block(customer_file)
+    # Brief 327: the CUSTOMER FILE block moved to the user prompt. It was the
+    # only per-message-volatile block in this prompt, and prompt caching is a
+    # prefix match — leaving it here invalidated the cache on every message.
+    # `customer_file` stays in this signature for callers/tests; it is rendered
+    # by _build_user_prompt now.
     _approved_answers_block = _build_approved_answers_block(channel)
     _source_of_truth_block = _build_source_of_truth_block()
     _info_updates_block = _build_info_updates_block()
@@ -1675,7 +1679,7 @@ Your customer-facing name is {agent_name}. Use this name only when natural. Do n
 AGENT PERSONA:
 {_build_agent_persona_block(_icp_envelope)}
 
-{_customer_file_block}{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}{_consulta_reference_facts}
+{_approved_answers_block}{_info_updates_block}{_knowledge_files_block}{_icp_sot_block}{_consulta_reference_facts}
 
 {writing_style_block}
 
@@ -1712,7 +1716,7 @@ CRITICAL LANGUAGE: Write EVERY booking flow reply — rejection, multi-departure
 
 STATE MANAGEMENT: Python still manages awaiting_booking_confirmation, hold creation, and booking_confirmed. Do not set these flags yourself unless an ACTION instruction in the user prompt explicitly tells you to.
 
-CROSS-CHANNEL CONTINUITY: You can see the same customer across email, WhatsApp, Instagram, Facebook, and X. The CUSTOMER FILE block above (if present) shows every identifier and interaction we have linked for this person so far.
+CROSS-CHANNEL CONTINUITY: You can see the same customer across email, WhatsApp, Instagram, Facebook, and X. The CUSTOMER FILE block (if present) shows every identifier and interaction we have linked for this person so far.
 
 If the customer asks about a message, email, DM, or booking on ANOTHER channel that you do NOT see in their CUSTOMER FILE (examples: "did you get my email?", "I messaged you on Instagram last week", "I booked yesterday", "check the email I just sent"), you MUST:
 
@@ -1918,9 +1922,15 @@ def _build_user_prompt(
     action_context: str = "",
     channel: str = "email",
     messages: list = None,
+    customer_file=None,
 ) -> str:
-    """Build the user prompt: business data, thread context, inbound message."""
+    """Build the user prompt: business data, thread context, inbound message.
+
+    Brief 327: also renders the CUSTOMER FILE block (moved here from the system
+    prompt). It changes on every message, so it must sit AFTER the cached
+    system-prompt prefix or it invalidates the cache on every call."""
     today = datetime.now(_CURACAO_TZ).strftime("%Y-%m-%d")
+    customer_file_section = _build_customer_file_block(customer_file)
     csk = config_loader.get_common_sense_knowledge()
     client_context = _build_client_context()
 
@@ -2018,6 +2028,8 @@ CLIENT DATA (source of truth for all customer-facing information):
 {client_context}
 
 {action_context}
+
+{customer_file_section}
 
 THREAD CONTEXT (already collected this conversation):
   Fields: {json.dumps(thread_fields, ensure_ascii=False)}
@@ -2242,14 +2254,28 @@ def process_message(
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         client = anthropic.Anthropic(api_key=api_key)
-        system_prompt = _build_system_prompt(thread_flags, channel=channel, customer_file=customer_file)
+        system_prompt = _build_system_prompt(thread_flags, channel=channel)
         user_prompt = _build_user_prompt(from_email, subject, body, thread_fields, thread_flags,
-                                          action_context, channel=channel, messages=messages)
+                                          action_context, channel=channel, messages=messages,
+                                          customer_file=customer_file)
 
+        # Brief 327: prompt caching. The breakpoint on this system block also
+        # covers the `tools` array, which renders before it — together ~17k
+        # tokens that are identical on every message, billed at ~10% on a
+        # cache read instead of full price.
+        #
+        # DO NOT put any per-request or per-message value in the system prompt
+        # (dates, customer names, counts, conversation history, live DB reads
+        # that change per turn). Caching is a PREFIX match: one changed byte
+        # invalidates everything after it, and the cache is then written at a
+        # 1.25x premium on every call and never read — costing MORE than no
+        # caching at all. It fails silently, with no error. Per-message values
+        # belong in the user prompt: see TODAY at _build_user_prompt.
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            system=system_prompt,
+            system=[{"type": "text", "text": system_prompt,
+                     "cache_control": {"type": "ephemeral"}}],
             tools=[MARINA_TOOL],
             tool_choice={"type": "tool", "name": "marina_response"},
             messages=[{"role": "user", "content": user_prompt}],
